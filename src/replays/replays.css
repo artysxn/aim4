@@ -11316,3 +11316,86 @@ th.tm-rl-name,
   gap: 6px;
   align-items: center;
 }
+
+/* ---- 3D view inside the timeline viewer ---------------------------------- */
+/* The 3D canvas covers the radar rather than replacing it in the DOM: the
+   radar keeps its size, its drawing layer and its hit testing, so switching
+   back is a class toggle and every tool still knows where it is. */
+.rv-3d-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  z-index: 2;
+}
+.rv-3d-canvas[hidden] {
+  display: none;
+}
+/* The drawing layer and overlays must stay ON TOP of the 3D view, so pencil
+   mode works the same in both. */
+.rv-map.is-3d .rv-canvas {
+  visibility: hidden;
+}
+.rv-map.is-3d .rv-3d-canvas {
+  z-index: 2;
+}
+
+.rv-viewmode {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  display: flex;
+  gap: 6px;
+  z-index: 6;
+}
+.rv-viewmode[hidden] {
+  display: none;
+}
+.rv-viewmode-btn {
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(18, 18, 22, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 6px;
+  color: #e8eaf0;
+  cursor: pointer;
+}
+.rv-viewmode-btn:hover {
+  border-color: rgba(255, 255, 255, 0.45);
+}
+.rv-viewmode-btn.is-on {
+  background: #2f6df0;
+  border-color: #3f7bff;
+  color: #fff;
+}
+.rv-viewmode-btn svg {
+  width: 18px;
+  height: 18px;
+}
+/* The state note sits beside the button, right-aligned with it. */
+.rv-viewmode {
+  align-items: center;
+}
+.rv-viewmode-note {
+  font-size: 10px;
+  color: rgba(232, 234, 240, 0.72);
+  background: rgba(12, 12, 14, 0.82);
+  padding: 3px 7px;
+  border-radius: 4px;
+  white-space: nowrap;
+  order: -1;
+}
+.rv-viewmode-note[hidden] {
+  display: none;
+}
+.rv-viewmode-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.rv-viewmode-btn.is-busy {
+  cursor: progress;
+}

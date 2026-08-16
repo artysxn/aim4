@@ -18,6 +18,7 @@ import { writeRecord } from '../../replays/demoStore.js';
 import { INGEST_UPLOADER } from '../../replays/identity.js';
 import { applyHltvTeams, teamsFromDemoFilename } from './teamNames.js';
 import { findLibraryDuplicate, fingerprintDemo } from './duplicates.js';
+import { PARSER_REVISION } from '../../demoparser/schema.js';
 
 const send = (msg) => {
   try {
@@ -55,7 +56,22 @@ async function run() {
 
   const fingerprint = fingerprintDemo(demo, sizeBytes);
   const dup = await findLibraryDuplicate(library, fingerprint);
-  if (dup) {
+
+  // One gate on top of the duplicate check: a match we already hold is still
+  // worth writing when the copy we hold was made by an OLDER parser. Revisions
+  // 1-2 stored zeros for jump and crouch (demoparser2 silently ignored the
+  // prop names they asked with), and that cannot be repaired from the stored
+  // ticks — only a reparse fixes it, and we have just done one.
+  //
+  // The upgrade writes under the EXISTING demo id rather than the fresh one.
+  // That is the whole difference between an upgrade and a duplicate: keeping
+  // the id means every link, note, tag and stat that points at this match
+  // still points at it afterwards. Minting a new id here would leave the stale
+  // copy in place and add a second one beside it.
+  const dupRevision = dup ? (dup.parser?.revision ?? 1) : null;
+  const upgrading = Boolean(dup) && dupRevision < PARSER_REVISION;
+
+  if (dup && !upgrading) {
     send({
       type: 'done',
       result: {
@@ -71,22 +87,37 @@ async function run() {
     process.exit(0);
   }
 
+  const targetId = upgrading ? dup.id : demoId;
+
   send({ type: 'progress', stage: 'store', round: 0, total: demo.rounds?.length || 0 });
   const record = await ingestDemo(
     library,
-    demoId,
+    targetId,
     demo,
     {
       filename: filename || path.basename(file),
       sizeBytes: Number(sizeBytes) || 0,
       source: 'hltv',
-      uploadedAt: Date.parse(row.playedAt) || Date.now(),
-      uploaderId: INGEST_UPLOADER.id,
-      uploaderName: INGEST_UPLOADER.username,
-      visibility: 'public'
+      // An upgrade keeps the moment it was first seen; only a genuinely new
+      // demo is dated now. Same for who owns it and who may see it —
+      // ingestDemo carries uploader and visibility off the existing record,
+      // and these are the rest of what a viewer would notice going missing.
+      uploadedAt: upgrading
+        ? Date.parse(dup.uploadedAt) || Date.parse(row.playedAt) || Date.now()
+        : Date.parse(row.playedAt) || Date.now(),
+      uploaderId: upgrading ? dup.uploaderId || INGEST_UPLOADER.id : INGEST_UPLOADER.id,
+      uploaderName: upgrading ? dup.uploaderName || INGEST_UPLOADER.username : INGEST_UPLOADER.username,
+      visibility: upgrading ? dup.visibility || 'public' : 'public'
     },
     (p) => send({ type: 'progress', stage: 'store', ...p })
   );
+
+  if (upgrading) {
+    if (dup.tags) record.tags = dup.tags;
+    if (Number.isFinite(dup.views)) record.views = dup.views;
+    if (dup.topPlayer) record.topPlayer = dup.topPlayer;
+    record.reparsedAt = new Date().toISOString();
+  }
 
   record.hltv = {
     matchId: row.matchId,
@@ -107,7 +138,12 @@ async function run() {
     result: {
       ok: true,
       duplicate: false,
-      demoId,
+      // An upgrade is neither a duplicate nor a new demo; the pipeline counts
+      // it as stored (it wrote files), and this says which id it landed on so
+      // the log does not look like a mismatch.
+      upgraded: upgrading || undefined,
+      upgradedFrom: upgrading ? dupRevision : undefined,
+      demoId: targetId,
       name: filename || path.basename(file),
       mapNumber,
       naming

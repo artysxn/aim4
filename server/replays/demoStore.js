@@ -749,6 +749,45 @@ export function saveTempUpload(req, allowedBytes, prefix = 'import') {
   });
 }
 
+/**
+ * Rebuild a demo's .aim4replay package from what the library already stores.
+ *
+ * The stored round files ARE the package contents (.json.zst + .tickz +
+ * .c100.bin, written by materialize.js), so this is a read and a re-wrap, not
+ * a re-encode — no parsing, no recompression. The 3D viewer uses it to open a
+ * library demo by id with the same decoder it uses for a dropped file, which
+ * is why it hands back the whole match rather than a round at a time.
+ *
+ * @returns {Promise<Uint8Array|null>} null when the demo has no rounds stored
+ */
+export async function buildDemoPackage(user, id) {
+  const record = await readRecord(user, id);
+  if (!record) return null;
+  const dir = roundsDir(user);
+  let names = [];
+  try {
+    names = await fsp.readdir(dir);
+  } catch {
+    return null;
+  }
+  const suffix = `~${id}`;
+  const entries = [['manifest.json', Buffer.from(JSON.stringify(record), 'utf8')]];
+  for (const name of names.sort()) {
+    // Round files carry the owning demo id in their stem, which is what makes
+    // a whole-match read a filename filter rather than an index lookup.
+    const stem = name.replace(/\.(json\.zst|tickz|c100\.bin|json|bin)$/, '');
+    if (!stem.endsWith(suffix)) continue;
+    try {
+      entries.push([`rounds/${name}`, await fsp.readFile(path.join(dir, name))]);
+    } catch {
+      /* a file vanished mid-read; the package is still usable without it */
+    }
+  }
+  if (entries.length === 1) return null;
+  const { encodeReplayPackage } = await import('../../src/replays/shared/replayPackage.js');
+  return encodeReplayPackage(entries);
+}
+
 export function demoFilePath(user, id) {
   return demoPath(user, id);
 }

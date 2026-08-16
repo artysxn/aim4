@@ -22,8 +22,20 @@ export const SCHEMA_VERSION = 1;
  *   1  original
  *   2  fire grenades read their type from the shot log, so a molotov thrown by
  *      a CT is stored as a molotov instead of an incendiary
+ *   3  movement state is real. Revisions 1-2 asked demoparser2 for
+ *      `is_ducking` and `in_air`, which it silently omits rather than
+ *      rejecting, so every round they produced has zeros in FLAG_DUCKING and
+ *      FLAG_AIRBORNE. This revision reads m_bDucked / m_flDuckAmount and
+ *      m_fFlags (FL_ONGROUND), and stores the continuous duck amount in the
+ *      side byte's high nibble. A round at revision < 3 cannot be upgraded
+ *      without the original .dem — see shared/sim3d/deriveFlags.js for what
+ *      is recoverable from the tick buffer alone, and what is not.
+ *      Also records events.broken: raw entity_killed rows for map breakables,
+ *      indices undecoded, so a future per-map table can read them without
+ *      re-downloading anything. Doors are NOT captured and cannot be: their
+ *      entity is not replicated and no door event exists in the demo.
  */
-export const PARSER_REVISION = 2;
+export const PARSER_REVISION = 3;
 
 /**
  * @typedef {object} NormalizedPlayer
@@ -53,6 +65,20 @@ export const PARSER_REVISION = 2;
  * @property {ArrayBuffer} ticks        tickFormat buffer, stride 1
  * @property {RoundEvents} events
  * @property {Record<string, PlayerRoundStats>} stats  keyed by player id
+ */
+
+/**
+ * @typedef {object} BrokenEvent
+ * A map entity destroyed this round — a window, a vent, a breakable prop.
+ * The entity is identified ONLY by its engine index, because demoparser2
+ * exposes no world-entity classes and no break event; there is no name,
+ * position or model to go with it. Stored undecoded so a per-map index table
+ * can interpret it later without another parse. Player deaths are excluded.
+ * @property {number} tick
+ * @property {number} entity     entindex_killed, opaque until mapped
+ * @property {number} attacker   entindex_attacker
+ * @property {number} inflictor  entindex_inflictor
+ * @property {number} damageBits
  */
 
 /**

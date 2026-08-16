@@ -948,6 +948,87 @@ export async function handleReplayRequest(req, res, url) {
     return true;
   }
 
+  // ---- 3D availability + the upgrade queue --------------------------------
+  // What the viewer's "watch in 3D" control needs, in one call: whether this
+  // demo has the movement data the 3D viewer requires (PARSER_REVISION 3 —
+  // rounds below it have zeros for jump and crouch), whether the map has a
+  // 3D pack on this host, and where the demo sits in the reparse queue.
+  //
+  // Three independent gates, reported separately rather than collapsed into
+  // one boolean, because the fixes differ: a stale demo can be queued, an
+  // unsupported map cannot be anything but waited for, and an unfetchable
+  // demo can never be upgraded at all.
+  const threeDMatch = p.match(/^\/api\/replays\/demos\/([A-Za-z0-9_-]+)\/3d$/);
+  if (threeDMatch && (req.method === 'GET' || req.method === 'POST')) {
+    const id = threeDMatch[1];
+    const record = await readRecord(user, id);
+    if (!record || !canSee(record, access, { viaLink: true })) {
+      json(res, 404, { error: 'Replay not found.' });
+      return true;
+    }
+    const { statusFor, requestUpgrade } = await import('./reparseQueue.js');
+    const { cs3dMapByCode, hasCs3dPack } = await import('../cs3d/availability.js');
+    const map = cs3dMapByCode(record.map);
+    const mapReady = map ? await hasCs3dPack(map.slug) : false;
+
+    // POST is the request; GET is the poll the button uses while it waits.
+    const queue =
+      req.method === 'POST' ? await requestUpgrade(user, id) : await statusFor(user, id);
+
+    json(res, 200, {
+      ok: queue.ok !== false,
+      error: queue.ok === false ? queue.error : undefined,
+      demoId: id,
+      // Gate 1: does the stored data carry jump and crouch?
+      dataReady: !!queue.current,
+      revision: queue.revision,
+      targetRevision: queue.targetRevision,
+      upgradeable: !!queue.upgradeable,
+      // Gate 2: is there a 3D map to put it on?
+      mapReady,
+      mapSlug: map?.slug || null,
+      mapName: map?.name || record.mapName || '',
+      // Gate 3: where in line, if anywhere.
+      job: queue.job || null,
+      // Only meaningful once both gates pass.
+      url: queue.current && mapReady ? `/${map.slug}?demo=${encodeURIComponent(id)}` : null
+    });
+    return true;
+  }
+
+  // The whole match as an .aim4replay, so the 3D viewer can open a library
+  // demo with the same decoder it uses for a dropped file. Read permission is
+  // the demo's own; this exposes nothing the round routes do not already.
+  const packageMatch = p.match(/^\/api\/replays\/demos\/([A-Za-z0-9_-]+)\/package$/);
+  if (req.method === 'GET' && packageMatch) {
+    const id = packageMatch[1];
+    const record = await readRecord(user, id);
+    if (!record || !canSee(record, access, { viaLink: true })) {
+      json(res, 404, { error: 'Replay not found.' });
+      return true;
+    }
+    const { buildDemoPackage } = await import('./demoStore.js');
+    const bytes = await buildDemoPackage(user, id);
+    if (!bytes) {
+      json(res, 404, { error: 'This demo has no stored rounds.' });
+      return true;
+    }
+    res.writeHead(200, {
+      ...CORS,
+      'Content-Type': 'application/octet-stream',
+      'Content-Length': String(bytes.length),
+      'Cache-Control': 'private, max-age=60'
+    });
+    res.end(Buffer.from(bytes));
+    return true;
+  }
+
+  if (req.method === 'GET' && p === '/api/replays/3d/queue') {
+    const { queueSnapshot } = await import('./reparseQueue.js');
+    json(res, 200, queueSnapshot());
+    return true;
+  }
+
   const parseMatch = p.match(/^\/api\/replays\/demos\/([A-Za-z0-9_-]+)\/parse$/);
   if (req.method === 'POST' && parseMatch) {
     const id = parseMatch[1];

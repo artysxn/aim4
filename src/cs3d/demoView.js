@@ -259,22 +259,32 @@ export class DemoView {
       const z = useB ? a.z + (b.z - a.z) * f : a.z;
       const yaw = useB ? lerpAngle(a.yaw, b.yaw, f) : a.yaw;
       const pitch = useB ? a.pitch + (b.pitch - a.pitch) * f : a.pitch;
-      const ducked = (a.flags & FLAG_DUCKING) !== 0;
+      // The continuous duck (parser revision 3+) drives the hull directly, so
+      // a crouch animates instead of snapping — 29% of crouch-state ticks are
+      // mid-transition. Rounds parsed before that store 0 here and fall back
+      // to the boolean, which for revision < 3 is itself always 0: those
+      // rounds simply have no crouch data and render standing. See
+      // shared/sim3d/deriveFlags.js for why it cannot be recovered.
+      const amount = useB ? a.duckAmount + (b.duckAmount - a.duckAmount) * f : a.duckAmount;
+      const duck = amount > 0 ? amount : (a.flags & FLAG_DUCKING) !== 0 ? 1 : 0;
 
       const g = bodyState.group;
       g.visible = slot !== this.povSlot;
       // Source (x, y, z) → scene (x, z, −y); yaw is rotation.y for a +x-forward object.
       g.position.set(x, z, -y);
       g.rotation.y = yaw * DEG;
-      bodyState.body.scale.y = ducked ? HULL_DUCK : HULL_STAND;
-      bodyState.nose.position.y = (ducked ? EYE_DUCK : EYE_STAND) - 4;
+      const hull = HULL_STAND + (HULL_DUCK - HULL_STAND) * duck;
+      const eye = EYE_STAND + (EYE_DUCK - EYE_STAND) * duck;
+      bodyState.body.scale.y = hull;
+      bodyState.nose.position.y = eye - 4;
       const mat = this._teamMats[a.side] || this._teamMats.unknown;
       if (bodyState.body.material !== mat) bodyState.body.material = mat;
 
       if (slot === this.povSlot) {
-        // Eye height eases through duck transitions like the game's camera.
-        const targetEye = ducked ? EYE_DUCK : EYE_STAND;
-        this._eye += (targetEye - this._eye) * Math.min(1, dt * 14);
+        // With a real duck amount the camera follows it exactly, which is the
+        // game's own curve; without one, ease so the fallback boolean does not
+        // snap the view 18 units.
+        this._eye = amount > 0 ? eye : this._eye + (eye - this._eye) * Math.min(1, dt * 14);
         this.camera.position.set(x, z + this._eye, -y);
         this.camera.rotation.set(-pitch * DEG, cameraYawFromSource(yaw), 0, 'YXZ');
       }

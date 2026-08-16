@@ -19,7 +19,20 @@
 //  12  weapon uint8   index into the round's weapon dictionary
 //  13  flags  uint8   see FLAG_*
 //  14  flash  uint8   remaining flash blind, 20ths of a second, capped
-//  15  side   uint8   0 unknown, 2 = T, 3 = CT (engine team_num)
+//  15  side   uint8   low nibble: 0 unknown, 2 = T, 3 = CT (engine team_num)
+//                     high nibble: duck amount, 0 (standing) to 15 (ducked)
+//
+// The duck amount rides in the side byte's spare bits rather than growing the
+// record, so every stored round stays readable at 16 bytes and nothing has to
+// be migrated: side only ever holds 0, 2 or 3, leaving four bits free, and a
+// round written before this existed has zeros there, which reads back as
+// "standing" — exactly what it meant before. It is a nibble because the value
+// is only ever used to pick a hull and an eye height, and 1/15th of the duck
+// travel is finer than that needs.
+//
+// Why continuous at all: 29% of the ticks in which a player is changing
+// crouch state are mid-transition (0 < m_flDuckAmount < 1), so FLAG_DUCKING
+// alone renders most crouching as a snap between two poses.
 //
 // A 110 second round at 64 tick is ~7000 ticks -> 1.1 MB for all ten players;
 // the same round at stride 100 is ~11 KB, which is why the coarse pass over a
@@ -45,6 +58,10 @@ export const FLASH_SCALE = 20;
 export const SIDE_UNKNOWN = 0;
 export const SIDE_T = 2;
 export const SIDE_CT = 3;
+/** Mask for the side half of byte 15, and the scale of its duck half. */
+export const SIDE_MASK = 0x0f;
+export const DUCK_SHIFT = 4;
+export const DUCK_MAX = 15;
 
 export const FLAG_ALIVE = 1 << 0;
 export const FLAG_DUCKING = 1 << 1;
@@ -132,7 +149,8 @@ export function writeRecord(view, row, slot, state) {
   view.setUint8(o + 12, clampU8(state.weapon));
   view.setUint8(o + 13, clampU8(state.flags));
   view.setUint8(o + 14, clampU8((state.flash || 0) * FLASH_SCALE));
-  view.setUint8(o + 15, encodeSide(state.side ?? state.teamNum));
+  const duck = Math.max(0, Math.min(DUCK_MAX, Math.round((state.duckAmount || 0) * DUCK_MAX)));
+  view.setUint8(o + 15, encodeSide(state.side ?? state.teamNum) | (duck << DUCK_SHIFT));
 }
 
 /**
@@ -151,8 +169,12 @@ export function readRecord(view, row, slot, out = {}) {
   out.weapon = view.getUint8(o + 12);
   out.flags = view.getUint8(o + 13);
   out.flash = view.getUint8(o + 14) / FLASH_SCALE;
-  out.teamNum = view.getUint8(o + 15);
+  const packed = view.getUint8(o + 15);
+  out.teamNum = packed & SIDE_MASK;
   out.side = decodeSide(out.teamNum);
+  // 0 on any round written before the duck nibble existed, i.e. "standing",
+  // which is what those rounds already meant.
+  out.duckAmount = (packed >> DUCK_SHIFT) / DUCK_MAX;
   out.alive = (out.flags & FLAG_ALIVE) !== 0;
   return out;
 }

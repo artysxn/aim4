@@ -168,6 +168,26 @@ export function version() {
 // once per round, so it is fetched separately at the freezetime ticks below.
 // Same reasoning for `balance` and `current_equip_value`: both are buy-time
 // facts, not per-tick ones.
+// Movement state, by its real network-property path.
+//
+// `is_ducking` and `in_air` were asked for here until 2026-08-16 and are a
+// trap: demoparser2 0.41.3 does not error on them, it silently omits them
+// from the result — they never even appear as keys — so every round parsed
+// before that date carries zeros in FLAG_DUCKING and FLAG_AIRBORNE. The
+// fully-qualified paths below return a value on every tick. Verified against
+// listUpdatedFields() on a CS2 demo; do not "simplify" them back to the
+// short aliases.
+//
+// m_fFlags carries FL_ONGROUND in bit 0, so airborne is !(flags & 1).
+// m_flDuckAmount is the continuous 0..1 duck, which is what actually makes
+// crouching look right — 29% of crouch-state ticks are mid-transition, so a
+// boolean throws most of the motion away (see tickFormat's side byte).
+const PROP_ONGROUND = 'CCSPlayerPawn.m_fFlags';
+const PROP_DUCKED = 'CCSPlayerPawn.CCSPlayer_MovementServices.m_bDucked';
+const PROP_DUCK_AMOUNT = 'CCSPlayerPawn.CCSPlayer_MovementServices.m_flDuckAmount';
+/** FL_ONGROUND. */
+const FL_ONGROUND = 1;
+
 const TICK_PROPS = [
   'X',
   'Y',
@@ -181,10 +201,11 @@ const TICK_PROPS = [
   'team_num',
   'flash_duration',
   'is_scoped',
-  'is_ducking',
   'has_helmet',
   'is_defusing',
-  'in_air'
+  PROP_ONGROUND,
+  PROP_DUCKED,
+  PROP_DUCK_AMOUNT
 ];
 
 // Older parser builds reject unknown props, so a rejected sweep retries with
@@ -414,12 +435,19 @@ function teamNameFor(players, fallback) {
 function flagsFor(row, hasBomb) {
   let f = 0;
   if (row.is_alive !== false && num(row.health) > 0) f |= FLAG_ALIVE;
-  if (row.is_ducking) f |= FLAG_DUCKING;
   if (row.is_scoped) f |= FLAG_SCOPED;
   if (row.is_defusing) f |= FLAG_DEFUSING;
-  if (row.in_air) f |= FLAG_AIRBORNE;
   if (row.has_helmet) f |= FLAG_HAS_HELMET;
   if (hasBomb) f |= FLAG_HAS_BOMB;
+  // Ducked from the boolean, but treat a substantially-lowered hull as ducked
+  // too: the boolean only latches at the bottom of the travel, and a player
+  // caught mid-duck is much closer to crouched than to standing.
+  const amount = row[PROP_DUCK_AMOUNT];
+  if (row[PROP_DUCKED] || (typeof amount === 'number' && amount > 0.5)) f |= FLAG_DUCKING;
+  // FL_ONGROUND clear = airborne. Absent (older parser) leaves it unset
+  // rather than guessing, which is what deriveFlags.js is for.
+  const fl = row[PROP_ONGROUND];
+  if (typeof fl === 'number' && (fl & FL_ONGROUND) === 0) f |= FLAG_AIRBORNE;
   return f;
 }
 
@@ -589,6 +617,9 @@ function packBatch(reader, batch, roster, tickRate) {
     // Without per-tick inventory, the bomb carrier is inferred from what the
     // player is holding. It only affects the droplet marker.
     state.flags = flagsFor(r, String(weaponName || '').includes('c4'));
+    // The continuous duck, for the 3D viewer's hull and eye height. Absent on
+    // an older parser build, which stores 0 = standing.
+    state.duckAmount = num(r[PROP_DUCK_AMOUNT]);
     state.flash = num(r.flash_duration);
     // Engine team_num each tick (2=T, 3=CT) — same source sparkoo/demoinfocs uses.
     state.teamNum = numish(r.team_num);
@@ -1134,6 +1165,27 @@ export async function parseDemo(file, opts = {}) {
     // Ground pickups / drops so mid-round inventory can track utility & guns.
     'item_pickup',
     'item_remove',
+    // Map breakables — windows, vents, the destructible props. Captured RAW
+    // and undecoded on purpose.
+    //
+    // demoparser2 0.41.3 replicates only six entity classes (player pawn and
+    // controller, weapon, grenade, team, game rules), so there is no
+    // func_breakable state to read per tick and no break_breakable event. All
+    // that survives is entity_killed, which names its victim by entity index
+    // and nothing else: no class, no position, no model. On its own that
+    // cannot say "the heaven window went".
+    //
+    // It is stored anyway because the index is likely stable per map (it comes
+    // from the entity lump's load order) and repeats tellingly — on a Nuke
+    // match one index died 16 times across 19 rounds, which is what a
+    // round-resetting window looks like. Once a per-map index table exists,
+    // these rows decode retroactively. Recording them now costs a few hundred
+    // rows per match; NOT recording them would cost a second re-download of
+    // the entire library to get them.
+    //
+    // Doors are absent entirely and no amount of storage fixes that: they are
+    // never destroyed, so no event fires, and their entity is not replicated.
+    'entity_killed',
     ...DETONATION_EVENTS.map(([name]) => name)
   ]);
   const byName = eventsByName(all);
@@ -1260,6 +1312,20 @@ export async function parseDemo(file, opts = {}) {
         z: num(e.user_Z ?? e.Z),
         yaw: num(e.user_yaw ?? e.yaw),
         pitch: num(e.user_pitch ?? e.pitch)
+      }));
+
+    // Raw destruction rows, indices undecoded (see the entity_killed note in
+    // the event list). Player deaths are dropped: player_death already covers
+    // them with real identities, and keeping both would double the noise.
+    const deathTicks = new Set((byName.get('player_death') || []).map((e) => num(e.tick)));
+    const broken = (byName.get('entity_killed') || [])
+      .filter((e) => inSpan(e, span) && !deathTicks.has(num(e.tick)))
+      .map((e) => ({
+        tick: num(e.tick),
+        entity: num(e.entindex_killed),
+        attacker: num(e.entindex_attacker),
+        inflictor: num(e.entindex_inflictor),
+        damageBits: num(e.damagebits)
       }));
 
     const bomb = [];
@@ -1427,7 +1493,8 @@ export async function parseDemo(file, opts = {}) {
         grenades,
         bomb,
         damage,
-        items
+        items,
+        broken
       },
       stats
     });

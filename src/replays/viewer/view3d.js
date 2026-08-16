@@ -1,0 +1,448 @@
+// ---------------------------------------------------------------------------
+// src/replays/viewer/view3d.js
+// The 3D map inside the timeline viewer, in place of the radar canvas.
+//
+// This is deliberately NOT the standalone explorer (src/cs3d/main.js). That
+// page owns a clock, a HUD and a key map; here the timeline already owns all
+// three, and the 3D view is a renderer that gets told what to show. One
+// direction of data: the viewer samples a tick, hands over the same `states`
+// array the radar draws from, and this positions bodies against it. Nothing
+// here reads a demo file, so 3D and 2D can never disagree about the moment
+// being watched — they are the same numbers.
+//
+// It stays mounted once created. Switching back to 2D hides the canvas and
+// stops the render loop; switching in again is a class toggle, not a reload,
+// because streaming Nuke's pack costs seconds and the whole point of the
+// button is flicking between the two views of one moment.
+//
+// Camera modes:
+//   pov     behind a player's eyes, cycled by left click. The recorded view
+//           angles drive it, so it is what that player actually saw.
+//   free    detached, orbiting the round. Right click toggles into it (unless
+//           the pencil is out, in which case right click still draws).
+// Zoom changes the field of view rather than moving the camera, because
+// dollying a POV camera would put it inside the player's own head or through
+// the wall behind them.
+// ---------------------------------------------------------------------------
+
+import * as THREE from 'three/webgpu';
+import { MapPack } from '../../cs3d/mapLoader.js';
+import { MapLighting } from '../../cs3d/sky.js';
+import { patchWebGPUPartialAttributeUpload } from '../../cs3d/threePatches.js';
+import { cameraYawFromSource } from '../../../shared/sim3d/units.js';
+import {
+  HULL_STAND,
+  HULL_DUCK,
+  EYE_STAND,
+  EYE_DUCK,
+  HULL_HALF_WIDE
+} from '../../../shared/sim3d/constants.js';
+import { FLAG_DUCKING } from '../shared/tickFormat.js';
+
+const DEG = Math.PI / 180;
+
+const TEAM_COLOR = { T: 0xd9a24a, CT: 0x5b87e0 };
+const NADE_COLOR = {
+  smokegrenade: 0xc8ccd0,
+  flashbang: 0xfff0a8,
+  hegrenade: 0xd8503a,
+  molotov: 0xe87a28,
+  incgrenade: 0xe87a28,
+  decoy: 0x7fc46a
+};
+const SMOKE_SECONDS = 18;
+const FIRE_SECONDS = 7;
+const POP_SECONDS = 0.3;
+const SMOKE_RADIUS = 144;
+const FIRE_RADIUS = 110;
+
+const FOV_DEFAULT = 90;
+const FOV_MIN = 25;
+const FOV_MAX = 110;
+
+/** Free camera orbit distance limits, units. */
+const ORBIT_MIN = 200;
+const ORBIT_MAX = 4000;
+
+export function createView3d({ slug, onModeChange }) {
+  const canvas = document.createElement('canvas');
+  canvas.className = 'rv-3d-canvas';
+
+  let renderer = null;
+  let scene = null;
+  let camera = null;
+  let pack = null;
+  let lighting = null;
+  let raf = 0;
+  let ready = false;
+  let failed = null;
+  let visible = false;
+
+  // Camera state.
+  let mode = 'pov'; // 'pov' | 'free'
+  let povSlot = -1; // index into the last frame's live slots
+  let fov = FOV_DEFAULT;
+  let orbit = { yaw: 0.6, pitch: -0.85, dist: 1400, target: new THREE.Vector3() };
+  let eyeSmooth = EYE_STAND;
+
+  // Last frame handed in by the viewer.
+  let frame = null;
+
+  const bodies = [];
+  const nades = new Map();
+  let geo = null;
+  let mats = null;
+
+  function buildActors() {
+    geo = {
+      body: new THREE.CylinderGeometry(HULL_HALF_WIDE, HULL_HALF_WIDE, 1, 12),
+      nose: new THREE.BoxGeometry(18, 9, 9),
+      nade: new THREE.SphereGeometry(5, 10, 8),
+      smoke: new THREE.SphereGeometry(SMOKE_RADIUS, 20, 14),
+      fire: new THREE.CylinderGeometry(FIRE_RADIUS, FIRE_RADIUS, 6, 20),
+      pop: new THREE.SphereGeometry(30, 12, 8)
+    };
+    geo.body.translate(0, 0.5, 0); // origin at the feet; scale.y is the hull
+    mats = {
+      T: new THREE.MeshBasicMaterial({ color: TEAM_COLOR.T }),
+      CT: new THREE.MeshBasicMaterial({ color: TEAM_COLOR.CT }),
+      unknown: new THREE.MeshBasicMaterial({ color: 0x9a9a9a }),
+      nose: new THREE.MeshBasicMaterial({ color: 0x18181c })
+    };
+    for (let i = 0; i < 10; i++) {
+      const group = new THREE.Group();
+      const body = new THREE.Mesh(geo.body, mats.unknown);
+      body.scale.y = HULL_STAND;
+      const nose = new THREE.Mesh(geo.nose, mats.nose);
+      nose.position.set(HULL_HALF_WIDE + 6, EYE_STAND - 4, 0);
+      group.add(body, nose);
+      group.visible = false;
+      bodies.push({ group, body, nose });
+    }
+  }
+
+  async function boot() {
+    renderer = new THREE.WebGPURenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.NeutralToneMapping;
+    renderer.shadowMap.enabled = true;
+
+    scene = new THREE.Scene();
+    camera = new THREE.PerspectiveCamera(FOV_DEFAULT, 16 / 9, 4, 120000);
+    camera.rotation.order = 'YXZ';
+    scene.add(camera);
+
+    await renderer.init();
+    patchWebGPUPartialAttributeUpload(renderer);
+
+    pack = new MapPack({ slug, scene, renderer, onProgress: () => {} });
+    const manifest = await pack.fetchManifest();
+    lighting = new MapLighting(scene, camera, manifest, { shadows: true, renderer });
+    pack.lightmapIntensity = lighting.lightmapIntensity;
+    pack.sun = lighting.worldSun();
+    if (manifest.sky?.equirect) lighting.loadSkybox(pack.base, manifest.sky, pack.v).catch(() => {});
+
+    buildActors();
+    for (const b of bodies) (pack.world || scene).add(b.group);
+
+    await pack.load(manifest);
+    ready = true;
+    resize();
+  }
+
+  function resize() {
+    if (!renderer || !canvas.parentElement) return;
+    const r = canvas.parentElement.getBoundingClientRect();
+    const w = Math.max(1, Math.round(r.width));
+    const h = Math.max(1, Math.round(r.height));
+    renderer.setSize(w, h, false);
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+    lighting?.resize?.();
+  }
+
+  // ---- actors ---------------------------------------------------------------
+
+  /** Slots that are alive in the current frame, in slot order. */
+  function liveSlots() {
+    if (!frame) return [];
+    const out = [];
+    for (let i = 0; i < frame.states.length; i++) {
+      const s = frame.states[i];
+      if (s && s.alive) out.push(i);
+    }
+    return out;
+  }
+
+  function sideOf(slot) {
+    const p = (frame.players || []).find((x) => x.slot === slot);
+    if (!p) return frame.states[slot]?.side || '';
+    const sides = frame.teamSides || {};
+    return (p.team === 1 ? sides[1] : sides[2]) || frame.states[slot]?.side || '';
+  }
+
+  function applyFrame() {
+    if (!ready || !frame) return;
+    const live = liveSlots();
+    // A POV whose player died falls to the next live one rather than freezing.
+    if (mode === 'pov' && live.length && !live.includes(povSlot)) {
+      povSlot = live.find((s) => s > povSlot) ?? live[0];
+    }
+
+    for (let slot = 0; slot < bodies.length; slot++) {
+      const s = frame.states[slot];
+      const b = bodies[slot];
+      if (!s || !s.alive) {
+        b.group.visible = false;
+        continue;
+      }
+      // Hide the body you are looking through, or you see the inside of it.
+      b.group.visible = !(mode === 'pov' && slot === povSlot);
+      b.group.position.set(s.x, s.z, -s.y);
+      b.group.rotation.y = (s.yaw || 0) * DEG;
+
+      const duck = s.duckAmount > 0 ? s.duckAmount : (s.flags & FLAG_DUCKING) !== 0 ? 1 : 0;
+      const hull = HULL_STAND + (HULL_DUCK - HULL_STAND) * duck;
+      const eye = EYE_STAND + (EYE_DUCK - EYE_STAND) * duck;
+      b.body.scale.y = hull;
+      b.nose.position.y = eye - 4;
+      const m = mats[sideOf(slot)] || mats.unknown;
+      if (b.body.material !== m) b.body.material = m;
+
+      if (mode === 'pov' && slot === povSlot) {
+        eyeSmooth = s.duckAmount > 0 ? eye : eyeSmooth + (eye - eyeSmooth) * 0.35;
+        camera.position.set(s.x, s.z + eyeSmooth, -s.y);
+        camera.rotation.set(-(s.pitch || 0) * DEG, cameraYawFromSource(s.yaw || 0), 0, 'YXZ');
+        orbit.target.copy(camera.position);
+      }
+    }
+
+    applyNades();
+    if (mode === 'free') applyFreeCamera();
+  }
+
+  function nadeMesh(key, g, color, opacity) {
+    let n = nades.get(key);
+    if (n?.geo === g) return n.mesh;
+    if (n) {
+      n.mesh.removeFromParent();
+      n.mesh.material.dispose();
+    }
+    const mesh = new THREE.Mesh(
+      g,
+      new THREE.MeshBasicMaterial({ color, transparent: opacity < 1, opacity, depthWrite: opacity >= 1 })
+    );
+    (pack.world || scene).add(mesh);
+    nades.set(key, { mesh, geo: g });
+    return mesh;
+  }
+
+  function dropNade(key) {
+    const n = nades.get(key);
+    if (!n) return;
+    n.mesh.removeFromParent();
+    n.mesh.material.dispose();
+    nades.delete(key);
+  }
+
+  /** Derived fresh each frame, so scrubbing backwards needs no undo log. */
+  function applyNades() {
+    const list = frame.events?.grenades || [];
+    const tick = frame.tick;
+    const rate = frame.tickRate || 64;
+    for (let i = 0; i < list.length; i++) {
+      const g = list[i];
+      const color = NADE_COLOR[g.type] ?? 0xffffff;
+      const path = Array.isArray(g.path) ? g.path : [];
+      const det = g.detonateTick ?? (path.length ? path[path.length - 1].tick : g.throwTick);
+
+      if (tick >= g.throwTick && tick < det && path.length >= 2) {
+        let k = 0;
+        while (k + 2 < path.length && path[k + 1].tick <= tick) k++;
+        const p0 = path[k];
+        const p1 = path[Math.min(k + 1, path.length - 1)];
+        const span = Math.max(1, p1.tick - p0.tick);
+        const t = Math.max(0, Math.min(1, (tick - p0.tick) / span));
+        const mesh = nadeMesh(i, geo.nade, color, 1);
+        mesh.position.set(
+          p0.x + (p1.x - p0.x) * t,
+          p0.z + (p1.z - p0.z) * t,
+          -(p0.y + (p1.y - p0.y) * t)
+        );
+        continue;
+      }
+      const at = g.at || (path.length ? path[path.length - 1] : null);
+      const since = Number.isFinite(g.detonateTick) ? (tick - g.detonateTick) / rate : -1;
+      if (at && since >= 0) {
+        if (g.type === 'smokegrenade' && since < SMOKE_SECONDS) {
+          nadeMesh(i, geo.smoke, 0xb8bcc0, 0.72).position.set(at.x, at.z + 30, -at.y);
+          continue;
+        }
+        if ((g.type === 'molotov' || g.type === 'incgrenade') && since < FIRE_SECONDS) {
+          nadeMesh(i, geo.fire, 0xe06818, 0.5).position.set(at.x, at.z + 4, -at.y);
+          continue;
+        }
+        if ((g.type === 'flashbang' || g.type === 'hegrenade') && since < POP_SECONDS) {
+          nadeMesh(i, geo.pop, color, 0.8 * (1 - since / POP_SECONDS)).position.set(at.x, at.z + 8, -at.y);
+          continue;
+        }
+      }
+      dropNade(i);
+    }
+  }
+
+  function applyFreeCamera() {
+    const t = orbit.target;
+    const cp = Math.cos(orbit.pitch);
+    camera.position.set(
+      t.x + orbit.dist * cp * Math.cos(orbit.yaw),
+      t.y - orbit.dist * Math.sin(orbit.pitch),
+      t.z + orbit.dist * cp * Math.sin(orbit.yaw)
+    );
+    camera.lookAt(t);
+  }
+
+  function loop() {
+    raf = requestAnimationFrame(loop);
+    if (!ready || !visible) return;
+    pack?.materials?.setTime(performance.now() / 1000);
+    lighting?.update();
+    renderer.render(scene, camera);
+  }
+
+  return {
+    canvas,
+    get ready() {
+      return ready;
+    },
+    get failed() {
+      return failed;
+    },
+    get mode() {
+      return mode;
+    },
+    get povName() {
+      if (mode !== 'pov' || !frame) return null;
+      const p = (frame.players || []).find((x) => x.slot === povSlot);
+      return p?.name || null;
+    },
+
+    /** Create the scene. Safe to call once; later calls are no-ops. */
+    async start(container) {
+      if (renderer || failed) return;
+      container.appendChild(canvas);
+      try {
+        await boot();
+        applyFrame();
+        loop();
+      } catch (err) {
+        failed = String(err?.message || err);
+        console.error('view3d: boot failed', err);
+      }
+    },
+
+    /** The viewer's clock, once per drawn frame. */
+    setFrame(next) {
+      frame = next;
+      // Centre the orbit on the action the first time we see a live round.
+      if (mode === 'free' && orbit.dist === 1400 && frame) {
+        const live = liveSlots();
+        if (live.length) {
+          const s = frame.states[live[0]];
+          orbit.target.set(s.x, s.z + 64, -s.y);
+        }
+      }
+      if (mode === 'pov' && povSlot < 0) {
+        const live = liveSlots();
+        if (live.length) povSlot = live[0];
+      }
+      applyFrame();
+    },
+
+    show() {
+      visible = true;
+      canvas.hidden = false;
+      resize();
+    },
+    hide() {
+      visible = false;
+      canvas.hidden = true;
+    },
+    resize,
+
+    /** Left click: next player's eyes. Returns the new POV name. */
+    cyclePov() {
+      const live = liveSlots();
+      if (!live.length) return null;
+      if (mode !== 'pov') {
+        mode = 'pov';
+        if (!live.includes(povSlot)) povSlot = live[0];
+      } else {
+        const i = live.indexOf(povSlot);
+        povSlot = live[(i + 1) % live.length];
+      }
+      applyFrame();
+      onModeChange?.(mode);
+      return this.povName;
+    },
+
+    /** Right click (or the explore button): detach / reattach the camera. */
+    toggleFree() {
+      if (mode === 'free') {
+        mode = 'pov';
+      } else {
+        mode = 'free';
+        // Start the orbit where the eyes were, so the switch is continuous.
+        orbit.target.copy(camera.position);
+        orbit.dist = 600;
+      }
+      applyFrame();
+      onModeChange?.(mode);
+      return mode;
+    },
+
+    setMode(next) {
+      if (next === mode) return;
+      if (next === 'free') this.toggleFree();
+      else {
+        mode = 'pov';
+        applyFrame();
+        onModeChange?.(mode);
+      }
+    },
+
+    /**
+     * Wheel. In POV this narrows the field of view — a zoom that cannot walk
+     * the camera out of the player's head. Free-look dollies the orbit.
+     */
+    zoomBy(factor) {
+      if (mode === 'free') {
+        orbit.dist = Math.max(ORBIT_MIN, Math.min(ORBIT_MAX, orbit.dist / factor));
+        applyFreeCamera();
+        return;
+      }
+      fov = Math.max(FOV_MIN, Math.min(FOV_MAX, fov / factor));
+      camera.fov = fov;
+      camera.updateProjectionMatrix();
+    },
+
+    /** Free-look orbiting, from a drag. Ignored in POV — that camera is the demo's. */
+    orbitBy(dx, dy) {
+      if (mode !== 'free') return;
+      orbit.yaw -= dx * 0.005;
+      orbit.pitch = Math.max(-1.5, Math.min(1.5, orbit.pitch + dy * 0.005));
+      applyFreeCamera();
+    },
+
+    dispose() {
+      cancelAnimationFrame(raf);
+      for (const key of [...nades.keys()]) dropNade(key);
+      pack?.dispose?.();
+      renderer?.dispose?.();
+      canvas.remove();
+      renderer = null;
+      ready = false;
+    }
+  };
+}

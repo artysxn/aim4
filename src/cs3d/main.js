@@ -168,17 +168,28 @@ window.addEventListener('drop', async (e) => {
   }
 });
 
-// Dev deep-link: ?demo=<url> fetches a package instead of waiting for a drop.
-// With Vite serving /@fs/, any package on this machine is a URL in dev.
+// ?demo=<id|url> opens a demo without a drop.
+//
+// A bare id is a library demo, fetched as a package from the replays API —
+// that is the link the 2D viewer's "watch in 3D" button hands over. Anything
+// containing a slash is treated as a URL, which is what makes dev deep-links
+// work against a file on disk (Vite serves /@fs/).
 if (params.get('demo')) {
-  fetch(params.get('demo'))
+  const ref = params.get('demo');
+  const isId = /^[A-Za-z0-9_-]+$/.test(ref);
+  const src = isId ? `/api/replays/demos/${ref}/package` : ref;
+  fetch(src, isId ? { credentials: 'include' } : undefined)
     .then(async (res) => {
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      acceptDemo(loadDemoBytes(await res.arrayBuffer(), params.get('demo').split('/').pop()));
+      if (!res.ok) {
+        // The API answers JSON on failure; a package is bytes.
+        const detail = await res.json().catch(() => null);
+        throw new Error(detail?.error || `HTTP ${res.status}`);
+      }
+      acceptDemo(loadDemoBytes(await res.arrayBuffer(), isId ? ref : ref.split('/').pop()));
     })
     .catch((err) => {
       console.error('cs3d: ?demo= failed', err);
-      hud.showError(`Demo fetch failed: ${err.message}`);
+      hud.showError(`Could not open that demo: ${err.message}`);
     });
 }
 

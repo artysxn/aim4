@@ -75,6 +75,9 @@ import {
   summarizeDuelStats
 } from '../duels/duelStats.js';
 import { spinnerHtml } from '../../lib/spinner.js';
+import view2dIcon from '../../icons/demo_2d.svg?raw';
+import view3dIcon from '../../icons/demo_3d.svg?raw';
+import explore3dIcon from '../../icons/demo_3d_EXPLORE.svg?raw';
 
 const SPEEDS = [0.25, 0.5, 1, 2, 4];
 const MIN_ZOOM = 1;
@@ -137,6 +140,13 @@ export function createTimelineViewer({
         </div>
         <canvas class="rv-canvas" id="rv-canvas"></canvas>
         <div class="rv-loading" id="rv-loading"></div>
+        <div class="rv-viewmode" id="rv-viewmode" hidden>
+          <button type="button" class="rv-tool rv-viewmode-btn" id="rv-explore"
+            title="Free look (right click in 3D)" hidden>${icon(explore3dIcon)}</button>
+          <button type="button" class="rv-tool rv-viewmode-btn" id="rv-toggle3d"
+            title="Switch to 3D">${icon(view3dIcon)}</button>
+          <span class="rv-viewmode-note" id="rv-3d-note" hidden></span>
+        </div>
       </div>
       <div class="rv-team-col">
         <aside class="rv-team rv-team-2" data-team="2"></aside>
@@ -507,6 +517,153 @@ export function createTimelineViewer({
    */
   const coachAvailable = Boolean(statsDemoId);
   const states = [];
+
+  // ---- 2D / 3D view switching ---------------------------------------------
+  // The 3D scene replaces the radar canvas and nothing else: the timeline,
+  // scoreboards, killfeed, charts and every tool keep working because they
+  // read the same tick this does. It is created on first use and then kept
+  // alive for the life of the viewer — flicking between the two views of one
+  // moment is the point, and re-streaming a map pack would defeat it.
+  // ONE control, four states. An earlier cut had two widgets stacked in the
+  // same corner — a "request" chip and a mode toggle — which meant the thing
+  // you needed was missing exactly when you needed it: a demo too old to view
+  // in 3D showed no toggle, and the request chip was a separate object nobody
+  // would connect to it. The button is now the single answer to "can I see
+  // this in 3D", and it says which of the three gates is in the way.
+  const viewmodeEl = el.querySelector('#rv-viewmode');
+  const toggle3dBtn = el.querySelector('#rv-toggle3d');
+  const exploreBtn = el.querySelector('#rv-explore');
+  const note3dEl = el.querySelector('#rv-3d-note');
+  let view3d = null;
+  let mode3d = false;
+  let map3dSlug = null;
+  /** Last /3d payload: dataReady, mapReady, upgradeable, job. */
+  let avail3d = null;
+  let poll3d = 0;
+
+  async function probe3d(method = 'GET') {
+    if (!statsDemoId) return;
+    try {
+      const res = await fetch(`/api/replays/demos/${encodeURIComponent(statsDemoId)}/3d`, {
+        method,
+        credentials: 'include'
+      });
+      if (!res.ok) return;
+      avail3d = await res.json();
+      map3dSlug = avail3d.mapSlug || null;
+      // Visible whenever there is anything to say — including "this needs a
+      // reparse", which is the case the old version hid.
+      viewmodeEl.hidden = !(avail3d.dataReady || avail3d.upgradeable || avail3d.job);
+      sync3dButtons();
+      const job = avail3d.job;
+      const busy = job && ['queued', 'downloading', 'parsing'].includes(job.state);
+      clearTimeout(poll3d);
+      if (busy) poll3d = setTimeout(() => probe3d('GET'), 4000);
+    } catch {
+      /* offline or signed out: the control stays hidden */
+    }
+  }
+  probe3d();
+
+  function sync3dButtons() {
+    const s = avail3d;
+    const job = s?.job;
+    const busy = job && ['queued', 'downloading', 'parsing'].includes(job.state);
+    const ready = !!(s?.dataReady && s?.mapReady);
+
+    toggle3dBtn.classList.toggle('is-busy', !!busy);
+    toggle3dBtn.disabled = !ready && !s?.upgradeable;
+
+    if (ready) {
+      // The icon shows where you would GO, not where you are.
+      toggle3dBtn.innerHTML = icon(mode3d ? view2dIcon : view3dIcon);
+      toggle3dBtn.title = mode3d ? 'Switch to 2D radar' : 'Switch to 3D';
+      note3dEl.hidden = true;
+    } else {
+      toggle3dBtn.innerHTML = icon(view3dIcon);
+      note3dEl.hidden = false;
+      if (busy) {
+        toggle3dBtn.title = 'Preparing this demo for 3D';
+        note3dEl.textContent =
+          job.state === 'queued'
+            ? job.position > 1
+              ? `#${job.position} in queue`
+              : 'next up'
+            : job.state === 'downloading'
+              ? 'downloading'
+              : 'reparsing';
+      } else if (job?.state === 'failed') {
+        toggle3dBtn.title = 'Reparse failed — click to try again';
+        note3dEl.textContent = 'failed, retry';
+      } else if (s?.upgradeable) {
+        toggle3dBtn.title = 'Request 3D: this demo needs a reparse for jump & crouch';
+        note3dEl.textContent = 'request 3D';
+      } else if (s?.dataReady && !s?.mapReady) {
+        toggle3dBtn.title = `${s.mapName || 'This map'} has no 3D map yet`;
+        note3dEl.textContent = 'no 3D map';
+      } else {
+        toggle3dBtn.title = 'No source demo on file to reparse';
+        note3dEl.textContent = 'unavailable';
+      }
+    }
+
+    exploreBtn.hidden = !mode3d;
+    exploreBtn.classList.toggle('is-on', mode3d && view3d?.mode === 'free');
+    exploreBtn.title =
+      view3d?.mode === 'free' ? 'Free look on — right click to return to POV' : 'Free look (right click in 3D)';
+    mapEl.classList.toggle('is-3d', mode3d);
+  }
+
+  async function setMode3d(on) {
+    if (on === mode3d) return;
+    if (on && !map3dSlug) return;
+    mode3d = on;
+    if (on) {
+      if (!view3d) {
+        // Loaded on demand: three.js and the map loader are a large chunk, and
+        // most sessions never leave the radar.
+        toggle3dBtn.classList.add('is-loading');
+        try {
+          const { createView3d } = await import('./view3d.js');
+          view3d = createView3d({ slug: map3dSlug, onModeChange: () => sync3dButtons() });
+          await view3d.start(mapEl);
+        } finally {
+          toggle3dBtn.classList.remove('is-loading');
+        }
+        if (view3d.failed) {
+          mode3d = false;
+          sync3dButtons();
+          return;
+        }
+      }
+      view3d.show();
+      // Push the current moment straight in, so the switch shows the same
+      // instant rather than an empty map until the next tick.
+      draw();
+    } else {
+      view3d?.hide();
+      draw();
+    }
+    sync3dButtons();
+  }
+
+  toggle3dBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const s = avail3d;
+    // Ready: this is the view switch. Behind: this is the request. Same
+    // button, because to the user it is the same intent.
+    if (s?.dataReady && s?.mapReady) {
+      setMode3d(!mode3d);
+      return;
+    }
+    if (s?.upgradeable || s?.job?.state === 'failed') probe3d('POST');
+  });
+  exploreBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (!mode3d || !view3d) return;
+    view3d.toggleFree();
+    sync3dButtons();
+  });
 
   const playback = new Playback((pos) => onPosition(pos));
 
@@ -1863,6 +2020,14 @@ export function createTimelineViewer({
     (e) => {
       e.preventDefault();
       const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+      // In 3D the wheel narrows the field of view instead of scaling a radar.
+      // There is no pan to go with it on purpose: dragging a POV camera would
+      // walk it out of the player's head, which is the one thing the 3D view
+      // exists to show faithfully.
+      if (mode3d && view3d) {
+        view3d.zoomBy(factor);
+        return;
+      }
       setZoom(renderer.zoom * factor, e.clientX, e.clientY);
     },
     { passive: false }
@@ -1872,6 +2037,8 @@ export function createTimelineViewer({
 
   let panning = false;
   let panBtn = -1;
+  /** True while a left-drag is orbiting the 3D free camera. */
+  let orbiting = false;
   let lastX = 0;
   let lastY = 0;
   /** Pointer id currently laying down (or rubbing out) ink, or -1. */
@@ -1914,6 +2081,30 @@ export function createTimelineViewer({
     if (e.target.closest?.('.rv-clock-row, .rv-loading')) return;
     closePopovers();
 
+    // In 3D the right button belongs to the camera, not the pencil: it flips
+    // between a player's eyes and free look. Drawing is still available, but
+    // it has to be asked for with the pencil — which then takes both buttons
+    // back, so an intentional annotation is never eaten by a camera move.
+    if (mode3d && view3d && !drawing.enabled) {
+      if (e.button === 2) {
+        pendingClick = null;
+        view3d.toggleFree();
+        sync3dButtons();
+        e.preventDefault();
+        return;
+      }
+      if (e.button === 0) {
+        // Left click cycles POV, but only as a click — a drag orbits.
+        pendingClick = { x: e.clientX, y: e.clientY, id: e.pointerId, three: true };
+        orbiting = true;
+        lastX = e.clientX;
+        lastY = e.clientY;
+        mapEl.setPointerCapture(e.pointerId);
+        e.preventDefault();
+        return;
+      }
+    }
+
     // Right click always draws, whatever mode the toolbar is in. Left click
     // only draws while drawing mode is on, so it stays a pan otherwise.
     if (e.button === 2 || (e.button === 0 && drawing.enabled)) {
@@ -1947,6 +2138,17 @@ export function createTimelineViewer({
   });
 
   mapEl.addEventListener('pointermove', (e) => {
+    if (orbiting && pendingClick?.id === e.pointerId) {
+      const dx = e.clientX - lastX;
+      const dy = e.clientY - lastY;
+      lastX = e.clientX;
+      lastY = e.clientY;
+      if (Math.hypot(e.clientX - pendingClick.x, e.clientY - pendingClick.y) > CLICK_SLOP) {
+        pendingClick.moved = true;
+        view3d?.orbitBy(dx, dy);
+      }
+      return;
+    }
     if (inkPointer === e.pointerId) {
       const pt = radarAt(e);
       if (drawing.erasing) drawing.eraseAt(pt, pt.scale);
@@ -2002,6 +2204,24 @@ export function createTimelineViewer({
   const endPan = (e) => {
     if (endStroke(e)) {
       pendingClick = null;
+      orbiting = false;
+      return;
+    }
+    // A 3D left-click that never became a drag is a request for the next
+    // player's eyes; one that moved was an orbit and must not also cycle.
+    if (orbiting && pendingClick?.id === e.pointerId) {
+      const wasClick = !pendingClick.moved && e.type === 'pointerup';
+      orbiting = false;
+      pendingClick = null;
+      try {
+        mapEl.releasePointerCapture(e.pointerId);
+      } catch {
+        /* already released */
+      }
+      if (wasClick && view3d) {
+        view3d.cyclePov();
+        sync3dButtons();
+      }
       return;
     }
     if (
@@ -4322,6 +4542,20 @@ export function createTimelineViewer({
     const pov = povFrameFor(tick);
     const zoneOverlay = zoneOverlayForTick(tick);
     const duelOverlayFrame = duelOverlayForTick(tick, pov);
+
+    // The 3D view reads the same sampled tick the radar does, so the two can
+    // never drift apart — they are one set of numbers drawn twice.
+    if (mode3d && view3d) {
+      view3d.setFrame({
+        tick,
+        tickRate: timing.tickRate,
+        states,
+        players: track ? activeMeta.players || [] : [],
+        events: track ? activeMeta.events || {} : {},
+        teamSides: { 1: activeMeta.team1Side, 2: activeMeta.team2Side }
+      });
+    }
+
     renderer.render({
       tick,
       tickRate: timing.tickRate,
@@ -4550,9 +4784,16 @@ export function createTimelineViewer({
 
   const onResize = () => {
     syncChromeInset();
+    view3d?.resize();
     draw();
   };
   window.addEventListener('resize', onResize);
+
+  // The map pane resizes on its own too — sidebars collapsing, charts opening
+  // — and the 3D canvas has to follow it, not just the window.
+  const mapObserver =
+    typeof ResizeObserver === 'function' ? new ResizeObserver(() => view3d?.resize()) : null;
+  mapObserver?.observe(mapEl);
 
   const offStore = store.onChange((event) => {
     if (event.type === 'full' && event.file === files[activeIndex]) draw();
@@ -4631,6 +4872,11 @@ export function createTimelineViewer({
       detachBoardTips();
       offStore();
       chromeObserver?.disconnect();
+      mapObserver?.disconnect();
+      clearTimeout(poll3d);
+      // Releases the WebGPU device and the map pack; nothing else will.
+      view3d?.dispose();
+      view3d = null;
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('keydown', onTabDown);
       window.removeEventListener('keyup', onTabUp);
