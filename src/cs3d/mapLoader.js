@@ -200,6 +200,41 @@ function normalizeTile(mesh, wantColor, tint, wantAmb) {
 }
 
 /**
+ * World-space surface area of a normalized tile.
+ *
+ * The flat view (src/cs3d/fpsView.js) shades a material by how much of the map
+ * it covers, and triangle count is not that number: Nuke's pipe material
+ * carries 255k triangles strung around the level and covers less ground than
+ * the handful that make the hangar floor. Area has to be measured, and here is
+ * the only place it can be — `geom` holds this tile's positions already baked
+ * to world space, and the caller disposes it immediately afterwards.
+ *
+ * ~3.7M triangles for Nuke, spread across 80 group loads, so no frame wears
+ * more than a fraction of a millisecond of it.
+ */
+function surfaceArea(geom) {
+  const p = geom.getAttribute('position').array;
+  const idx = geom.index.array;
+  let sum = 0;
+  for (let i = 0; i < idx.length; i += 3) {
+    const a = idx[i] * 3;
+    const b = idx[i + 1] * 3;
+    const c = idx[i + 2] * 3;
+    const ux = p[b] - p[a];
+    const uy = p[b + 1] - p[a + 1];
+    const uz = p[b + 2] - p[a + 2];
+    const vx = p[c] - p[a];
+    const vy = p[c + 1] - p[a + 1];
+    const vz = p[c + 2] - p[a + 2];
+    const cx = uy * vz - uz * vy;
+    const cy = uz * vx - ux * vz;
+    const cz = ux * vy - uy * vx;
+    sum += Math.sqrt(cx * cx + cy * cy + cz * cz);
+  }
+  return sum * 0.5;
+}
+
+/**
  * BatchedMesh whose per-tile culling keeps a radius of tiles around the
  * camera alive regardless of the frustum (see SHADOW_KEEP_RADIUS).
  */
@@ -291,6 +326,27 @@ export class MapPack {
     this.world.name = 'world';
     this.sky3d = null; // Group, when the map has a 3D skybox
     this.batches = new Map(); // matId → TileBatch
+    /** matId → world-space surface area, summed over its tiles (see surfaceArea). */
+    this.matArea = new Map();
+    /**
+     * Every instance tint ever applied, as [batch, instanceId, colour].
+     *
+     * BatchedMesh multiplies its per-instance colour into every fragment
+     * (three's NodeMaterial: `colorNode = batchColor.mul(colorNode)`), so the
+     * flat view has to flatten these to white or its greys come out carrying
+     * Dust 2's taxi yellow. Kept as a list rather than a snapshot of the colour
+     * texture so a tile that streams in while the view is on still gets its
+     * tint when the view is switched off.
+     */
+    this.tints = [];
+    this.tintsOff = false;
+    /**
+     * Make every world batch receive the dynamic sun's shadows, including ones
+     * created later. Lightmapped geometry normally does not — its shadows are
+     * in the bake — but the flat view throws the bake away and needs them from
+     * the shadow map instead.
+     */
+    this.forceReceiveShadow = false;
     this.placeholder = null;
     this.collider = null; // { geometry, bvh }
     this.groupsLoaded = 0;
@@ -462,7 +518,7 @@ export class MapPack {
     // geometry never *receives* the dynamic sun; it still *casts*, so a prop
     // standing in an alley is shaded by the walls the way its floor is.
     b.castShadow = !decal && m.alphaMode !== 'BLEND' && root !== this.sky3d;
-    b.receiveShadow = !m.lightmapped && root !== this.sky3d;
+    b.receiveShadow = (this.forceReceiveShadow || !m.lightmapped) && root !== this.sky3d;
     if (decal) b.renderOrder = 1;
     if (root === this.sky3d) {
       // The skybox is scenery: no shadows either way, drawn first.
@@ -510,8 +566,12 @@ export class MapPack {
         // material per vmat; the colour survives per tile. Masked materials
         // already carry it in COLOR_0.gba, and must not take it twice.
         if (!masked && tileTint && (tileTint.r !== 1 || tileTint.g !== 1 || tileTint.b !== 1)) {
-          batch.setColorAt(iid, tileTint);
+          this.tints.push([batch, iid, tileTint.clone()]);
+          if (!this.tintsOff) batch.setColorAt(iid, tileTint);
         }
+        // The flat view's shading input. The 3D skybox is left out: the view
+        // hides it, and its ×16 group scale is not in these positions anyway.
+        if (!job.sky) this.matArea.set(id, (this.matArea.get(id) || 0) + surfaceArea(geom));
         this.tileCount++;
       } catch (e) {
         console.warn(`cs3d: tile for m${id} rejected`, e.message);
@@ -520,6 +580,18 @@ export class MapPack {
       o.geometry.dispose();
     }
     this.onWorldChanged();
+  }
+
+  /**
+   * Turn every tile's instance tint on or off (see `this.tints`).
+   *
+   * Off means white, which is the identity for the multiply three bakes into
+   * every batched material — so the flat view's greys stay grey.
+   * @param {boolean} on
+   */
+  setTintsEnabled(on) {
+    this.tintsOff = !on;
+    for (const [batch, iid, color] of this.tints) batch.setColorAt(iid, on ? color : _WHITE);
   }
 
   /** Spawn list for a side, or the other side if that one is empty. */
@@ -661,3 +733,4 @@ export class MapPack {
 }
 
 const _IDENTITY = new THREE.Matrix4();
+const _WHITE = new THREE.Color(1, 1, 1);

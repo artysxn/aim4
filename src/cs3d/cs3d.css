@@ -351,3 +351,44 @@ body {
 #c3-ui.is-locked ~ .c3-cross {
   display: block;
 }
+
+/* ---- demo playback ------------------------------------------------------- */
+/* The roster: bottom-left, one row per player, digit = POV key. Team colours
+   match the placeholder bodies (T amber, CT blue); the active POV row glows. */
+.c3-roster {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font: 12px/1.5 ui-monospace, Menlo, monospace;
+  pointer-events: none;
+}
+.c3-roster[hidden] {
+  display: none;
+}
+.c3-r-row {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  background: rgba(12, 12, 12, 0.72);
+  border-radius: 4px;
+  padding: 1px 8px;
+  color: var(--text);
+}
+.c3-r-row b {
+  opacity: 0.6;
+}
+.c3-r-tT span {
+  color: #e6b563;
+}
+.c3-r-tCT span {
+  color: #85a9ef;
+}
+.c3-r-row.is-pov {
+  outline: 1px solid rgba(255, 255, 255, 0.65);
+}
+.c3-keys-demo b {
+  color: #b9c6e8;
+}

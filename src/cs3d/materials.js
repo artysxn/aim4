@@ -201,6 +201,7 @@ export class MaterialLibrary {
       : 16;
     this.interim = new Map(); // id → flat-colour material shown until textures land
     this.final = new Map(); // id → textured material
+    this.flat = null; // id → unlit grey, while the flat view is on (setFlat)
     this.users = new Map(); // id → Set<Object3D> whose .material we own
     this.textures = new Array(manifest.tex?.dir?.length || 0); // index → THREE.Texture
     this.pendingMats = new Map(); // texIndex → Set<matId> waiting on it
@@ -275,9 +276,53 @@ export class MaterialLibrary {
     this.time.value = seconds;
   }
 
-  /** Current material for an id (final if built, else interim). */
+  /** Current material for an id: the flat view's if it is on, else final, else interim. */
   get(id) {
-    return this.final.get(id) || this.interim.get(id) || null;
+    return this.flat?.get(id) || this.final.get(id) || this.interim.get(id) || null;
+  }
+
+  /**
+   * Replace every material with one unlit colour, or restore the real ones.
+   *
+   * This is a swap rather than an edit of the live materials for the same
+   * reason the streaming path is (rule 1 at the top of this file): a textured
+   * node material cannot have its maps pulled out from under it. The flat
+   * materials are built once, held, and handed to every object bound to an id
+   * — including objects bound *after* the view is on, because `get()` and
+   * `bind()` both read `this.flat` first, so a batch created by a group that
+   * is still streaming comes up flat like the rest.
+   *
+   * Lambert, not Basic: the flat view keeps the live sun and its shadow map,
+   * and an unlit material takes neither. Lambert is the cheapest thing that
+   * does — diffuse only, no specular lobe, no environment — and it drops every
+   * baked input with it, which is the other half of what this view is for.
+   *
+   * @param {Map<number, number|null>|null} colors  id → grey hex, or null for
+   *   "do not draw this one" (the cut-outs and decals: a chainlink fence with
+   *   its alpha thrown away is a solid slab across the map). Pass null for the
+   *   whole map to restore the textured materials.
+   */
+  setFlat(colors) {
+    if (this.flat) {
+      for (const m of this.flat.values()) m.dispose();
+      this.flat = null;
+    }
+    if (colors) {
+      this.flat = new Map();
+      for (const m of this.manifest.materials) {
+        const grey = colors.get(m.id);
+        const mat = new THREE.MeshLambertMaterial({ color: grey ?? 0x555555 });
+        mat.name = `m${m.id}:flat`;
+        // No fog and no tone mapping in this view, so a lit surface shows the
+        // hex asked for — which is the whole point of shading by area.
+        mat.fog = false;
+        if (grey === null) mat.visible = false;
+        if (m.doubleSided) mat.side = THREE.DoubleSide;
+        mat.userData = { id: m.id, flat: true };
+        this.flat.set(m.id, mat);
+      }
+    }
+    for (const [id, set] of this.users) for (const o of set) o.material = this.get(id);
   }
 
   /** Material id from a pack mesh's material name ("m12"). */
@@ -492,7 +537,9 @@ export class MaterialLibrary {
     const mat = this._buildFinal(m);
     this.final.set(id, mat);
     const users = this.users.get(id);
-    if (users) for (const o of users) o.material = mat;
+    // `get`, not `mat`: with the flat view on, a material finishing its
+    // textures must not put them back on screen.
+    if (users) for (const o of users) o.material = this.get(id);
     this.onMaterialReady?.(id, mat);
   }
 
@@ -742,5 +789,6 @@ export class MaterialLibrary {
     this.sun.mask?.dispose();
     for (const m of this.interim.values()) m.dispose();
     for (const m of this.final.values()) m.dispose();
+    if (this.flat) for (const m of this.flat.values()) m.dispose();
   }
 }

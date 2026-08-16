@@ -1,0 +1,159 @@
+// Run: node shared/sim3d/motion.test.js
+//
+// The movement tick against its own closed forms. The demo corpus (via
+// scripts/cs3d-oracle.mjs) is the authority on whether the MODEL matches
+// CS2; this file is the authority on whether the CODE matches the model:
+// the leapfrog identity, the accelerate cap, the air-speed cap, the exact
+// friction sequence, and bit-for-bit determinism of the f32 discipline.
+// Everything is derived from constants.js at runtime, so retuning a
+// constant to a measured value does not break the suite.
+
+import {
+  TICK_DT,
+  GRAVITY,
+  JUMP_IMPULSE,
+  ACCEL,
+  FRICTION,
+  STOP_SPEED,
+  AIR_SPEED_CAP
+} from './constants.js';
+import { createPlayerState, createInput, stepPlayer, flatWorld, emptyWorld } from './motion.js';
+import { createGrenade, stepGrenade, GRENADE_GRAVITY_SCALE } from './grenade.js';
+
+function assert(cond, msg) {
+  if (!cond) throw new Error(msg || 'assert failed');
+}
+const close = (a, b, tol, msg) => assert(Math.abs(a - b) <= tol, `${msg}: ${a} vs ${b} (tol ${tol})`);
+
+// ---- jump: leapfrog samples lie exactly on the continuous parabola --------
+{
+  const world = flatWorld(0);
+  const st = createPlayerState(0, 0, 0);
+  const input = createInput();
+  stepPlayer(st, input, world); // settle onto the ground
+  assert(st.onGround, 'starts grounded on the flat world');
+
+  input.jump = true;
+  stepPlayer(st, input, world);
+  input.jump = false;
+
+  // z after the jump tick: (J − g·dt/2)·dt, the order the oracle verified.
+  close(st.pos.z, (JUMP_IMPULSE - (GRAVITY * TICK_DT) / 2) * TICK_DT, 1e-3, 'first-tick rise');
+
+  let apex = 0;
+  let ticks = 1;
+  while (!st.onGround && ticks < 200) {
+    stepPlayer(st, input, world);
+    apex = Math.max(apex, st.pos.z);
+    ticks++;
+    // Leapfrog identity: every airborne sample sits on z = J·t − g·t²/2.
+    if (!st.onGround) {
+      const t = ticks * TICK_DT;
+      close(st.pos.z, JUMP_IMPULSE * t - (GRAVITY / 2) * t * t, 0.01, `parabola at tick ${ticks}`);
+    }
+  }
+  assert(st.onGround, 'lands');
+  close(apex, (JUMP_IMPULSE * JUMP_IMPULSE) / (2 * GRAVITY), 0.15, 'apex ≈ J²/2g');
+  close(ticks * TICK_DT, (2 * JUMP_IMPULSE) / GRAVITY, 2.5 * TICK_DT, 'hang time ≈ 2J/g');
+  close(st.pos.z, 0, 1e-3, 'back on the floor');
+}
+
+// ---- ground accelerate: first-tick kick, cap, and steady state ------------
+{
+  const world = flatWorld(0);
+  const st = createPlayerState(0, 0, 0);
+  const input = createInput();
+  input.maxSpeed = 215;
+  stepPlayer(st, input, world);
+  input.forward = 1;
+
+  stepPlayer(st, input, world);
+  // From rest friction no-ops, so tick one adds exactly accel·dt·wishspeed.
+  close(Math.hypot(st.vel.x, st.vel.y), ACCEL * TICK_DT * 215, 1e-2, 'first-tick accelerate');
+
+  for (let i = 0; i < 96; i++) stepPlayer(st, input, world);
+  const speed = Math.hypot(st.vel.x, st.vel.y);
+  close(speed, 215, 1e-2, 'steady-state run speed');
+  assert(speed <= 215 + 1e-3, 'never exceeds wishspeed');
+  assert(st.onGround && Math.abs(st.pos.z) < 1e-3, 'stays glued to the floor');
+}
+
+// ---- friction: the exact Source decay sequence ----------------------------
+{
+  const world = flatWorld(0);
+  const st = createPlayerState(0, 0, 0);
+  const input = createInput();
+  stepPlayer(st, input, world);
+  st.vel.x = 200;
+
+  // Reference: control = max(v, stopspeed); v' = v − control·f·dt, and
+  // WalkMove snaps speeds under 1 u/s to a dead stop.
+  let ref = 200;
+  for (let i = 0; i < 40; i++) {
+    stepPlayer(st, input, world);
+    const control = ref < STOP_SPEED ? STOP_SPEED : ref;
+    ref = Math.max(0, ref - control * FRICTION * TICK_DT);
+    if (ref < 1) ref = 0;
+    close(st.vel.x, ref, 0.05, `friction tick ${i}`);
+    if (ref === 0) break;
+  }
+  assert(st.vel.x === 0, 'comes to a dead stop');
+}
+
+// ---- air control: the 30 u/s projection cap -------------------------------
+{
+  const world = emptyWorld();
+  const st = createPlayerState(0, 0, 10000);
+  st.onGround = false;
+  const input = createInput();
+  input.maxSpeed = 215;
+  input.side = 1;
+  for (let i = 0; i < 128; i++) stepPlayer(st, input, world);
+  const h = Math.hypot(st.vel.x, st.vel.y);
+  close(h, AIR_SPEED_CAP, 0.5, 'air speed saturates at the cap');
+  assert(h <= AIR_SPEED_CAP + 1e-3, 'cap never exceeded');
+}
+
+// ---- determinism: the f32 discipline is bit-stable ------------------------
+{
+  const run = () => {
+    const world = flatWorld(0);
+    const st = createPlayerState(3.25, -7.5, 0);
+    const input = createInput();
+    input.maxSpeed = 215;
+    for (let i = 0; i < 300; i++) {
+      input.forward = i % 3 === 0 ? 1 : 0;
+      input.side = i % 5 === 0 ? -1 : 1;
+      input.yaw = (i * 7) % 360;
+      input.jump = i % 50 === 10;
+      stepPlayer(st, input, world);
+    }
+    return st;
+  };
+  const a = run();
+  const b = run();
+  assert(Object.is(a.pos.x, b.pos.x) && Object.is(a.pos.y, b.pos.y) && Object.is(a.pos.z, b.pos.z), 'positions bit-identical');
+  assert(Object.is(a.vel.x, b.vel.x) && Object.is(a.vel.y, b.vel.y) && Object.is(a.vel.z, b.vel.z), 'velocities bit-identical');
+  assert(a.pos.x === Math.fround(a.pos.x) && a.vel.x === Math.fround(a.vel.x), 'state stays f32');
+}
+
+// ---- grenade: leapfrog arc and coming to rest -----------------------------
+{
+  const g = createGrenade({ x: 0, y: 0, z: 100 }, { x: 250, y: 0, z: 100 });
+  const world = emptyWorld();
+  const grav = GRAVITY * GRENADE_GRAVITY_SCALE;
+  for (let k = 1; k <= 64; k++) {
+    stepGrenade(g, world);
+    const t = k * TICK_DT;
+    close(g.pos.z, 100 + 100 * t - (grav / 2) * t * t, 0.02, `grenade parabola tick ${k}`);
+    close(g.pos.x, 250 * t, 0.02, `grenade linear x tick ${k}`);
+  }
+
+  const g2 = createGrenade({ x: 0, y: 0, z: 60 }, { x: 40, y: 0, z: 0 });
+  const floor = flatWorld(0);
+  for (let k = 0; k < 640 && !g2.resting; k++) stepGrenade(g2, floor);
+  assert(g2.resting, 'grenade comes to rest on the floor');
+  assert(g2.bounces > 0, 'rest came via at least one bounce');
+}
+
+console.log('motion.test: ok');

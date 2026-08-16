@@ -20,8 +20,11 @@ export class Hud {
         <div class="c3-stat" data-k="pos">0 0 0</div>
         <div class="c3-stat" data-k="speed">0 u/s</div>
         <div class="c3-stat" data-k="fps"></div>
+        <div class="c3-stat" data-k="view"></div>
         <div class="c3-stat" data-k="backend"></div>
+        <div class="c3-stat" data-k="demo" hidden></div>
       </div>
+      <div class="c3-roster" data-k="roster" hidden></div>
       <div class="c3-inspect" data-k="inspect" hidden></div>
       <div class="c3-grade" data-k="grade" hidden></div>
       <div class="c3-load" data-k="load"><div class="c3-load-bar"><span></span></div><div class="c3-load-text"></div></div>
@@ -39,6 +42,11 @@ export class Hud {
             <div><b>Esc</b> release, <b>H</b> this panel</div>
             <div><b>I</b> inspect what you are looking at</div>
             <div><b>G</b> colour grade sliders</div>
+            <div><b>V</b> flat view — no textures, max fps</div>
+            <div class="c3-keys-demo"><b>Drop</b> an .aim4replay on the page to watch it here</div>
+            <div class="c3-keys-demo"><b>1-0</b> player POV, <b>X</b> free camera</div>
+            <div class="c3-keys-demo"><b>P</b> play / pause, <b>, .</b> step (Shift: half-second)</div>
+            <div class="c3-keys-demo"><b>[ ]</b> previous / next round, <b>M</b> speed</div>
           </div>
           <label class="c3-sens">Sensitivity <input type="number" step="0.05" min="0.05" max="10" value="${sens}"></label>
           <div class="c3-maps"></div>
@@ -78,6 +86,61 @@ export class Hud {
 
   setBackend(name) {
     this.el.backend.textContent = name;
+  }
+
+  /** The flat view is a mode you can forget you are in; say so in the strip. */
+  setFpsView(on) {
+    this.el.view.textContent = on ? 'flat' : '';
+  }
+
+  /**
+   * The demo roster: one row per player, digit → POV. Rebuilt on demo/round/
+   * POV changes only — the per-frame part is setDemoStatus.
+   * @param {Array<{slot:number,name:string,team:1|2,pov:boolean}>|null} rows
+   */
+  setRoster(rows) {
+    const el = this.el.roster;
+    if (!rows || !rows.length) {
+      el.hidden = true;
+      el.innerHTML = '';
+      return;
+    }
+    el.hidden = false;
+    el.innerHTML = rows
+      .map(
+        (p) =>
+          `<div class="c3-r-row${p.pov ? ' is-pov' : ''} c3-r-t${esc(p.side)}">` +
+          `<b>${(p.slot + 1) % 10}</b><span>${esc(p.name)}</span></div>`
+      )
+      .join('');
+  }
+
+  hideError() {
+    this.el.err.hidden = true;
+  }
+
+  /**
+   * The per-frame demo strip: round, clock, play state, speed, POV. Throttled
+   * here so callers can just call it every frame.
+   */
+  setDemoStatus(s) {
+    const el = this.el.demo;
+    if (!s) {
+      el.hidden = true;
+      el.textContent = '';
+      return;
+    }
+    const now = performance.now();
+    if (!el.hidden && now - (this._demoAt || 0) < 100) return;
+    this._demoAt = now;
+    el.hidden = false;
+    const sign = s.clock < 0 ? '-' : '';
+    const t = Math.abs(s.clock);
+    const clock = `${sign}${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
+    el.textContent =
+      `round ${s.round}/${s.rounds}  ${clock}  ${s.atEnd ? 'end' : s.playing ? '▶' : '⏸'}` +
+      (s.speed !== 1 ? ` ×${s.speed}` : '') +
+      (s.pov ? `  POV ${s.pov}` : '');
   }
 
   /** @param {number[]} src source-space position, @param {number} speed u/s */

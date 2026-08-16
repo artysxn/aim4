@@ -62,15 +62,13 @@ export class Controls {
     if (down) this.keys.add(code);
     else this.keys.delete(code);
     if (down) {
+      // Digits are context-dependent: main.js routes them to demo POV when a
+      // demo is loaded, or to T/CT spawns in the plain explorer.
+      const digit = /^Digit(\d)$/.exec(code);
+      if (digit) this.hooks.onDigit?.(Number(digit[1]));
       switch (code) {
         case 'KeyF':
           this.hooks.onToggleMode?.();
-          break;
-        case 'Digit1':
-          this.hooks.onSpawn?.('T');
-          break;
-        case 'Digit2':
-          this.hooks.onSpawn?.('CT');
           break;
         case 'KeyR':
           this.hooks.onSpawn?.(null);
@@ -83,6 +81,31 @@ export class Controls {
           break;
         case 'KeyG':
           this.hooks.onGrade?.();
+          break;
+        case 'KeyV':
+          this.hooks.onFpsView?.();
+          break;
+        // Demo playback (no-ops until a demo is loaded; main.js decides).
+        case 'KeyP':
+          this.hooks.onPlayPause?.();
+          break;
+        case 'Comma':
+          this.hooks.onStep?.(e.shiftKey ? -32 : -1);
+          break;
+        case 'Period':
+          this.hooks.onStep?.(e.shiftKey ? 32 : 1);
+          break;
+        case 'BracketLeft':
+          this.hooks.onRound?.(-1);
+          break;
+        case 'BracketRight':
+          this.hooks.onRound?.(1);
+          break;
+        case 'KeyM':
+          this.hooks.onSpeed?.();
+          break;
+        case 'KeyX':
+          this.hooks.onPovExit?.();
           break;
         case 'Space':
           if (this.locked) this.player.input.jump = true;

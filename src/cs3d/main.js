@@ -18,6 +18,9 @@ import { patchWebGPUPartialAttributeUpload } from './threePatches.js';
 import { Player } from './player.js';
 import { Controls } from './controls.js';
 import { Hud } from './hud.js';
+import { FpsView } from './fpsView.js';
+import { DemoView } from './demoView.js';
+import { loadDemoBytes, loadDemoFile } from './demoData.js';
 
 const params = new URLSearchParams(location.search);
 const map = cs3dMapForPath(location.pathname) || cs3dMap(params.get('map')) || null;
@@ -77,13 +80,26 @@ const controls = new Controls(canvas, player, {
     hud.setMode(player.mode);
   },
   onSpawn: (side) => spawnAt(side),
+  // Digits belong to the demo when one is loaded (1-0 → slots 0-9), and to
+  // the T/CT spawns in the plain explorer.
+  onDigit: (n) => {
+    if (demoView.active) demoView.setPov((n + 9) % 10);
+    else if (n === 1) spawnAt('T');
+    else if (n === 2) spawnAt('CT');
+  },
+  onPlayPause: () => demoView.togglePlay(),
+  onStep: (d) => demoView.step(d),
+  onRound: (d) => demoView.shiftRound(d),
+  onSpeed: () => demoView.cycleSpeed(),
+  onPovExit: () => demoView.active && demoView.povSlot !== null && demoView.setPov(demoView.povSlot),
   onHelp: () => hud.toggleHelp(),
   onInspect: () => {
     inspectOn = !inspectOn;
     if (!inspectOn) hud.setInspect(null);
     inspectAt = 0;
   },
-  onGrade: () => hud.toggleGrade()
+  onGrade: () => hud.toggleGrade(),
+  onFpsView: () => fpsView.toggle()
 });
 const hud = new Hud(uiRoot, {
   map,
@@ -92,6 +108,79 @@ const hud = new Hud(uiRoot, {
 });
 hud.setLocked(false);
 hud.setMode(player.mode);
+
+// The flat view (V). Reads `pack` and `lighting` through getters because both
+// are filled in by boot(), long after the key is bound.
+const fpsView = new FpsView({
+  scene,
+  renderer,
+  getPack: () => pack,
+  getLighting: () => lighting,
+  onChange: (on) => hud.setFpsView(on)
+});
+
+// ---- demo playback ---------------------------------------------------------
+// Drop an .aim4replay (the compact package the local parser and the library
+// both use) onto the page to watch it on this map: placeholder bodies, every
+// grenade, and 1-0 for any player's POV. Rejected when the package is for a
+// different map — the geometry under the ticks would be nonsense.
+const demoView = new DemoView({
+  camera,
+  getPack: () => pack,
+  onChange: (dv) => {
+    hud.setRoster(dv.active ? dv.roster() : null);
+    hud.setDemoStatus(dv.status());
+    if (!dv.active) hud.setDemoStatus(null);
+    // Leaving a POV: hand the fly camera the view so there is no snap.
+    if (dv.povSlot === null && player.mode === 'fly') {
+      player.yaw = camera.rotation.y;
+      player.pitch = camera.rotation.x;
+      player.flyVel.set(0, 0, 0);
+    }
+  }
+});
+
+function acceptDemo(demo) {
+  if (demo.mapCode !== map.code) {
+    const wanted = CS3D_MAPS.find((m) => m.code === demo.mapCode);
+    hud.showError(
+      `${demo.name} is a ${wanted ? wanted.name : demo.mapCode} demo` +
+        (wanted ? ` — open /${wanted.slug} and drop it there.` : ', which has no 3D map yet.')
+    );
+    setTimeout(() => hud.hideError(), 6000);
+    return;
+  }
+  demoView.setDemo(demo);
+  console.log(`cs3d: demo loaded — ${demo.name}, ${demo.rounds.length} rounds`);
+}
+
+window.addEventListener('dragover', (e) => e.preventDefault());
+window.addEventListener('drop', async (e) => {
+  e.preventDefault();
+  const file = e.dataTransfer?.files?.[0];
+  if (!file) return;
+  try {
+    acceptDemo(await loadDemoFile(file));
+  } catch (err) {
+    console.error(err);
+    hud.showError(`Could not read ${file.name}: ${err.message}`);
+    setTimeout(() => hud.hideError(), 6000);
+  }
+});
+
+// Dev deep-link: ?demo=<url> fetches a package instead of waiting for a drop.
+// With Vite serving /@fs/, any package on this machine is a URL in dev.
+if (params.get('demo')) {
+  fetch(params.get('demo'))
+    .then(async (res) => {
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      acceptDemo(loadDemoBytes(await res.arrayBuffer(), params.get('demo').split('/').pop()));
+    })
+    .catch((err) => {
+      console.error('cs3d: ?demo= failed', err);
+      hud.showError(`Demo fetch failed: ${err.message}`);
+    });
+}
 
 // ---- pack ------------------------------------------------------------------
 let pack = null;
@@ -460,6 +549,15 @@ function setupBloom(manifest) {
  * three unshifts it onto the render list whatever `autoClear` says.
  */
 function renderFrame() {
+  // The flat view is one pass to the canvas and nothing else. There is no 3D
+  // skybox to draw first, so the depth clear and the second render have nothing
+  // to separate, and the composite's HDR target and fullscreen pass would only
+  // put the map's LUT back over greys chosen to be exact.
+  if (fpsView.enabled) {
+    renderer.setRenderTarget(null);
+    renderer.render(scene, camera);
+    return;
+  }
   // With bloom on, both passes go to the HDR target and the composite puts the
   // result on screen; without it, straight to the canvas as before.
   if (composite) renderer.setRenderTarget(sceneRT);
@@ -516,6 +614,9 @@ function frame(now) {
   const dt = Math.min(0.1, (now - last) / 1000);
   last = now;
   player.update(dt);
+  // After the player: in POV the demo owns the camera, and writing second wins.
+  demoView.update(now);
+  if (demoView.active) hud.setDemoStatus(demoView.status());
   lighting?.update();
   pack.materials?.setTime(now / 1000);
   if (renderer.backend) renderFrame();
@@ -546,5 +647,5 @@ boot();
 requestAnimationFrame(frame);
 
 if (import.meta.env.DEV) {
-  window.__cs3d = { THREE, scene, camera, player, get pack() { return pack; }, renderer, lighting: () => lighting };
+  window.__cs3d = { THREE, scene, camera, player, get pack() { return pack; }, renderer, lighting: () => lighting, fpsView, demoView };
 }
