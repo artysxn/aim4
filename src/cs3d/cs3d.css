@@ -213,6 +213,66 @@ body {
   user-select: all;
 }
 
+/* The boot screen. Nothing of the map is shown until every tile and texture
+   is in: streaming them over an empty void looks like a broken render, and
+   this is also the moment the browser is busiest, so an honest bar reads
+   better than a half-built world. Opaque and click-blocking, so a click
+   cannot lock the pointer into a map that is not on screen yet. */
+.c3-boot {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  background: #2e2e2e;
+  transition: opacity 0.35s ease, visibility 0s linear 0.35s;
+}
+
+#c3-ui > .c3-boot {
+  pointer-events: auto;
+}
+
+.c3-boot.is-done {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.c3-boot-name {
+  font-family: var(--font-display, inherit);
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #ffffff;
+}
+
+.c3-boot-bar {
+  width: min(420px, 62vw);
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+}
+
+.c3-boot-bar span {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: 3px;
+  background: var(--accent, #e60611);
+  transition: width 0.2s ease;
+}
+
+.c3-boot-text {
+  color: rgba(255, 255, 255, 0.68);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
 .c3-load {
   position: absolute;
   left: 50%;

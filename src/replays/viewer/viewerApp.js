@@ -100,6 +100,7 @@ export function openViewer({
 
   const bodyEl = overlay.querySelector('#rv-body');
   const titleEl = overlay.querySelector('#rv-title-main');
+  const topEl = overlay.querySelector('.rv-top');
 
   let current = null;
   let activeMode = null;
@@ -141,10 +142,14 @@ export function openViewer({
       // Only the first Timeline mount honours it; switching modes afterwards
       // should keep where the user has scrubbed to, not jump back to the link.
       startAt: next === 'timeline' && !usedStartAt ? (usedStartAt = true, startAt) : null,
-      onRound: syncUrl
+      onRound: syncUrl,
+      onBack: close
     });
     if (next === 'analyzer') syncUrl(null);
     bodyEl.appendChild(current.el);
+    // Timeline carries its own header in the collapsible side panel, so the
+    // map can start at the top of the window. Analyzer still uses this one.
+    topEl.hidden = next === 'timeline';
     titleEl.textContent = next === 'analyzer' ? 'Analyzer' : 'Viewer';
     overlay.querySelectorAll('.rv-mode').forEach((b) => {
       b.classList.toggle('active', b.dataset.mode === next);

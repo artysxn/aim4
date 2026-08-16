@@ -41,7 +41,8 @@
     "sim:lab": "node tools/sim-lab.mjs",
     "cs3d:import": "node scripts/cs3d-import.mjs",
     "cs3d:pack": "node --max-old-space-size=16384 scripts/cs3d-pack.mjs",
-    "cs3d:build": "node scripts/cs3d-import.mjs && node --max-old-space-size=16384 scripts/cs3d-pack.mjs"
+    "cs3d:build": "node scripts/cs3d-import.mjs && node --max-old-space-size=16384 scripts/cs3d-pack.mjs",
+    "cs3d:upload": "node scripts/cs3d-upload.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.108.2",
@@ -57,6 +58,7 @@
     "ws": "^8.21.0"
   },
   "devDependencies": {
+    "@aws-sdk/client-s3": "^3.1111.0",
     "@gltf-transform/core": "^4.4.2",
     "@gltf-transform/extensions": "^4.4.2",
     "@gltf-transform/functions": "^4.4.2",

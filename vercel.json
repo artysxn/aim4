@@ -11,6 +11,7 @@
     { "source": "/training", "destination": "/index.html" },
     { "source": "/leaderboards", "destination": "/index.html" },
     { "source": "/routines", "destination": "/index.html" },
+    { "source": "/map-practice", "destination": "/index.html" },
     { "source": "/replay-viewer", "destination": "/index.html" },
     { "source": "/demos", "destination": "/index.html" },
     { "source": "/playlists", "destination": "/index.html" },

@@ -80,22 +80,52 @@ function layerUniforms(o) {
 const clampNum = (v, lo, hi) => Math.min(hi, Math.max(lo, Number.isFinite(v) ? v : hi));
 
 /**
+ * Per-map multiplier on the authored fog strength, keyed by slug.
+ *
+ * Anubis authors an unusually long ramp — gradient 150 → 100000 over a map
+ * ~4500 units across, so under 5% of the way up it at any sightline you
+ * actually have — and reads clear where the game reads hazy. Multiplying the
+ * strength rather than shortening the ramp keeps the shape the author gave it.
+ */
+const MAP_FOG = {
+  anubis: 4
+};
+
+/**
  * Fog for a map, ready to hand to `scene.fogNode`.
  *
- * The 3D skybox needs no special case: the loader draws it at its real ×16
- * size and distance rather than as a miniature around the camera, so the same
- * distance ramp fogs the far hills exactly as much as the game does — which is
- * a lot, and is why the game's horizon looks like a horizon.
+ * The DISTANCE ramp needs no special case for the 3D skybox: the loader draws
+ * it at its real ×16 size and distance rather than as a miniature around the
+ * camera, so the same ramp fogs the far hills exactly as much as the game does.
+ *
+ * The HEIGHT ramp does. It is authored against the miniature, which in the game
+ * sits inside the band — Anubis fogs from y 0 to 15000, and its skybox in the
+ * game is a model a few hundred units tall. Drawn at ×16 that model reaches
+ * past 15000, where the ramp has already fallen to zero, so Anubis lost the
+ * haze on everything distant while Nuke (band ±100000, effectively unbounded)
+ * kept it. `skyNode` is the same fog with the height band scaled by the same
+ * ×16, which puts the enlarged skybox back where the author put the model.
+ * Scaling the band for the world pass instead would be wrong: the playable map
+ * is at its authored size and its height falloff is real.
  */
 export class MapFog {
   /**
-   * @param {object} manifest  pack manifest (fog, bounds)
+   * @param {object} manifest  pack manifest (fog, bounds, sky3d)
    */
   constructor(manifest) {
-    const spec = manifest?.fog || fallbackFog(manifest);
+    const raw = manifest?.fog || fallbackFog(manifest);
+    const k = MAP_FOG[manifest?.map?.slug] || 1;
+    // Applied to `strength`, which rampFactor multiplies in before the clamp,
+    // so it scales the whole curve without touching the distances.
+    const boost = (o) => (o ? { ...o, strength: (o.strength ?? 1) * k } : null);
+    const spec = k === 1 ? raw : { cubemap: boost(raw?.cubemap), gradient: boost(raw?.gradient) };
     this.spec = spec;
     this.cube = spec?.cubemap ? layerUniforms(spec.cubemap) : null;
     this.grad = spec?.gradient ? layerUniforms(spec.gradient) : null;
+    const skyScale = Number(manifest?.sky3d?.scale) || 0;
+    const lift = (o) => (o ? { ...o, heightStart: o.heightStart * skyScale, heightEnd: o.heightEnd * skyScale } : null);
+    this.cubeSky = skyScale > 1 && spec?.cubemap ? layerUniforms(lift(spec.cubemap)) : null;
+    this.gradSky = skyScale > 1 && spec?.gradient ? layerUniforms(lift(spec.gradient)) : null;
 
     // Sky fit, updated by MapLighting as the real sky arrives.
     this.horizon = uniform(new THREE.Color(0.62, 0.72, 0.85));
@@ -105,10 +135,13 @@ export class MapFog {
     this.gradColor = uniform(
       spec?.gradient ? new THREE.Color(...spec.gradient.color) : new THREE.Color(0.6, 0.68, 0.8)
     );
-    this.node = this.cube || this.grad ? this._build() : null;
+    this.node = this.cube || this.grad ? this._build(this.cube, this.grad) : null;
+    // Swapped in for the distant pass (see main.js drawScene). Falls back to the
+    // world node when the map has no 3D skybox to scale for.
+    this.skyNode = this.cubeSky || this.gradSky ? this._build(this.cubeSky, this.gradSky) : this.node;
   }
 
-  _build() {
+  _build(cube, grad) {
     const dist = positionWorld.distance(cameraPosition);
     const height = positionWorld.y;
     // The direction we are looking, which is the direction the fog takes its
@@ -119,8 +152,8 @@ export class MapFog {
     const sun = pow(max(dot(dir, this.toSun), 0), float(6)).mul(0.5);
     const skyColor = mix(this.horizon, this.zenith, up).add(this.sunColor.mul(sun));
 
-    const aCube = this.cube ? rampFactor(dist, height, this.cube) : float(0);
-    const aGrad = this.grad ? rampFactor(dist, height, this.grad) : float(0);
+    const aCube = cube ? rampFactor(dist, height, cube) : float(0);
+    const aGrad = grad ? rampFactor(dist, height, grad) : float(0);
 
     // Two "over" composites folded into the one (colour, factor) pair a
     // FogNode can express: sky haze first, flat gradient layer on top.

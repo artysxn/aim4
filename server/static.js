@@ -50,6 +50,7 @@ const SITE_VIEW_PATHS = new Set([
   '/leaderboards',
   '/football',
   '/routines',
+  '/map-practice',
   '/replay-viewer',
   '/demos',
   '/playlists',

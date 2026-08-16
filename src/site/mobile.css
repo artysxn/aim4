@@ -381,7 +381,11 @@ html[data-mobile] .rv-speed {
   font-size: 13px;
 }
 
-html[data-mobile] .rv-play {
+html[data-mobile] .rv-play,
+html[data-mobile] .rv-skip,
+html[data-mobile] .rv-draw-btn,
+html[data-mobile] .rv-side-toggle,
+html[data-mobile] .rv-side-show {
   width: 40px;
   height: 40px;
 }
@@ -397,17 +401,14 @@ html[data-mobile] .rv-scrub-track {
   border-radius: 3px;
 }
 
-html[data-mobile] .rv-time {
-  min-width: 46px;
-  font-size: 12px;
-}
-
-html[data-mobile] .rv-tool {
+html[data-mobile] .rv-tool,
+html[data-mobile] .rv-side > .rv-tools > .rv-tool {
   width: 36px;
   height: 36px;
 }
 
-html[data-mobile] .rv-tool svg {
+html[data-mobile] .rv-tool svg,
+html[data-mobile] .rv-side > .rv-tools > .rv-tool svg {
   width: 20px;
   height: 20px;
 }

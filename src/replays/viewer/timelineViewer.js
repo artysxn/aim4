@@ -64,7 +64,6 @@ import chartIcon from '../../icons/demos_chart.svg?raw';
 import zonesIcon from '../../icons/demos_zones.svg?raw';
 import duelsIcon from '../../icons/demos_duels.svg?raw';
 import povIcon from '../../icons/demo_pov.svg?raw';
-import rosterIcon from '../../icons/icon_multiplayer.svg?raw';
 import { createPovVision, povDuelOverlay, povZonePaint } from './teamPov.js';
 import { rememberRound } from '../../site/homeView.js';
 import { createDuelOverlay } from '../duels/duelOverlay.js';
@@ -78,8 +77,13 @@ import { spinnerHtml } from '../../lib/spinner.js';
 import view2dIcon from '../../icons/demo_2d.svg?raw';
 import view3dIcon from '../../icons/demo_3d.svg?raw';
 import explore3dIcon from '../../icons/demo_3d_EXPLORE.svg?raw';
+import backIcon from '../../icons/icon_back.svg?raw';
+import menuIcon from '../../icons/icon_menu.svg?raw';
+import headshotIcon from '../../icons/headshot.png';
 
 const SPEEDS = [0.25, 0.5, 1, 2, 4];
+/** Seconds the two transport skip buttons jump. */
+const SKIP_SECONDS = 10;
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 5;
 /** Mild map zoom when jumping to a coach mistake. */
@@ -87,12 +91,19 @@ const COACH_FOCUS_ZOOM = 2.15;
 /** View travel duration (ms). Quick, but ease-out so it does not feel snapped. */
 const COACH_FOCUS_MS = 300;
 
-const statsIconSvg =
-  '<svg viewBox="0 -960 960 960" width="19" height="19" fill="currentColor" aria-hidden="true">' +
-  '<path d="M640-160v-280h120v280H640Zm-220 0v-640h120v640H420Zm-220 0v-440h120v440H200Z"/></svg>';
-
 /** The shipped SVGs are a fixed light grey; let CSS drive the colour instead. */
 const icon = (raw) => String(raw).replace(/fill="#[0-9a-fA-F]{3,8}"/g, 'fill="currentColor"');
+
+/**
+ * A ring with a "10" in it. `back` draws the arrowhead on the left of the
+ * ring (anticlockwise, rewind); otherwise it points right (forward).
+ */
+const skipIconSvg = (back) =>
+  '<svg viewBox="0 -960 960 960" width="20" height="20" fill="currentColor" aria-hidden="true"><path d="' +
+  (back
+    ? 'M480-80q-75 0-140.5-28.5t-114-77q-48.5-48.5-77-114T120-440h80q0 117 81.5 198.5T480-160q117 0 198.5-81.5T760-440q0-117-81.5-198.5T480-720h-6l62 62-56 58-160-160 160-160 56 58-62 62h6q75 0 140.5 28.5t114 77q48.5 48.5 77 114T840-440q0 75-28.5 140.5t-77 114q-48.5 48.5-114 77T480-80Z'
+    : 'M480-80q-75 0-140.5-28.5t-114-77q-48.5-48.5-77-114T120-440q0-75 28.5-140.5t77-114q48.5-48.5 114-77T480-800h6l-62-62 56-58 160 160-160 160-56-58 62-62h-6q-117 0-198.5 81.5T200-440q0 117 81.5 198.5T480-160q117 0 198.5-81.5T760-440h80q0 75-28.5 140.5t-77 114q-48.5 48.5-114 77T480-80Z') +
+  'M422-304v-192h-48v-48h96v240h-48Zm128 0q-17 0-28.5-11.5T510-344v-168q0-17 11.5-28.5T550-552h76q17 0 28.5 11.5T666-512v168q0 17-11.5 28.5T626-304h-76Zm10-48h56v-152h-56v152Z"/></svg>';
 
 export function createTimelineViewer({
   store,
@@ -106,7 +117,9 @@ export function createTimelineViewer({
   /** When set, coach notes are generated for the team but only this player is shown. */
   coachReviewPlayerId = '',
   /** `{ tick, zoom, panX, panY }` from a shared moment link, or null. */
-  startAt = null
+  startAt = null,
+  /** Closes the viewer. The back arrow lives in this view's own side panel. */
+  onBack = null
 }) {
   /**
    * True when the viewer was opened from the team's Autocoach page.
@@ -122,119 +135,194 @@ export function createTimelineViewer({
 
   const el = document.createElement('div');
   el.className = 'rv-timeline';
+  // The white source PNG is tinted with mask-image, so the kill feed can pick
+  // the colour rather than shipping one baked-in version of the icon.
+  el.style.setProperty('--rv-hs-icon', `url("${headshotIcon}")`);
   el.innerHTML = `
-    <div class="rv-stage">
-      <div class="rv-team-col">
-        <aside class="rv-team rv-team-1" data-team="1"></aside>
+    <aside class="rv-side" id="rv-side">
+      <div class="rv-side-head">
+        <button type="button" class="rv-back" id="rv-side-back" aria-label="Back">${icon(backIcon)}</button>
+        <span class="rv-side-title">Viewer</span>
+        <button type="button" class="rv-side-toggle" id="rv-side-toggle"
+          aria-label="Hide panel" title="Hide panel">${icon(menuIcon)}</button>
       </div>
-      <div class="rv-map">
-        <div class="rv-clock-row" id="rv-clock-row">
-          <span class="rv-match-score" id="rv-score-left" data-side="T">0</span>
-          <div class="rv-clock" id="rv-clock" role="button" tabindex="0"
-            title="Copy link to this moment">00:00</div>
-          <span class="rv-match-score" id="rv-score-right" data-side="CT">0</span>
-        </div>
-        <div class="rv-feed-stack" id="rv-feed-stack">
-          <div class="rv-killfeed" id="rv-killfeed" aria-live="polite"></div>
-          <div class="rv-duel-feed" id="rv-duel-feed" hidden></div>
-        </div>
-        <canvas class="rv-canvas" id="rv-canvas"></canvas>
-        <div class="rv-loading" id="rv-loading"></div>
-        <div class="rv-viewmode" id="rv-viewmode" hidden>
-          <button type="button" class="rv-tool rv-viewmode-btn" id="rv-explore"
-            title="Free look (right click in 3D)" hidden>${icon(explore3dIcon)}</button>
-          <button type="button" class="rv-tool rv-viewmode-btn" id="rv-toggle3d"
-            title="Switch to 3D">${icon(view3dIcon)}</button>
-          <span class="rv-viewmode-note" id="rv-3d-note" hidden></span>
+      <div class="rv-side-body">
+        <aside class="rv-charts" id="rv-charts" hidden>
+          <section class="rv-wingraph" id="rv-wingraph">
+            <div class="rv-wingraph-head">
+              <span class="rv-sec-title">Predicted Winrate</span>
+              <span class="rv-sec-val">
+                <span class="rv-wingraph-label t" id="rv-wingraph-t">-</span>
+                <span class="rv-wingraph-label ct" id="rv-wingraph-ct">-</span>
+              </span>
+            </div>
+            <canvas class="rv-wingraph-canvas" id="rv-wingraph-canvas"></canvas>
+            <div class="rv-wingraph-tip" id="rv-wingraph-tip" hidden></div>
+          </section>
+          <section class="rv-mapgraph">
+            <div class="rv-wingraph-head">
+              <span class="rv-sec-title">Map control %</span>
+              <span class="rv-sec-val">
+                <span class="rv-wingraph-label ct" id="rv-mapgraph-ct">CT</span>
+                <span class="rv-wingraph-label neu" id="rv-mapgraph-neu">-</span>
+                <span class="rv-wingraph-label t" id="rv-mapgraph-t">T</span>
+              </span>
+            </div>
+            <canvas class="rv-wingraph-canvas" id="rv-mapgraph-canvas"></canvas>
+            <div class="rv-wingraph-tip" id="rv-mapgraph-tip" hidden></div>
+          </section>
+        </aside>
+        <aside class="rv-coach-pick" id="rv-coach-pick" hidden>
+          <div class="rv-coach-pick-head">
+            <span class="rv-coach-pick-title" id="rv-coach-pick-title">Coach which team?</span>
+            <button type="button" class="rp-btn-icon" id="rv-coach-pick-close" title="Cancel" aria-label="Cancel">✕</button>
+          </div>
+          <div id="rv-coach-pick-teams">
+            <p class="rv-coach-pick-hint">Mistakes are noted for one side only.</p>
+            <button type="button" class="rv-coach-pick-team" data-team="1" id="rv-coach-pick-t1">Team 1</button>
+            <button type="button" class="rv-coach-pick-team" data-team="2" id="rv-coach-pick-t2">Team 2</button>
+          </div>
+          <div id="rv-coach-pick-players" hidden>
+            <p class="rv-coach-pick-hint">Watch mistakes for</p>
+            <div class="rv-coach-pick-player-list" id="rv-coach-pick-player-list"></div>
+            <div class="rv-coach-pick-actions">
+              <button type="button" class="btn btn-sm" id="rv-coach-pick-back">Back</button>
+              <button type="button" class="btn btn-sm" id="rv-coach-pick-all">All</button>
+              <button type="button" class="btn btn-sm primary" id="rv-coach-pick-go">Continue</button>
+            </div>
+          </div>
+        </aside>
+      </div>
+      <div class="rv-side-dock" id="rv-side-dock">
+        <aside class="rv-note-dock" id="rv-note-panel" hidden>
+          <div class="rv-note-head" id="rv-note-head-list" hidden>
+            <span class="rv-note-stamp">Notes</span>
+            <button type="button" class="rp-btn-icon" id="rv-note-add" title="New note" aria-label="New note">+</button>
+            <button type="button" class="rp-btn-icon rv-note-close" id="rv-note-close-list" title="Close" aria-label="Close">✕</button>
+          </div>
+          <div class="rv-note-list" id="rv-note-list" hidden></div>
+          <div class="rv-note-editor" id="rv-note-editor">
+            <div class="rv-note-head">
+              <button type="button" class="rp-btn-icon" id="rv-note-prev" title="Previous note" aria-label="Previous note">‹</button>
+              <span class="rv-note-stamp" id="rv-note-stamp">00:00</span>
+              <span class="rv-note-pos" id="rv-note-pos"></span>
+              <span class="rv-note-marks" id="rv-note-marks" hidden>
+                <button type="button" class="rv-note-mark-btn ok" id="rv-note-mark-ok"
+                  title="Accept this note" aria-label="Accept this note">✓</button>
+                <button type="button" class="rv-note-mark-btn x" id="rv-note-mark-x"
+                  title="Dismiss this note" aria-label="Dismiss this note">✗</button>
+              </span>
+              <button type="button" class="rp-btn-icon" id="rv-note-next" title="Next note" aria-label="Next note">›</button>
+              <button type="button" class="rp-btn-icon" id="rv-note-add-edit" title="New note" aria-label="New note">+</button>
+              <button type="button" class="rp-btn-icon rv-note-close" id="rv-note-close" title="Close" aria-label="Close">✕</button>
+            </div>
+            <textarea id="rv-note-text" maxlength="${NOTE_MAX}" rows="6"
+              placeholder="What happens here?"></textarea>
+            <div class="rv-popover-foot">
+              <span class="rv-note-count" id="rv-note-count">0 / ${NOTE_MAX}</span>
+              <span class="rv-popover-msg" id="rv-note-msg"></span>
+            </div>
+          </div>
+        </aside>
+        <div class="rv-popover" id="rv-playlist-panel" hidden>
+          <div class="rv-playlist-list" id="rv-playlist-list"></div>
+          <div class="rv-popover-foot">
+            <input type="text" id="rv-playlist-new" class="site-input" maxlength="60" placeholder="New playlist" />
+            <select class="site-select rv-playlist-scope" id="rv-playlist-scope" title="Who can see this playlist">
+              <option value="private">Private</option>
+              <option value="team">Team</option>
+            </select>
+            <button type="button" class="btn btn-sm primary" id="rv-playlist-add">Create</button>
+          </div>
+          <span class="rv-popover-msg" id="rv-playlist-msg"></span>
         </div>
       </div>
-      <div class="rv-team-col">
-        <aside class="rv-team rv-team-2" data-team="2"></aside>
-      </div>
-    </div>
-    <aside class="rv-charts" id="rv-charts" hidden>
-      <div class="rv-mapgraph">
-        <div class="rv-wingraph-head">
-          <span class="rv-wingraph-label ct" id="rv-mapgraph-ct">CT</span>
-          <span class="rv-wingraph-label" id="rv-mapgraph-neu">Map control</span>
-          <span class="rv-wingraph-label t" id="rv-mapgraph-t">T</span>
-        </div>
-        <canvas class="rv-wingraph-canvas" id="rv-mapgraph-canvas"></canvas>
-        <div class="rv-wingraph-tip" id="rv-mapgraph-tip" hidden></div>
-      </div>
-      <div class="rv-wingraph" id="rv-wingraph">
-        <div class="rv-wingraph-head">
-          <span class="rv-wingraph-label ct" id="rv-wingraph-ct">-</span>
-          <span class="rv-wingraph-label t" id="rv-wingraph-t">-</span>
-        </div>
-        <canvas class="rv-wingraph-canvas" id="rv-wingraph-canvas"></canvas>
-        <div class="rv-wingraph-tip" id="rv-wingraph-tip" hidden></div>
+      <div class="rv-tools" id="rv-tools">
+        <button type="button" class="rv-tool" id="rv-zones"
+          title="Map positions: active / controlled / contested">${icon(zonesIcon)}</button>
+        <button type="button" class="rv-tool" id="rv-coach" title="Coach: mistake notes for one team" ${
+          statsDemoId ? '' : 'hidden'
+        }>${icon(coachIcon)}</button>
+        <button type="button" class="rv-tool" id="rv-bookmark" title="Save to a playlist">${icon(bookmarkAddIcon)}</button>
+        <button type="button" class="rv-tool" id="rv-note" title="Notes">${icon(commentsIcon)}</button>
+        <!-- Hidden until /3d says there is something to say about this demo:
+             ready to switch, reparsing, or available on request. -->
+        <button type="button" class="rv-tool rv-tool-3d" id="rv-toggle3d" title="Switch to 3D" hidden
+          ><span class="rv-3d-icon" id="rv-3d-icon">${icon(view3dIcon)}</span
+          ><span class="rv-3d-note" id="rv-3d-note" hidden></span></button>
+        <!-- Starts inactive to match chartOn: the tiers that hold the chart
+             outright switch it on below, and syncWinChart lights the button
+             when they do. Hardcoding active here left every other tier with
+             a lit button and no panel. -->
+        <button type="button" class="rv-tool" id="rv-chart" title="Win chance chart">${icon(chartIcon)}</button>
+        <button type="button" class="rv-tool" id="rv-duels"
+          title="Duel stats: xK beside fighters; hover a player or line for win %">${icon(duelsIcon)}</button>
+        <button type="button" class="rv-tool" id="rv-pov"
+          title="Team POV: one team's map control and only the enemies they can see">${icon(povIcon)}</button>
       </div>
     </aside>
-    <aside class="rv-coach-pick" id="rv-coach-pick" hidden>
-      <div class="rv-coach-pick-head">
-        <span class="rv-coach-pick-title" id="rv-coach-pick-title">Coach which team?</span>
-        <button type="button" class="rp-btn-icon" id="rv-coach-pick-close" title="Cancel" aria-label="Cancel">✕</button>
-      </div>
-      <div id="rv-coach-pick-teams">
-        <p class="rv-coach-pick-hint">Mistakes are noted for one side only.</p>
-        <button type="button" class="rv-coach-pick-team" data-team="1" id="rv-coach-pick-t1">Team 1</button>
-        <button type="button" class="rv-coach-pick-team" data-team="2" id="rv-coach-pick-t2">Team 2</button>
-      </div>
-      <div id="rv-coach-pick-players" hidden>
-        <p class="rv-coach-pick-hint">Watch mistakes for</p>
-        <div class="rv-coach-pick-player-list" id="rv-coach-pick-player-list"></div>
-        <div class="rv-coach-pick-actions">
-          <button type="button" class="btn btn-sm" id="rv-coach-pick-back">Back</button>
-          <button type="button" class="btn btn-sm" id="rv-coach-pick-all">All</button>
-          <button type="button" class="btn btn-sm primary" id="rv-coach-pick-go">Continue</button>
+    <button type="button" class="rv-side-show" id="rv-side-show"
+      aria-label="Show panel" title="Show panel" hidden>${icon(menuIcon)}</button>
+    <div class="rv-main">
+      <div class="rv-stage">
+        <div class="rv-map">
+          <canvas class="rv-canvas" id="rv-canvas"></canvas>
+          <div class="rv-clock-row" id="rv-clock-row">
+            <span class="rv-clock-team" id="rv-clock-team-left" data-side="T"></span>
+            <span class="rv-clock-odds" id="rv-odds-left" data-side="T" hidden></span>
+            <span class="rv-match-score" id="rv-score-left" data-side="T">0</span>
+            <div class="rv-clock" id="rv-clock" role="button" tabindex="0"
+              title="Copy link to this moment">00:00</div>
+            <span class="rv-match-score" id="rv-score-right" data-side="CT">0</span>
+            <span class="rv-clock-odds" id="rv-odds-right" data-side="CT" hidden></span>
+            <span class="rv-clock-team" id="rv-clock-team-right" data-side="CT"></span>
+          </div>
+          <div class="rv-feed-stack" id="rv-feed-stack">
+            <div class="rv-killfeed" id="rv-killfeed" aria-live="polite"></div>
+            <div class="rv-duel-feed" id="rv-duel-feed" hidden></div>
+          </div>
+          <div class="rv-team-col rv-team-col-1">
+            <aside class="rv-team rv-team-1" data-team="1"></aside>
+          </div>
+          <div class="rv-team-col rv-team-col-2">
+            <aside class="rv-team rv-team-2" data-team="2"></aside>
+          </div>
+          <div class="rv-loading" id="rv-loading"></div>
+          <div class="rv-transport-anchor">
+            <div class="rv-tools rv-tools-draw" id="rv-draw-tools" hidden>
+              <button type="button" class="rv-tool" id="rv-erase" title="Eraser: drag over a line to remove it">${icon(eraseIcon)}</button>
+              <span class="rv-tool-sep"></span>
+              ${DRAW_COLORS.map(
+                (c) => `<button type="button" class="rv-swatch" data-color="${c.value}" title="${c.label}"
+                  style="--swatch:${c.value}"><span></span></button>`
+              ).join('')}
+            </div>
+            <div class="rv-transport">
+              <div class="rv-transport-group">
+                <button type="button" class="rv-play" id="rv-play" aria-label="Play">
+                  <svg viewBox="0 -960 960 960" width="18" height="18"><path d="M320-200v-560l440 280-440 280Z"/></svg>
+                </button>
+              </div>
+              <div class="rv-transport-group">
+                <button type="button" class="rv-skip" id="rv-fwd"
+                  aria-label="Forward ${SKIP_SECONDS} seconds" title="Forward ${SKIP_SECONDS}s">${skipIconSvg(false)}</button>
+                <button type="button" class="rv-skip" id="rv-back"
+                  aria-label="Rewind ${SKIP_SECONDS} seconds" title="Rewind ${SKIP_SECONDS}s">${skipIconSvg(true)}</button>
+              </div>
+              <div class="rv-transport-group">
+                <button type="button" class="rv-speed" id="rv-speed">1X</button>
+                <button type="button" class="rv-tool rv-draw-btn" id="rv-draw"
+                  title="Draw (right click always draws)">${icon(pencilIcon)}</button>
+              </div>
+            </div>
+          </div>
+          <div class="rv-viewmode" id="rv-viewmode" hidden>
+            <button type="button" class="rv-tool rv-viewmode-btn" id="rv-explore"
+              title="Free look (right click in 3D)" hidden>${icon(explore3dIcon)}</button>
+          </div>
         </div>
       </div>
-    </aside>
-    <aside class="rv-note-dock" id="rv-note-panel" hidden>
-      <div class="rv-note-head" id="rv-note-head-list" hidden>
-        <span class="rv-note-stamp">Notes</span>
-        <button type="button" class="rp-btn-icon" id="rv-note-add" title="New note" aria-label="New note">+</button>
-        <button type="button" class="rp-btn-icon rv-note-close" id="rv-note-close-list" title="Close" aria-label="Close">✕</button>
-      </div>
-      <div class="rv-note-list" id="rv-note-list" hidden></div>
-      <div class="rv-note-editor" id="rv-note-editor">
-        <div class="rv-note-head">
-          <button type="button" class="rp-btn-icon" id="rv-note-prev" title="Previous note" aria-label="Previous note">‹</button>
-          <span class="rv-note-stamp" id="rv-note-stamp">00:00</span>
-          <span class="rv-note-pos" id="rv-note-pos"></span>
-          <span class="rv-note-marks" id="rv-note-marks" hidden>
-            <button type="button" class="rv-note-mark-btn ok" id="rv-note-mark-ok"
-              title="Accept this note" aria-label="Accept this note">✓</button>
-            <button type="button" class="rv-note-mark-btn x" id="rv-note-mark-x"
-              title="Dismiss this note" aria-label="Dismiss this note">✗</button>
-          </span>
-          <button type="button" class="rp-btn-icon" id="rv-note-next" title="Next note" aria-label="Next note">›</button>
-          <button type="button" class="rp-btn-icon" id="rv-note-add-edit" title="New note" aria-label="New note">+</button>
-          <button type="button" class="rp-btn-icon rv-note-close" id="rv-note-close" title="Close" aria-label="Close">✕</button>
-        </div>
-        <textarea id="rv-note-text" maxlength="${NOTE_MAX}" rows="6"
-          placeholder="What happens here?"></textarea>
-        <div class="rv-popover-foot">
-          <span class="rv-note-count" id="rv-note-count">0 / ${NOTE_MAX}</span>
-          <span class="rv-popover-msg" id="rv-note-msg"></span>
-        </div>
-      </div>
-    </aside>
-    <div class="rv-scoreboard" id="rv-scoreboard" hidden>
-      <div class="rv-scoreboard-head">
-        <span id="rv-scoreboard-title">Match stats</span>
-        <button type="button" class="rp-btn-icon" id="rv-scoreboard-close" aria-label="Close">✕</button>
-      </div>
-      <div class="rv-scoreboard-body" id="rv-scoreboard-body"></div>
-    </div>
-    <div class="rv-chrome">
-      <div class="rv-rounds" id="rv-rounds"></div>
-      <div class="rv-transport">
-        <button type="button" class="rv-speed" id="rv-speed">x1</button>
-        <button type="button" class="rv-play" id="rv-play" aria-label="Play">
-          <svg viewBox="0 -960 960 960" width="18" height="18"><path d="M320-200v-560l440 280-440 280Z"/></svg>
-        </button>
+      <div class="rv-chrome">
         <div class="rv-scrub" id="rv-scrub">
           <div class="rv-scrub-track">
             <div class="rv-scrub-phases" id="rv-scrub-phases"></div>
@@ -243,54 +331,15 @@ export function createTimelineViewer({
           <div class="rv-scrub-marks" id="rv-scrub-marks"></div>
           <div class="rv-scrub-handle" id="rv-scrub-handle"></div>
         </div>
-        <span class="rv-time" id="rv-time">00:00</span>
+        <div class="rv-rounds" id="rv-rounds"></div>
       </div>
-      <div class="rv-tools-anchor">
-        <div class="rv-tools rv-tools-draw" id="rv-draw-tools" hidden>
-          <button type="button" class="rv-tool" id="rv-erase" title="Eraser: drag over a line to remove it">${icon(eraseIcon)}</button>
-          <span class="rv-tool-sep"></span>
-          ${DRAW_COLORS.map(
-            (c) => `<button type="button" class="rv-swatch" data-color="${c.value}" title="${c.label}"
-              style="--swatch:${c.value}"><span></span></button>`
-          ).join('')}
-        </div>
-        <div class="rv-tools" id="rv-tools">
-          <button type="button" class="rv-tool" id="rv-stats" title="Match stats up to this round (hold Tab)" ${
-            statsDemoId ? '' : 'hidden'
-          }>${statsIconSvg}</button>
-          <!-- Starts inactive to match chartOn: the tiers that hold the chart
-               outright switch it on below, and syncWinChart lights the button
-               when they do. Hardcoding active here left every other tier with
-               a lit button and no panel. -->
-          <button type="button" class="rv-tool" id="rv-chart" title="Win chance chart">${icon(chartIcon)}</button>
-          <button type="button" class="rv-tool" id="rv-coach" title="Coach: mistake notes for one team" ${
-            statsDemoId ? '' : 'hidden'
-          }>${icon(coachIcon)}</button>
-          <button type="button" class="rv-tool" id="rv-rosters"
-            title="Player sidebars">${icon(rosterIcon)}</button>
-          <button type="button" class="rv-tool" id="rv-zones"
-            title="Map positions: active / controlled / contested">${icon(zonesIcon)}</button>
-          <button type="button" class="rv-tool" id="rv-duels"
-            title="Duel stats: xK beside fighters; hover a player or line for win %">${icon(duelsIcon)}</button>
-          <button type="button" class="rv-tool" id="rv-pov"
-            title="Team POV: one team's map control and only the enemies they can see">${icon(povIcon)}</button>
-          <button type="button" class="rv-tool" id="rv-draw" title="Draw (right click always draws)">${icon(pencilIcon)}</button>
-          <button type="button" class="rv-tool" id="rv-note" title="Notes">${icon(commentsIcon)}</button>
-          <button type="button" class="rv-tool" id="rv-bookmark" title="Save to a playlist">${icon(bookmarkAddIcon)}</button>
-        </div>
+    </div>
+    <div class="rv-scoreboard" id="rv-scoreboard" hidden>
+      <div class="rv-scoreboard-head">
+        <span id="rv-scoreboard-title">Match stats</span>
+        <button type="button" class="rp-btn-icon" id="rv-scoreboard-close" aria-label="Close">✕</button>
       </div>
-      <div class="rv-popover" id="rv-playlist-panel" hidden>
-        <div class="rv-playlist-list" id="rv-playlist-list"></div>
-        <div class="rv-popover-foot">
-          <input type="text" id="rv-playlist-new" class="site-input" maxlength="60" placeholder="New playlist" />
-          <select class="site-select rv-playlist-scope" id="rv-playlist-scope" title="Who can see this playlist">
-            <option value="private">Private</option>
-            <option value="team">Team</option>
-          </select>
-          <button type="button" class="btn btn-sm primary" id="rv-playlist-add">Create</button>
-        </div>
-        <span class="rv-popover-msg" id="rv-playlist-msg"></span>
-      </div>
+      <div class="rv-scoreboard-body" id="rv-scoreboard-body"></div>
     </div>
     <button type="button" class="rv-keys" id="rv-keys" title="Click to hide" aria-label="Keyboard shortcuts. Click to hide">
       <span class="rv-keys-key">Space</span><span class="rv-keys-action">Pause / Unpause</span>
@@ -312,6 +361,10 @@ export function createTimelineViewer({
   const clockEl = el.querySelector('#rv-clock');
   const scoreLeftEl = el.querySelector('#rv-score-left');
   const scoreRightEl = el.querySelector('#rv-score-right');
+  const oddsLeftEl = el.querySelector('#rv-odds-left');
+  const oddsRightEl = el.querySelector('#rv-odds-right');
+  const clockTeamLeftEl = el.querySelector('#rv-clock-team-left');
+  const clockTeamRightEl = el.querySelector('#rv-clock-team-right');
   const killfeedEl = el.querySelector('#rv-killfeed');
   const duelFeedEl = el.querySelector('#rv-duel-feed');
   const loadingEl = el.querySelector('#rv-loading');
@@ -321,12 +374,16 @@ export function createTimelineViewer({
   const phasesEl = el.querySelector('#rv-scrub-phases');
   const marksEl = el.querySelector('#rv-scrub-marks');
   const handleEl = el.querySelector('#rv-scrub-handle');
-  const timeEl = el.querySelector('#rv-time');
   const playBtn = el.querySelector('#rv-play');
   const speedBtn = el.querySelector('#rv-speed');
+  const fwdBtn = el.querySelector('#rv-fwd');
+  const backBtn = el.querySelector('#rv-back');
   const team1El = el.querySelector('.rv-team-1');
   const team2El = el.querySelector('.rv-team-2');
   const chromeEl = el.querySelector('.rv-chrome');
+  const sideEl = el.querySelector('#rv-side');
+  const sideToggleBtn = el.querySelector('#rv-side-toggle');
+  const sideShowBtn = el.querySelector('#rv-side-show');
 
   const drawToolsEl = el.querySelector('#rv-draw-tools');
   const toolsEl = el.querySelector('#rv-tools');
@@ -354,7 +411,6 @@ export function createTimelineViewer({
   const duelsBtn = el.querySelector('#rv-duels');
   const povBtn = el.querySelector('#rv-pov');
   const coachBtn = el.querySelector('#rv-coach');
-  const rostersBtn = el.querySelector('#rv-rosters');
   const coachPick = el.querySelector('#rv-coach-pick');
   const coachPickTitle = el.querySelector('#rv-coach-pick-title');
   const coachPickTeams = el.querySelector('#rv-coach-pick-teams');
@@ -371,15 +427,15 @@ export function createTimelineViewer({
   const playlistNewEl = el.querySelector('#rv-playlist-new');
   const playlistMsg = el.querySelector('#rv-playlist-msg');
 
-  // Hotkey legend: show on demo open, hide for later rounds / click / notes / bookmarks.
+  // Hotkey legend: show on demo open, hide for later rounds / click.
+  // The note and playlist docks used to float over the map and had to push it
+  // out of the way; they live in the side panel now, so they no longer collide.
   let keysSessionActive = true;
 
   function syncKeysVisibility() {
     if (!keysEl) return;
-    const blocked = !notePanel.hidden || !playlistPanel.hidden;
-    const show = keysSessionActive && !blocked;
-    keysEl.hidden = !show;
-    keysEl.setAttribute('aria-hidden', show ? 'false' : 'true');
+    keysEl.hidden = !keysSessionActive;
+    keysEl.setAttribute('aria-hidden', keysSessionActive ? 'false' : 'true');
   }
 
   keysEl?.addEventListener('click', (e) => {
@@ -388,6 +444,34 @@ export function createTimelineViewer({
     keysSessionActive = false;
     syncKeysVisibility();
   });
+
+  // ---- side panel ---------------------------------------------------------
+  // Collapsing it hands the whole window to the map. The reopen button is a
+  // separate floating control rather than a sliver of the panel: a rail wide
+  // enough to click is a rail wide enough to notice, which is the one thing
+  // "fullscreen" is supposed to get rid of.
+  let sideOpen = true;
+
+  function syncSidePanel() {
+    el.classList.toggle('side-collapsed', !sideOpen);
+    if (sideShowBtn) sideShowBtn.hidden = sideOpen;
+    if (sideToggleBtn) {
+      sideToggleBtn.setAttribute('aria-expanded', sideOpen ? 'true' : 'false');
+    }
+    syncChromeInset();
+    view3d?.resize();
+    if (!destroyed) draw();
+  }
+
+  function setSideOpen(open) {
+    if (open === sideOpen) return;
+    sideOpen = open;
+    syncSidePanel();
+  }
+
+  sideToggleBtn?.addEventListener('click', () => setSideOpen(false));
+  sideShowBtn?.addEventListener('click', () => setSideOpen(true));
+  el.querySelector('#rv-side-back')?.addEventListener('click', () => onBack?.());
 
   const renderer = new RadarRenderer(canvas);
   renderer.onIconLoad = () => {
@@ -532,6 +616,7 @@ export function createTimelineViewer({
   // this in 3D", and it says which of the three gates is in the way.
   const viewmodeEl = el.querySelector('#rv-viewmode');
   const toggle3dBtn = el.querySelector('#rv-toggle3d');
+  const icon3dEl = el.querySelector('#rv-3d-icon');
   const exploreBtn = el.querySelector('#rv-explore');
   const note3dEl = el.querySelector('#rv-3d-note');
   let view3d = null;
@@ -553,7 +638,7 @@ export function createTimelineViewer({
       map3dSlug = avail3d.mapSlug || null;
       // Visible whenever there is anything to say — including "this needs a
       // reparse", which is the case the old version hid.
-      viewmodeEl.hidden = !(avail3d.dataReady || avail3d.upgradeable || avail3d.job);
+      toggle3dBtn.hidden = !(avail3d.dataReady || avail3d.upgradeable || avail3d.job);
       sync3dButtons();
       const job = avail3d.job;
       const busy = job && ['queued', 'downloading', 'parsing'].includes(job.state);
@@ -572,15 +657,16 @@ export function createTimelineViewer({
     const ready = !!(s?.dataReady && s?.mapReady);
 
     toggle3dBtn.classList.toggle('is-busy', !!busy);
+    toggle3dBtn.classList.toggle('active', mode3d);
     toggle3dBtn.disabled = !ready && !s?.upgradeable;
 
     if (ready) {
       // The icon shows where you would GO, not where you are.
-      toggle3dBtn.innerHTML = icon(mode3d ? view2dIcon : view3dIcon);
+      icon3dEl.innerHTML = icon(mode3d ? view2dIcon : view3dIcon);
       toggle3dBtn.title = mode3d ? 'Switch to 2D radar' : 'Switch to 3D';
       note3dEl.hidden = true;
     } else {
-      toggle3dBtn.innerHTML = icon(view3dIcon);
+      icon3dEl.innerHTML = icon(view3dIcon);
       note3dEl.hidden = false;
       if (busy) {
         toggle3dBtn.title = 'Preparing this demo for 3D';
@@ -607,6 +693,7 @@ export function createTimelineViewer({
       }
     }
 
+    viewmodeEl.hidden = !mode3d;
     exploreBtn.hidden = !mode3d;
     exploreBtn.classList.toggle('is-on', mode3d && view3d?.mode === 'free');
     exploreBtn.title =
@@ -749,11 +836,14 @@ export function createTimelineViewer({
         const sideClass = side === 'T' ? 'wt' : 'wct';
         const noted = coachOn && coachNotedFiles.has(r.file);
         const coachClass = noted ? ' has-coach' : '';
-        const gap =
-          i === 0 ? 0 : gapAfterRound(rounds[i - 1].round) * ROUND_GAP_PX;
-        const margin = gap ? ` style="margin-left:${gap}px"` : '';
+        // A side swap is a break in the strip, not another gap the eye has to
+        // measure — the arrows say what the extra space used to only imply.
+        const gapMul = i === 0 ? 0 : gapAfterRound(rounds[i - 1].round);
+        const swap = gapMul > 1 ? '<span class="rv-round-swap" aria-hidden="true">⇄</span>' : '';
+        const gap = gapMul * ROUND_GAP_PX;
+        const margin = gap && !swap ? ` style="margin-left:${gap}px"` : '';
         const coachHint = noted ? ' · coach notes' : '';
-        return `<button type="button" class="rv-round ${sideClass}${coachClass}" data-index="${i}"${margin} title="${escapeHtml(
+        return `${swap}<button type="button" class="rv-round ${sideClass}${coachClass}" data-index="${i}"${margin} title="${escapeHtml(
           `Round ${r.round} · ${side} win · ${economyLabel(r.econ1)} vs ${economyLabel(r.econ2)}${coachHint}`
         )}">${String(r.round).padStart(2, '0')}</button>`;
       })
@@ -1089,8 +1179,8 @@ export function createTimelineViewer({
     // Same class of sticky-cache bug as zone vision: a holding draw with
     // fallbackMeta can poison per-round duel windows under this file key.
     if (duelsOn) duelOverlay.reset();
-    notePanel.hidden = true;
-    noteBtn.classList.remove('active');
+    // The dock is a fixture of the side panel, not a popover that belongs to
+    // one round: switching rounds refills it rather than closing it.
     if (coachPicking) hideCoachPick();
     syncKeysVisibility();
     // Pause early in coach mode so freezetime auto-skip can't race the seek.
@@ -1538,17 +1628,12 @@ export function createTimelineViewer({
   }
 
   /** Stacked (phone) layout: sidebars optional; when off the map fills. */
+  /**
+   * The rosters overlay the map now, so there is no layout to switch between:
+   * what is left is coach mode's ability to clear them off a phone screen.
+   */
   function syncRostersLayout() {
-    const stacked = stackedQuery.matches;
-    if (rostersBtn) {
-      // Always available on the under-map roster layout, not only while coach runs.
-      rostersBtn.hidden = !stacked;
-      rostersBtn.classList.toggle('active', stacked && rostersOn);
-      rostersBtn.title = rostersOn
-        ? 'Hide player sidebars (map fills the screen)'
-        : 'Show player sidebars';
-    }
-    const hideRosters = stacked && !rostersOn;
+    const hideRosters = stackedQuery.matches && !rostersOn;
     el.classList.toggle('rosters-hidden', hideRosters);
     // Force the columns off in the DOM too: display:flex on .rv-team-col
     // outranks the UA [hidden] rule without an explicit [hidden] override.
@@ -1606,8 +1691,8 @@ export function createTimelineViewer({
     let leftTeam;
     let rightTeam;
     if (s1 === 'CT' && s2 === 'T') {
-      team1El.innerHTML = teamHtml(2, t2, 'T');
-      team2El.innerHTML = teamHtml(1, t1, 'CT');
+      team1El.innerHTML = teamHtml(2, 'T');
+      team2El.innerHTML = teamHtml(1, 'CT');
       leftScore = wins.team2;
       rightScore = wins.team1;
       leftSide = 'T';
@@ -1615,8 +1700,8 @@ export function createTimelineViewer({
       leftTeam = 2;
       rightTeam = 1;
     } else {
-      team1El.innerHTML = teamHtml(1, t1, s1 || 'T');
-      team2El.innerHTML = teamHtml(2, t2, s2 || 'CT');
+      team1El.innerHTML = teamHtml(1, s1 || 'T');
+      team2El.innerHTML = teamHtml(2, s2 || 'CT');
       leftScore = wins.team1;
       rightScore = wins.team2;
       leftSide = s1 || 'T';
@@ -1628,6 +1713,16 @@ export function createTimelineViewer({
     scoreRightEl.textContent = String(rightScore);
     scoreLeftEl.dataset.side = leftSide;
     scoreRightEl.dataset.side = rightSide;
+    // Team identity moved off the sidebars and onto the clock, so the two are
+    // read together with the score and the odds they belong to.
+    const leftInfo = leftTeam === 2 ? t2 : t1;
+    const rightInfo = rightTeam === 2 ? t2 : t1;
+    clockTeamLeftEl.textContent = leftInfo.name || `Team ${leftTeam}`;
+    clockTeamRightEl.textContent = rightInfo.name || `Team ${rightTeam}`;
+    clockTeamLeftEl.dataset.side = leftSide;
+    clockTeamRightEl.dataset.side = rightSide;
+    oddsLeftEl.dataset.side = leftSide;
+    oddsRightEl.dataset.side = rightSide;
     // Team POV: one roster on the sidebar. The other side's HP, buy and
     // inventory are exactly the information the mode exists to withhold, so the
     // panel is emptied rather than hidden and syncScoreboard stops feeding it.
@@ -1654,7 +1749,7 @@ export function createTimelineViewer({
     return { team1, team2 };
   }
 
-  function teamHtml(team, info, side) {
+  function teamHtml(team, side) {
     const players = (activeMeta.players || []).filter((p) => p.team === team);
     const rows = players
       .map((p) => {
@@ -1672,15 +1767,9 @@ export function createTimelineViewer({
         </div>`;
       })
       .join('');
-    const sideClass = side === 'T' ? 'side-t' : side === 'CT' ? 'side-ct' : '';
-    return `
-      <div class="rv-team-head ${sideClass}">
-        <span class="rv-team-name">${escapeHtml(info.name || `Team ${team}`)}</span>
-        <span class="rv-team-side" data-side-wp="${escapeHtml(side || '')}">${escapeHtml(
-          side || ''
-        )}</span>
-      </div>
-      <div class="rv-players">${rows}</div>`;
+    // No name, no side badge, no score: the sidebar is HP, buy and inventory.
+    // All three of those moved to the clock row, where they read as one line.
+    return `<div class="rv-players">${rows}</div>`;
   }
 
   function armorIconSrc(inv) {
@@ -1745,7 +1834,7 @@ export function createTimelineViewer({
     const victimName = victim?.name || k.victim || '?';
     const gun = iconImgHtml(k.weapon || 'knife', 'rv-killfeed-gun');
     const hs = k.headshot
-      ? '<span class="rv-killfeed-hs" title="Headshot">HS</span>'
+      ? '<span class="rv-killfeed-hs" role="img" aria-label="Headshot" title="Headshot"></span>'
       : '';
     const left = attackerName
       ? `<span class="rv-killfeed-name ${killfeedNameClass(k.attacker)}">${escapeHtml(
@@ -2078,7 +2167,16 @@ export function createTimelineViewer({
   }
 
   mapEl.addEventListener('pointerdown', (e) => {
-    if (e.target.closest?.('.rv-clock-row, .rv-loading')) return;
+    // Everything docked on top of the map — the clock, the rosters, the
+    // transport, the drawing palette — is a control, not somewhere to start a
+    // pan or a stroke from.
+    if (
+      e.target.closest?.(
+        '.rv-clock-row, .rv-loading, .rv-team-col, .rv-transport, .rv-tools, .rv-viewmode, .rv-feed-stack'
+      )
+    ) {
+      return;
+    }
     closePopovers();
 
     // In 3D the right button belongs to the camera, not the pencil: it flips
@@ -2288,13 +2386,14 @@ export function createTimelineViewer({
       : 'Coach needs a full match — open a demo, not a round selection';
   }
 
+  /**
+   * The side dock holds one panel at a time: notes or the bookmark list.
+   * The coach picker is no longer part of this — it is a section of its own
+   * higher up the panel, so picking a team no longer costs you the notes.
+   */
   function closePopovers(except = null) {
     if (notePanel !== except) notePanel.hidden = true;
     if (playlistPanel !== except) playlistPanel.hidden = true;
-    if (coachPick && coachPick !== except) {
-      coachPick.hidden = true;
-      coachPicking = false;
-    }
     noteBtn.classList.toggle('active', !notePanel.hidden);
     bookmarkBtn.classList.toggle('open', !playlistPanel.hidden);
     syncCoachBtn();
@@ -2769,13 +2868,14 @@ export function createTimelineViewer({
     showNoteAt(vis[next], { seek: true });
   }
 
-  /** Open the dock on the first chronological note when the round has any. */
+  /** Point the dock at the first chronological note when the round has any. */
   function autoOpenNotesIfPresent() {
     loadNotesFromMeta(true);
     const vis = visibleNoteIndices();
     if (!vis.length) return;
     noteView = 'editor';
-    revealNotePanel();
+    // Don't take the dock back off a bookmark list the user opened themselves.
+    if (playlistPanel.hidden) revealNotePanel();
     showNoteAt(vis[0], { seek: false });
   }
 
@@ -2805,14 +2905,19 @@ export function createTimelineViewer({
     showNoteAt(index, { seek: true });
   });
 
-  function setNoteOpen(open) {
+  /**
+   * `focus` is off for the openings the user did not ask for (arriving in the
+   * viewer, coming back from the bookmark list). A focused textarea swallows
+   * space, and space is the pause key.
+   */
+  function setNoteOpen(open, { focus = true } = {}) {
     closePopovers(open ? notePanel : null);
     notePanel.hidden = !open;
     noteBtn.classList.toggle('active', open);
     if (open) {
       if (noteView !== 'list') noteView = 'editor';
       renderNoteDock();
-      if (noteView === 'editor') noteText.focus();
+      if (focus && noteView === 'editor') noteText.focus();
     }
     syncKeysVisibility();
   }
@@ -2892,7 +2997,7 @@ export function createTimelineViewer({
       if (!roundNotes.length) {
         noteIndex = -1;
         if (!quiet) noteMsg.textContent = 'Notes cleared.';
-        setNoteOpen(false);
+        renderNoteDock({ forceText: true });
       } else {
         if (noteIndex < 0 || noteIndex >= roundNotes.length) noteIndex = 0;
         if (!quiet) noteMsg.textContent = 'Saved.';
@@ -3040,6 +3145,8 @@ export function createTimelineViewer({
     if (e.key === 'Enter') createPlaylist();
   });
 
+  // The dock holds one panel at a time: bookmarks take it over, and closing
+  // them hands it back to the notes rather than leaving an empty column.
   bookmarkBtn.addEventListener('click', () => {
     const open = playlistPanel.hidden;
     closePopovers(open ? playlistPanel : null);
@@ -3048,6 +3155,8 @@ export function createTimelineViewer({
     if (open) {
       renderPlaylists();
       if (!playlists) loadPlaylists();
+    } else {
+      setNoteOpen(true, { focus: false });
     }
     syncKeysVisibility();
   });
@@ -3058,7 +3167,8 @@ export function createTimelineViewer({
   // once for this demo and re-aggregated locally on every open, so stepping
   // from round 14 to round 20 costs no request.
 
-  const statsBtn = el.querySelector('#rv-stats');
+  // Reached by holding Tab (and closed with its own ✕). The tool bar is the
+  // eight overlay toggles and nothing else, so there is no button for it.
   const boardEl = el.querySelector('#rv-scoreboard');
   const boardBody = el.querySelector('#rv-scoreboard-body');
   const boardTitle = el.querySelector('#rv-scoreboard-title');
@@ -3173,7 +3283,6 @@ export function createTimelineViewer({
   function setScoreboardOpen(open) {
     const next = Boolean(open);
     boardEl.hidden = !next;
-    statsBtn?.classList.toggle('active', next);
     if (!next) return;
     if (!statsDemoId) {
       boardBody.innerHTML = '<p class="view-empty">Load a full match to see live stats.</p>';
@@ -3204,7 +3313,6 @@ export function createTimelineViewer({
     setScoreboardOpen(open);
   }
 
-  statsBtn?.addEventListener('click', () => toggleScoreboard());
   el.querySelector('#rv-scoreboard-close').addEventListener('click', () => {
     tabHoldingStats = false;
     setScoreboardOpen(false);
@@ -3398,19 +3506,25 @@ export function createTimelineViewer({
     return { team1: s1, team2: 100 - s1, t: sample.t, ct: sample.ct };
   }
 
-  /** Put T/CT win% in the side badges (or restore T/CT when coach is off). */
+  /**
+   * The round win chance, in the two places it is read from: beside each team
+   * on the clock row, and in the Predicted Winrate header. Both are blanked
+   * when the chart is off — an odds number with no graph behind it is a claim
+   * the user has not asked for and cannot check.
+   */
   function syncSideWinrates(now) {
-    for (const badge of el.querySelectorAll('[data-side-wp]')) {
-      const side = badge.dataset.sideWp;
-      if (!chartOn || !now || (side !== 'T' && side !== 'CT')) {
-        badge.textContent = side || '';
-        badge.classList.toggle('is-wp', false);
-        continue;
-      }
-      const pct = Math.round(side === 'CT' ? now.ct : now.t);
-      badge.textContent = `${pct}%`;
-      badge.classList.toggle('is-wp', true);
+    const pctFor = (side) =>
+      side === 'CT' ? Math.round(now.ct) : side === 'T' ? Math.round(now.t) : null;
+    for (const badge of [oddsLeftEl, oddsRightEl]) {
+      if (!badge) continue;
+      const pct = chartOn && now ? pctFor(badge.dataset.side) : null;
+      badge.hidden = pct == null;
+      badge.textContent = pct == null ? '' : `${pct}%`;
     }
+    const t = chartOn && now ? pctFor('T') : null;
+    const ct = chartOn && now ? pctFor('CT') : null;
+    if (graphTLabel) graphTLabel.textContent = t == null ? '-' : `${t}%`;
+    if (graphCtLabel) graphCtLabel.textContent = ct == null ? '-' : `${ct}%`;
   }
 
   function drawWinGraph(result, tick) {
@@ -3833,9 +3947,12 @@ export function createTimelineViewer({
     ctx.fill();
 
     mapPlayhead = { x: px / dpr, y: py / dpr, tick, sample };
-    if (mapCtLabel) mapCtLabel.textContent = `CT ${Math.round(ct)}%`;
-    if (mapTLabel) mapTLabel.textContent = `T ${Math.round(tShare)}%`;
-    if (mapNeuLabel) mapNeuLabel.textContent = `Neutral ${Math.round(neu)}%`;
+    // Numbers only: the header is a title plus a readout now, and the colours
+    // (blue / grey / red) already say which share is which. The hover tip
+    // still spells out CT, neutral and T in words.
+    if (mapCtLabel) mapCtLabel.textContent = `${Math.round(ct)}%`;
+    if (mapTLabel) mapTLabel.textContent = `${Math.round(tShare)}%`;
+    if (mapNeuLabel) mapNeuLabel.textContent = `${Math.round(neu)}%`;
   }
 
   function syncMapControlChart(tick) {
@@ -3846,9 +3963,9 @@ export function createTimelineViewer({
       return;
     }
     mapPlayhead = null;
-    if (mapCtLabel) mapCtLabel.textContent = 'CT';
-    if (mapTLabel) mapTLabel.textContent = 'T';
-    if (mapNeuLabel) mapNeuLabel.textContent = 'Map control';
+    if (mapCtLabel) mapCtLabel.textContent = '-';
+    if (mapTLabel) mapTLabel.textContent = '-';
+    if (mapNeuLabel) mapNeuLabel.textContent = '-';
     // Chart works without the positions overlay — load the zone network on demand.
     const file = files[activeIndex];
     const wantTick = tick;
@@ -3894,7 +4011,6 @@ export function createTimelineViewer({
     if (coachPickTeams) coachPickTeams.hidden = false;
     if (coachPickPlayers) coachPickPlayers.hidden = true;
     if (coachPickBack) coachPickBack.hidden = true;
-    closePopovers(coachPick);
     coachPicking = true;
     if (coachPick) coachPick.hidden = false;
     syncCoachBtn();
@@ -3929,7 +4045,6 @@ export function createTimelineViewer({
           .join('');
       }
     }
-    closePopovers(coachPick);
     coachPicking = true;
     if (coachPick) coachPick.hidden = false;
     syncCoachBtn();
@@ -4118,14 +4233,6 @@ export function createTimelineViewer({
     draw();
   });
 
-  rostersBtn?.addEventListener('click', () => {
-    if (!stackedQuery.matches) return;
-    rostersOn = !rostersOn;
-    syncRostersLayout();
-    // POV may have emptied a panel; rebuild so shown sidebars are current.
-    if (rostersOn) renderScoreboards();
-  });
-
   // Off → team 1 → team 2 → off. A cycle rather than a picker: there are only
   // ever two answers, and the tooltip names the one currently in force.
   povBtn?.addEventListener('click', async () => {
@@ -4182,7 +4289,6 @@ export function createTimelineViewer({
       syncRostersLayout();
       const vis = visibleNoteIndices();
       noteIndex = vis.includes(noteIndex) ? noteIndex : (vis[0] ?? -1);
-      if (noteIndex < 0) setNoteOpen(false);
       renderNoteDock({ forceText: true });
       renderActiveMarks();
       syncCoachRoundChips();
@@ -4412,7 +4518,6 @@ export function createTimelineViewer({
     if (activeMeta) activeMeta.notes = roundNotes;
     if (!roundNotes.length) {
       noteIndex = -1;
-      if (!notePanel.hidden) setNoteOpen(false);
     } else if (noteIndex < 0 || noteIndex >= roundNotes.length) {
       noteIndex = 0;
     }
@@ -4579,7 +4684,6 @@ export function createTimelineViewer({
 
     const item = sequence.at(activeIndex);
     const local = at.local;
-    timeEl.textContent = formatClock(local);
     const pct = item?.seconds ? (local / item.seconds) * 100 : 0;
     fillEl.style.width = `${pct}%`;
     handleEl.style.left = `${pct}%`;
@@ -4624,12 +4728,35 @@ export function createTimelineViewer({
   function cycleSpeed() {
     speedIndex = (speedIndex + 1) % SPEEDS.length;
     playback.setSpeed(SPEEDS[speedIndex]);
-    speedBtn.textContent = `x${SPEEDS[speedIndex]}`;
+    speedBtn.textContent = `${SPEEDS[speedIndex]}X`;
   }
 
   speedBtn.addEventListener('click', () => {
     cycleSpeed();
   });
+
+  /**
+   * Skip inside the round on screen. `nudge` alone would roll into the next
+   * round at the edges, which is not what a 10-second step is asking for —
+   * it is a step within the moment being watched.
+   */
+  function skipBy(seconds) {
+    const item = sequence.at(activeIndex);
+    if (!item) return;
+    const base = sequence.offsetOf(activeIndex);
+    const local = Math.max(
+      0,
+      Math.min(roundLocalMax(item), playback.position - base + seconds)
+    );
+    // Landing in the buy on purpose disarms the freezetime skip, same as a drag.
+    const timing = item.timing;
+    const freezeSecs = Math.max(0, (timing.freezeEndTick - timing.startTick) / timing.tickRate);
+    if (local < freezeSecs) freezeSkip = false;
+    playback.seek(base + local);
+  }
+
+  fwdBtn?.addEventListener('click', () => skipBy(SKIP_SECONDS));
+  backBtn?.addEventListener('click', () => skipBy(-SKIP_SECONDS));
 
   /** Slot currently under the pointer in a side panel, or -1. */
   let hoverSlot = -1;
@@ -4737,27 +4864,21 @@ export function createTimelineViewer({
   }
   window.addEventListener('keydown', onKey);
 
-  // The round strip + transport float over the bottom of the stage, so the map
-  // fits itself above them. The strip wraps to two rows on narrow windows, so
-  // the inset is measured rather than assumed.
+  // The round strip and scrubber own their own row under the map now, so the
+  // chrome no longer eats into the radar. What still overlays it is the
+  // floating transport cluster in the bottom-left corner, and the radar is
+  // inset by that much so a player standing there is never under a button.
   //
-  // The measurement is also published as --rv-chrome-h: the narrow layout puts
-  // the rosters under the map, where the chrome would cover them, so the stage
-  // turns this into bottom padding. Once it does, the map box already stops
-  // above the chrome and insetting the drawing again would only shrink the
-  // radar into the top of an empty box.
+  // The height is still published as --rv-chrome-h: the stacked layout puts
+  // the rosters under the map and sizes the docked panels off it.
   function syncChromeInset() {
     const chromeH = chromeEl.offsetHeight;
     el.style.setProperty('--rv-chrome-h', `${chromeH}px`);
-    const stageH = el.querySelector('.rv-stage')?.clientHeight || 0;
-    // Stacked + sidebars: chrome sits over the roster row (padding), not the map.
-    // Stacked + sidebars hidden (mobile coach): map fills; chrome overlays it.
-    const rosterRow = stackedQuery.matches && !el.classList.contains('rosters-hidden');
-    const overlap = rosterRow
-      ? 0
-      : Math.max(0, Math.min(chromeH - 12, stageH * 0.35));
-    // Keep the hotkey legend clear of the floating transport when it overlays the map.
-    el.style.setProperty('--rv-keys-inset', `${overlap + 10}px`);
+    const transportH = el.querySelector('.rv-transport')?.offsetHeight || 0;
+    const overlap = transportH ? transportH + 20 : 0;
+    // Keep the hotkey legend clear of the floating transport and the 3D
+    // free-look button, both of which sit on that bottom band of the map.
+    el.style.setProperty('--rv-keys-inset', `${overlap + 12}px`);
     if (renderer.viewInset.bottom !== overlap) {
       renderer.viewInset.bottom = overlap;
       return true;
@@ -4843,6 +4964,9 @@ export function createTimelineViewer({
     syncRostersLayout();
     syncChromeInset();
     syncKeysVisibility();
+    // Notes are the dock's resting state, so the panel opens with them showing
+    // whether or not this round has any written yet.
+    setNoteOpen(true, { focus: false });
     loadPlaylists();
     await buildSequence();
     await restorePersistedCoach();

@@ -2855,3 +2855,48 @@ body.is-impersonating .ingest-off-toast {
   border-color: rgba(255, 255, 255, 0.22);
   background: rgba(255, 255, 255, 0.04);
 }
+
+/* ---- Map Practice -------------------------------------------------------- */
+/* One row per map, matching the gamemode rows. Play leaves the shell for
+   cs3d.html, so it is a plain link and the router's delegated handler lets
+   it through. */
+
+.mp-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mp-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 10px 14px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  transition: background 0.15s ease;
+}
+
+.mp-row:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.mp-row-title {
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.mp-play {
+  flex-shrink: 0;
+  background: var(--accent-dim);
+  color: #ffb4b4;
+}
+
+.mp-play:hover {
+  background: rgba(245, 37, 37, 0.24);
+  color: #fff;
+}

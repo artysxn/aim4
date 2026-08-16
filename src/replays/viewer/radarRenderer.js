@@ -43,7 +43,7 @@ export const TEAM_COLORS = {
 
 /** Live T / CT colors â€” preferred when the tick buffer carries side. */
 export const SIDE_COLORS = {
-  T: { base: '#e8b84a', bright: '#f5d27a', dim: '#8a6a20' },
+  T: { base: '#e60611', bright: '#ff6a70', dim: '#7d1015' },
   CT: { base: '#5b9fd4', bright: '#8fc4ef', dim: '#2a5578' }
 };
 

@@ -28,6 +28,11 @@ export class Hud {
       <div class="c3-inspect" data-k="inspect" hidden></div>
       <div class="c3-grade" data-k="grade" hidden></div>
       <div class="c3-load" data-k="load"><div class="c3-load-bar"><span></span></div><div class="c3-load-text"></div></div>
+      <div class="c3-boot" data-k="boot">
+        <div class="c3-boot-name">${esc(map.name)}</div>
+        <div class="c3-boot-bar"><span></span></div>
+        <div class="c3-boot-text">Loading</div>
+      </div>
       <div class="c3-center" data-k="enter">
         <div class="c3-panel">
           <div class="c3-panel-title">${esc(map.name)}</div>
@@ -58,6 +63,10 @@ export class Hud {
     root.querySelectorAll('[data-k]').forEach((n) => (this.el[n.dataset.k] = n));
     this.loadBar = root.querySelector('.c3-load-bar span');
     this.loadText = root.querySelector('.c3-load-text');
+    this.bootBar = root.querySelector('.c3-boot-bar span');
+    this.bootText = root.querySelector('.c3-boot-text');
+    /** True once the map has been revealed; the boot screen never comes back. */
+    this.booted = false;
     const picker = root.querySelector('.c3-maps');
     picker.innerHTML = CS3D_MAPS.map((m) => {
       const href = m.bareRoute === false ? `/de_${m.slug}` : `/${m.slug}`;
@@ -163,21 +172,49 @@ export class Hud {
     // Geometry and the texture bundle stream side by side; the bar is bytes.
     const total = (p.bytesTotal || 0) + (p.texBytesTotal || 0);
     const loaded = (p.bytesLoaded || 0) + (p.texBytesLoaded || 0);
-    const done = p.groupsTotal && p.groupsLoaded >= p.groupsTotal && p.texTotal && p.texLoaded >= p.texTotal;
-    if (done) {
+    // Both counts have to be able to finish on a degenerate pack, or the boot
+    // screen never lifts: no texture bundle at all is done, and so is a pack
+    // with no geometry groups — but only once the geometry phase is reached,
+    // since 0 of 0 is trivially true while the manifest is still landing.
+    const streaming = p.phase !== 'manifest' && p.phase !== 'phys';
+    const geoDone = streaming && p.groupsLoaded >= p.groupsTotal;
+    const texDone = !p.texTotal || p.texLoaded >= p.texTotal;
+    if (geoDone && texDone) {
       this.el.load.classList.add('is-done');
+      this.finishBoot();
       return;
     }
     const frac = total ? loaded / total : p.groupsTotal ? p.groupsLoaded / p.groupsTotal : 0;
-    this.loadBar.style.width = `${Math.round(frac * 100)}%`;
+    const pct = Math.round(frac * 100);
+    this.loadBar.style.width = `${pct}%`;
     const mb = (loaded / 1e6).toFixed(0);
     const mbT = (total / 1e6).toFixed(0);
-    this.loadText.textContent =
+    const label =
       p.phase === 'manifest' || p.phase === 'phys'
         ? 'collision'
         : p.groupsLoaded < p.groupsTotal
           ? `${mb} / ${mbT} MB`
           : `textures ${p.texLoaded} / ${p.texTotal}`;
+    this.loadText.textContent = label;
+    if (!this.booted) {
+      this.bootBar.style.width = `${pct}%`;
+      this.bootText.textContent = `${pct}% · ${label}`;
+    }
+  }
+
+  /**
+   * Take the boot screen down and hand over the map.
+   *
+   * Half a map is worse than no map: streaming tiles in over an empty grey
+   * void reads as a broken render, so nothing is shown until every tile and
+   * texture is in. Also called on a load error, so the message is not stranded
+   * behind an opaque panel.
+   */
+  finishBoot() {
+    if (this.booted) return;
+    this.booted = true;
+    this.bootBar.style.width = '100%';
+    this.el.boot.classList.add('is-done');
   }
 
   /**
@@ -273,5 +310,7 @@ export class Hud {
     this.el.err.hidden = false;
     this.el.err.textContent = msg;
     this.el.load.classList.add('is-done');
+    // Whatever went wrong, the user has to be able to read it.
+    this.finishBoot();
   }
 }

@@ -115,6 +115,8 @@ const LM_NEUTRAL_UV = [0.97, 0.97];
  * from a random corner of the atlas.
  */
 const LM_UV_MAX = 0.876;
+/** One texel of the 4096² atlas, in UV. A chart smaller than this is not one. */
+const LM_TEXEL = 1 / 4096;
 /** RGBM range for the lightmap: values up to this many units of radiance survive. */
 const LM_RANGE = 16;
 /**
@@ -395,7 +397,16 @@ function classifyMaterial(mat) {
   // glow disc and the chimney steam. Rendered the way the vmat asks, they
   // belong. Loose particle sheets under materials/effects/ still go: those are
   // sprites the game spawns, not placed scenery.
-  if (/^materials\/effects\/(smoke|dust|light)/i.test(name)) return null;
+  //
+  // Except that the path says nothing about which is which. Inferno's entire
+  // cloud layer is `materials/effects/smoke/cloud_001_b.vmat` — placed scenery
+  // in its 3D skybox, named like a particle — and this rule was silently
+  // deleting it, which is why Inferno had a bare gradient for a sky while Nuke
+  // (`nuke_clouds_003`, a path this rule happens to miss) had clouds. What
+  // actually separates them is placement: geometry in the map or the skybox
+  // prefab is scenery whatever it is called. So drop only the ones that are
+  // NOT clouds; a cloud card that got placed is a cloud.
+  if (/^materials\/effects\/(smoke|dust|light)/i.test(name) && !/cloud/i.test(name)) return null;
   // A retakes-mode wall, not scenery.
   if (/retakes_blocker/i.test(name)) return null;
   const effect = /^csgo_effects/.test(shader);
@@ -507,6 +518,74 @@ function classifyMaterial(mat) {
     !!(tex.g_tColor2 || tex.g_tColorB || tex.g_tLayer2Color);
   const scale1 = Array.isArray(vecs.g_vTexCoordScale1) ? vecs.g_vTexCoordScale1 : Array.isArray(vecs.g_vTexCoordScale) ? vecs.g_vTexCoordScale : [1, 1];
   const scale2 = Array.isArray(vecs.g_vTexCoordScale2) ? vecs.g_vTexCoordScale2 : scale1;
+  /**
+   * Per-layer colour correction, the `csgo_environment` family only.
+   *
+   * These shaders do not draw their albedo as authored: each layer is pushed
+   * through a saturation / contrast / brightness adjust first, gated by
+   * `g_nColorCorrectionMode<n>`. Inferno's stone walls run layer 1 at
+   * saturation 0.5 — half — with a tint mask brightened 1.977×.
+   *
+   * Nuke is 83% `csgo_complex`, which has no such parameters, so ignoring them
+   * cost nothing there and the map looked right. Inferno is 76%
+   * `csgo_environment` / `csgo_environment_blend`, so ignoring them meant every
+   * blended wall and floor rendered at full saturation with an unscaled tint —
+   * the same pack code, the same render path, a different shader vocabulary in.
+   *
+   * Read per layer; layer 2's values only matter on a blend.
+   */
+  const ccOf = (n) => {
+    if (Number(ints[`g_nColorCorrectionMode${n}`]) !== 1) return null;
+    const sat = floats[`g_fTextureColorSaturation${n}`];
+    const con = floats[`g_fTextureColorContrast${n}`];
+    const bri = floats[`g_fTextureColorBrightness${n}`];
+    const out = {
+      sat: Number.isFinite(sat) ? sat : 1,
+      con: Number.isFinite(con) ? con : 1,
+      bri: Number.isFinite(bri) ? bri : 1
+    };
+    return out.sat === 1 && out.con === 1 && out.bri === 1 ? null : out;
+  };
+  const cc1 = ccOf(1);
+  const cc2 = blend ? ccOf(2) : null;
+  const tintMaskBright = floats.g_fTintMaskBrightness1;
+  /**
+   * How `csgo_environment` applies its per-instance tint. Read off the game's
+   * own shader (VRF's csgo_environment.frag is decompiled from it), and it is
+   * nothing like the plain multiply every other shader uses:
+   *
+   *   mask   = saturate(((height.g - 0.5) * g_fTintMaskContrast + 0.5) * g_fTintMaskBrightness)
+   *   tn     = normalize(tint)                     the tint's HUE, unit length
+   *   tinted = tn * min(luma(albedo) / luma(tn), 3 * luma(albedo) * max(tint))
+   *   amount = g_flModelTintAmount * (1 - min(tint))
+   *   out    = mix(albedo, tinted, amount * mask * g_bModelTint)
+   *
+   * i.e. the albedo is recoloured to the tint's hue AT ITS OWN LUMINANCE, only
+   * capped darker for a dark tint. A multiply darkens by the tint's brightness
+   * as well, which is why Inferno's plaster went from terracotta to blood-red
+   * and its barrels to near-black: the barrels' tint is a dark brown, and on top
+   * of that they set g_bModelTint1 = 0 — tint OFF — which nothing here honoured.
+   * 37 of Inferno's 237 environment vmats also run g_flModelTintAmount = 0.
+   *
+   * The mask is the HEIGHT map's green channel per the decompiled shader. VRF's
+   * hand-written environment_blend uses the colour map's alpha instead; the two
+   * are not separable from texture statistics alone, so this follows the
+   * decompiled source. If tinted props look masked wrong, that channel index
+   * (below, `mask(h1, .., 1)`) is the one thing to try flipping to alpha.
+   */
+  const env = /csgo_environment/.test(shader);
+  const layerTint = (n) => ({
+    on: Number(ints[`g_bModelTint${n}`] ?? 1) !== 0,
+    bright: Number.isFinite(floats[`g_fTintMaskBrightness${n}`]) ? floats[`g_fTintMaskBrightness${n}`] : 1,
+    contrast: Number.isFinite(floats[`g_fTintMaskContrast${n}`]) ? floats[`g_fTintMaskContrast${n}`] : 1
+  });
+  const envTint = env
+    ? {
+        amount: Number.isFinite(floats.g_flModelTintAmount) ? floats.g_flModelTintAmount : 1,
+        l1: layerTint(1),
+        l2: blend ? layerTint(2) : undefined
+      }
+    : undefined;
   return {
     name,
     shader,
@@ -533,6 +612,7 @@ function classifyMaterial(mat) {
         }
       : undefined,
     tintMask: ints.F_TINT_MASK === 1 || !!tex.g_tTintMask,
+    envTint,
     glass,
     glassOpacity,
     glassRoughness,
@@ -542,6 +622,10 @@ function classifyMaterial(mat) {
     // Layer 2's texture scale relative to layer 1 (both tile the same UV set).
     blendScale2: blend ? [scale2[0] / (scale1[0] || 1) || 1, scale2[1] / (scale1[1] || 1) || 1] : undefined,
     blendSoftness: Number.isFinite(floats.g_flBlendSoftness) ? floats.g_flBlendSoftness : 0.5,
+    cc1: cc1 || undefined,
+    cc2: cc2 || undefined,
+    tintMaskBright:
+      Number.isFinite(tintMaskBright) && tintMaskBright !== 1 ? tintMaskBright : undefined,
     tex
   };
 }
@@ -743,11 +827,17 @@ class TextureBundle {
   }
 
   /** A single-channel mask (self-illum), packed into the red channel. */
-  mask(png, maxSize) {
+  /**
+   * A single-channel mask. `channel` defaults to R, which is where a dedicated
+   * mask texture keeps it; `csgo_environment` has no dedicated tint-mask slot
+   * and keeps its tint mask in the COLOUR map's alpha instead, so that family
+   * asks for channel 3 of its g_tColor1/2.
+   */
+  mask(png, maxSize, channel = 0) {
     if (!png) return Promise.resolve(null);
     const size = Math.min(maxSize, 512);
-    return this._add(`mask|${png}|${size}`, 'mask', async () => {
-      const raw = await this._channelAt(png, 0, size, 255);
+    return this._add(`mask|${png}|${channel}|${size}`, 'mask', async () => {
+      const raw = await this._channelAt(png, channel, size, 255);
       // Constant-white masks say "the whole surface glows", which the material
       // can express with no texture at all.
       let min = 255;
@@ -1525,7 +1615,20 @@ function lightmapUvOf(prim) {
     const a = prim.getAttribute(`TEXCOORD_${n}`);
     const mn = a.getMin([]);
     const mx = a.getMax([]);
-    if (mn[0] >= -0.01 && mn[1] >= -0.01 && mx[0] <= LM_UV_MAX && mx[1] <= LM_UV_MAX) return a;
+    if (mn[0] < -0.01 || mn[1] < -0.01 || mx[0] > LM_UV_MAX || mx[1] > LM_UV_MAX) continue;
+    // A chart that collapses to a point is not a chart. Its UVs sit inside the
+    // atlas range — [0, 0] passes every bound above — so the prim was called
+    // charted and then sampled ONE texel of the atlas across its whole surface.
+    // Where that texel is dark the model renders black, beside an identical
+    // instance that got a real chart: 525 prims and 1.4M triangles of Ancient,
+    // including the wall and roof trims. Rejected here, they fall through to
+    // the chartless path and get the probe bake instead, which is what CS2
+    // lights them with anyway.
+    //
+    // Both axes, not either: a long thin trim can legitimately be one texel
+    // wide, and only two prims in Ancient are that shape.
+    if (mx[0] - mn[0] < LM_TEXEL && mx[1] - mn[1] < LM_TEXEL) continue;
+    return a;
   }
   return null;
 }
@@ -1996,7 +2099,9 @@ async function packWorld({ io, worldGlb, bundle, idBase, lmScale, lightmapped, l
     const roughSrc = pickTex(rawTexDir, tp, SLOT_NORMAL, { allowDefault: true });
     const color2Png = cls.blend ? pickTex(rawTexDir, tp, SLOT_COLOR2) : null;
     const normal2Png = cls.blend && WANT_NORMAL ? pickTex(rawTexDir, tp, SLOT_NORMAL2) : null;
-    const h1 = cls.blend ? pickTex(rawTexDir, tp, SLOT_HEIGHT1) : null;
+    // Height maps: the blend threshold on a two-layer material, and on the
+    // csgo_environment family the tint mask (height.g) even with one layer.
+    const h1 = cls.blend || cls.envTint ? pickTex(rawTexDir, tp, SLOT_HEIGHT1) : null;
     const h2 = cls.blend ? pickTex(rawTexDir, tp, SLOT_HEIGHT2) : null;
     const modPng = cls.blend ? pickTex(rawTexDir, tp, SLOT_BLENDMOD) : null;
     const illumPng = cls.selfIllum ? pickTex(rawTexDir, tp, SLOT_SELFILLUM) : null;
@@ -2014,7 +2119,15 @@ async function packWorld({ io, worldGlb, bundle, idBase, lmScale, lightmapped, l
     const hb = cls.blend && (h1 || h2) ? await texBundle.heights({ h1, h2 }) : null;
     const bm = await texBundle.blendMod(modPng);
     const si = illumPng ? await texBundle.mask(illumPng, texOrm) : null;
-    const tm = tintMaskPng ? await texBundle.mask(tintMaskPng, texOrm) : null;
+    // csgo_environment: the tint mask is the HEIGHT map's green channel, per
+    // layer (see envTint in classifyMaterial). Everything else has a dedicated
+    // mask texture, channel 0. A constant-white height.g comes back null from
+    // mask() and means "fully masked in"; no height map at all means the
+    // shader's default grey, 0.5 — the two are told apart by envMask*Const.
+    const tm = cls.envTint ? (h1 ? await texBundle.mask(h1, texOrm, 1) : null) : tintMaskPng ? await texBundle.mask(tintMaskPng, texOrm) : null;
+    const tm2 = cls.envTint && cls.blend && h2 ? await texBundle.mask(h2, texOrm, 1) : null;
+    const envMask1Const = cls.envTint && tm === null ? (h1 ? 1 : 0.5) : undefined;
+    const envMask2Const = cls.envTint && cls.blend && tm2 === null ? (h2 ? 1 : 0.5) : undefined;
     const em = cls.effect ? await texBundle.effectMasks(SLOT_EMASK.map((s) => pickTex(rawTexDir, tp, s)), texOrm) : null;
     const baseEntry = b !== null ? bundle.entry(b) : null;
     // A cut-out material whose colour map turned out to be fully opaque has
@@ -2063,6 +2176,17 @@ async function packWorld({ io, worldGlb, bundle, idBase, lmScale, lightmapped, l
       // Where the per-tile instance tint is allowed to land. Absent = the whole
       // surface takes it, which is the majority of materials.
       tintMask: tm ?? undefined,
+      // csgo_environment's per-layer albedo adjust, and how hard the tint mask
+      // is driven. Absent on csgo_complex, which has no such parameters.
+      cc1: cls.cc1,
+      cc2: cls.cc2,
+      tintMaskBright: cls.tintMaskBright,
+      // csgo_environment's luminance-preserving tint (see classifyMaterial).
+      // The per-layer masks ride in tintMask / blend.tintMask; a layer with no
+      // mask texture carries its constant here instead.
+      envTint: cls.envTint
+        ? { ...cls.envTint, l1: { ...cls.envTint.l1, const: envMask1Const }, l2: cls.envTint.l2 ? { ...cls.envTint.l2, const: envMask2Const } : undefined }
+        : undefined,
       effect: cls.effect ? { ...cls.effect, masks: em !== null ? cls.effect.masks : undefined, maskTex: em ?? undefined } : undefined,
       // Layer 2 of a blend shader, plus how it is mixed in.
       blend: cls.blend
@@ -2072,7 +2196,9 @@ async function packWorld({ io, worldGlb, bundle, idBase, lmScale, lightmapped, l
             heights: hb ?? undefined,
             mod: bm ?? undefined,
             scale2: cls.blendScale2,
-            softness: cls.blendSoftness
+            softness: cls.blendSoftness,
+            // Layer 2's own tint mask (csgo_environment keeps one per layer).
+            tintMask: tm2 ?? undefined
           }
         : undefined,
       // Materials whose geometry carries lightmap charts get the baked

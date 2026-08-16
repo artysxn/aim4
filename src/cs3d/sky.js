@@ -43,23 +43,50 @@ const SUN_SCALE = 1.0;
  * Extra sun on top of what `light_environment` authored, applied to the lights
  * only and never to the exposure calibration (see below). Dialled in against
  * the game with the `sun x` slider: the bakes are indirect-only, so the maps
- * read flat and low-contrast outdoors at 1. Settled at 3, then raised to 5 —
- * 3 still read dim once the map colour grade was ruled out as a way to lift it.
+ * read flat and low-contrast outdoors at 1. Settled at 3, then 5, now 25 —
+ * the last step came with the sky probe dropped to a tenth (see SKY_PROBE_SCALE),
+ * which took most of the fill light out and left the sun to carry the image.
+ * These three numbers were tuned together and only make sense together.
  */
-const SUN_BOOST = 5.0;
+const SUN_BOOST = 25.0;
 /** Ambient for lightmapped surfaces = baked irradiance × this. */
-const LIGHTMAP_SCALE = 1.0;
+const LIGHTMAP_SCALE = 0.95;
 /** Bounds on the sky-probe intensity when calibrating it to the atlas mean. */
 const ENV_MIN = 0.15;
 const ENV_MAX = 3.0;
 /**
- * Where the visible sky should land in linear output after exposure, before
- * tonemapping. The world's exposure is set from the baked atlas, which says
- * nothing about how bright the sky above it was authored: Inferno's sky came
- * out at 0.15 that way, a dark teal lid over a normally lit map. So the sky is
- * calibrated separately, against its own measured brightness.
+ * The sky probe, after that calibration, times this.
+ *
+ * The probe is a global environment with no occlusion, so it lights an indoor
+ * crate exactly as much as one in the yard. Since chartless props now carry
+ * baked probe irradiance and baked sun visibility of their own, the sky is no
+ * longer needed as fill and mostly just washed interiors out with blue. A tenth
+ * keeps its reflections without that.
+ */
+const SKY_PROBE_SCALE = 0.1;
+/**
+ * Where the visible sky's mean should land in linear output after exposure,
+ * before tonemapping. The world's exposure is set from the baked atlas, which
+ * says nothing about how bright the sky above it was authored: Inferno's sky
+ * came out at 0.15 that way, a dark teal lid over a normally lit map. So the
+ * sky is calibrated separately, against its own measured brightness.
  */
 const SKY_TARGET = 1.0;
+/**
+ * Per-map override, keyed by slug.
+ *
+ * Ancient is the only map whose sky texture carries real structure — layered
+ * cloud, mist banks and a mountain silhouette, 4× dynamic range. Driving its
+ * mean to 1.0 put the average pixel at white and clipped all of that into one
+ * flat glare. Half the target gives the highlights room to sit above the mean,
+ * which is where that structure lives.
+ *
+ * The other six read as smooth gradients, have nothing above the mean to
+ * protect, and were already right at 1.0 — lowering it there only banded them.
+ */
+const MAP_SKY_TARGET = {
+  ancient: 0.5
+};
 /** How far the calibration is allowed to move the authored sky brightness. */
 const SKY_GAIN_MIN = 0.5;
 const SKY_GAIN_MAX = 6;
@@ -239,6 +266,26 @@ export class MapLighting {
     this.ambientLum = lm?.p50 ? lm.p50 : lm?.mean ? lum(...lm.mean) : Math.max(0.05, 0.11 * this.brightness);
     this.lightmapIntensity = LIGHTMAP_SCALE;
     /**
+     * Ambient for the 3D skybox only: the lightmap's own mean irradiance.
+     *
+     * Separate from the sky probe because that probe is scaled to a hundredth
+     * (SKY_PROBE_SCALE) to stop a global, unoccluded environment washing out
+     * interiors. The miniature is distant open-air scenery with no interiors to
+     * protect, and at the probe's level it had no ambient at all — its shaded
+     * faces rendered black.
+     *
+     * The bake's mean and NOT the sky's colour. Outdoor ambient is sky from
+     * above plus warm ground bounce, which is what the bake measured; the sky
+     * alone is only half of it. Renormalising a teal sky to a target luminance
+     * also starves red — luminance is 72% green — so Mirage's sandstone came
+     * out grey-teal against a bake whose mean is (0.481, 0.378, 0.318), almost
+     * the inverse. Using the bake fixes the hue and the level together: its
+     * luminance runs well above the shade median this used before.
+     */
+    this.skyAmbient = lm?.mean
+      ? new THREE.Color(lm.mean[0], lm.mean[1], lm.mean[2]).multiplyScalar(LIGHTMAP_SCALE)
+      : new THREE.Color(this.ambientLum, this.ambientLum, this.ambientLum);
+    /**
      * Whether the pack ships the sun's baked shadow mask. With it, the world
      * is lit the way the game lights it — the atlas is indirect, the sun is
      * analytic, `shadowmask.webp` says where it reaches — and the sun's
@@ -284,7 +331,7 @@ export class MapLighting {
     if (this.renderer) this.renderer.toneMappingExposure = this.exposure;
     // Until the real sky is measured, the probe carries the same ambient
     // level as the bake (the procedural dome's zenith is roughly 1.0).
-    this.envIntensity = Math.min(ENV_MAX, Math.max(ENV_MIN, this.ambientLum / 0.75));
+    this.envIntensity = SKY_PROBE_SCALE * Math.min(ENV_MAX, Math.max(ENV_MIN, this.ambientLum / 0.75));
     // The sky as the map authored it: env_sky's brightnessscale times the sky
     // material's own exposure bias (stops). It is only the starting point —
     // loadSkybox measures what the texture actually holds and corrects this
@@ -406,13 +453,22 @@ export class MapLighting {
       const skyLum = Math.max(1e-3, lum(...measured.mean));
       // A white upward-facing surface under this probe gets radiance ≈ mean ×
       // intensity; make that the bake's mean.
-      this.envIntensity = Math.min(ENV_MAX, Math.max(ENV_MIN, this.ambientLum / skyLum));
+      this.envIntensity = SKY_PROBE_SCALE * Math.min(ENV_MAX, Math.max(ENV_MIN, this.ambientLum / skyLum));
       // What the authored brightness would actually put on screen, and how far
       // off SKY_TARGET that is. Bounded, so a map that means to have a dim sky
       // keeps a dim one — it just stops being black.
       const onScreen = Math.max(1e-4, this.exposure * this.bgIntensity * skyLum);
-      const gain = Math.min(SKY_GAIN_MAX, Math.max(SKY_GAIN_MIN, SKY_TARGET / onScreen));
+      const target = MAP_SKY_TARGET[this.manifest.map?.slug] ?? SKY_TARGET;
+      const gain = Math.min(SKY_GAIN_MAX, Math.max(SKY_GAIN_MIN, target / onScreen));
       this.bgIntensity *= gain;
+      // Only when there is no bake to take it from: the sky alone misses the
+      // ground bounce (see skyAmbient in the constructor), so it is the
+      // fallback rather than the refinement it started as.
+      if (!this.manifest.lightmap?.mean) {
+        this.skyAmbient
+          .setRGB(measured.mean[0], measured.mean[1], measured.mean[2])
+          .multiplyScalar(this.ambientLum / skyLum);
+      }
       // The haze is the sky, so it moves with it.
       this.fog?.setSky({
         horizon: measured.horizon.clone().multiplyScalar(this.bgIntensity),

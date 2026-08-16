@@ -153,13 +153,71 @@ async function main() {
       ok++;
       continue;
     }
-    const vmat = manifest.skyMaterial;
+    let vmat = manifest.skyMaterial;
     if (!vmat) {
       console.warn(`  ! ${entry.slug}: no env_sky in the entity lump; keeping the procedural sky`);
       continue;
     }
-    const listing = await listTextures(vrfCli, pak, path.dirname(String(vmat)).replace(/\\/g, '/'), listCache);
-    const vtex = findSkyTexture(listing, vmat);
+    /**
+     * `env_sky` naming a `_lighting` material: take the render sibling instead.
+     *
+     * Ancient points at `sky_hr_aztec_02_lighting.vmat`, whose texture is a
+     * 256² irradiance cube — no cloud detail and a hard white rectangle where
+     * the sun is. Shipped as the visible sky it gives a clear blue sky with a
+     * blown-out blob overhead instead of the map's overcast weather. The real
+     * one, `sky_hr_aztec_02.vmat`, sits beside it and names a different texture
+     * at a different exposure bias.
+     *
+     * Both are legitimate: the map lights from one and draws the other. We use
+     * the sky for both jobs, and of the two the render version is the one worth
+     * having — it carries the detail, and its irradiance is close enough once
+     * loadSkybox measures and calibrates it.
+     */
+    if (/_lighting\.vmat$/i.test(vmat)) {
+      const render = vmat.replace(/_lighting\.vmat$/i, '.vmat');
+      // Existence is the test: a dump that comes back with a sky texture means
+      // the sibling is really there.
+      const ok = await run(vrfCli, ['-i', pak, '-f', render.replace(/\.vmat$/i, '.vmat_c'), '-b', 'DATA'])
+        .then((d) => /g_tSkyTexture/.test(d))
+        .catch(() => false);
+      if (ok) {
+        console.log(`  ${entry.slug}: env_sky names a _lighting material; using ${path.basename(render)} for the visible sky`);
+        vmat = render;
+      }
+    }
+    // The material's own brightness and, more importantly, the texture it
+    // actually names.
+    //
+    // `g_tSkyTexture` is the authority. Guessing the texture from the
+    // material's filename works only while the two share a stem, and Inferno's
+    // does not: `materials/skybox/test/s2_de_inferno_sky01.vmat` points at
+    // `materials/de_inferno/skybox/inferno_sky_01_exr_*.vtex`, a different
+    // name in a different directory. The stem match found an unrelated texture
+    // sitting beside the material in skybox/test/ and shipped that instead —
+    // which is why Inferno's sky was a dim teal gradient with no clouds while
+    // every other map, whose names happen to line up, looked right.
+    let exposureBias = 0;
+    let named = null;
+    try {
+      const dump = await run(vrfCli, ['-i', pak, '-f', String(vmat).replace(/\.vmat$/i, '.vmat_c'), '-b', 'DATA']);
+      const m = dump.match(/g_flBrightnessExposureBias"\s*\n\s*m_flValue\s*=\s*(-?[\d.]+)/);
+      if (m) exposureBias = Number(m[1]) || 0;
+      const t = dump.match(/g_tSkyTexture"\s*\n\s*m_pValue\s*=\s*resource:"([^"]+)"/);
+      if (t) named = t[1].replace(/\.vtex$/i, '.vtex_c');
+    } catch {
+      /* fall back to the stem match below */
+    }
+    let vtex = null;
+    if (named) {
+      // Named textures carry a content hash VRF keeps, so the path is exact.
+      const listing = await listTextures(vrfCli, pak, path.dirname(named).replace(/\\/g, '/'), listCache);
+      vtex = listing.find((f) => f.toLowerCase() === named.toLowerCase()) || null;
+      if (!vtex) console.warn(`  ! ${entry.slug}: ${named} not in the pak; falling back to the name match`);
+    }
+    if (!vtex) {
+      const listing = await listTextures(vrfCli, pak, path.dirname(String(vmat)).replace(/\\/g, '/'), listCache);
+      vtex = findSkyTexture(listing, vmat);
+    }
     if (!vtex) {
       console.warn(`  ! ${entry.slug}: no texture matching ${vmat}`);
       continue;
@@ -167,17 +225,6 @@ async function main() {
     const outDir = path.join(packDir, 'sky');
     await fsp.rm(outDir, { recursive: true, force: true });
     await fsp.mkdir(outDir, { recursive: true });
-    // The sky material's own brightness: sky.vfx exposes
-    // g_flBrightnessExposureBias in stops (Dust 2 sets 0.765, most maps 0).
-    // Without it the texture is dimmer than the world it lit.
-    let exposureBias = 0;
-    try {
-      const dump = await run(vrfCli, ['-i', pak, '-f', String(vmat).replace(/\.vmat$/i, '.vmat_c'), '-b', 'DATA']);
-      const m = dump.match(/g_flBrightnessExposureBias"\s*\n\s*m_flValue\s*=\s*(-?[\d.]+)/);
-      if (m) exposureBias = Number(m[1]) || 0;
-    } catch {
-      /* keep 0 */
-    }
     try {
       const res = await run(TOOL_EXE, ['cube', pak, vtex, outDir, 'sky', size]);
       const file = path.join(outDir, 'sky.hdr');

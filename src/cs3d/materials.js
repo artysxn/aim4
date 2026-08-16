@@ -48,7 +48,10 @@ import {
   lights,
   max,
   mix,
+  luminance,
+  min,
   normalMap,
+  normalize,
   smoothstep,
   texture,
   transformNormalToView,
@@ -86,11 +89,34 @@ class Cs3dMaterial extends THREE.MeshStandardNodeMaterial {
     // what takes the leaky runtime shadow map out of the picture. Without the
     // baked term a prop still needs the real light, or it loses the sun
     // entirely — hence the `sun` check rather than `probeAmbient` alone.
-    if (cs3d.lightmap || (cs3d.probeAmbient && cs3d.sun)) this.lightsNode = lights([]);
+    if (cs3d.lightmap || (cs3d.probeAmbient && cs3d.sun) || (cs3d.sky && cs3d.sun)) {
+      this.lightsNode = lights([]);
+    }
   }
 
   setupLightMap(builder) {
     const lm = this.cs3d.lightmap;
+    /**
+     * The 3D skybox: distant scenery drawn at ×16 around the sky camera.
+     *
+     * It gets the analytic sun with NO occlusion term and keeps the sky probe
+     * as its diffuse ambient. It cannot use the probe-ambient path: CS2's light
+     * probe volumes cover the playable map, not the miniature, so every one of
+     * its vertices falls outside every volume. The pack does not bake `_AMB` or
+     * `_SUN` for it at all — and with a map-wide `probeAmbient` flag the loader
+     * still asked for `_amb`, got nothing, and filled zeros. Zero ambient plus
+     * an unshadowed sun is why the background buildings went black on the side
+     * facing away from it while their roofs stayed lit.
+     */
+    if (!lm && this.cs3d.sky) {
+      const ssun = this.cs3d.sun;
+      const amb = this.cs3d.skyAmbient;
+      if (!ssun) return super.setupLightMap(builder);
+      const nDotL = max(dot(transformedNormalWorld, ssun.direction), float(0));
+      let irr = ssun.color.mul(ssun.intensity).mul(nDotL);
+      if (amb) irr = irr.add(amb.mul(float(LM_TO_IRRADIANCE)));
+      return new IrradianceNode(irr);
+    }
     // A prop with baked probe irradiance: CS2's own light for everything that
     // has no lightmap chart. It arrives per vertex in `_amb`, already the
     // ambient cube evaluated for that vertex's normal, so there is nothing to
@@ -159,7 +185,9 @@ class Cs3dMaterial extends THREE.MeshStandardNodeMaterial {
    */
   setupEnvironment(builder) {
     const node = super.setupEnvironment(builder);
-    if (!node || !(this.cs3d.lightmap || this.cs3d.probeAmbient)) return node;
+    // The 3D skybox supplies its own diffuse in setupLightMap, so the probe is
+    // reflections-only for it too — otherwise it would take both.
+    if (!node || !(this.cs3d.lightmap || this.cs3d.probeAmbient || this.cs3d.sky)) return node;
     return new SpecularOnlyEnvironmentNode(node.envNode);
   }
 }
@@ -246,6 +274,8 @@ export class MaterialLibrary {
       intensity: uniform(0),
       mask: null
     };
+    /** The 3D skybox's own ambient; see setSkyAmbient. */
+    this.skyAmbient = uniform(new THREE.Color(0, 0, 0));
     this._buildInterim();
   }
 
@@ -375,7 +405,15 @@ export class MaterialLibrary {
     this._started = true;
     this._loadLightmap().catch((e) => console.warn('cs3d: lightmap failed', e));
     this._loadShadowMask().catch((e) => console.warn('cs3d: shadow mask failed', e));
-    this._streamBundle().catch((e) => console.warn('cs3d: texture bundle failed', e));
+    // A bundle that fails outright (404, dropped connection) never reaches the
+    // per-texture counter, so the count has to be closed out here. Otherwise
+    // progress stops short of 100% forever — which now means the boot screen
+    // never lifts, not just that a small bar sticks.
+    this._streamBundle().catch((e) => {
+      console.warn('cs3d: texture bundle failed', e);
+      this.loadedTex = this.totalTex;
+      this.onProgress?.();
+    });
   }
 
   /**
@@ -387,6 +425,21 @@ export class MaterialLibrary {
     if (toSun) this.sun.direction.value.copy(toSun).normalize();
     if (color) this.sun.color.value.copy(color);
     if (Number.isFinite(intensity)) this.sun.intensity.value = intensity;
+  }
+
+  /**
+   * Ambient for the 3D skybox: the sky's own irradiance, at full strength.
+   *
+   * It cannot share the sky probe. That probe is deliberately crushed to a
+   * hundredth (SKY_PROBE_SCALE) because a global environment has no occlusion
+   * and was washing the map's interiors blue — which leaves it at ~0.006, so
+   * handing the miniature "sky probe diffuse" gave it no ambient at all and its
+   * shaded faces stayed black. The miniature is distant open-air scenery: it
+   * wants the sky as measured, not as tuned for indoor crates.
+   * @param {THREE.Color} color  sky irradiance, linear
+   */
+  setSkyAmbient(color) {
+    if (color) this.skyAmbient.value.copy(color);
   }
 
   async _loadShadowMask() {
@@ -580,16 +633,31 @@ export class MaterialLibrary {
             heights: m.blend.heights !== undefined ? this.textures[m.blend.heights] : null,
             mod: m.blend.mod !== undefined ? this.textures[m.blend.mod] : null,
             scale2: m.blend.scale2 || [1, 1],
-            softness: m.blend.softness ?? 0.5
+            softness: m.blend.softness ?? 0.5,
+            // Each layer's own albedo adjust, applied before the mix, with the
+            // texture averages the contrast pivots on.
+            cc1: m.cc1 || null,
+            cc2: m.cc2 || null,
+            avg1: m.avg,
+            avg2: m.blend.base !== undefined ? this.manifest.tex?.dir?.[m.blend.base]?.avg : undefined,
+            // csgo_environment: the game's tint, per layer, masked by height.g.
+            envTint: m.envTint || null,
+            mask1: m.envTint && m.tintMask !== undefined ? this.textures[m.tintMask] : null,
+            mask2: m.envTint && m.blend.tintMask !== undefined ? this.textures[m.blend.tintMask] : null
           }
         : null;
       mat = new Cs3dMaterial({
         lightmap: lightmapped ? this.lightmap : null,
         blend,
         // Both paths now take the analytic sun: charted geometry gates it on
-        // the mask atlas, chartless on its baked `_sun` vertex term.
-        sun: lightmapped || (this.probeAmbient && this.sunVis) ? this.sun : null,
-        probeAmbient: !lightmapped && this.probeAmbient
+        // the mask atlas, chartless on its baked `_sun` vertex term. The 3D
+        // skybox takes it unoccluded (see setupLightMap).
+        sun: lightmapped || (this.probeAmbient && this.sunVis) || m.sky ? this.sun : null,
+        // The miniature sits outside every light probe volume, so it keeps the
+        // sky probe's diffuse instead of a baked `_amb` that does not exist.
+        probeAmbient: !lightmapped && this.probeAmbient && !m.sky,
+        sky: !!m.sky,
+        skyAmbient: m.sky ? this.skyAmbient : null
       });
       // `factor` is only the tints the pack invents (water fog, glass, unlit
       // black). A vmat's own g_vColorTint is NOT here: it already rides on each
@@ -634,13 +702,26 @@ export class MaterialLibrary {
       }
       if (m.emissive) this._wireEmissive(mat, m, base);
       if (blend && blend.base && base) this._wireBlend(mat, base, normal, blend);
-      if (m.tintMask !== undefined) this._wireTintMask(mat, this.textures[m.tintMask], base);
+      // One layer: colour correction and, on csgo_environment, the game's tint.
+      else if (m.cc1 || m.envTint) this._wireEnvSingle(mat, base, m, m.envTint && m.tintMask !== undefined ? this.textures[m.tintMask] : null);
+      // A dedicated tint mask (csgo_complex and friends). csgo_environment
+      // handled its own tint above and must not take it a second time here.
+      if (!m.envTint && m.tintMask !== undefined) this._wireTintMask(mat, this.textures[m.tintMask], base, m.tintMaskBright ?? 1);
     }
     mat.name = `m${m.id}`;
     mat.userData = { id: m.id, decal: !!m.decal, alphaMode: m.alphaMode, lightmapped: !!m.lightmapped };
     // Foliage cards, fences and grates are single-sided geometry that has to
     // be visible from behind; F_RENDER_BACKFACES in the vmat says which.
-    if (m.doubleSided) mat.side = THREE.DoubleSide;
+    //
+    // A 3D skybox card is always two-sided regardless of what the vmat says.
+    // It is scenery wrapped around the viewer, so whichever way its faces were
+    // wound, half of it is being looked at from behind: Ancient's cloud layer
+    // (`csgo_unlitgeneric`, a dome spanning y -1902..4138 with the camera
+    // inside it) was culled away entirely, while the sun disc and the tree
+    // cards beside it survived only because `effect` and `csgo_foliage` happen
+    // to force DoubleSide already. Nothing up there is thick enough for
+    // back-face culling to be saving anything.
+    if (m.doubleSided || m.sky) mat.side = THREE.DoubleSide;
     if (m.alphaMode === 'BLEND') {
       mat.transparent = true;
       // Water keeps depth writes: its sheets overlap in places and, drawn
@@ -748,11 +829,15 @@ export class MaterialLibrary {
    * mask it. The loader leaves setColorAt unused for these materials, so that
    * multiply is never compiled in and this is the only place the tint applies.
    */
-  _wireTintMask(mat, maskTex, base) {
+  _wireTintMask(mat, maskTex, base, maskBright = 1) {
     if (!maskTex) return;
     const had = !!mat.colorNode;
     const src = had ? mat.colorNode : base ? texture(base, uv(0)) : vec4(1, 1, 1, 1);
-    const k = mix(vec3(1), vertexColor().gba, texture(maskTex, uv(0)).r);
+    // The game's tint for this family: `1 - mask * (1 - tint)`, a straight
+    // multiply where the mask says so. csgo_environment is NOT this — see
+    // _envTintLayer — and never reaches here.
+    const m = clamp(texture(maskTex, uv(0)).r.mul(float(maskBright)), 0, 1);
+    const k = mix(vec3(1), vertexColor().gba, m);
     let rgb = src.rgb.mul(k);
     // A colourNode from the blend wiring already carries the material factor.
     if (!had) rgb = rgb.mul(vec3(mat.color.r, mat.color.g, mat.color.b));
@@ -771,6 +856,83 @@ export class MaterialLibrary {
    * instead derives it from which layer stands proud (dirt settles into the
    * crevices of the stone, not onto its bumps).
    */
+  /**
+   * `csgo_environment`'s per-layer albedo adjust: saturation, then contrast
+   * about mid grey, then brightness.
+   *
+   * The environment shaders do not draw their albedo as authored — Inferno's
+   * stone runs layer 1 at saturation 0.5. Nuke is almost entirely
+   * `csgo_complex`, which has no such parameters, so this is a no-op there and
+   * the map is unaffected.
+   *
+   * Applied to the linear sample, where Source applies it to the texture read.
+   * If the correction reads too strong or too weak, that difference in space is
+   * the first thing to suspect — contrast about 0.5 is not the same operation
+   * either side of the transfer curve.
+   */
+  _correct(rgb, cc, avg) {
+    if (!cc) return rgb;
+    let c = rgb;
+    // The game's MatrixColorCorrect2, in order: contrast about the TEXTURE'S
+    // AVERAGE colour (not mid grey), then brightness, then saturation about
+    // the luminance axis. `avg` is the pack's per-texture mean, sRGB bytes.
+    if (cc.con !== 1) {
+      const p = avg ? vec3(...avg.map((v) => Math.pow(v / 255, 2.2))) : vec3(0.18);
+      c = c.sub(p).mul(float(cc.con)).add(p);
+    }
+    if (cc.bri !== 1) c = c.mul(float(cc.bri));
+    if (cc.sat !== 1) c = mix(vec3(luminance(c)), c, float(cc.sat));
+    return clamp(c, 0, 1);
+  }
+
+  /**
+   * `csgo_environment`'s per-instance tint, one layer. Read off the game's own
+   * shader (see cs3d-pack's classifyMaterial for the derivation):
+   *
+   *   mask   = saturate(((h.g - 0.5) * contrast + 0.5) * brightness)
+   *   tn     = normalize(tint)                    hue only, unit length
+   *   tinted = tn * min(luma(albedo) / luma(tn), 3 * luma(albedo) * max(tint))
+   *   amount = g_flModelTintAmount * (1 - min(tint))
+   *   out    = mix(albedo, tinted, amount * mask * g_bModelTint)
+   *
+   * The albedo is recoloured to the tint's hue at its OWN luminance; only a dark
+   * tint pulls it darker, and then only to 3·luma·max(tint). Nothing here is a
+   * multiply by the tint's brightness, which is what made every tinted surface
+   * on Inferno too dark: terracotta plaster went blood-red, brown barrels went
+   * near-black. The barrels also set g_bModelTint1 = 0 (tint off), and 37
+   * Inferno vmats run amount 0; both were being tinted anyway.
+   */
+  _envTintLayer(albedo, tint, layer, maskNode, amount) {
+    if (!layer || !layer.on) return albedo;
+    const raw = maskNode ?? float(layer.const ?? 0.5);
+    const mask = clamp(raw.sub(0.5).mul(float(layer.contrast)).add(0.5).mul(float(layer.bright)), 0, 1);
+    const tn = normalize(max(tint, vec3(0.001)));
+    const L = luminance(albedo);
+    const hi = max(tint.x, max(tint.y, tint.z));
+    const lo = min(tint.x, min(tint.y, tint.z));
+    const tinted = tn.mul(min(L.div(luminance(tn)), L.mul(3).mul(hi)));
+    const k = float(amount).mul(float(1).sub(lo)).mul(mask);
+    return clamp(mix(albedo, tinted, k), 0, 1);
+  }
+
+  /**
+   * A one-layer csgo_environment material: colour correction, then the
+   * game's tint (per-texel, from COLOR_0.gba, masked by the height map's G).
+   * The loader never sets a BatchedMesh colour for these, so this is the only
+   * place the instance tint touches the surface.
+   */
+  _wireEnvSingle(mat, base, m, mask1) {
+    if (!base) return;
+    const src = texture(base, uv(0));
+    let rgb = this._correct(src.rgb, m.cc1, m.avg);
+    const et = m.envTint;
+    if (et) {
+      const maskNode = mask1 ? texture(mask1, uv(0)).r : null;
+      rgb = this._envTintLayer(rgb, vertexColor().gba, et.l1, maskNode, et.amount);
+    }
+    mat.colorNode = vec4(rgb.mul(vec3(mat.color.r, mat.color.g, mat.color.b)), src.a);
+  }
+
   _wireBlend(mat, base1, normal1, blend) {
     const uv0 = uv(0);
     const uv2 = uv0.mul(vec2(blend.scale2[0], blend.scale2[1]));
@@ -792,9 +954,24 @@ export class MaterialLibrary {
     }
     const c1 = texture(base1, uv0);
     const c2 = texture(blend.base, uv2);
-    const c = mix(c1, c2, w);
+    // Each layer is corrected and tinted on its own, then the two are mixed:
+    // that is the game's order, and it is what lets Inferno's "dirty" pass
+    // (layer 2, tint-mask brightness 0.4) stay lightly tinted over plaster
+    // that is fully tinted, exactly where the paint reveals it.
+    let l1 = this._correct(c1.rgb, blend.cc1, blend.avg1);
+    let l2 = this._correct(c2.rgb, blend.cc2, blend.avg2);
+    const et = blend.envTint;
+    if (et) {
+      const tint = vertexColor().gba;
+      l1 = this._envTintLayer(l1, tint, et.l1, blend.mask1 ? texture(blend.mask1, uv0).r : null, et.amount);
+      l2 = this._envTintLayer(l2, tint, et.l2, blend.mask2 ? texture(blend.mask2, uv2).r : null, et.amount);
+    }
+    const rgb = mix(l1, l2, w);
     // Keep the material's own colour factor and layer 1's alpha for cut-outs.
-    mat.colorNode = vec4(c.rgb.mul(vec3(mat.color.r, mat.color.g, mat.color.b)), c1.a);
+    mat.colorNode = vec4(rgb.mul(vec3(mat.color.r, mat.color.g, mat.color.b)), c1.a);
+    // For a non-environment blend with a dedicated tint mask, _wireTintMask
+    // still runs after this and needs the same weight and layer-2 UV.
+    mat._cs3dBlend = { w, uv2 };
     if (normal1 || blend.normal) {
       const n1 = normal1 ? texture(normal1, uv0) : vec4(0.5, 0.5, 1, 1);
       const n2 = blend.normal ? texture(blend.normal, uv2) : n1;

@@ -28,6 +28,7 @@ import sideGamemodes from '../icons/sideicons/sideicon_gamemodes.svg?raw';
 import sideLeaderboards from '../icons/sideicons/sideicon_leaderboards.svg?raw';
 import sideReplayViewer from '../icons/sideicons/sideicon_replayviewer.svg?raw';
 import sideRoutines from '../icons/sideicons/sideicon_routines.svg?raw';
+import sideMapPractice from '../icons/sideicons/sideicon_map_practice.svg?raw';
 import sideTeam from '../icons/sideicons/sideicon_team.svg?raw';
 import sideTeamDocs from '../icons/sideicons/sideicon_docs.svg?raw';
 import sideTeamPositions from '../icons/sideicons/sideicon_positions.svg?raw';
@@ -42,6 +43,7 @@ import logoMarkUrl from '../icons/aim4logos/logo1x1.png';
 import { SettingsManager } from '../core/SettingsManager.js';
 import { AuthManager } from '../core/AuthManager.js';
 import { initTrainingView } from './trainingView.js';
+import { initMapPracticeView } from './mapPracticeView.js';
 import { initLeaderboardsView } from './leaderboardsView.js';
 import { initFootballView } from './footballView.js';
 import { initPlayerProfileView } from './playerProfileView.js';
@@ -162,6 +164,7 @@ const ICONS = {
   leaderboards: sideLeaderboards,
   'replay-viewer': sideReplayViewer,
   routines: sideRoutines,
+  'map-practice': sideMapPractice,
   team: sideTeam,
   'team-docs': sideTeamDocs,
   'team-positions': sideTeamPositions,
@@ -220,8 +223,12 @@ if (IS_MOBILE) {
   initMobileChrome({ shell });
   initMobileFilterToggle();
 
+  // Map Practice goes with them: the 3D explorer is WASD and pointer lock.
   document
-    .querySelectorAll('.side-link[data-nav="training"], .site-card[data-nav="training"]')
+    .querySelectorAll(
+      '.side-link[data-nav="training"], .site-card[data-nav="training"], ' +
+        '.side-link[data-nav="map-practice"]'
+    )
     .forEach((el) => el.remove());
   document
     .querySelectorAll('.site-footer a[href="/train"], .site-footer a[href="/training"]')
@@ -510,6 +517,7 @@ const ROUTES = {
   football: { title: 'Football', path: '/football', shell: 'football' },
   tools: { title: 'Tools', path: '/tools', shell: 'tools' },
   routines: { title: 'Routines', path: '/routines', shell: 'routines' },
+  'map-practice': { title: 'Map Practice', path: '/map-practice', shell: 'map-practice' },
   player: { title: 'Player', path: '/player', shell: 'player' },
   account: { title: 'My Profile', path: '/account', shell: 'account' },
   'account-subscription': {
@@ -776,6 +784,7 @@ viewControllers.training = IS_MOBILE ? {} : initTrainingView({ escapeHtml, openL
 viewControllers.leaderboards = initLeaderboardsView({ auth, escapeHtml, openProfile });
 viewControllers.football = initFootballView({ auth, escapeHtml });
 viewControllers.player = initPlayerProfileView({ escapeHtml });
+viewControllers['map-practice'] = initMapPracticeView({ escapeHtml });
 viewControllers.home = initHomeView({ auth, escapeHtml });
 // One manager per page, refreshed whenever the session changes. Gates read it
 // for UI state only; the server has already made every decision it reflects.

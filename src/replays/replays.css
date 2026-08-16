@@ -11,11 +11,16 @@
 :root {
   --rv-team1: #38a3e8;
   --rv-team2: #e8913c;
-  --rv-t: #e8b84a;
+  /* T side is the aim4 red. --rv-t-bright is for text and thin marks, where
+     the flat brand red goes muddy against black. */
+  --rv-t: #e60611;
+  --rv-t-bright: #ff4d55;
   --rv-ct: #5b9fd4;
   --rv-stage: #050505;
   --rv-panel: #0c0c0c;
   --rv-ink: #b5b5b5;
+  /* Width of the timeline viewer's collapsible side panel. */
+  --rv-side-w: 360px;
 }
 
 /* ---- Library ------------------------------------------------------------ */
@@ -1358,6 +1363,12 @@ body.rv-open {
   background: var(--rv-panel);
 }
 
+/* Timeline mode carries its own header inside the side panel so the map can
+   start at the top of the window; the display above outranks [hidden]. */
+.rv-top[hidden] {
+  display: none;
+}
+
 .rv-back {
   display: inline-flex;
   align-items: center;
@@ -1439,73 +1450,143 @@ body.rv-open {
 }
 
 /* ---- Timeline mode ------------------------------------------------------ */
+/* One row: a collapsible side panel that owns the header, the graphs, the
+   note / bookmark dock and the tool bar, and a main column where the map
+   fills everything above the round strip. Every readout that used to float in
+   the map's gutters is either an overlay on the map itself or lives in the
+   panel, so collapsing the panel really is a fullscreen canvas. */
 
 .rv-timeline {
   position: relative;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   flex: 1;
   min-width: 0;
   min-height: 0;
+}
+
+.rv-side {
+  position: relative;
+  z-index: 10;
+  flex: 0 0 var(--rv-side-w);
+  width: var(--rv-side-w);
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border);
+  background: var(--rv-panel);
+}
+
+.rv-timeline.side-collapsed .rv-side {
+  display: none;
+}
+
+.rv-side-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 0 0 auto;
+  padding: 10px 12px;
+}
+
+.rv-side-title {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #ffffff;
+}
+
+.rv-side-toggle,
+.rv-side-show {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--rv-ink);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.rv-side-toggle:hover,
+.rv-side-show:hover {
+  background: #161616;
+  color: #ffffff;
+}
+
+.rv-side-toggle svg,
+.rv-side-show svg {
+  width: 22px;
+  height: 22px;
+  fill: currentColor;
+  display: block;
+}
+
+/* Reopening the panel: a floating button over the map, so the collapsed state
+   is a clean canvas and not a rail pretending to be one. */
+.rv-side-show {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 10;
+  background: rgba(10, 10, 10, 0.82);
+}
+
+.rv-side-show[hidden] {
+  display: none;
+}
+
+/* Graphs and the coach picker. Scrolls on its own so a tall coach roster
+   never pushes the dock or the tool bar off the bottom of the panel. */
+.rv-side-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 4px 16px 12px;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.rv-side-dock {
+  flex: 0 0 auto;
+  padding: 0 16px;
+}
+
+.rv-main {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .rv-stage {
   flex: 1;
   min-height: 0;
-  display: grid;
-  /* Fixed side columns so roster util icons never resize the map gutters. */
-  grid-template-columns: 272px minmax(0, 1fr) 272px;
-  /* minmax(0, 1fr), not auto: an auto row is sized by its content, and the
-     canvas' own backing-store size is content. That fed the canvas' height
-     back into the row height every frame and the map grew off the bottom of
-     the screen. Pinning the row to the container breaks the loop. */
-  grid-template-rows: minmax(0, 1fr);
-  /* Top-align both team columns so left/right rosters share one header line. */
-  align-items: start;
-  gap: 12px;
-  /* Chrome overlays the bottom; keep only a small inset so the map can fill. */
-  padding: 12px;
+  display: flex;
   overflow: hidden;
 }
 
-/* Bottom chrome sits on a higher z-layer over the stage so the map is not
-   cropped by a separate flex row — tools stay at the bottom of the screen. */
-/* Two rows: round strip + transport on the left; tool buttons anchored on the
-   right. Drawing palette is absolutely positioned above the tools so toggling
-   it never changes grid row heights. */
+/* The strip's own row under the map — it no longer overlays and crops it. */
 .rv-chrome {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 8;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  grid-template-rows: auto auto;
-  align-items: end;
-  gap: 6px 12px;
-  padding: 10px 16px 12px;
-  border-top: 1px solid var(--border);
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 16px 10px;
   background: #050505;
-  pointer-events: none;
-}
-
-.rv-chrome > * {
-  pointer-events: auto;
-}
-
-.rv-chrome > .rv-rounds {
-  grid-column: 1 / -1;
-  grid-row: 1;
-}
-
-.rv-chrome > .rv-transport {
-  grid-area: 2 / 1;
-  min-width: 0;
-}
-
-.rv-chrome > .rv-tools-anchor {
-  grid-area: 2 / 2;
 }
 
 .rv-rounds {
@@ -1518,54 +1599,51 @@ body.rv-open {
   max-width: 100%;
   overflow-x: auto;
   overflow-y: hidden;
-  padding: 0 8px 4px;
+  padding: 2px 8px 4px;
 }
 
 /* ---- Viewer tool menus --------------------------------------------------- */
 
-.rv-tools-anchor {
-  position: relative;
-  justify-self: end;
+/* The eight overlay tools, along the bottom of the side panel. */
+.rv-side > .rv-tools {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 2px;
+  padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
 }
 
 .rv-tools {
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 4px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--rv-panel);
 }
 
-/* Float above the tool cluster — out of document flow, no layout shift. */
+/* Floats above the transport cluster — out of flow, no layout shift. */
 .rv-tools-draw {
   position: absolute;
-  right: 0;
-  bottom: calc(100% + 6px);
+  left: 0;
+  bottom: calc(100% + 8px);
   z-index: 2;
+  padding: 4px;
+  border-radius: var(--radius-sm);
+  background: rgba(12, 12, 12, 0.94);
 }
 
 .rv-tools[hidden] {
   display: none;
 }
 
-/* Notes sit in the right gutter above chrome + drawing palette. */
+/* Docked panels are sections of the side panel now, not floating cards. */
 .rv-note-dock,
 .rv-coach-pick {
-  position: absolute;
-  right: 16px;
-  bottom: 120px;
-  z-index: 9;
-  width: min(300px, calc(100vw - 32px));
   display: flex;
   flex-direction: column;
   gap: 8px;
   padding: 10px;
-  border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  background: var(--rv-panel);
-  pointer-events: auto;
+  background: #131313;
 }
 
 .rv-note-dock[hidden],
@@ -1827,10 +1905,50 @@ body.rv-open {
   color: var(--accent);
 }
 
+/* The eight overlay tools carry the panel's bottom row, so they get more room
+   than the tools that still sit in a cluster. */
+.rv-side > .rv-tools > .rv-tool {
+  width: 36px;
+  height: 36px;
+}
+
+.rv-side > .rv-tools > .rv-tool svg {
+  width: 21px;
+  height: 21px;
+}
+
+/* Queue / "request 3D" state, as a caption under its own button rather than
+   a chip parked in a corner of the map with nothing to attach it to. */
+.rv-tool-3d {
+  position: relative;
+}
+
+.rv-3d-icon {
+  display: inline-flex;
+}
+
+.rv-3d-note {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 4px);
+  transform: translateX(-50%);
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(12, 12, 14, 0.92);
+  color: rgba(232, 234, 240, 0.72);
+  font-size: 10px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.rv-3d-note[hidden] {
+  display: none;
+}
+
 /* Team POV eye: color by the side being followed, not the team number. */
 .rv-tool.active.pov-t {
-  background: rgba(232, 184, 74, 0.18);
-  color: var(--rv-t);
+  background: color-mix(in srgb, var(--rv-t) 22%, transparent);
+  color: var(--rv-t-bright);
 }
 
 .rv-tool.active.pov-ct {
@@ -1900,6 +2018,16 @@ body.rv-open {
   border-radius: var(--radius-sm);
   background: var(--rv-panel);
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+}
+
+/* The bookmark list takes over the side dock rather than floating: it is the
+   other half of a pair with the notes, so it stands in the same place. */
+.rv-side-dock > .rv-popover {
+  position: static;
+  width: auto;
+  border: 0;
+  background: #131313;
+  box-shadow: none;
 }
 
 .rv-popover[hidden] {
@@ -1987,6 +2115,7 @@ body.rv-open {
 
 .rv-map {
   position: relative;
+  flex: 1;
   align-self: stretch;
   min-width: 0;
   min-height: 0;
@@ -2021,10 +2150,9 @@ body.rv-open {
   align-items: center;
   gap: 8px;
   padding: 4px 10px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  border: 0;
   border-radius: var(--radius-xs);
   background: rgba(0, 0, 0, 0.88);
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
   font-size: 13px;
   font-weight: 600;
   line-height: 1.2;
@@ -2032,7 +2160,7 @@ body.rv-open {
 }
 
 .rv-killfeed-name.side-t {
-  color: var(--rv-t);
+  color: var(--rv-t-bright);
 }
 
 .rv-killfeed-name.side-ct {
@@ -2055,11 +2183,23 @@ body.rv-open {
   opacity: 0.92;
 }
 
+/* The source PNG is white on transparent, so it is used as a mask and the
+   colour comes from here — the same grey the weapon icon is filtered to. */
 .rv-killfeed-hs {
-  color: #f0c040;
-  font-size: 10px;
-  font-weight: 800;
-  letter-spacing: 0.04em;
+  display: block;
+  width: 15px;
+  height: 15px;
+  flex: 0 0 15px;
+  background-color: #b5b5b5;
+  opacity: 0.92;
+  -webkit-mask-image: var(--rv-hs-icon);
+  mask-image: var(--rv-hs-icon);
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  mask-size: contain;
 }
 
 .rv-duel-feed {
@@ -2104,7 +2244,7 @@ body.rv-open {
 }
 
 .rv-duel-feed-name.side-t {
-  color: var(--rv-t);
+  color: var(--rv-t-bright);
 }
 
 .rv-duel-feed-name.side-ct {
@@ -2125,7 +2265,7 @@ body.rv-open {
 }
 
 .rv-duel-feed-odds b.side-t {
-  color: var(--rv-t);
+  color: var(--rv-t-bright);
 }
 
 .rv-duel-feed-odds b.side-ct {
@@ -2164,24 +2304,69 @@ body.rv-open {
   border-radius: var(--radius-sm);
 }
 
+/* One bar: who is playing, what the model gives them, the score and the
+   clock. The three used to be read in three different places on screen. */
 .rv-clock-row {
   position: absolute;
-  top: 8px;
+  top: 10px;
   left: 50%;
   transform: translateX(-50%);
-  z-index: 2;
+  z-index: 5;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 14px;
+  max-width: calc(100% - 32px);
+  padding: 6px 18px;
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.9);
   pointer-events: none;
 }
 
-.rv-clock {
-  padding: 5px 16px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-xs);
-  background: rgba(0, 0, 0, 0.92);
+.rv-clock-team {
+  max-width: 12ch;
+  overflow: hidden;
   color: var(--rv-ink);
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rv-clock-team[data-side='T'] {
+  color: var(--rv-t-bright);
+}
+
+.rv-clock-team[data-side='CT'] {
+  color: var(--rv-ct);
+}
+
+.rv-clock-odds {
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.85;
+}
+
+.rv-clock-odds[hidden] {
+  display: none;
+}
+
+.rv-clock-odds[data-side='T'] {
+  color: var(--rv-t-bright);
+}
+
+.rv-clock-odds[data-side='CT'] {
+  color: var(--rv-ct);
+}
+
+.rv-clock {
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  color: #ffffff;
   font-size: 17px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
@@ -2191,12 +2376,10 @@ body.rv-open {
 }
 
 .rv-clock:hover {
-  background: rgba(20, 20, 24, 0.96);
-  border-color: rgba(255, 255, 255, 0.18);
+  color: var(--rv-ink);
 }
 
 .rv-clock.copied {
-  border-color: rgba(111, 207, 151, 0.55);
   color: #6fcf97;
 }
 
@@ -2216,7 +2399,7 @@ body.rv-open {
 }
 
 .rv-match-score[data-side='T'] {
-  color: var(--rv-t);
+  color: var(--rv-t-bright);
 }
 
 .rv-match-score[data-side='CT'] {
@@ -2224,7 +2407,6 @@ body.rv-open {
 }
 
 .rv-clock[data-phase='planted'] {
-  border-color: rgba(242, 208, 36, 0.6);
   color: #f2d024;
 }
 
@@ -2244,7 +2426,7 @@ body.rv-open {
   font-size: 11px;
 }
 
-/* ---- Scoreboards (middle-left / middle-right) --------------------------- */
+/* ---- Scoreboards (overlaid left / right of the map) --------------------- */
 
 .rv-team {
   display: flex;
@@ -2259,76 +2441,14 @@ body.rv-open {
   overflow-y: auto;
   padding: 12px 14px;
   border-radius: var(--radius);
-  background: #0c0c0c;
+  background: rgba(10, 10, 10, 0.9);
 }
 
 /* Team POV hides one roster. The display above outranks the UA hidden rule, so
-   this has to say it again; the grid column itself stays, because the map
+   this has to say it again; the column itself stays put, because the map
    should not resize when the mode is toggled. */
 .rv-team[hidden] {
   display: none;
-}
-
-.rv-team-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid var(--border);
-}
-
-.rv-team-name {
-  font-family: var(--font-display);
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.rv-team-1 .rv-team-name {
-  color: var(--rv-team1);
-}
-
-.rv-team-2 .rv-team-name {
-  color: var(--rv-team2);
-}
-
-.rv-team-side {
-  flex: 0 0 auto;
-  min-width: 22px;
-  padding: 1px 5px;
-  border-radius: 3px;
-  background: rgba(255, 255, 255, 0.08);
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  font-variant-numeric: tabular-nums;
-  text-align: center;
-}
-
-.rv-team-side.is-wp {
-  min-width: 2.6em;
-  letter-spacing: 0;
-}
-
-.rv-team-head.side-t .rv-team-side,
-.rv-team-head.side-t .rv-team-name {
-  color: var(--rv-t);
-}
-
-.rv-team-head.side-ct .rv-team-side,
-.rv-team-head.side-ct .rv-team-name {
-  color: var(--rv-ct);
-}
-
-.rv-team-head.side-t .rv-team-side {
-  background: color-mix(in srgb, var(--rv-t) 22%, transparent);
-}
-
-.rv-team-head.side-ct .rv-team-side {
-  background: color-mix(in srgb, var(--rv-ct) 22%, transparent);
 }
 
 .rv-players {
@@ -2383,7 +2503,7 @@ body.rv-open {
 }
 
 .rv-player[data-side='T'] .rv-player-hp {
-  background: #947538;
+  background: #8a1219;
 }
 
 .rv-player[data-side='CT'] .rv-player-hp {
@@ -2497,30 +2617,43 @@ body.rv-open {
 /* ---- Round chips (T / CT win colors) ------------------------------------ */
 
 .rv-round {
+  position: relative;
   flex: 0 0 auto;
-  min-width: 34px;
+  min-width: 36px;
   margin-left: 3px;
-  padding: 5px 0;
+  /* Bottom padding is the room the win rule and the coach diamond live in. */
+  padding: 5px 0 14px;
   border: 0;
-  border-bottom: 2px solid transparent;
-  border-radius: var(--radius-xs);
-  background: #262626;
+  background: transparent;
   color: var(--muted);
-  font: 500 12px var(--font-body);
+  font: 600 13px var(--font-body);
   font-variant-numeric: tabular-nums;
   cursor: pointer;
+}
+
+/* The win colour is a rule under the number, not a filled chip: twenty-four
+   filled boxes across the bottom of the screen out-shouted the map. */
+.rv-round::before {
+  content: '';
+  position: absolute;
+  left: 5px;
+  right: 5px;
+  bottom: 9px;
+  height: 2px;
+  border-radius: 1px;
+  background: rgba(255, 255, 255, 0.14);
 }
 
 .rv-round:first-child {
   margin-left: 0;
 }
 
-.rv-round.wt {
-  border-bottom-color: var(--rv-t);
+.rv-round.wt::before {
+  background: var(--rv-t);
 }
 
-.rv-round.wct {
-  border-bottom-color: var(--rv-ct);
+.rv-round.wct::before {
+  background: var(--rv-ct);
 }
 
 .rv-chrome.wt .rv-scrub-fill {
@@ -2532,61 +2665,46 @@ body.rv-open {
 }
 
 .rv-round:hover {
-  background: #303030;
   color: var(--text);
 }
 
 .rv-round.active {
-  background: #333333;
-  color: var(--text);
+  color: #ffffff;
 }
 
-/* Soft green wash from the bottom — round has at least one coach note. */
-.rv-round.has-coach {
-  background:
-    linear-gradient(
-      to top,
-      rgba(62, 232, 122, 0.38) 0%,
-      rgba(62, 232, 122, 0.12) 40%,
-      transparent 72%
-    ),
-    #262626;
+.rv-round.active::before {
+  height: 3px;
+  bottom: 8px;
 }
 
-.rv-round.has-coach:hover {
-  background:
-    linear-gradient(
-      to top,
-      rgba(62, 232, 122, 0.48) 0%,
-      rgba(62, 232, 122, 0.16) 42%,
-      transparent 74%
-    ),
-    #303030;
+/* Green diamond under the number — round has at least one coach note. */
+.rv-round.has-coach::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: 1px;
+  width: 5px;
+  height: 5px;
+  background: #3ee87a;
+  transform: translateX(-50%) rotate(45deg);
 }
 
-.rv-round.has-coach.active {
-  background:
-    linear-gradient(
-      to top,
-      rgba(62, 232, 122, 0.52) 0%,
-      rgba(62, 232, 122, 0.18) 44%,
-      transparent 76%
-    ),
-    #333333;
+/* Half-time / overtime side swap, in place of an unexplained wider gap. */
+.rv-round-swap {
+  flex: 0 0 auto;
+  padding: 0 7px;
+  color: rgba(181, 181, 181, 0.45);
+  font-size: 12px;
+  line-height: 1;
+  user-select: none;
 }
 
 /* ---- Transport ---------------------------------------------------------- */
 
-.rv-transport,
 .rv-macro-bar {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 4px 0 0;
-  background: transparent;
-}
-
-.rv-macro-bar {
   padding: 10px 16px;
   border-top: 1px solid var(--border);
   background: var(--rv-panel);
@@ -2624,6 +2742,84 @@ body.rv-open {
   fill: currentColor;
 }
 
+/* The timeline's floating transport: three pill groups in the map's bottom
+   left corner. Grouped rather than one long bar so play, skip and the
+   playback settings read as three separate jobs at a glance. The anchor is
+   what the drawing palette hangs off, so opening it shifts nothing. */
+.rv-transport-anchor {
+  position: absolute;
+  left: 16px;
+  bottom: 16px;
+  z-index: 6;
+}
+
+.rv-timeline .rv-transport {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.rv-transport-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px;
+  border-radius: var(--radius-sm);
+  background: rgba(12, 12, 12, 0.94);
+}
+
+.rv-timeline .rv-play {
+  width: 38px;
+  height: 38px;
+  border-radius: var(--radius-xs);
+  background: transparent;
+}
+
+.rv-timeline .rv-play:hover {
+  background: #1e1e1e;
+  color: #ffffff;
+}
+
+.rv-skip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--rv-ink);
+  cursor: pointer;
+}
+
+.rv-skip:hover {
+  background: #1e1e1e;
+  color: #ffffff;
+}
+
+.rv-timeline .rv-speed {
+  height: 38px;
+  min-width: 44px;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--rv-ink);
+  font: 600 13px var(--font-body);
+  letter-spacing: 0.04em;
+}
+
+.rv-timeline .rv-speed:hover {
+  background: #1e1e1e;
+  color: #ffffff;
+}
+
+.rv-draw-btn {
+  width: 38px;
+  height: 38px;
+}
+
 .rv-scrub {
   position: relative;
   flex: 1;
@@ -2632,6 +2828,13 @@ body.rv-open {
   align-items: center;
   cursor: pointer;
   touch-action: none;
+}
+
+/* Full width under the map, above the round strip. */
+.rv-chrome > .rv-scrub {
+  flex: 0 0 auto;
+  width: 100%;
+  height: 20px;
 }
 
 .rv-scrub-track {
@@ -4441,7 +4644,7 @@ body.rv-open {
 }
 
 .st-table td.st-role-t {
-  color: #e8b84a;
+  color: var(--rv-t-bright);
   font-weight: 600;
   white-space: nowrap;
 }
@@ -4610,15 +4813,30 @@ body.rv-open {
 
 /* ---- Coach --------------------------------------------------------------- */
 
+/* Rosters float over the map, centred on its vertical axis. They used to be
+   grid columns beside it, which meant a 3D view could never fill the window
+   and the "collapse everything" state still had two gutters in it. */
 .rv-team-col {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 4;
+  width: 268px;
+  max-height: calc(100% - 140px);
   display: flex;
   flex-direction: column;
   justify-content: flex-start;
   gap: 10px;
   min-width: 0;
   min-height: 0;
-  height: 100%;
-  max-height: 100%;
+}
+
+.rv-team-col-1 {
+  left: 16px;
+}
+
+.rv-team-col-2 {
+  right: 16px;
 }
 
 /* Same [hidden] vs display:flex fight as .rv-team / .rv-tool. */
@@ -4631,18 +4849,11 @@ body.rv-open {
   min-height: 0;
 }
 
-/* Win + map-control charts dock bottom-left, mirroring the note box. */
+/* Win + map-control charts are sections of the side panel. */
 .rv-charts {
-  position: absolute;
-  left: 16px;
-  right: auto;
-  bottom: 120px;
-  z-index: 9;
-  width: min(300px, calc(100vw - 32px));
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  pointer-events: auto;
+  gap: 18px;
 }
 
 .rv-charts[hidden] {
@@ -4653,29 +4864,35 @@ body.rv-open {
 .rv-wingraph {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 8px 10px 10px;
+  gap: 8px;
   border: 0;
-  border-radius: var(--radius-sm);
-  background: var(--rv-panel);
+  background: transparent;
   position: relative;
 }
 
+/* Title on the left, the live numbers it is a graph of on the right. */
 .rv-wingraph-head {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
-  margin-bottom: 6px;
+  gap: 8px;
   font-size: 12px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
-  gap: 8px;
 }
 
-.rv-mapgraph .rv-wingraph-head {
-  display: grid;
-  grid-template-columns: 1fr auto 1fr;
+.rv-sec-title {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.rv-sec-val {
+  display: inline-flex;
+  align-items: baseline;
   gap: 8px;
+  white-space: nowrap;
 }
 
 .rv-wingraph-label.ct {
@@ -4683,32 +4900,24 @@ body.rv-open {
 }
 
 .rv-wingraph-label.t {
-  color: var(--rv-t);
-  margin-left: auto;
+  color: var(--rv-t-bright);
 }
 
-.rv-mapgraph .rv-wingraph-label.t {
-  margin-left: 0;
-  justify-self: end;
-  text-align: right;
-}
-
-#rv-mapgraph-neu {
-  color: rgba(180, 186, 196, 0.85);
+.rv-wingraph-label.neu {
+  color: rgba(180, 186, 196, 0.7);
   font-weight: 600;
-  justify-self: center;
-  text-align: center;
-  margin: 0;
 }
 
 .rv-wingraph-canvas {
   display: block;
   width: 100%;
-  height: 96px;
+  height: 130px;
+  border-radius: var(--radius-xs);
+  background: #101010;
 }
 
 .rv-mapgraph .rv-wingraph-canvas {
-  height: 88px;
+  height: 130px;
 }
 
 .rv-wingraph-canvas.is-dot-hover {
@@ -8489,10 +8698,11 @@ th.tm-rl-name,
   white-space: nowrap;
 }
 
-/* Timeline: full-viewer bottom-right, above the floating chrome. */
+/* Timeline: bottom-right of the map, clear of the round strip below it. */
 .rv-timeline > .rv-keys {
   right: 16px;
-  bottom: var(--rv-keys-inset, 10px);
+  bottom: calc(var(--rv-chrome-h, 60px) + var(--rv-keys-inset, 10px));
+  z-index: 6;
 }
 
 /* ---- Two-handle range slider (lib/rangeSlider.js) ------------------------ */
@@ -10448,55 +10658,46 @@ th.tm-rl-name,
    ---------------------------------------------------------------------- */
 
 @media (max-width: 860px) {
-  /* Narrow screens: the map takes the top and both rosters sit under it, side
-     by side. This replaces an earlier layout that laid one roster out as a
-     horizontally scrolling row and hid the second team outright, which on a
-     phone meant half the server was missing.
-
-     The stage reserves the chrome's real height (published as --rv-chrome-h by
-     syncChromeInset) as bottom padding, because down here the chrome overlays
-     the rosters rather than the map. */
-  .rv-stage {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    grid-template-rows: minmax(0, 1fr) auto;
-    gap: 8px;
-    padding: 8px 8px calc(var(--rv-chrome-h, 132px) + 8px);
+  /* Narrow screens: the side panel is a full-width drawer over the map rather
+     than a column beside it, and the two rosters shrink to half-width strips
+     pinned to the bottom corners so the map keeps the middle of the screen. */
+  .rv-timeline {
+    flex-direction: column;
   }
 
-  .rv-map {
-    grid-area: 1 / 1 / 2 / -1;
+  .rv-side {
+    position: absolute;
+    inset: 0;
+    width: auto;
+    flex: 1 1 auto;
+    border-right: 0;
   }
 
-  .rv-stage > .rv-team-col:first-child {
-    grid-area: 2 / 1;
-  }
-
-  .rv-stage > .rv-team-col:last-child {
-    grid-area: 2 / 2;
-  }
-
-  /* Mobile coach with sidebars off: one full-bleed map cell; chrome overlays. */
-  .rv-timeline.rosters-hidden .rv-stage {
-    grid-template-columns: minmax(0, 1fr) !important;
-    grid-template-rows: minmax(0, 1fr) !important;
-    gap: 0;
-    padding: 8px;
-    align-items: stretch;
-  }
-
-  .rv-timeline.rosters-hidden .rv-map {
-    grid-area: 1 / 1 / -1 / -1 !important;
-    height: 100%;
-    min-height: 0;
+  .rv-side-show {
+    top: 8px;
+    left: 8px;
   }
 
   .rv-timeline.rosters-hidden .rv-team-col {
     display: none !important;
   }
 
+  /* Both rosters on one line under the map: half the width each, and only as
+     tall as the space above the round strip allows. */
   .rv-team-col {
-    height: auto;
-    max-height: none;
+    top: auto;
+    bottom: 8px;
+    transform: none;
+    width: calc(50% - 12px);
+    max-height: 42%;
+  }
+
+  .rv-team-col-1 {
+    left: 8px;
+  }
+
+  .rv-team-col-2 {
+    right: 8px;
   }
 
   /* Two rosters share the width, so every row is tightened and the block
@@ -10504,7 +10705,7 @@ th.tm-rl-name,
      itself is hidden: it would sit on top of a roster only a few pixels too
      tall, and touch scrolling does not need it. */
   .rv-team {
-    max-height: 38vh;
+    max-height: 100%;
     padding: 8px 9px;
     gap: 6px;
     scrollbar-width: none;
@@ -10512,24 +10713,6 @@ th.tm-rl-name,
 
   .rv-team::-webkit-scrollbar {
     display: none;
-  }
-
-  .rv-team-head {
-    padding-bottom: 6px;
-  }
-
-  .rv-team-name {
-    font-size: 11px;
-    letter-spacing: 0.04em;
-    overflow: hidden;
-    white-space: nowrap;
-    text-overflow: ellipsis;
-  }
-
-  .rv-team-side {
-    min-width: 18px;
-    padding: 1px 4px;
-    font-size: 10px;
   }
 
   .rv-players {
@@ -10599,63 +10782,56 @@ th.tm-rl-name,
     max-width: 13px;
   }
 
-  /* Chrome stacks: round strip, then transport, then the tool row full width.
-     Side by side, the tools squeezed the transport until the clock was cut off. */
   .rv-chrome {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto auto auto;
-    gap: 6px;
-    padding: 8px 10px calc(10px + env(safe-area-inset-bottom));
-  }
-
-  .rv-chrome > .rv-rounds {
-    grid-area: 1 / 1;
+    padding: 0 10px calc(8px + env(safe-area-inset-bottom));
   }
 
   /* Centering a strip that overflows puts its first chips out of reach of the
      scroller. The active round is scrolled into view on selection anyway. */
   .rv-rounds {
     justify-content: flex-start;
-    padding: 0 2px 4px;
+    padding: 2px 2px 4px;
   }
 
-  .rv-chrome > .rv-transport {
-    grid-area: 2 / 1;
-  }
-
-  .rv-chrome > .rv-tools-anchor {
-    grid-area: 3 / 1;
-    justify-self: stretch;
-  }
-
-  .rv-tools {
-    justify-content: space-around;
-    overflow-x: auto;
-  }
-
-  .rv-tools-draw {
-    left: 0;
-    right: 0;
-    justify-content: center;
-  }
-
-  /* Docked panels span the width and sit directly above the chrome, in the
-     gutter the side columns used to provide. They land on the rosters rather
-     than on empty map, so they carry their own background: as loose floating
-     cards the roster showed through the gaps between them. */
-  .rv-charts,
-  .rv-note-dock,
-  .rv-coach-pick {
+  /* The transport shares the bottom band with two rosters, so it loses its
+     gaps and sits above them rather than beside them. */
+  .rv-transport-anchor {
     left: 8px;
-    right: 8px;
-    width: auto;
-    bottom: calc(var(--rv-chrome-h, 132px) + 8px);
-    max-height: 38vh;
-    overflow-y: auto;
-    padding: 8px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    background: var(--rv-panel);
+    bottom: calc(42% + 16px);
+  }
+
+  .rv-timeline .rv-transport {
+    gap: 6px;
+  }
+
+  .rv-transport-group {
+    padding: 4px;
+  }
+
+  .rv-timeline.rosters-hidden .rv-transport-anchor {
+    bottom: 12px;
+  }
+
+  .rv-timeline .rv-play,
+  .rv-skip,
+  .rv-timeline .rv-speed,
+  .rv-draw-btn {
+    width: 32px;
+    height: 32px;
+  }
+
+  .rv-timeline .rv-speed {
+    min-width: 36px;
+  }
+
+  .rv-clock-row {
+    gap: 8px;
+    padding: 5px 12px;
+  }
+
+  .rv-clock-team {
+    max-width: 8ch;
+    font-size: 12px;
   }
 
   .rv-scoreboard-body {

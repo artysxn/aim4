@@ -255,7 +255,7 @@ async function boot() {
       }
     }
     const knobs = installGrade(renderer, params, post);
-    if (knobs) setupGradePanel(knobs);
+    if (knobs) setupGradePanel(knobs, manifest.map?.slug);
     // After the grade: the composite bakes that curve in, then takes tone
     // mapping off the scene render.
     if (setupBloom(manifest)) console.log('cs3d: bloom from the map post-processing volume');
@@ -265,11 +265,17 @@ async function boot() {
     // baked shadow atlas, because CS2 leaves the sun out of the irradiance
     // bake; null on a pack that predates the mask.
     pack.sun = lighting.worldSun();
+    // The 3D skybox's own ambient (see MapLighting.skyAmbient). Pushed again
+    // once loadSkybox has measured the real sky, since it refines the hue.
+    pack.skyAmbient = lighting.skyAmbient;
     // The map's own skybox, if it was exported (scripts/cs3d-sky.mjs). It
     // replaces the procedural dome and becomes the ambient probe; the
     // procedural one stays as the fallback for a pack without it.
     if (manifest.sky?.equirect) {
-      lighting.loadSkybox(pack.base, manifest.sky, pack.v).catch(() => {});
+      lighting
+        .loadSkybox(pack.base, manifest.sky, pack.v)
+        .then(() => pack.materials?.setSkyAmbient(lighting.skyAmbient))
+        .catch(() => {});
     }
     // Place the camera before anything renders: T spawn, eye height, looking along the spawn yaw.
     const s = (manifest.spawns?.T?.[0] || manifest.spawns?.CT?.[0]) || null;
@@ -293,7 +299,10 @@ async function boot() {
 // from it and the tile's own tint. `I` toggles it. The raycast walks every
 // instance of every BatchedMesh, so it runs a few times a second rather than
 // per frame, and only while the panel is up.
-let inspectOn = true;
+//
+// Off on load: it is a debugging tool, it covers a third of the screen, and its
+// raycast is the most expensive thing on the frame when it is up.
+let inspectOn = false;
 let inspectAt = 0;
 const _ray = new THREE.Raycaster();
 _ray.far = 8192;
@@ -437,33 +446,59 @@ function reapplyLight() {
   for (const k of LIGHT_KEYS) if (lightMult[k] !== 1) applyLight(k, lightMult[k]);
 }
 
-function setupGradePanel(knobs) {
+/**
+ * Slider defaults a single map overrides, keyed by slug.
+ *
+ * Anubis takes twice the bounce: it is 89% lightmapped, far more than any
+ * other map, so the baked indirect is doing nearly all of its shading and the
+ * one number tuned on Nuke leaves it flat. Everything not listed here uses the
+ * `def` on the slider itself.
+ */
+const MAP_GRADE = {
+  anubis: { bake: 2 }
+};
+
+function setupGradePanel(knobs, slug) {
+  const perMap = MAP_GRADE[slug] || {};
   let saved = {};
   try {
     saved = JSON.parse(localStorage.getItem(GRADE_STORE) || '{}');
   } catch {
     /* first run */
   }
+  // `def` is where each slider loads and where reset returns it. The maths
+  // behind the sliders is untouched: the lighting knobs are still plain
+  // multipliers over SUN_BOOST / LIGHTMAP_SCALE / SKY_PROBE_SCALE and the grade
+  // knobs still feed installGrade's uniforms. Only the starting positions moved,
+  // to the values dialled in against the game on Nuke.
   const defs = [
-    // Multiplies SUN_BOOST, so 1 is already the baked-in default: max 5 reaches
-    // 5× that, which is well past anything that still looks like the game.
-    { key: 'sun', label: 'sun ×', min: 0, max: 5, step: 0.05 },
-    { key: 'bake', label: 'bounce ×', min: 0, max: 3, step: 0.05 },
-    { key: 'sky', label: 'sky probe ×', min: 0, max: 3, step: 0.05 },
-    { key: 'brightness', label: 'brightness', min: 0.2, max: 3, step: 0.01 },
-    { key: 'contrast', label: 'contrast', min: 0.5, max: 2.5, step: 0.01 },
-    { key: 'saturation', label: 'saturation', min: 0, max: 2.5, step: 0.01 },
-    { key: 'vibrance', label: 'vibrance', min: 0, max: 2, step: 0.01 },
-    { key: 'lift', label: 'black lift', min: 0, max: 0.08, step: 0.001 }
+    { key: 'sun', label: 'sun ×', min: 0, max: 5, step: 0.05, def: 5 },
+    { key: 'bake', label: 'bounce ×', min: 0, max: 3, step: 0.05, def: 0.9 },
+    { key: 'sky', label: 'sky probe ×', min: 0, max: 3, step: 0.05, def: 0.1 },
+    { key: 'brightness', label: 'brightness', min: 0.2, max: 3, step: 0.01, def: 1 },
+    { key: 'contrast', label: 'contrast', min: 0.5, max: 2.5, step: 0.01, def: 1.12 },
+    { key: 'saturation', label: 'saturation', min: 0, max: 2.5, step: 0.01, def: 1.14 },
+    { key: 'vibrance', label: 'vibrance', min: 0, max: 2, step: 0.01, def: 0.1 },
+    { key: 'lift', label: 'black lift', min: 0, max: 0.08, step: 0.001, def: 0.004 }
   ].map((d) => {
-    // Lighting knobs are multipliers (reset 1); grade knobs start wherever
-    // installGrade landed.
-    const reset = LIGHT_KEYS.has(d.key) ? 1 : knobs[d.key].value;
-    const value = Number.isFinite(saved[d.key]) ? saved[d.key] : reset;
+    // A per-map override is the map's default, so reset returns there too.
+    const reset = perMap[d.key] ?? d.def;
+    // The map's defaults WIN over anything saved. A stored value from another
+    // map is nearly always wrong for this one — the numbers are per-map now
+    // (Anubis' bounce is 2, everything else 0.9) — and a stale store silently
+    // pinning a slider is impossible to tell apart from a broken default.
+    // Tweaks still persist while you stay on the map; loading one resets them.
+    const value = reset;
+    saved[d.key] = value;
     if (LIGHT_KEYS.has(d.key)) applyLight(d.key, value);
     else knobs[d.key].value = value;
     return { ...d, value, reset };
   });
+  try {
+    localStorage.setItem(GRADE_STORE, JSON.stringify(saved));
+  } catch {
+    /* private mode */
+  }
   hud.buildGrade(defs, (key, value) => {
     if (LIGHT_KEYS.has(key)) applyLight(key, value);
     else if (knobs[key]) knobs[key].value = value;
@@ -601,9 +636,17 @@ function drawScene() {
   const skyWas = sky.visible;
   const domeWas = dome ? dome.visible : false;
 
+  // The distant pass gets the fog whose height band is scaled to the ×16
+  // skybox (see fog.js). Each material only ever draws in one of these two
+  // passes, so each still compiles against a single fog node.
+  const worldFog = scene.fogNode;
+  const skyFog = lighting?.fog?.skyNode || worldFog;
+
   world.visible = false;
+  scene.fogNode = skyFog;
   renderer.render(scene, camera); // clears colour + depth; background, dome, skybox
   renderer.clearDepth();
+  scene.fogNode = worldFog;
 
   world.visible = true;
   sky.visible = false;

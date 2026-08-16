@@ -47,6 +47,24 @@ export function assetBase() {
 /** Collision kinds a player body collides with (grenadeclip is for nades only). */
 const WALK_SOLID = new Set(['solid', 'playerclip', 'sky', 'ladder', 'entity']);
 
+/**
+ * Whether a material's per-tile tint is applied through a mask (per texel, via
+ * COLOR_0.gba) rather than as a BatchedMesh instance colour over the whole
+ * tile. True for a dedicated tint mask, for a mask on either blend layer, or
+ * for a blend layer whose tint-mask brightness is below 1 without a texture:
+ * every one of those needs the per-texel path. Must agree with the check in
+ * MaterialLibrary._build, or the tint is applied twice or not at all.
+ */
+function tintIsMasked(m) {
+  if (!m) return false;
+  // csgo_environment applies its tint itself, per texel, with the game's own
+  // luminance-preserving formula — always through COLOR_0.gba, whether or not a
+  // mask texture exists, because "amount 0" and "g_bModelTint off" have to be
+  // able to apply NO tint, which a BatchedMesh colour cannot express.
+  if (m.envTint) return true;
+  return m.tintMask !== undefined;
+}
+
 /** Positions of a (possibly quantized) mesh in world space as float32, plus a copied index. */
 function worldFloatGeometry(mesh) {
   const src = mesh.geometry;
@@ -410,6 +428,7 @@ export class MapPack {
       probeAmbient: !!manifest.probeAmbient
     });
     if (this.sun) this.materials.setSun(this.sun);
+    if (this.skyAmbient) this.materials.setSkyAmbient(this.skyAmbient);
     this.materials.onProgress = () => this._progress('textures');
     this.materials.onMaterialReady = () => this.onWorldChanged();
     this._progress('manifest');
@@ -559,9 +578,13 @@ export class MapPack {
       // A masked tint cannot go through BatchedMesh.setColorAt: three multiplies
       // that colour into every fragment of the tile. It goes into the tile's own
       // COLOR_0.gba instead, and the material applies it through the mask.
-      const masked = m.tintMask !== undefined;
+      const masked = tintIsMasked(m);
       const tileTint = o.material?.color || null;
-      const geom = normalizeTile(o, !!m.blend || masked, masked ? tileTint : null, !m.lightmapped && !!this.manifest.probeAmbient);
+      // `_amb`/`_sun` only for geometry the pack actually baked them onto. The
+      // 3D skybox is excluded: it sits outside every probe volume, so the pack
+      // skips it and asking here would fill zeros and black it out.
+      const wantAmb = !m.lightmapped && !m.sky && !!this.manifest.probeAmbient;
+      const geom = normalizeTile(o, !!m.blend || masked, masked ? tileTint : null, wantAmb);
       const need = geom.getAttribute('position').count;
       const needIdx = geom.index.count;
       // The manifest's totals are exact; addGeometry throwing means a stale
@@ -646,7 +669,7 @@ export class MapPack {
     const attr = obj.geometry?.getAttribute?.('color');
     if (attr && hit.face) {
       paint = attr.getX(hit.face.a);
-      if (m && m.tintMask !== undefined) {
+      if (m && tintIsMasked(m)) {
         tileTint = [attr.getY(hit.face.a), attr.getZ(hit.face.a), attr.getW(hit.face.a)];
         tintFrom = 'COLOR_0.gba (masked)';
       }
