@@ -1,11 +1,21 @@
 node_modules/
 dist/
-server/data/
 
 # Baked map geometry SHIPS: it is derived from public map data, it changes
 # only when the maps or the bake code change, and without it a deployed /sim
 # can do nothing but tell you to re-bake. simdata/ is the committed copy;
 # server/data/replays/sim/ stays ignored and overrides it per host.
+/server/data/*
+
+# ...with one exception. A fresh clone of the 3D renderer can load nothing
+# without a packed map, and re-packing needs the .vpk drop plus a 17 GB
+# intermediate. So de_nuke ships (~91 MB) and the other six do not. Git will
+# not look inside an excluded directory, hence the un-ignore at every level.
+!/server/data/cs3d/
+/server/data/cs3d/*
+!/server/data/cs3d/pack/
+/server/data/cs3d/pack/*
+!/server/data/cs3d/pack/nuke/
 
 # Extracted duel corpus + training logs. Regenerate with:
 #   node scripts/extract-duel-episodes.mjs
@@ -20,3 +30,17 @@ scripts/round-cache/
 .vercel
 .env*
 .venv-sim/
+
+# 3D map pipeline: the operator's .vpk drop and the VRF CLI binary. Both are
+# re-acquirable (Steam / VRF releases) and neither belongs in a public repo.
+#
+# The leading slash matters. This was an unanchored "cs3d/", which git matches
+# at EVERY depth: it silently swallowed src/cs3d/ (the whole renderer),
+# server/cs3d/routes.js and shared/cs3d/maps.js. Do not remove the slash.
+/cs3d/
+/tools/vrf/
+
+# .NET build output for the cs3d-tex exporter (245 MB of VRF dependencies).
+# Source only; rebuild with `dotnet build -c Release`.
+/tools/cs3d-tex/bin/
+/tools/cs3d-tex/obj/

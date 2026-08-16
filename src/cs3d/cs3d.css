@@ -1,0 +1,353 @@
+/* ---------------------------------------------------------------------------
+   cs3d.css
+   The map explorer page: a full-window canvas with a thin overlay. Same dark
+   palette and PP Mori as the rest of the site; only the weights it uses.
+--------------------------------------------------------------------------- */
+
+@font-face {
+  font-family: 'PP Mori';
+  src: url('/fonts/pp/PPMori-Regular.otf') format('opentype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'PP Mori';
+  src: url('/fonts/pp/PPMori-SemiBold.otf') format('opentype');
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  --bg: #000;
+  --surface: #0c0c0c;
+  --border: #181818;
+  --text: #f2f2f2;
+  --muted: #9c9ca2;
+  --accent: #e60611;
+  --radius: 12px;
+  --radius-sm: 8px;
+  --font-body: 'PP Mori', system-ui, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-body);
+  overflow: hidden;
+}
+
+#c3-canvas {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  cursor: crosshair;
+}
+
+#c3-ui {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  font-size: 13px;
+}
+#c3-ui > * {
+  pointer-events: none;
+}
+
+.c3-top {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.c3-title {
+  font-weight: 600;
+  padding: 6px 10px;
+  background: rgba(12, 12, 12, 0.82);
+  border-radius: var(--radius-sm);
+}
+.c3-stat {
+  padding: 6px 10px;
+  background: rgba(12, 12, 12, 0.7);
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  min-width: 52px;
+  text-align: center;
+}
+.c3-stat:empty {
+  display: none;
+}
+
+/* Inspector: what the crosshair is on, under the status strip. */
+.c3-inspect {
+  position: absolute;
+  top: 52px;
+  left: 12px;
+  width: 340px;
+  max-height: calc(100vh - 76px);
+  overflow-y: auto;
+  padding: 8px 10px;
+  background: rgba(12, 12, 12, 0.86);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  line-height: 1.45;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+.c3-i-head {
+  margin: 7px 0 2px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  font-size: 9px;
+}
+.c3-i-head:first-child {
+  margin-top: 0;
+}
+.c3-i-row {
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}
+.c3-i-row > span {
+  color: var(--muted);
+  flex: none;
+}
+.c3-i-row > b {
+  font-weight: 500;
+  text-align: right;
+  word-break: break-all;
+}
+.c3-i-row i {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 5px;
+  border-radius: 2px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+}
+
+/* Grade panel: live tone-mapping knobs, top right. */
+.c3-grade {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 300px;
+  padding: 10px 12px;
+  background: rgba(12, 12, 12, 0.9);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+}
+/* `#c3-ui > *` turns pointer events off for every direct child and outranks a
+   bare class, so the sliders need the id in the selector to be draggable. */
+#c3-ui > .c3-grade {
+  pointer-events: auto;
+}
+.c3-g-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 6px;
+  font-weight: 600;
+}
+.c3-g-title span {
+  color: var(--muted);
+  font-weight: 400;
+  font-size: 9px;
+}
+.c3-g-row {
+  display: grid;
+  grid-template-columns: 76px 1fr 46px;
+  gap: 8px;
+  align-items: center;
+  margin: 3px 0;
+}
+.c3-g-row > span {
+  color: var(--muted);
+}
+.c3-g-row > b {
+  text-align: right;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.c3-g-row input[type='range'] {
+  width: 100%;
+  accent-color: #d8a24a;
+}
+.c3-g-foot {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 8px;
+  padding-top: 7px;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+}
+.c3-g-foot button {
+  flex: none;
+  padding: 3px 9px;
+  font: inherit;
+  color: inherit;
+  background: rgba(255, 255, 255, 0.1);
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.c3-g-foot code {
+  color: var(--muted);
+  font-size: 9px;
+  word-break: break-all;
+  user-select: all;
+}
+
+.c3-load {
+  position: absolute;
+  left: 50%;
+  bottom: 28px;
+  transform: translateX(-50%);
+  width: min(360px, 60vw);
+  transition: opacity 0.4s;
+}
+.c3-load.is-done {
+  opacity: 0;
+}
+.c3-load-bar {
+  height: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.c3-load-bar span {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  transition: width 0.2s;
+}
+.c3-load-text {
+  margin-top: 6px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.c3-center {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.35);
+}
+.c3-center[hidden] {
+  display: none;
+}
+.c3-panel {
+  pointer-events: auto;
+  background: rgba(12, 12, 12, 0.94);
+  border-radius: var(--radius);
+  padding: 22px 26px;
+  min-width: 300px;
+  max-width: 420px;
+}
+.c3-panel-title {
+  font-weight: 600;
+  font-size: 18px;
+  margin-bottom: 14px;
+}
+.c3-keys {
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+}
+.c3-keys b {
+  color: var(--text);
+  font-weight: 600;
+}
+.c3-sens {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 16px;
+  color: var(--muted);
+}
+.c3-sens input {
+  width: 84px;
+  height: 32px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: #050505;
+  color: var(--text);
+  font: inherit;
+  padding: 0 10px;
+  outline: none;
+}
+.c3-maps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 16px;
+}
+.c3-maps a {
+  color: var(--muted);
+  text-decoration: none;
+  font-weight: 600;
+  padding: 5px 9px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.03);
+}
+.c3-maps a:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.06);
+}
+.c3-maps a.is-active {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.c3-err {
+  position: absolute;
+  left: 50%;
+  top: 40%;
+  transform: translate(-50%, -50%);
+  background: rgba(12, 12, 12, 0.94);
+  border-radius: var(--radius);
+  padding: 18px 22px;
+  max-width: 520px;
+  color: var(--text);
+  pointer-events: auto;
+}
+.c3-err[hidden] {
+  display: none;
+}
+
+.c3-cross {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  width: 4px;
+  height: 4px;
+  margin: -2px 0 0 -2px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.85);
+  pointer-events: none;
+  display: none;
+}
+#c3-ui.is-locked ~ .c3-cross {
+  display: block;
+}

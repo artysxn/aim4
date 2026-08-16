@@ -1,0 +1,18 @@
+# core.autocrlf is true on the Windows workstations, and git decides text vs
+# binary by looking for a NUL byte in the first 8 KB. That guess is per file:
+# a baked .hdr or .bin whose header happens to be plain ASCII can be judged
+# "text", and git then rewrites every LF to CRLF and silently corrupts it.
+#
+# The renderer would not error on a corrupted pack, it would just draw wrong.
+# So the pipeline's output formats are pinned rather than guessed.
+*.glb   binary
+*.bin   binary
+*.webp  binary
+*.hdr   binary
+*.ktx2  binary
+*.vtex  binary
+*.vpk   binary
+*.dem   binary
+*.png   binary
+*.jpg   binary
+*.jpeg  binary

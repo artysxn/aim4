@@ -7,6 +7,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { cs3dMapForPath } from '../shared/cs3d/maps.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const DIST_DIR = path.join(__dirname, '..', 'dist');
@@ -82,8 +83,9 @@ function isSiteViewPath(rel) {
 
 /**
  * Try to serve a file from dist/. Returns true if handled.
- * SPA fallback: "/" and the site view paths → index.html (site shell), every
- * other unknown path (gamemode deep links, /train) → train.html (the trainer).
+ * SPA fallback: "/" and the site view paths → index.html (site shell), the
+ * 3D map routes (/dust2, /de_nuke, ...) → cs3d.html, every other unknown
+ * path (gamemode deep links, /train) → train.html (the trainer).
  */
 export function tryServeStatic(req, res, url) {
   if (req.method !== 'GET' && req.method !== 'HEAD') return false;
@@ -91,6 +93,7 @@ export function tryServeStatic(req, res, url) {
   let rel = decodeURIComponent(url.pathname);
   if (rel === '/') rel = '/index.html';
   if (PAGE_ALIASES[rel]) rel = PAGE_ALIASES[rel];
+  else if (!rel.includes('.') && cs3dMapForPath(rel)) rel = '/cs3d.html';
 
   const filePath = path.normalize(path.join(DIST_DIR, rel));
   if (!filePath.startsWith(DIST_DIR)) {

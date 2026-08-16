@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    cs3d-tex: a thin CLI over the ValveResourceFormat library (MIT) for the
+    texture cases Source2Viewer-CLI cannot do. Today that is exactly one:
+    cube textures (every map's skybox is a BC6H HDR cubemap, and the CLI
+    throws a NullReferenceException in Texture.GenerateBitmap for them, in
+    both 18.0 and 19.2). Using the library directly lets us ask for one face
+    at a time, which works.
+
+    Built on demand by scripts/cs3d-sky.mjs; the binary is gitignored with
+    the rest of tools/vrf.
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>cs3d-tex</AssemblyName>
+    <RootNamespace>Cs3dTex</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 16.0 and up target net10.0 only; 15.0.4937 is the newest that builds
+         against the net9.0 SDK on this machine. Texture decoding has not
+         changed between them for our purposes. -->
+    <PackageReference Include="ValveResourceFormat" Version="15.0.4937" />
+  </ItemGroup>
+
+</Project>

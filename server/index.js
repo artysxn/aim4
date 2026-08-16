@@ -25,6 +25,7 @@ import { handleSimRequest } from './sim/routes.js';
 import { handleAccountRequest } from './account/routes.js';
 import { handleBillingRequest } from './billing/routes.js';
 import { handleFaceitWebhookRequest } from './ingest/faceit/webhookRoutes.js';
+import { handleCs3dRequest } from './cs3d/routes.js';
 import { checkCaseSensitivity, sweepStaleUploads } from './replays/demoStore.js';
 import { parseQueueBusy, resumeInterruptedParses, sweepBatchFiles } from './replays/jobs.js';
 import { setParserBusyProbe } from './sim/jobs.js';
@@ -153,6 +154,11 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (await handleAccountRequest(req, res, url)) {
+      return;
+    }
+
+    // 3D map packs: static, public, long-cached binaries with their own CORS.
+    if (url.pathname.startsWith('/api/cs3d/') && (await handleCs3dRequest(req, res, url))) {
       return;
     }
 

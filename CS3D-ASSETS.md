@@ -107,3 +107,28 @@ bomb beeps, explosion. Drop as-is in `sounds/`, organization later.
 Say which map/model landed and I build the importer against it starting
 with `maps/INF/`: transform + chunking + BVH bake + `meta.json`, then the
 anchor-overlay check (CS3D-PLAN 3D-0) before anything else.
+
+## Fresh clone on a new workstation
+
+All the pipeline *code* is in git — the renderer (`src/cs3d/`), the import
+and pack scripts, and the `cs3d-tex` exporter source. Three things are not,
+because they are large, re-acquirable, or Valve's to distribute:
+
+| Missing | Size | How to restore |
+|---|---|---|
+| `cs3d/maps/*.vpk` | 2.0 GB | Copy from the old machine, or re-pull from your own CS2 install (`game/csgo/maps/de_*.vpk`). |
+| `tools/vrf/` | 166 MB | Source2Viewer CLI, `cli-windows-x64.zip` from the ValveResourceFormat releases page, unzipped in place. |
+| `tools/cs3d-tex/bin/` | 245 MB | `dotnet build -c Release` in `tools/cs3d-tex/`. |
+
+**de_nuke ships packed** (`server/data/cs3d/pack/nuke/`, ~91 MB) so the
+renderer has something to draw on a fresh clone without any of the above.
+It is the map carrying the baked light-probe ambient. The other six re-pack
+once the .vpk drop and VRF are back:
+
+```
+npm run cs3d:build
+```
+
+That is import + pack for every map found in the drop. Expect a ~17 GB
+intermediate under `server/data/cs3d/raw/`, which is gitignored and can be
+deleted afterwards — only `pack/` is served.

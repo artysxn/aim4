@@ -1,5 +1,8 @@
 import { defineConfig } from 'vite';
 import { fileURLToPath } from 'node:url';
+import fs from 'node:fs';
+import path from 'node:path';
+import { cs3dMapForPath } from './shared/cs3d/maps.js';
 
 // Paths the game-route fallback must never touch: backend proxies, the site
 // shell's own views (/tools, /training, /leaderboards, /football), tool pages
@@ -7,18 +10,22 @@ import { fileURLToPath } from 'node:url';
 const GAME_FALLBACK_SKIP = /^\/(api|ws|football|training|leaderboards|replays|tools|assets|fonts|maps|src|public|node_modules|@|demos|playlists|database|charts|patterns|uploads|routines|replay-viewer|team|account|admin|i|s2|icons)(\/|$)/;
 
 // Dev-server twin of the vercel.json rewrites: the landing owns "/" and
-// "/tools", every other extension-less path (e.g. /train, /gridshot,
-// /gridshot/competitive) is the game SPA served from train.html.
+// "/tools", the 3D map explorer owns /<map> (e.g. /dust2, /de_nuke), every
+// other extension-less path (e.g. /train, /gridshot, /gridshot/competitive)
+// is the game SPA served from train.html.
 function gameRouteFallback() {
   const rewrite = (req, res, next) => {
     if (req.method === 'GET' || req.method === 'HEAD') {
       const pathname = new URL(req.url, 'http://localhost').pathname;
+      // /@vite/client, /@fs/, /@id/ are Vite's own; the skip regex's bare "@"
+      // alternative never matched them (it wants "/" or end right after).
       if (
         pathname !== '/' &&
         !pathname.includes('.') &&
+        !pathname.startsWith('/@') &&
         !GAME_FALLBACK_SKIP.test(pathname)
       ) {
-        req.url = '/train.html';
+        req.url = cs3dMapForPath(pathname) ? '/cs3d.html' : '/train.html';
       }
     }
     next();
@@ -34,11 +41,45 @@ function gameRouteFallback() {
   };
 }
 
+// Dev-only twin of server/cs3d/routes.js: serve the local map packs at
+// /api/cs3d/ straight from disk so `npm run dev` needs no backend for /dust2.
+// Registered before Vite's proxy, so it wins for this prefix; everything else
+// under /api still goes to the backend.
+function cs3dPackDev() {
+  const packDir = path.resolve(process.env.CS3D_PACK_DIR || 'server/data/cs3d/pack');
+  const MIME = { '.json': 'application/json', '.glb': 'model/gltf-binary', '.webp': 'image/webp', '.png': 'image/png', '.ktx2': 'image/ktx2', '.hdr': 'image/vnd.radiance' };
+  const serve = (req, res, next) => {
+    const pathname = new URL(req.url, 'http://localhost').pathname;
+    if (!pathname.startsWith('/api/cs3d/')) return next();
+    const rel = pathname.slice('/api/cs3d/'.length);
+    const file = path.normalize(path.join(packDir, rel));
+    if (!file.startsWith(packDir) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) {
+      res.statusCode = 404;
+      return res.end();
+    }
+    res.setHeader('Content-Type', MIME[path.extname(file)] || 'application/octet-stream');
+    // The texture bundle streams; the loader reads its progress off this.
+    res.setHeader('Content-Length', fs.statSync(file).size);
+    // Dev re-packs in place; never let the browser keep yesterday's geometry.
+    res.setHeader('Cache-Control', 'no-cache');
+    fs.createReadStream(file).pipe(res);
+  };
+  return {
+    name: 'aim4-cs3d-pack-dev',
+    configureServer(server) {
+      server.middlewares.use(serve);
+    },
+    configurePreviewServer(server) {
+      server.middlewares.use(serve);
+    }
+  };
+}
+
 // Minimal Vite config. Three.js is bundled from node_modules so the bare
 // "three" specifier resolves cleanly in dev (HMR) and production builds.
 export default defineConfig({
   base: '/',
-  plugins: [gameRouteFallback()],
+  plugins: [gameRouteFallback(), cs3dPackDev()],
   server: {
     host: true,
     open: false,
@@ -79,7 +120,9 @@ export default defineConfig({
         // Easter-egg football — built as its own page so it reads VITE_API_URL
         // (the hosted backend) exactly like the main client's NetClient.
         football: fileURLToPath(new URL('./tools/football.html', import.meta.url)),
-        zoneEditor: fileURLToPath(new URL('./tools/zone-editor.html', import.meta.url))
+        zoneEditor: fileURLToPath(new URL('./tools/zone-editor.html', import.meta.url)),
+        // The 3D map explorer — served for /dust2, /mirage, ... (shared/cs3d/maps.js).
+        cs3d: fileURLToPath(new URL('./cs3d.html', import.meta.url))
       }
     }
   },
