@@ -9,7 +9,7 @@
 import './cs3d.css';
 import * as THREE from 'three/webgpu';
 import { cs3dMapForPath, cs3dMap, CS3D_MAPS } from '../../shared/cs3d/maps.js';
-import { cameraYawFromSource, sceneToSource } from '../../shared/sim3d/units.js';
+import { cameraYawFromSource, sceneToSource, sourceYawFromCamera } from '../../shared/sim3d/units.js';
 import { MapPack } from './mapLoader.js';
 import { MapLighting } from './sky.js';
 import { installGrade } from './grade.js';
@@ -22,6 +22,9 @@ import { FpsView } from './fpsView.js';
 import { DemoView } from './demoView.js';
 import { sharedPlayerModels } from './playerModels.js';
 import { LiveBody } from './liveBody.js';
+import { placeThirdPersonCamera } from './thirdPerson.js';
+import { mountCrosshair } from './crosshairOverlay.js';
+import { ViewModelAssets, ViewModel, createViewModelPass } from './viewModel.js';
 import { loadDemoBytes, loadDemoFile } from './demoData.js';
 
 const params = new URLSearchParams(location.search);
@@ -87,8 +90,17 @@ const controls = new Controls(canvas, player, {
   // the T/CT spawns in the plain explorer.
   onDigit: (n) => {
     if (demoView.active) demoView.setPov((n + 9) % 10);
+    // Walking: 1/2/3 are the weapon slots the way the game has them, and the
+    // draw animation plays. Flying, there is no body to arm, so 1 and 2 stay
+    // the T and CT spawns.
+    else if (player.mode === 'walk' && n >= 1 && n <= 3) equipSlot(n);
     else if (n === 1) spawnAt('T');
     else if (n === 2) spawnAt('CT');
+  },
+  // Mouse: fire while held for an automatic weapon, once per click otherwise.
+  onAttack: (button, down) => {
+    attackHeld[button] = down;
+    if (down) tryAttack(button);
   },
   onPlayPause: () => demoView.togglePlay(),
   onStep: (d) => demoView.step(d),
@@ -121,6 +133,7 @@ const hud = new Hud(uiRoot, {
 hud.setLocked(false);
 hud.setMode(player.mode);
 hud.setWeapon(player.weapon, player.maxSpeed);
+mountCrosshair(uiRoot);
 
 // The flat view (V). Reads `pack` and `lighting` through getters because both
 // are filled in by boot(), long after the key is bound.
@@ -143,6 +156,42 @@ const fpsView = new FpsView({
 // manifest is in, so it never competes with the first tiles; a body created
 // before it lands is a placeholder until the next frame after it does.
 const playerModels = sharedPlayerModels();
+
+// ---- viewmodel -------------------------------------------------------------
+// The hands and the weapon in them (src/cs3d/viewModel.js), over the pack
+// scripts/cs3d-weapons.mjs builds: the agents' own first-person arms on the
+// game's viewmodel rig, its draw / idle / shoot / swing clips, and the weapon
+// models. Shown in first-person walk mode and in a demo POV; hidden while
+// flying or in third person, where there is nothing to hold it.
+const vmAssets = new ViewModelAssets();
+const viewModel = new ViewModel(vmAssets);
+const vmPass = createViewModelPass(renderer);
+vmPass.scene.add(viewModel.group);
+
+/** 1 / 2 / 3, the game's slots. The draw animation and its lockout come free. */
+const SLOTS = { 1: 'ak47', 2: 'glock', 3: 'knife' };
+const attackHeld = { primary: false, secondary: false };
+let equipped = 3;
+
+function equipSlot(n) {
+  const name = SLOTS[n];
+  if (!name || !vmAssets.ready) return;
+  equipped = n;
+  viewModel.setWeapon(name);
+  // The body's speed cap follows what it is holding, as it does in the game.
+  player.setWeapon(name);
+  hud.setWeapon(player.weapon, player.maxSpeed);
+}
+
+/**
+ * Pull the trigger once. The viewmodel owns the timing (deploy lockout, then
+ * the weapon's own cycle time out of weapons.vdata), so this only has to ask.
+ */
+function tryAttack(button) {
+  if (!controls.locked || player.mode !== 'walk' || thirdPerson) return;
+  viewModel.attack(button, performance.now() / 1000);
+}
+
 const demoView = new DemoView({
   camera,
   getPack: () => pack,
@@ -321,6 +370,15 @@ async function boot() {
     // in a global sky probe — the same rule the map's props follow.
     playerModels.getProbeGrid = () => pack?.probeGrid || null;
     playerModels.load().then((ok) => ok && console.log('cs3d: player models ready'));
+    // The hands, alongside the tiles. Once they land the body is armed with
+    // whatever slot is selected, so the first frame after the pack arrives has
+    // a weapon in it rather than waiting for a keypress.
+    vmAssets.load().then((ok) => {
+      if (ok === false) return;
+      viewModel.setSide(lastSide);
+      equipSlot(equipped);
+      console.log('cs3d: viewmodel ready');
+    });
     await pack.load(manifest);
     // The material library exists now; any lighting knob set before this had
     // nothing to write to. Same call, same order as the timeline's 3D view.
@@ -518,6 +576,53 @@ function setupGradePanel(knobs, slug) {
   });
 }
 
+/**
+ * The viewmodel, every frame.
+ *
+ * It is shown when there is a body to hold it: walking in first person, or
+ * inside a demo POV, where it takes that player's weapon and their speed. In
+ * fly mode, third person, or the flat view there is nothing to hold a gun and
+ * it is hidden — which also skips its pass entirely.
+ */
+function updateViewModel(dt, inThird) {
+  if (!viewModel.ready) return;
+  const pov = demoView.active && demoView.povSlot !== null ? demoView.povState() : null;
+  const show = !fpsView.enabled && (pov ? true : player.mode === 'walk' && !inThird);
+  viewModel.visible = show;
+  if (!show) return;
+  if (pov) {
+    // A recorded POV: the weapon, the speed and the view are the demo's, and
+    // the gun kicks on the ticks the demo says that player pulled the trigger.
+    if (pov.side) viewModel.setSide(pov.side);
+    if (pov.weapon) viewModel.setWeapon(pov.weapon, { draw: false });
+    for (let i = 0; i < pov.shots; i++) viewModel.attack('primary', 0);
+    viewModel.update(dt, { speed: pov.speed, onGround: !pov.airborne, viewYaw: pov.yaw, viewPitch: pov.pitch });
+  } else {
+    // Holding an automatic weapon's trigger keeps firing at its cycle time.
+    if (attackHeld.primary && viewModel.isAuto) tryAttack('primary');
+    viewModel.setSide(lastSide);
+    viewModel.update(dt, {
+      speed: Math.hypot(player.vel.x, player.vel.z),
+      onGround: player.onGround,
+      viewYaw: sourceYawFromCamera(player.yaw),
+      viewPitch: -player.pitch * (180 / Math.PI)
+    });
+  }
+  // The gun stands in the map's own light, like every other moving thing.
+  const grid = pack?.probeGrid;
+  if (grid) {
+    const p = pov ? pov.eye : camera.position;
+    const cube = grid.sample(p.x, p.y, p.z, _vmCube);
+    // The ambient cube's upward and lateral terms, as one fill colour.
+    _vmColor.setRGB(
+      (cube[6] + cube[0] + cube[3]) / 3,
+      (cube[7] + cube[1] + cube[4]) / 3,
+      (cube[8] + cube[2] + cube[5]) / 3
+    );
+    vmPass.setAmbient(_vmColor, 1.6);
+  }
+}
+
 function renderFrame() {
   if (fpsView.enabled) {
     renderer.setRenderTarget(null);
@@ -526,6 +631,9 @@ function renderFrame() {
   }
   if (mapRenderer) mapRenderer.render(camera);
   else renderer.render(scene, camera);
+  // Last, over everything, with its own depth: the gun is never clipped by a
+  // wall the player is standing against.
+  if (viewModel.visible && viewModel.ready) vmPass.render();
 }
 
 // ---- live body / third person ----------------------------------------------
@@ -534,39 +642,12 @@ function renderFrame() {
 // behind it — the way to watch the locomotion blend run on live input, and
 // the path a bot's body will take.
 const liveBody = new LiveBody(playerModels, () => pack?.world || null);
-const _tpEye = { x: 0, y: 0, z: 0 };
-const _tpWant = { x: 0, y: 0, z: 0 };
-const _tpFwd = new THREE.Vector3();
-/** Camera 110u behind and 16u above the eyes, pulled in against the map so it never leaves the room. */
-const THIRD_PERSON_BACK = 110;
-const THIRD_PERSON_UP = 16;
-function placeThirdPersonCamera() {
-  const eye = camera.position; // player.syncCamera put it on the eyes
-  camera.getWorldDirection(_tpFwd);
-  const wx = eye.x - _tpFwd.x * THIRD_PERSON_BACK;
-  const wy = eye.y - _tpFwd.y * THIRD_PERSON_BACK + THIRD_PERSON_UP;
-  const wz = eye.z - _tpFwd.z * THIRD_PERSON_BACK;
-  if (player.world) {
-    // Trace a small hull (12u box, origin at its bottom like every hull) from
-    // the eyes back to where the camera wants to be — Source frame: scene
-    // (x, y, z) → (x, −z, y) — and stop at the first wall.
-    const HALF = 6;
-    _tpEye.x = eye.x;
-    _tpEye.y = -eye.z;
-    _tpEye.z = eye.y - HALF;
-    _tpWant.x = wx;
-    _tpWant.y = -wz;
-    _tpWant.z = wy - HALF;
-    const t = player.world.traceHull(_tpEye, _tpWant, HALF, 2 * HALF);
-    camera.position.set(t.endpos.x, t.endpos.z + HALF, -t.endpos.y);
-  } else {
-    camera.position.set(wx, wy, wz);
-  }
-}
 
 // ---- loop ------------------------------------------------------------------
 let last = performance.now();
 const _src = [0, 0, 0];
+const _vmCube = new Float32Array(18);
+const _vmColor = new THREE.Color();
 function frame(now) {
   requestAnimationFrame(frame);
   const dt = Math.min(0.1, (now - last) / 1000);
@@ -577,7 +658,8 @@ function frame(now) {
   const inThird = thirdPerson && player.mode === 'walk';
   liveBody.setSide(lastSide);
   liveBody.update(player, dt, { visible: inThird });
-  if (inThird) placeThirdPersonCamera();
+  if (inThird) placeThirdPersonCamera(camera, player.world);
+  updateViewModel(dt, inThird);
   // After the player: in POV the demo owns the camera, and writing second wins.
   demoView.update(now);
   if (demoView.active) hud.setDemoStatus(demoView.status());
@@ -603,6 +685,7 @@ window.addEventListener('resize', () => {
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight, false);
   mapRenderer?.resize();
+  vmPass.resize(window.innerWidth, window.innerHeight);
   lighting?.resize();
 });
 

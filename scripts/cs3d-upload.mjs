@@ -53,6 +53,36 @@ const dry = flag('--dry');
 const force = flag('--force');
 const CONCURRENCY = Number(opt('--jobs', 8));
 
+/**
+ * Retry a request that failed for a reason that might not repeat.
+ *
+ * A pack sync is ~500 objects and the best part of a gigabyte over eight
+ * connections, and at that size a transient socket error is a normal event
+ * rather than an exceptional one — a single `sslv3 alert bad record mac`
+ * mid-run used to abort the whole upload and leave the bucket half-written.
+ * Every operation here is idempotent (a PUT of the same key with the same
+ * bytes, or a HEAD), so retrying is always safe.
+ *
+ * Not retried: anything the request itself is wrong about (auth, a bad bucket,
+ * a 4xx that is not 408/429), because those repeat forever and the useful
+ * thing is to fail loudly on the first one.
+ */
+async function retry(fn, label, attempts = 5) {
+  for (let i = 1; ; i++) {
+    try {
+      return await fn();
+    } catch (e) {
+      const status = e?.$metadata?.httpStatusCode;
+      const fatal = status && status >= 400 && status < 500 && status !== 408 && status !== 429;
+      if (fatal || i >= attempts) throw e;
+      // Exponential with jitter: 0.25s, 0.5s, 1s, 2s.
+      const wait = 250 * 2 ** (i - 1) * (0.5 + Math.random());
+      console.warn(`  ! ${label}: ${e?.message || e} — retry ${i}/${attempts - 1} in ${(wait / 1000).toFixed(1)}s`);
+      await new Promise((r) => setTimeout(r, wait));
+    }
+  }
+}
+
 /** Same table as server/cs3d/routes.js: the two paths must agree. */
 const MIME = {
   '.json': 'application/json; charset=utf-8',
@@ -128,6 +158,7 @@ async function main() {
   let uploaded = 0;
   let skipped = 0;
   let bytes = 0;
+  let lastLog = Date.now();
 
   for (const map of maps) {
     const files = await walk(path.join(PACK_DIR, map));
@@ -151,7 +182,7 @@ async function main() {
 
         if (!force) {
           try {
-            const head = await s3.send(new HeadObjectCommand({ Bucket, Key }));
+            const head = await retry(() => s3.send(new HeadObjectCommand({ Bucket, Key })), `head ${Key}`);
             const etag = String(head.ETag || '').replace(/"/g, '');
             // A multipart ETag is not an md5; treat it as unknown and re-upload.
             if (head.ContentLength === body.length && !etag.includes('-') && etag === md5(body)) {
@@ -165,19 +196,28 @@ async function main() {
         }
 
         if (!dry) {
-          await s3.send(
-            new PutObjectCommand({
-              Bucket,
-              Key,
-              Body: body,
-              ContentType: MIME[path.extname(full).toLowerCase()] || 'application/octet-stream',
-              CacheControl: isManifest ? REVALIDATE : IMMUTABLE
-            })
+          await retry(
+            () =>
+              s3.send(
+                new PutObjectCommand({
+                  Bucket,
+                  Key,
+                  Body: body,
+                  ContentType: MIME[path.extname(full).toLowerCase()] || 'application/octet-stream',
+                  CacheControl: isManifest ? REVALIDATE : IMMUTABLE
+                })
+              ),
+            `put ${Key}`
           );
         }
         mapUp++;
         uploaded++;
         bytes += body.length;
+        // A gigabyte over a few hundred objects is minutes of silence otherwise.
+        if (Date.now() - lastLog > 15000) {
+          lastLog = Date.now();
+          console.log(`  ... ${map}: ${mapUp + mapSkip}/${files.length} files, ${(bytes / 1024 ** 2).toFixed(0)} MB sent`);
+        }
       }
     };
 

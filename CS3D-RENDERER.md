@@ -72,6 +72,65 @@ triangle floor reproduces `flatWorld()` tick for tick, wall stop-and-slide at
 250 u/s with no tunnelling, a 16 u step climbed and a 38 u ledge refused, a
 ceiling capping a jump, the headroom rule, byte-for-byte determinism.
 
+## The viewmodel (2026-08-17): hands, weapons, and firing
+
+CS3D-ENGINE-PLAN E-6's data, E-7's models and E-9's viewmodel, in one pass.
+`npm run cs3d:weapons` (`scripts/cs3d-weapons.mjs`) builds
+`server/data/cs3d/pack/weapons/` — 66 weapon and grenade models, the four
+viewmodel clip sets, and the first-person arms — and `src/cs3d/viewModel.js`
+draws them.
+
+**The weapon table is a file, not a reverse-engineering job.**
+`scripts/weapons.vdata_c` carries cycle time, deploy duration, damage,
+headshot and armour multipliers, penetration, range falloff, spread and every
+inaccuracy term, recoil magnitude and seed, and the muzzle position. It is a
+prefab tree (`weapon_ak47_prefab` → `rifle` → `primary` → `weapon_base`), so
+values resolve up a `_base` chain — `scripts/lib/kv3.mjs` parses it and
+`resolveBase` flattens it. Spot-checked against the real game: AK 0.1 s
+(600 RPM), M4A4 0.09, MP9 0.07, Deagle 0.225, AWP 1.455. This is most of E-6's
+"extract `CCSWeaponBaseVData`" line item, and it means the fire rates are
+*data*, not constants someone typed.
+
+**Three findings worth keeping:**
+
+| | |
+|---|---|
+| CS2 has **one model per weapon** | `weapon_rif_ak47.vmdl` is both the thing in your hands and the thing on the ground, so this pack serves the viewmodel now and the world model later |
+| The first-person **arms are inside the agent models** | the `firstperson_*` mesh groups `cs3d-models.mjs` throws away. They are skinned to the agent's skeleton, but the viewmodel clips are authored against `animation/skeletons/characters/viewmodel.vnmskel`, which branches at the shoulder (`root_motion → armUpperShoulder_L → arm_lower_L` where the agent goes `clavicle_L → arm_upper_L → arm_lower_L`). Below the elbow the rigs are identical to the millimetre — arm 11.79, hand 11.08, finger 2.87 — so `rebindArms()` moves the mesh across: every vertex through `vmRest · agentBindInverse`, new inverse binds from the viewmodel rest pose. 48 joints, of which 4 are missing on the viewmodel rig and all four are procedural forearm TWIST helpers, which fold into their parent |
+| A melee weapon's swing rate is **in neither data file** | every knife inherits the base `m_flCycleTime = [0.15, 0.3]` and overrides nothing; `items_game.txt` only declares `cycletime` as an attribute class in CS2, the values having moved to the vdata; and the swing *animations* are 1.13 s / 1.10 s, which is the whole wind-up and settle rather than how often the game lets you swing. So 0.4 s / 1.0 s ship as `[guessed]` with their provenance in the manifest, and the clip lengths ride along so the comparison is one read away |
+
+Also fixed, in both packers: a clip's duration was taken per channel while
+padding single-key channels to a second, so a clip that animates some bones and
+holds others — which is every shoot animation — came out 1 s long instead of
+0.37 s. The length is now read across every channel first, and only a clip
+where *every* channel is a single key gets stretched.
+
+**The runtime.** `viewModel.js` draws the hands in their own pass with their
+own camera and a cleared depth buffer, at CS2's narrower `viewmodel_fov` (68)
+while the world stays at 90 — the same reason the game separates them, and what
+stops a muzzle poking through the wall behind it. The gun hangs off the rig's
+`wpn` bone, which the clips animate, so it moves with the hands. Bob, sway and
+recoil are derived (the game computes them in the binary): bob is a walk cycle
+whose amplitude follows speed, sway is a clamped lag on view rotation, and the
+kick is a spring scaled by the weapon's own `m_flRecoilMagnitude`. All three
+carry `[verify]` constants. The fill light takes the map's baked ambient at the
+player's position, so the gun darkens indoors with everything else.
+
+**Firing.** Left and right mouse while pointer-locked; automatic weapons repeat
+while held, semi-autos once per click, both gated on the table's cycle time and
+on the deploy lockout after a switch. `1`/`2`/`3` are rifle / pistol / knife
+with the draw animation and its `m_flDeployDuration`; the knife alternates its
+light and heavy swings so a spammed slice does not replay one clip. In a demo
+POV the viewmodel takes that player's weapon, bobs on the speed their legs are
+already running on, and kicks on the ticks the demo says they pulled the
+trigger (`events.shots`).
+
+Open: the weapon's own bones (bolt, trigger, magazine) are packed but not
+driven — the clips animate them through a per-weapon secondary skeleton, and
+the generic `_default_*` sets this pack uses do not carry a given weapon's. No
+tracers, no muzzle flash, no sound, no hit registration: firing moves the
+viewmodel and nothing else yet. Grenade throw clips are packed and unbound.
+
 **Where the bodies show up.** Three places, one module: the explorer's demo
 playback (`demoView.js`), the timeline viewer's 3D view
 (`src/replays/viewer/view3d.js`, the same `PlayerBody` per slot, its mixers
@@ -114,7 +173,12 @@ beside it come out of one bake at one brightness. `mapLoader.js ProbeGrid`
 reads it trilinearly; `playerModels.js BodyMaterial` samples it at chest height
 each frame into six uniforms and evaluates Σ nᵢ²·cube[axis] per pixel, with the
 sky probe demoted to reflections-only (`SpecularOnlyEnvironmentNode`, now
-exported from materials.js). The dynamic sun and its shadow map stay — that is
+exported from materials.js). The four-byte HDR encoding is `shared/cs3d/rgbe.js`
+rather than a copy in each end — an encoder in the packer and a decoder in the
+browser is a codec with two different exponent biases in it eventually, and the
+failure mode is not a crash but every player in the map lit 2^k too bright.
+`rgbe.test.js` holds both ends to the round trip, to black being exact, and to
+the bias being the importer's 136. The dynamic sun and its shadow map stay — that is
 the half CS2 also keeps for players. `manifest.probeGrid` is optional, so a
 pack from before this still loads and its bodies fall back to a flat ambient.
 
@@ -130,6 +194,40 @@ Also: `TextureMetalness [0,0,0,0]` and friends are VRF's **constant stand-ins**
 for a slot with no texture, and now win over the 1×1 placeholder exported for
 that slot.
 
+**Two steps then a skate on the third** was the authored ground speed, and the
+lesson is about the estimator rather than the number. The clips carry no root
+motion — the game moves the entity and the legs run in place — so the pack
+measures what speed each loop is authored for and the runtime plays it at
+`actual / authored`. Get that wrong and the feet slide; get it 23% wrong and
+the slip accumulates to a whole step every couple of cycles, which reads as a
+hitch rather than a drift.
+
+The first estimator took the median horizontal speed over every frame whose
+foot was in the lowest third of its travel. That window is not contact: it also
+holds the plant and the lift, where the foot is still decelerating in or
+already swinging forward (a quarter of those frames move *forwards*), and the
+median of the mixture came out 182 u/s against a real 224. During genuine
+contact the foot's speed sits on a **plateau** at exactly the body speed and
+every other frame is slower, so the fix is to read the top of the distribution
+instead of its middle: per frame, the horizontal speed of whichever foot is
+lower; per clip, its p90. Not the max — that catches a swing frame where the
+wrong foot was picked as the low one.
+
+It validates three ways: the eight directions of a gait agree to ±10% (run),
+±6% (walk) and ±1% (crouch) where before they spread 118–209; and the
+walk/run ratio it produces is **0.512**, which is `WALK_SPEED_SCALE` — a number
+the demo corpus measured at 0.52 entirely independently. Authored speeds are
+run 224.4, walk 115.0, crouch 93.4 u/s, identical across weapon classes because
+the legs are shared.
+
+(A related trap that turned out not to bite: VRF times a clip's frames at
+`duration / N` rather than `duration / (N−1)`, so the exported span is 0.7014 s
+where the game says 0.7333. It cancels — the authored speed is measured against
+the same compressed clock, and cadence depends only on the product
+`authored × duration`, which is distance per cycle. The loop itself is closed:
+the last key matches the first to 4e-4, so wrapping the phase at `duration` has
+no seam.)
+
 **Bodies folding into themselves** was the aim tilt: the full view pitch (±89°)
 distributed across the spine, so a player looking down bent double and ended up
 inside their own legs. CS2 clamps how far the world model follows the view and
@@ -138,10 +236,8 @@ now run 0.10 / 0.15 / 0.25 / 0.20 / 0.30 up the chain.
 
 Open, in the order they matter:
 
-0. **The other six maps need a re-pack** for their probe grids
-   (`npm run cs3d:pack -- --map <slug> --force`, ~90 s each; nuke is done).
-   Without one a body falls back to a flat ambient — better than the sky probe
-   was, but not the map's own light. R2 then needs `npm run cs3d:upload`.
+0. **R2 is a re-pack behind.** All seven maps carry probe grids locally;
+   `npm run cs3d:upload` pushes them (and the rebuilt geometry) to the bucket.
 1. **Operator eye-test.** Direction naming is assumed `e` = the body's right;
    if the legs cross the wrong way on a strafe, swap the sign of `relYaw` in
    `playerModels.js` `DIRS`. Playback cadence and the pitch weights are first

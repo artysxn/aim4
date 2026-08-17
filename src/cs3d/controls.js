@@ -30,6 +30,9 @@ export class Controls {
     this.player = player;
     this.hooks = hooks;
     this.locked = false;
+    this.enabled = true;
+    // Timeline 3D viewer owns F/G/V; Map Practice keeps the page keys.
+    this.pageKeys = hooks.pageKeys !== false;
     const mouse = trainerMouse();
     this.sens = mouse.sens;
     this.rawInput = mouse.rawInput;
@@ -37,20 +40,61 @@ export class Controls {
     this._onMouseMove = this._onMouseMove.bind(this);
     this._onKey = this._onKey.bind(this);
     this._onLockChange = this._onLockChange.bind(this);
+    this._onCanvasClick = () => {
+      if (this.enabled && !this.locked) this.requestLock();
+    };
     // pointerrawupdate is the un-coalesced path. mousemove merges deltas across
     // a long WebGPU frame into one jump; the trainer stays smooth because its
     // frames are cheap. Same handler, different event.
     this._lookEvent = 'onpointerrawupdate' in document ? 'pointerrawupdate' : 'mousemove';
 
-    canvas.addEventListener('click', () => {
-      if (!this.locked) this._requestLock();
-    });
+    if (hooks.lockOnClick !== false) {
+      canvas.addEventListener('click', this._onCanvasClick);
+    }
+    // Firing. Only while locked, and preventDefault so the right button does
+    // not open a context menu over the map.
+    this._onMouseDown = (e) => {
+      if (!this.enabled || !this.locked) return;
+      if (e.button === 0 || e.button === 2) {
+        e.preventDefault();
+        if (this.pageKeys) this.hooks.onAttack?.(e.button === 2 ? 'secondary' : 'primary', true);
+      }
+    };
+    this._onMouseUp = (e) => {
+      if (this.pageKeys && (e.button === 0 || e.button === 2)) {
+        this.hooks.onAttack?.(e.button === 2 ? 'secondary' : 'primary', false);
+      }
+    };
+    this._onContextMenu = (e) => {
+      if (this.locked) e.preventDefault();
+    };
+    document.addEventListener('mousedown', this._onMouseDown);
+    document.addEventListener('mouseup', this._onMouseUp);
+    canvas.addEventListener('contextmenu', this._onContextMenu);
     document.addEventListener('pointerlockchange', this._onLockChange);
     document.addEventListener('pointerlockerror', this._onLockChange);
     document.addEventListener(this._lookEvent, this._onMouseMove);
     window.addEventListener('keydown', this._onKey);
     window.addEventListener('keyup', this._onKey);
     window.addEventListener('blur', () => this._releaseAll());
+  }
+
+  setEnabled(on) {
+    this.enabled = !!on;
+    if (!this.enabled) {
+      this._releaseAll();
+      this.exitLock();
+    }
+  }
+
+  requestLock() {
+    this._requestLock();
+  }
+
+  exitLock() {
+    if (document.pointerLockElement === this.canvas && document.exitPointerLock) {
+      document.exitPointerLock();
+    }
   }
 
   /**
@@ -63,6 +107,7 @@ export class Controls {
    * fallback rather than the primary.
    */
   _requestLock() {
+    if (!this.enabled) return;
     const el = this.canvas;
     if (!el.requestPointerLock) return;
     // requestPointerLock rejects, loudly, when the document is not focused.
@@ -103,7 +148,7 @@ export class Controls {
   }
 
   _onMouseMove(e) {
-    if (!this.locked) return;
+    if (!this.enabled || !this.locked) return;
     this.player.look(e.movementX, e.movementY, radiansPerCountFromSensitivity(this.sens));
   }
 
@@ -113,6 +158,7 @@ export class Controls {
   }
 
   _onKey(e) {
+    if (!this.enabled) return;
     const down = e.type === 'keydown';
     const code = e.code;
     // Typing in a field (sensitivity box) must not move the player.
@@ -121,6 +167,12 @@ export class Controls {
     if (down) this.keys.add(code);
     else this.keys.delete(code);
     if (down) {
+      if (!this.pageKeys) {
+        if (code === 'Space' && this.locked) this.player.input.jump = true;
+        if (this.locked && /^(Space|Key[WASDC]|ShiftLeft|ControlLeft)$/.test(code)) e.preventDefault();
+        this._applyKeys();
+        return;
+      }
       // Digits are context-dependent: main.js routes them to demo POV when a
       // demo is loaded, or to T/CT spawns in the plain explorer.
       const digit = /^Digit(\d)$/.exec(code);
@@ -200,6 +252,10 @@ export class Controls {
   }
 
   dispose() {
+    this.canvas.removeEventListener('click', this._onCanvasClick);
+    document.removeEventListener('mousedown', this._onMouseDown);
+    document.removeEventListener('mouseup', this._onMouseUp);
+    this.canvas.removeEventListener('contextmenu', this._onContextMenu);
     document.removeEventListener('pointerlockchange', this._onLockChange);
     document.removeEventListener('pointerlockerror', this._onLockChange);
     document.removeEventListener(this._lookEvent, this._onMouseMove);

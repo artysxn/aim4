@@ -15,14 +15,13 @@
 // because streaming Nuke's pack costs seconds and the whole point of the
 // button is flicking between the two views of one moment.
 //
-// Camera modes:
-//   pov     behind a player's eyes, cycled by left click. The recorded view
-//           angles drive it, so it is what that player actually saw.
-//   free    detached, orbiting the round. Right click toggles into it (unless
-//           the pencil is out, in which case right click still draws).
-// Zoom changes the field of view rather than moving the camera, because
-// dollying a POV camera would put it inside the player's own head or through
-// the wall behind them.
+// Camera modes (F toggles the pair, G the other pair):
+//   pov     recorded first person. Left click next player, right click previous.
+//   third   behind that same player. Cycling is the same.
+//   fly     Map Practice noclip. WASD + pointer lock; G from a follow mode
+//           lands here first.
+//   walk    Map Practice walking body. Same Player as /nuke, same sim.
+// Zoom changes the field of view. Fully zoomed out is 90.
 // ---------------------------------------------------------------------------
 
 import * as THREE from 'three/webgpu';
@@ -43,6 +42,10 @@ import {
   HULL_HALF_WIDE
 } from '../../../shared/sim3d/constants.js';
 import { FLAG_DUCKING, FLAG_AIRBORNE } from '../shared/tickFormat.js';
+import { Player } from '../../cs3d/player.js';
+import { Controls } from '../../cs3d/controls.js';
+import { placeThirdPersonCamera } from '../../cs3d/thirdPerson.js';
+import { mountCrosshair } from '../../cs3d/crosshairOverlay.js';
 
 const DEG = Math.PI / 180;
 const RAD = 180 / Math.PI;
@@ -64,11 +67,7 @@ const FIRE_RADIUS = 110;
 
 const FOV_DEFAULT = 90;
 const FOV_MIN = 25;
-const FOV_MAX = 110;
-
-/** Free camera orbit distance limits, units. */
-const ORBIT_MIN = 200;
-const ORBIT_MAX = 4000;
+const FOV_MAX = 90;
 
 export function createView3d({ slug, onModeChange }) {
   const canvas = document.createElement('canvas');
@@ -85,12 +84,15 @@ export function createView3d({ slug, onModeChange }) {
   let ready = false;
   let failed = null;
   let visible = false;
+  let player = null;
+  let controls = null;
+  let crosshair = null;
+  let lastNow = 0;
 
-  // Camera state.
-  let mode = 'pov'; // 'pov' | 'free'
+  // Camera state. 'pov' | 'third' | 'fly' | 'walk'
+  let mode = 'pov';
   let povSlot = -1; // index into the last frame's live slots
   let fov = FOV_DEFAULT;
-  let orbit = { yaw: 0.6, pitch: -0.85, dist: 1400, target: new THREE.Vector3() };
   let eyeSmooth = EYE_STAND;
 
   // Last frame handed in by the viewer, and the tick before it (the animation
@@ -151,7 +153,11 @@ export function createView3d({ slug, onModeChange }) {
     scene = new THREE.Scene();
     camera = new THREE.PerspectiveCamera(FOV_DEFAULT, 16 / 9, 4, 120000);
     camera.rotation.order = 'YXZ';
+    camera.fov = fov;
     scene.add(camera);
+    player = new Player(camera);
+    controls = new Controls(canvas, player, { pageKeys: false, lockOnClick: false });
+    controls.setEnabled(false);
 
     await renderer.init();
     patchWebGPUPartialAttributeUpload(renderer);
@@ -164,6 +170,7 @@ export function createView3d({ slug, onModeChange }) {
       scene,
       renderer,
       onProgress: (p) => boot.setProgress(p),
+      onPhys: (collider) => player.setCollider(collider),
       onWorldChanged: () => lighting?.markShadowDirty()
     });
     // From here on this is src/cs3d/main.js boot(), step for step: the same
@@ -245,8 +252,9 @@ export function createView3d({ slug, onModeChange }) {
   function applyFrame() {
     if (!ready || !frame) return;
     const live = liveSlots();
+    const follow = mode === 'pov' || mode === 'third';
     // A POV whose player died falls to the next live one rather than freezing.
-    if (mode === 'pov' && live.length && !live.includes(povSlot)) {
+    if (follow && live.length && !live.includes(povSlot)) {
       povSlot = live.find((s) => s > povSlot) ?? live[0];
     }
     const tick = frame.tick;
@@ -322,16 +330,15 @@ export function createView3d({ slug, onModeChange }) {
         if (b.body.material !== mm) b.body.material = mm;
       }
 
-      if (mode === 'pov' && slot === povSlot) {
+      if ((mode === 'pov' || mode === 'third') && slot === povSlot) {
         eyeSmooth = s.duckAmount > 0 ? eye : eyeSmooth + (eye - eyeSmooth) * 0.35;
         camera.position.set(s.x, s.z + eyeSmooth, -s.y);
         camera.rotation.set(-(s.pitch || 0) * DEG, cameraYawFromSource(s.yaw || 0), 0, 'YXZ');
-        orbit.target.copy(camera.position);
+        if (mode === 'third') placeThirdPersonCamera(camera, player?.world);
       }
     }
 
     applyNades();
-    if (mode === 'free') applyFreeCamera();
   }
 
   function nadeMesh(key, g, color, opacity) {
@@ -404,21 +411,37 @@ export function createView3d({ slug, onModeChange }) {
     }
   }
 
-  function applyFreeCamera() {
-    const t = orbit.target;
-    const cp = Math.cos(orbit.pitch);
-    camera.position.set(
-      t.x + orbit.dist * cp * Math.cos(orbit.yaw),
-      t.y - orbit.dist * Math.sin(orbit.pitch),
-      t.z + orbit.dist * cp * Math.sin(orbit.yaw)
-    );
-    camera.lookAt(t);
+  function isFree() {
+    return mode === 'fly' || mode === 'walk';
   }
 
-  function loop() {
+  function setCamMode(next) {
+    if (next === mode) return;
+    mode = next;
+    if (!player || !controls) {
+      onModeChange?.(mode);
+      return;
+    }
+    if (isFree()) {
+      player.yaw = camera.rotation.y;
+      player.pitch = camera.rotation.x;
+      player.setMode(next === 'walk' ? 'walk' : 'fly');
+      controls.setEnabled(true);
+    } else {
+      controls.setEnabled(false);
+    }
+    applyFrame();
+    onModeChange?.(mode);
+  }
+
+  function loop(now) {
     raf = requestAnimationFrame(loop);
+    const t = now || performance.now();
+    const dt = lastNow ? Math.min(0.1, (t - lastNow) / 1000) : 0;
+    lastNow = t;
     if (!ready || !visible) return;
-    pack?.materials?.setTime(performance.now() / 1000);
+    if (isFree() && player) player.update(dt);
+    pack?.materials?.setTime(t / 1000);
     lighting?.update();
     if (mapRenderer) mapRenderer.render(camera);
     else renderer.render(scene, camera);
@@ -435,8 +458,14 @@ export function createView3d({ slug, onModeChange }) {
     get mode() {
       return mode;
     },
+    get isFree() {
+      return isFree();
+    },
+    get povSlot() {
+      return povSlot;
+    },
     get povName() {
-      if (mode !== 'pov' || !frame) return null;
+      if (povSlot < 0 || !frame) return null;
       const p = (frame.players || []).find((x) => x.slot === povSlot);
       return p?.name || null;
     },
@@ -445,6 +474,7 @@ export function createView3d({ slug, onModeChange }) {
     async start(container) {
       if (renderer || failed) return;
       container.appendChild(canvas);
+      crosshair = mountCrosshair(container);
       try {
         await bootScene(container);
         applyFrame();
@@ -459,15 +489,7 @@ export function createView3d({ slug, onModeChange }) {
     /** The viewer's clock, once per drawn frame. */
     setFrame(next) {
       frame = next;
-      // Centre the orbit on the action the first time we see a live round.
-      if (mode === 'free' && orbit.dist === 1400 && frame) {
-        const live = liveSlots();
-        if (live.length) {
-          const s = frame.states[live[0]];
-          orbit.target.set(s.x, s.z + 64, -s.y);
-        }
-      }
-      if (mode === 'pov' && povSlot < 0) {
+      if (povSlot < 0) {
         const live = liveSlots();
         if (live.length) povSlot = live[0];
       }
@@ -477,80 +499,85 @@ export function createView3d({ slug, onModeChange }) {
     show() {
       visible = true;
       canvas.hidden = false;
+      if (crosshair) crosshair.hidden = false;
+      if (isFree()) controls.setEnabled(true);
       resize();
     },
     hide() {
       visible = false;
       canvas.hidden = true;
+      if (crosshair) crosshair.hidden = true;
+      controls?.setEnabled(false);
     },
     resize,
 
-    /** Left click: next player's eyes. Returns the new POV name. */
-    cyclePov() {
+    /**
+     * Cycle the selected player. `dir` +1 is left click (next), -1 is right
+     * click (previous). Does not change fly/walk vs follow.
+     */
+    cyclePov(dir = 1) {
       const live = liveSlots();
       if (!live.length) return null;
-      if (mode !== 'pov') {
-        mode = 'pov';
-        if (!live.includes(povSlot)) povSlot = live[0];
-      } else {
+      if (!live.includes(povSlot)) povSlot = live[0];
+      else {
         const i = live.indexOf(povSlot);
-        povSlot = live[(i + 1) % live.length];
+        povSlot = live[(i + dir + live.length) % live.length];
       }
       applyFrame();
       onModeChange?.(mode);
       return this.povName;
     },
 
-    /** Right click (or the explore button): detach / reattach the camera. */
-    toggleFree() {
-      if (mode === 'free') {
-        mode = 'pov';
-      } else {
-        mode = 'free';
-        // Start the orbit where the eyes were, so the switch is continuous.
-        orbit.target.copy(camera.position);
-        orbit.dist = 600;
-      }
-      applyFrame();
-      onModeChange?.(mode);
+    /** F: from free roam, first person. From follow, pov ↔ third. */
+    toggleFollow() {
+      if (isFree()) setCamMode('pov');
+      else setCamMode(mode === 'pov' ? 'third' : 'pov');
       return mode;
     },
 
-    setMode(next) {
-      if (next === mode) return;
-      if (next === 'free') this.toggleFree();
-      else {
-        mode = 'pov';
-        applyFrame();
-        onModeChange?.(mode);
-      }
+    /** G: from follow, fly. From free roam, fly ↔ walk. */
+    toggleFree() {
+      if (!isFree()) setCamMode('fly');
+      else setCamMode(mode === 'fly' ? 'walk' : 'fly');
+      return mode;
     },
 
     /**
-     * Wheel. In POV this narrows the field of view — a zoom that cannot walk
-     * the camera out of the player's head. Free-look dollies the orbit.
+     * Unlocked free roam: click grabs the mouse. Locked, or in follow: cycle.
+     * @returns {boolean} true if the viewer consumed the click
      */
-    zoomBy(factor) {
-      if (mode === 'free') {
-        orbit.dist = Math.max(ORBIT_MIN, Math.min(ORBIT_MAX, orbit.dist / factor));
-        applyFreeCamera();
-        return;
+    pointerDown(button) {
+      if (isFree() && controls && !controls.locked) {
+        controls.requestLock();
+        return true;
       }
+      if (button === 0) this.cyclePov(1);
+      else if (button === 2) this.cyclePov(-1);
+      else return false;
+      return true;
+    },
+
+    setMode(next) {
+      if (next === 'free' || next === 'fly') setCamMode('fly');
+      else if (next === 'walk') setCamMode('walk');
+      else if (next === 'third') setCamMode('third');
+      else setCamMode('pov');
+    },
+
+    /** Wheel: FOV. Fully zoomed out is 90. */
+    zoomBy(factor) {
+      if (!camera) return;
       fov = Math.max(FOV_MIN, Math.min(FOV_MAX, fov / factor));
       camera.fov = fov;
       camera.updateProjectionMatrix();
     },
 
-    /** Free-look orbiting, from a drag. Ignored in POV — that camera is the demo's. */
-    orbitBy(dx, dy) {
-      if (mode !== 'free') return;
-      orbit.yaw -= dx * 0.005;
-      orbit.pitch = Math.max(-1.5, Math.min(1.5, orbit.pitch + dy * 0.005));
-      applyFreeCamera();
-    },
+    orbitBy() {},
 
     dispose() {
       cancelAnimationFrame(raf);
+      controls?.dispose();
+      crosshair?.remove();
       for (const key of [...nades.keys()]) dropNade(key);
       for (const b of bodies) b.model?.dispose();
       pack?.dispose?.();

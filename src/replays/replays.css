@@ -2482,8 +2482,24 @@ body.rv-open {
   background: rgba(90, 209, 122, 0.22);
 }
 
-.rv-player.dead {
-  opacity: 0.35;
+.rv-player.is-pov .rv-player-hp {
+  width: 100% !important;
+}
+
+.rv-player.is-pov[data-side='T'] .rv-player-hp {
+  background: var(--rv-t);
+}
+
+.rv-player.is-pov[data-side='CT'] .rv-player-hp {
+  background: var(--rv-ct);
+}
+
+.rv-timeline.is-3d-immerse .rv-team-col {
+  display: none !important;
+}
+
+.rv-map.is-3d {
+  cursor: none;
 }
 
 .rv-player-hp-row {
@@ -11529,6 +11545,7 @@ th.tm-rl-name,
   height: 100%;
   display: block;
   z-index: 2;
+  cursor: none;
 }
 
 .rv-map > .c3-boot {

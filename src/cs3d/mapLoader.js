@@ -25,6 +25,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { MeshBVH } from 'three-mesh-bvh';
 import { MaterialLibrary } from './materials.js';
+import { decodeRgbeAdd, RGBE_BYTES } from '../../shared/cs3d/rgbe.js';
 
 export const PACK_VERSION = 2;
 const GEO_CONCURRENCY = 4;
@@ -63,7 +64,7 @@ class ProbeGrid {
     this.cell = meta.cell;
     this.dims = meta.dims;
     this.data = new Uint8Array(buffer);
-    this.stride = 24; // 6 components x RGBE
+    this.stride = 6 * RGBE_BYTES;
   }
 
   /**
@@ -90,15 +91,7 @@ class ProbeGrid {
       const cy = Math.min(dy - 1, y0 + (k & 2 ? 1 : 0));
       const cz = Math.min(dz - 1, z0 + (k & 4 ? 1 : 0));
       let o = ((cz * dy + cy) * dx + cx) * this.stride;
-      for (let c = 0; c < 6; c++, o += 4) {
-        const e = d[o + 3];
-        if (!e) continue;
-        // value = byte x 2^(e - 136), the encoding cs3d-pack writes.
-        const s = w * Math.pow(2, e - 136);
-        out[c * 3] += d[o] * s;
-        out[c * 3 + 1] += d[o + 1] * s;
-        out[c * 3 + 2] += d[o + 2] * s;
-      }
+      for (let c = 0; c < 6; c++, o += RGBE_BYTES) decodeRgbeAdd(d, o, w, out, c * 3);
     }
     return out;
   }

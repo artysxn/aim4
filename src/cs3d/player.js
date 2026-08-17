@@ -79,6 +79,16 @@ export class Player {
     return this.weapon;
   }
 
+  /**
+   * Hold a named weapon (the slot keys). Unknown names are ignored rather than
+   * silently capping the body at the default speed.
+   */
+  setWeapon(name) {
+    const i = EXPLORER_WEAPONS.indexOf(String(name || '').replace(/^weapon_/, ''));
+    if (i >= 0) this.weaponIndex = i;
+    return this.weapon;
+  }
+
   get maxSpeed() {
     return WEAPON_SPEED[this.weapon] ?? DEFAULT_WEAPON_SPEED;
   }

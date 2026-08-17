@@ -356,6 +356,11 @@ export function createTimelineViewer({
       <span class="rv-keys-key">O</span><span class="rv-keys-action">Rewind 15s</span>
       <span class="rv-keys-key">P</span><span class="rv-keys-action">Forward 15s</span>
       <span class="rv-keys-key">M</span><span class="rv-keys-action">Toggle speed</span>
+      <span class="rv-keys-key">V</span><span class="rv-keys-action">View</span>
+      <span class="rv-keys-key">F</span><span class="rv-keys-action">3D POV / third</span>
+      <span class="rv-keys-key">G</span><span class="rv-keys-action">3D fly / walk</span>
+      <span class="rv-keys-key">Click</span><span class="rv-keys-action">3D next player</span>
+      <span class="rv-keys-key">Right click</span><span class="rv-keys-action">3D previous player</span>
     </button>`;
 
   const canvas = el.querySelector('#rv-canvas');
@@ -624,6 +629,7 @@ export function createTimelineViewer({
   const note3dEl = el.querySelector('#rv-3d-note');
   let view3d = null;
   let mode3d = false;
+  let immerse3d = false;
   let map3dSlug = cs3dMap(rounds[0]?.map || '')?.slug || null;
   /** Last /3d payload: dataReady, mapReady, upgradeable, job. */
   let avail3d = null;
@@ -741,10 +747,16 @@ export function createTimelineViewer({
 
     viewmodeEl.hidden = !mode3d;
     exploreBtn.hidden = !mode3d;
-    exploreBtn.classList.toggle('is-on', mode3d && view3d?.mode === 'free');
-    exploreBtn.title =
-      view3d?.mode === 'free' ? 'Free look on. Right click to return to POV' : 'Free look (right click in 3D)';
+    exploreBtn.classList.toggle('is-on', mode3d && view3d?.isFree);
+    exploreBtn.title = view3d?.isFree
+      ? view3d.mode === 'walk'
+        ? 'Walk. G to fly'
+        : 'Fly. G to walk'
+      : 'Free roam (G)';
     mapEl.classList.toggle('is-3d', mode3d);
+    el.classList.toggle('is-3d-immerse', mode3d && immerse3d);
+    syncPovHighlight();
+    syncPovBtn();
   }
 
   async function setMode3d(on) {
@@ -760,7 +772,13 @@ export function createTimelineViewer({
         toggle3dBtn.classList.add('is-loading');
         try {
           const { createView3d } = await import('./view3d.js');
-          view3d = createView3d({ slug: map3dSlug, onModeChange: () => sync3dButtons() });
+          view3d = createView3d({
+            slug: map3dSlug,
+            onModeChange: () => {
+              sync3dButtons();
+              syncPovHighlight();
+            }
+          });
           const starting = view3d.start(mapEl);
           view3d.show();
           sync3dButtons();
@@ -783,6 +801,7 @@ export function createTimelineViewer({
       // instant rather than an empty map until the next tick.
       draw();
     } else {
+      immerse3d = false;
       view3d?.hide();
       draw();
     }
@@ -1673,12 +1692,16 @@ export function createTimelineViewer({
   function syncPovBtn() {
     if (!povBtn) return;
     const side = povSideNow();
-    povBtn.classList.toggle('active', Boolean(povTeam));
-    povBtn.classList.toggle('pov-t', side === 'T');
-    povBtn.classList.toggle('pov-ct', side === 'CT');
-    povBtn.title = povTeam
-      ? `Team POV: ${povTeamName()} (${side}). Click for the other team, again to turn it off.`
-      : 'Team POV: one team’s map control and only the enemies they can see';
+    povBtn.classList.toggle('active', mode3d ? immerse3d : Boolean(povTeam));
+    povBtn.classList.toggle('pov-t', !mode3d && side === 'T');
+    povBtn.classList.toggle('pov-ct', !mode3d && side === 'CT');
+    povBtn.title = mode3d
+      ? immerse3d
+        ? 'View: sidebars hidden. V to show them'
+        : 'View: hide both team sidebars'
+      : povTeam
+        ? `Team POV: ${povTeamName()} (${side}). Click for the other team, again to turn it off.`
+        : 'Team POV: one team’s map control and only the enemies they can see';
   }
 
   /** Stacked (phone) layout: sidebars optional; when off the map fills. */
@@ -1791,6 +1814,7 @@ export function createTimelineViewer({
     // rather than only when the button is clicked.
     syncPovBtn();
     indexPlayerRows();
+    syncPovHighlight();
   }
 
   function countWins() {
@@ -2007,6 +2031,14 @@ export function createTimelineViewer({
         invEl.innerHTML = s.alive ? invHtml(inv) : '';
       }
     }
+    syncPovHighlight();
+  }
+
+  function syncPovHighlight() {
+    const slot = mode3d && view3d ? view3d.povSlot : -1;
+    playerRows.forEach((row, s) => {
+      row.root.classList.toggle('is-pov', s === slot);
+    });
   }
 
   // ---- zoom / pan ---------------------------------------------------------
@@ -2233,25 +2265,16 @@ export function createTimelineViewer({
     }
     closePopovers();
 
-    // In 3D the right button belongs to the camera, not the pencil: it flips
-    // between a player's eyes and free look. Drawing is still available, but
-    // it has to be asked for with the pencil — which then takes both buttons
-    // back, so an intentional annotation is never eaten by a camera move.
+    // In 3D: left click next player, right click previous. In fly/walk an
+    // unlocked click grabs the mouse first (Map Practice). The pencil still
+    // owns both buttons when it is out.
     if (mode3d && view3d && !drawing.enabled) {
-      if (e.button === 2) {
+      if (e.button === 0 || e.button === 2) {
         pendingClick = null;
-        view3d.toggleFree();
+        orbiting = false;
+        view3d.pointerDown(e.button);
         sync3dButtons();
-        e.preventDefault();
-        return;
-      }
-      if (e.button === 0) {
-        // Left click cycles POV, but only as a click — a drag orbits.
-        pendingClick = { x: e.clientX, y: e.clientY, id: e.pointerId, three: true };
-        orbiting = true;
-        lastX = e.clientX;
-        lastY = e.clientY;
-        mapEl.setPointerCapture(e.pointerId);
+        syncPovHighlight();
         e.preventDefault();
         return;
       }
@@ -4290,6 +4313,11 @@ export function createTimelineViewer({
   // Off → team 1 → team 2 → off. A cycle rather than a picker: there are only
   // ever two answers, and the tooltip names the one currently in force.
   povBtn?.addEventListener('click', async () => {
+    if (mode3d) {
+      immerse3d = !immerse3d;
+      sync3dButtons();
+      return;
+    }
     povTeam = povTeam === 0 ? 1 : povTeam === 1 ? 2 : 0;
     povFollowSide = povSideNow();
     povVision.reset();
@@ -4869,9 +4897,34 @@ export function createTimelineViewer({
     const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
 
     if (e.code === 'Space' || key === ' ') {
+      if (mode3d && view3d?.isFree && document.pointerLockElement) return;
       e.preventDefault();
       playback.toggle();
       syncPlayButton();
+      return;
+    }
+    if (key === 'f') {
+      if (!mode3d || !view3d) return;
+      e.preventDefault();
+      view3d.toggleFollow();
+      sync3dButtons();
+      return;
+    }
+    if (key === 'g') {
+      if (!mode3d || !view3d) return;
+      e.preventDefault();
+      view3d.toggleFree();
+      sync3dButtons();
+      return;
+    }
+    if (key === 'v') {
+      e.preventDefault();
+      if (mode3d) {
+        immerse3d = !immerse3d;
+        sync3dButtons();
+        return;
+      }
+      povBtn?.click();
       return;
     }
     if (e.code === 'ArrowLeft') {

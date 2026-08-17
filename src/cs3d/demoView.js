@@ -86,6 +86,8 @@ export class DemoView {
     this._eye = EYE_STAND;
     this._last = 0;
     this._lastRow = -1;
+    /** POV player's weapon/speed/view for the viewmodel; see povState(). */
+    this._pov = null;
 
     this.root = new THREE.Group();
     this.root.name = 'demo';
@@ -138,6 +140,7 @@ export class DemoView {
     this.ticks = null;
     this.playing = false;
     this.povSlot = null;
+    this._pov = null;
     for (const b of this._bodies) {
       b.group.visible = false;
       if (b.model) b.model.group.visible = false;
@@ -214,6 +217,42 @@ export class DemoView {
       side: (p.team === 1 ? this.meta.team1Side : this.meta.team2Side) || '',
       pov: this.povSlot === p.slot
     }));
+  }
+
+  /**
+   * What the POV player is doing this frame, for the viewmodel: the weapon in
+   * their hands, how fast they are moving, where they are looking. Null when
+   * nobody's eyes are borrowed.
+   *
+   * Written by `update()` rather than recomputed, because everything in it was
+   * already sampled to place that player's body.
+   */
+  povState() {
+    return this.povSlot === null ? null : this._pov;
+  }
+
+  /**
+   * How many shots a slot fired between the previous drawn frame's tick and
+   * this one. Playing forward that is normally 0 or 1; at 4× or after a step
+   * it can be several, and each one kicks the viewmodel.
+   *
+   * Scrubbing backwards returns 0 rather than a negative — a rewind should not
+   * fire the gun.
+   */
+  _shotsCrossed(slot) {
+    const shots = this.meta?.events?.shots;
+    if (!shots?.length || !this.ticks) return 0;
+    const h = this.ticks.header;
+    const to = h.firstTick + this.row * h.stride;
+    const from = this._shotTick === undefined ? to : this._shotTick;
+    this._shotTick = to;
+    if (!(to > from) || to - from > (h.tickRate || 64)) return 0;
+    const who = this.meta.players?.find((p) => p.slot === slot)?.id;
+    let n = 0;
+    for (const s of shots) {
+      if (s.tick > from && s.tick <= to && (s.player === who || s.slot === slot)) n++;
+    }
+    return n;
   }
 
   /** Everything the HUD strip shows, cheap enough to poll per frame. */
@@ -294,6 +333,21 @@ export class DemoView {
 
       const eye = EYE_STAND + (EYE_DUCK - EYE_STAND) * duck;
       const visible = slot !== this.povSlot;
+      // Velocity from the row-to-row delta, once per body: the legs run on it
+      // and so do the POV's hands, so they are always in step.
+      const prev = bodyState.prev;
+      let speed = 0;
+      let moveYaw = yaw;
+      if (prev && prev.row !== this.row) {
+        const dtRows = Math.abs(this.row - prev.row);
+        if (dtRows > 0 && dtRows < 8) {
+          const dxr = (x - prev.x) / dtRows;
+          const dyr = (y - prev.y) / dtRows;
+          speed = Math.hypot(dxr, dyr) * rowsPerSecond;
+          if (speed > 1) moveYaw = Math.atan2(dyr, dxr) * RAD;
+        }
+      }
+      bodyState.prev = { row: this.row, x, y, z };
       if (useModels && (a.side === 'T' || a.side === 'CT')) {
         // The agent model. Velocity from the row-to-row delta (¼-unit
         // quantised, smoothed inside the body); heading from that velocity;
@@ -305,19 +359,6 @@ export class DemoView {
           this.root.add(m.group);
         } else if (m.side !== a.side) m.setSide(a.side);
         bodyState.group.visible = false;
-        const prev = bodyState.prev;
-        let speed = 0;
-        let moveYaw = yaw;
-        if (prev && prev.row !== this.row) {
-          const dtRows = Math.abs(this.row - prev.row);
-          if (dtRows > 0 && dtRows < 8) {
-            const dxr = (x - prev.x) / dtRows;
-            const dyr = (y - prev.y) / dtRows;
-            speed = Math.hypot(dxr, dyr) * rowsPerSecond;
-            if (speed > 1) moveYaw = Math.atan2(dyr, dxr) * RAD;
-          }
-        }
-        bodyState.prev = { row: this.row, x, y, z };
         m.set({
           speed,
           moveYaw,
@@ -352,6 +393,22 @@ export class DemoView {
         this._eye = amount > 0 ? eye : this._eye + (eye - this._eye) * Math.min(1, dt * 14);
         this.camera.position.set(x, z + this._eye, -y);
         this.camera.rotation.set(-pitch * DEG, cameraYawFromSource(yaw), 0, 'YXZ');
+        // For the viewmodel: what this player is holding and how they move.
+        // Speed comes from the same row delta the body's legs run on, so the
+        // hands bob in step with the feet.
+        this._pov = {
+          side: a.side,
+          weapon: this.meta.weapons?.[a.weapon] || '',
+          speed,
+          airborne: (a.flags & FLAG_AIRBORNE) !== 0,
+          yaw,
+          pitch,
+          eye: this.camera.position,
+          // Shots this player fired in the ticks the clock just crossed, so
+          // the viewmodel kicks on the demo's own trigger pulls rather than
+          // on a guess from the animation.
+          shots: this._shotsCrossed(slot)
+        };
       }
     }
 

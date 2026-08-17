@@ -61,6 +61,7 @@ import { MeshoptEncoder, MeshoptDecoder } from 'meshoptimizer';
 import sharp from 'sharp';
 
 import { CS3D_MAPS, cs3dMap } from '../shared/cs3d/maps.js';
+import { encodeRgbe, RGBE_BYTES } from '../shared/cs3d/rgbe.js';
 import { VRF_TO_SCENE_MAT4 } from '../shared/sim3d/units.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -1511,23 +1512,6 @@ const CUBE_DIRS_SOURCE = [
   [0, 1, 0] // scene −z
 ];
 
-/** value = byte × 2^(exponent − 136), the convention the importer's atlas uses. */
-function encodeRgbe(r, g, b, out, at) {
-  const m = Math.max(r, g, b);
-  if (!(m > 1e-9)) {
-    out[at] = out[at + 1] = out[at + 2] = out[at + 3] = 0;
-    return;
-  }
-  let e = Math.ceil(136 + Math.log2(m / 255));
-  if (e < 1) e = 1;
-  else if (e > 255) e = 255;
-  const s = Math.pow(2, e - 136);
-  out[at] = Math.min(255, Math.max(0, Math.round(r / s)));
-  out[at + 1] = Math.min(255, Math.max(0, Math.round(g / s)));
-  out[at + 2] = Math.min(255, Math.max(0, Math.round(b / s)));
-  out[at + 3] = e;
-}
-
 /**
  * Resample the probe volumes onto a regular grid over their union.
  *
@@ -1553,7 +1537,8 @@ function bakeProbeGrid(probes, cellSize, worldBox) {
   }
   const dims = [0, 1, 2].map((i) => Math.max(1, Math.ceil((sMax[i] - sMin[i]) / cellSize) + 1));
   const cells = dims[0] * dims[1] * dims[2];
-  const data = Buffer.alloc(cells * 6 * 4);
+  const cellBytes = 6 * RGBE_BYTES;
+  const data = Buffer.alloc(cells * cellBytes);
   const covered = new Uint8Array(cells);
   const out = [0, 0, 0];
   let hit = 0;
@@ -1572,7 +1557,7 @@ function bakeProbeGrid(probes, cellSize, worldBox) {
         for (let c = 0; c < 6; c++) {
           const d = CUBE_DIRS_SOURCE[c];
           if (probes.sample(px, py, pz, d[0], d[1], d[2], out)) {
-            encodeRgbe(out[0], out[1], out[2], data, (cell * 6 + c) * 4);
+            encodeRgbe(out[0], out[1], out[2], data, cell * cellBytes + c * RGBE_BYTES);
             any = true;
           }
         }
@@ -1606,7 +1591,7 @@ function bakeProbeGrid(probes, cellSize, worldBox) {
     }
     if (!grew.length) break;
     for (const [cell, from] of grew) {
-      data.copy(data, cell * 24, from * 24, from * 24 + 24);
+      data.copy(data, cell * cellBytes, from * cellBytes, from * cellBytes + cellBytes);
       covered[cell] = 2;
     }
     for (let i = 0; i < cells; i++) if (covered[i] === 2) covered[i] = 1;
