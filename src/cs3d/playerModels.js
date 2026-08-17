@@ -138,6 +138,9 @@ const SHEEN_SCALE = 0.5;
 /** Ambient a body falls back to when the map ships no probe grid, per axis. */
 const FALLBACK_AMBIENT = 0.18;
 
+/** Material names already reported by buildMaterial; one line each, not per body. */
+const SEEN_MATS = new Set();
+
 /** Drops whatever is accumulated into it (see DiffuseSunLightingModel). */
 const DISCARD_ACCUMULATOR = { addAssign() {} };
 
@@ -399,11 +402,33 @@ export class PlayerModels {
     m.normalMap = src.normalMap || null;
     if (src.normalScale) m.normalScale.copy(src.normalScale);
     m.roughnessMap = src.roughnessMap || null;
-    m.metalnessMap = src.metalnessMap || null;
     m.aoMap = src.aoMap || null;
-    m.aoMapIntensity = Number.isFinite(cs3d.aoMasking) ? cs3d.aoMasking : 1;
+    // `g_flAmbientOcclusionMasking` is not three's `aoMapIntensity`, the same
+    // way `g_flSheenScale` is not its `sheen`: three documents this one as a
+    // 0..1 blend toward the map, and a vmat float above 1 drives
+    // `1 + (ao − 1)·k` negative, which is a hole rather than a shadow. Measured
+    // at 3 it costs a third of the body's ambient.
+    m.aoMapIntensity = Math.max(0, Math.min(1, Number.isFinite(cs3d.aoMasking) ? cs3d.aoMasking : 1));
     m.roughness = src.roughness;
     m.metalness = src.metalness;
+    m.metalnessMap = src.metalnessMap || null;
+    // **Cloth and skin are dielectrics.** `csgo_character.vfx` has no metal
+    // path for `F_CLOTH_SHADING` or `F_SUBSURFACE_SCATTERING`, and here the
+    // difference is not subtle: metalness kills the diffuse term outright, so
+    // a metal body is lit by its reflections alone — and the only reflection a
+    // body gets is the sky probe, deliberately crushed to a hundredth
+    // (sky.js SKY_PROBE_SCALE). Measured on this scene, the same cloth at
+    // metalness 1 is 11× darker than at 0 and EVERY pixel of it reads as black,
+    // with one bright blob wherever the mirror happens to catch the sky. That
+    // is the CT's vest: `ctm_sas_body`'s metalness channel comes out of VRF
+    // saturated, the same way its roughness came out empty, and the ORM's blue
+    // channel carries it straight through. The rail is here for the same reason
+    // CLOTH_ROUGHNESS_MIN is: a pack older than the packer's guard is still the
+    // pack on the CDN, and no vest is a mirror whatever produced the texture.
+    if (cs3d.cloth || cs3d.sss) {
+      m.metalness = 0;
+      m.metalnessMap = null;
+    }
     m.side = THREE.FrontSide;
     // Cloth: the sheen lobe CS2 gives fatigues, vests and balaclavas.
     //
@@ -450,6 +475,19 @@ export class PlayerModels {
       m.roughnessNode = texture(m.roughnessMap).g.max(float(floor));
     }
     for (const t of [m.map, m.normalMap, m.roughnessMap, m.aoMap]) if (t) t.anisotropy = 8;
+    // What the pack actually said about this material, once per material name.
+    // Every rail above is a guess about a texture nobody can see from here: if
+    // a body still reads wrong, this is the line that says whether the vmat
+    // flagged it cloth at all, and what it asked for.
+    if (!SEEN_MATS.has(m.name)) {
+      SEEN_MATS.add(m.name);
+      console.log(
+        `cs3d: body material ${m.name || '(unnamed)'} —` +
+          ` cloth=${!!cs3d.cloth} sss=${!!cs3d.sss} sheen=${cs3d.sheen ?? 0}` +
+          ` ao=${cs3d.aoMasking ?? 1}→${m.aoMapIntensity} metal=${src.metalness}→${m.metalness}` +
+          ` rough=${src.roughness} maps[base=${!!m.map} nrm=${!!m.normalMap} orm=${!!m.roughnessMap}]`
+      );
+    }
     return m;
   }
 

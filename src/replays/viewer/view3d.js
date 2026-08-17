@@ -133,6 +133,8 @@ export function createView3d({ slug, onModeChange }) {
   let povState = null;
   /** Tick the shot scan last ran to, so each shot kicks the gun exactly once. */
   let shotTick = null;
+  /** One line the first time the gun actually draws, so "no hands" is answerable. */
+  let vmDrew = false;
 
   const bodies = [];
   const nades = new Map();
@@ -252,7 +254,12 @@ export function createView3d({ slug, onModeChange }) {
     // by setSide — so without this call the viewmodel would never become ready
     // and updateViewModel would never reach the setSide that would have made it.
     vmAssets.load().then((ok) => {
-      if (ok !== false) viewModel.setSide('T');
+      if (ok === false) return; // ViewModelAssets already logged why
+      // Hands first, then something in them, so the first POV frame is armed
+      // rather than waiting for the tick's weapon to resolve.
+      viewModel.setSide('T');
+      viewModel.setWeapon('knife', { draw: false });
+      console.log(`cs3d: viewmodel ready (${Object.keys(vmAssets.manifest?.weapons || {}).length} weapons)`);
     });
 
     await pack.load(manifest);
@@ -329,7 +336,16 @@ export function createView3d({ slug, onModeChange }) {
     const pov = mode === 'pov' ? povState : null;
     viewModel.visible = !!pov;
     if (!pov) return;
-    if (pov.side) viewModel.setSide(pov.side);
+    if (!vmDrew) {
+      vmDrew = true;
+      console.log(`cs3d: viewmodel drawing — ${pov.side || '?'} hands, ${pov.weapon || 'no weapon in the tick'}`);
+    }
+    // Only a real side. `sideOf` falls back to '' when the round has no team
+    // record for a slot, and `setSide('')` is not a no-op: it rebuilds the arms
+    // and the mixer and clears every action. One '' frame between two 'CT'
+    // frames would rebuild the rig twice a frame and leave the hands in bind
+    // pose with no animation ever running.
+    if (pov.side === 'T' || pov.side === 'CT') viewModel.setSide(pov.side);
     viewModel.setWeapon(pov.weapon || 'knife', { draw: false });
     for (let i = 0; i < pov.shots; i++) viewModel.attack('primary', 0);
     viewModel.update(dt, { speed: pov.speed, onGround: !pov.airborne, viewYaw: pov.yaw, viewPitch: pov.pitch });
