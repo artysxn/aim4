@@ -493,6 +493,25 @@ export function createTimelineViewer({
   const metaCache = new Map();
   /** file -> resolved meta, so selectRound can tell resident rounds apart. */
   const metaReady = new Map();
+  /**
+   * Scoreboard rows by slot, rebuilt whenever the panels are (indexPlayerRows).
+   *
+   * syncScoreboard runs on every frame and used to reach for each row and its
+   * three children with el.querySelector, which is ~40 tree walks a frame for
+   * nodes that only change when renderScoreboards replaces the markup.
+   *
+   * Declared HERE, at the top of the factory, rather than beside the functions
+   * that use it a thousand lines down. `const` has no hoisting: any path that
+   * reaches syncScoreboard before that declaration has run — a `draw()` from a
+   * callback, a round that resolves early, anything that gets reordered into
+   * the setup — throws "can't access lexical declaration before initialization"
+   * and takes the whole viewer with it. This factory is five thousand lines and
+   * its statement order moves; the declaration should not be able to end up
+   * behind its first use.
+   *
+   * @type {Map<number, {root: HTMLElement, hp: HTMLElement|null, inv: HTMLElement|null}>}
+   */
+  const playerRows = new Map();
   const files = rounds.map((r) => r.file);
 
   let sequence = new RoundSequence(rounds.map(() => ({})));
@@ -1727,17 +1746,7 @@ export function createTimelineViewer({
 
   // ---- scoreboards --------------------------------------------------------
 
-  /**
-   * Scoreboard rows by slot, rebuilt whenever the panels are.
-   *
-   * syncScoreboard runs on every frame and used to reach for each row and its
-   * three children with el.querySelector, which is ~40 tree walks a frame for
-   * nodes that only change when renderScoreboards replaces the markup.
-   *
-   * @type {Map<number, {root: HTMLElement, hp: HTMLElement|null, inv: HTMLElement|null}>}
-   */
-  const playerRows = new Map();
-
+  // playerRows is declared at the top of the factory; see the note there.
   function indexPlayerRows() {
     playerRows.clear();
     for (const root of el.querySelectorAll('.rv-player')) {
