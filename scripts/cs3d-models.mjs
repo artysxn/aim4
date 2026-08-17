@@ -255,42 +255,101 @@ function normalizeRootMotion(doc, label) {
 const sharpOf = (tex) => sharp(Buffer.from(tex.getImage()), { limitInputPixels: false });
 
 /**
- * One channel of a PNG as a raw single-channel buffer at `size`², or a constant
- * fill when the texture is a 1×1 stand-in (VRF writes those for absent slots).
+ * One channel of a PNG as a raw single-channel buffer at exactly `w`×`h`, or a
+ * constant fill when the texture is a 1×1 stand-in (VRF writes those for
+ * absent slots, and the vmat's `Texture<Slot>` vector says what they mean).
+ *
+ * The size is passed in rather than assumed square: these are UV-mapped
+ * character sheets, most of them 2:1 or 1:2, and squashing one to a square
+ * slides every texel off the UV it belongs to. That is exactly what happened
+ * the first time — the albedo kept its aspect and the ORM did not, so a
+ * model's roughness, AO and metalness were sampled from the wrong places.
  */
-async function channelAt(tex, channel, size, fallback) {
-  if (!tex) return { data: Buffer.alloc(size * size, fallback), constant: fallback };
+async function channelAt(tex, channel, w, h, fallback) {
+  if (!tex) return { data: Buffer.alloc(w * h, fallback), constant: fallback };
   const img = sharpOf(tex);
   const meta = await img.metadata();
   if (meta.width <= 1 && meta.height <= 1) {
     const { data } = await img.raw().toBuffer({ resolveWithObject: true });
     const v = data[Math.min(channel, (meta.channels || 1) - 1)];
-    return { data: Buffer.alloc(size * size, v), constant: v };
+    return { data: Buffer.alloc(w * h, v), constant: v };
   }
   const { data, info } = await img
     .ensureAlpha()
-    .resize(size, size, { fit: 'fill', kernel: 'lanczos3' })
+    .resize(w, h, { fit: 'fill', kernel: 'lanczos3' })
     .raw()
     .toBuffer({ resolveWithObject: true });
-  const out = Buffer.alloc(size * size);
+  const out = Buffer.alloc(w * h);
   const ch = Math.min(channel, info.channels - 1);
-  for (let i = 0; i < size * size; i++) out[i] = data[i * info.channels + ch];
+  for (let i = 0; i < w * h; i++) out[i] = data[i * info.channels + ch];
   return { data: out, constant: null };
+}
+
+/** The ORM's size: the source aspect, longest side capped at `cap`. */
+async function ormSize(tex, cap) {
+  const fallback = { w: cap, h: cap };
+  if (!tex) return fallback;
+  const meta = await sharpOf(tex).metadata();
+  if (!meta.width || !meta.height || (meta.width <= 1 && meta.height <= 1)) return fallback;
+  const k = Math.min(1, cap / Math.max(meta.width, meta.height));
+  return { w: Math.max(1, Math.round(meta.width * k)), h: Math.max(1, Math.round(meta.height * k)) };
+}
+
+/**
+ * What the vmat says about a character material beyond its textures.
+ *
+ * `csgo_character.vfx` is not a plain metal/rough dielectric: cloth surfaces
+ * carry a sheen lobe (`F_CLOTH_SHADING` + `g_flSheenScale` / tint) and skin a
+ * subsurface term. Rendered as ordinary dielectrics they read as wet plastic,
+ * which is precisely how the first pass looked. The flags ride in the packed
+ * material's extras so src/cs3d/playerModels.js can build the right BRDF.
+ *
+ * `Texture<Slot>` vectors are VRF's constant stand-ins for a slot with no real
+ * texture (`TextureMetalness [0,0,0,0]` means "metalness is 0"), and they win
+ * over whatever 1×1 placeholder was exported for that slot.
+ */
+function readVmat(mat) {
+  const v = mat.getExtras()?.vmat || {};
+  const I = v.IntParams || {};
+  const F = v.FloatParams || {};
+  const V = v.VectorParams || {};
+  const num = (x, d) => (Number.isFinite(x) ? x : d);
+  return {
+    name: v.Name || null,
+    shader: v.ShaderName || null,
+    cloth: !!I.F_CLOTH_SHADING,
+    sss: !!I.F_SUBSURFACE_SCATTERING,
+    sheen: num(F.g_flSheenScale, 0),
+    sheenTint: Array.isArray(V.g_flSheenTintColor) ? V.g_flSheenTintColor.slice(0, 3) : [1, 1, 1],
+    aoMasking: num(F.g_flAmbientOcclusionMasking, 1),
+    // [brightness, contrast] applied to the roughness the normal's alpha holds.
+    roughAdjust: Array.isArray(V.g_vRoughnessAdjustBrightnessContrast)
+      ? [num(V.g_vRoughnessAdjustBrightnessContrast[0], 0), num(V.g_vRoughnessAdjustBrightnessContrast[1], 1)]
+      : [0, 1],
+    constMetal: Array.isArray(V.TextureMetalness) ? num(V.TextureMetalness[0], null) : null,
+    constAo: Array.isArray(V.TextureAmbientOcclusion) ? num(V.TextureAmbientOcclusion[0], null) : null,
+    tint: Array.isArray(V.g_vColorTint) ? V.g_vColorTint.slice(0, 3) : [1, 1, 1]
+  };
 }
 
 /**
  * Textures the way the map pack builds them (cs3d-pack.mjs, "Textures"): the
  * albedo lossy at 1024, the normal near-lossless RGB at 512 (its alpha is the
- * roughness, which moves to the ORM), and one lossless ORM at 512 from AO's R,
+ * roughness, which moves to the ORM), and one lossless ORM from AO's R,
  * normal's A and metalness's R — Source 2's channel layout, verified against
  * the exports. VRF puts the raw g_tMetalness in the metallicRoughness slot,
  * which read as-is makes every rough surface a chrome one.
+ *
+ * Every map keeps the SOURCE ASPECT (see channelAt): these sheets are 2:1 and
+ * 1:2 as often as square, and an ORM squashed to a square samples roughness
+ * and AO from the wrong texels — the "wet plastic" of the first pass.
  */
 async function packMaterials(doc, label) {
   doc.createExtension(EXTTextureWebP).setRequired(true);
   let bytes = 0;
   const seen = new Map(); // source texture → packed texture, so shared arms/gloves pack once
   for (const mat of doc.getRoot().listMaterials()) {
+    const vmat = readVmat(mat);
     const base = mat.getBaseColorTexture();
     const normal = mat.getNormalTexture();
     const ao = mat.getOcclusionTexture();
@@ -317,20 +376,27 @@ async function packMaterials(doc, label) {
         bytes += buf.length;
       }
       {
-        const size = 512;
+        // The ORM follows the normal map's shape (roughness is its alpha, and
+        // it is the highest-frequency of the three); AO and metalness are
+        // resampled onto it.
+        const { w, h } = await ormSize(normal || ao || metal, 512);
         const [o, r, m] = await Promise.all([
-          channelAt(ao, 0, size, 255),
-          channelAt(normal, 3, size, 180),
-          channelAt(metal, 0, size, 0)
+          vmat.constAo !== null ? { data: null, constant: Math.round(vmat.constAo * 255) } : channelAt(ao, 0, w, h, 255),
+          channelAt(normal, 3, w, h, 180),
+          vmat.constMetal !== null ? { data: null, constant: Math.round(vmat.constMetal * 255) } : channelAt(metal, 0, w, h, 0)
         ]);
         if (o.constant === null || r.constant === null || m.constant === null) {
-          const rgb = Buffer.alloc(size * size * 3);
-          for (let i = 0; i < size * size; i++) {
-            rgb[i * 3] = o.data[i];
-            rgb[i * 3 + 1] = r.data[i];
-            rgb[i * 3 + 2] = m.data[i];
+          const fill = (c) => c.data || Buffer.alloc(w * h, c.constant);
+          const od = fill(o);
+          const rd = fill(r);
+          const md = fill(m);
+          const rgb = Buffer.alloc(w * h * 3);
+          for (let i = 0; i < w * h; i++) {
+            rgb[i * 3] = od[i];
+            rgb[i * 3 + 1] = rd[i];
+            rgb[i * 3 + 2] = md[i];
           }
-          const buf = await sharp(rgb, { raw: { width: size, height: size, channels: 3 } })
+          const buf = await sharp(rgb, { raw: { width: w, height: h, channels: 3 } })
             .webp({ lossless: true, effort: 4 })
             .toBuffer();
           packed.orm = doc.createTexture(`${label}_${mat.getName()}_orm`).setMimeType('image/webp').setImage(buf);
@@ -352,8 +418,9 @@ async function packMaterials(doc, label) {
       mat.setMetallicRoughnessTexture(null).setOcclusionTexture(null);
       mat.setMetallicFactor(packed.metalness).setRoughnessFactor(packed.roughness);
     }
-    // The vmat dump VRF attached is useful in the inspector but 5 kB per material.
-    mat.setExtras({ vmat: mat.getExtras()?.vmat?.Name || null });
+    // The vmat's whole dump is 5 kB a material; what the renderer needs of it
+    // is the shading model (see readVmat).
+    mat.setExtras({ cs3d: vmat });
   }
   return bytes;
 }

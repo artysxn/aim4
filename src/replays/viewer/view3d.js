@@ -198,7 +198,9 @@ export function createView3d({ slug, onModeChange }) {
 
     buildActors();
     for (const b of bodies) (pack.world || scene).add(b.group);
-    // The agents stream alongside the tiles, not ahead of them.
+    // The agents stream alongside the tiles, not ahead of them, and stand in
+    // the map's own baked light (mapLoader.js ProbeGrid) like its props do.
+    models.getProbeGrid = () => pack?.probeGrid || null;
     models.load();
 
     await pack.load(manifest);

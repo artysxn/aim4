@@ -193,7 +193,7 @@ class Cs3dMaterial extends THREE.MeshStandardNodeMaterial {
 }
 
 /** An EnvironmentNode that contributes reflections but no ambient diffuse. */
-class SpecularOnlyEnvironmentNode extends THREE.EnvironmentNode {
+export class SpecularOnlyEnvironmentNode extends THREE.EnvironmentNode {
   setup(builder) {
     const ctx = builder.context;
     const real = ctx.iblIrradiance;

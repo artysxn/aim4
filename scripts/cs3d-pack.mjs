@@ -88,6 +88,17 @@ const TEX_BASE = Number(opt('--tex', 1024));
 const TEX_NORMAL = Number(opt('--normal', 384));
 const TEX_ORM = Number(opt('--orm', 512));
 const TEX_LIGHTMAP = Number(opt('--lightmap', 4096));
+/**
+ * Probe-grid cell, units (see bakeProbeGrid).
+ *
+ * 192, not the 128 CS2 authors its own voxels at, because this term is a
+ * low-frequency ambient read through trilinear interpolation: what it has to
+ * get right is "am I under this roof", and a doorway transition spread over
+ * about a second of walking is what the eye expects anyway. 128 costs 3.4x the
+ * bytes for a difference you cannot see on a body 32 units wide — Nuke's grid
+ * is 0.9 MB here and was 5.2 MB there.
+ */
+const PROBE_GRID_CELL = Number(opt('--probe-cell', 192));
 const WANT_NORMAL = !flag('--no-normal');
 const WANT_ORM = !flag('--no-orm');
 /** Target bytes of (uncompressed) vertex data per geometry group. */
@@ -1406,8 +1417,35 @@ function makeProbeSampler(dir) {
     }
   };
 
+  // The union of every volume's world box, as an AABB. Yaw-rotated volumes
+  // contribute the AABB of their rotated corners, which is a superset — the
+  // grid built over it simply has a few cells no volume covers, and those are
+  // filled by dilation.
+  const gmin = [Infinity, Infinity, Infinity];
+  const gmax = [-Infinity, -Infinity, -Infinity];
+  for (const v of vols) {
+    const cs = Math.cos(((v.angles?.[1] || 0) * Math.PI) / 180);
+    const sn = Math.sin(((v.angles?.[1] || 0) * Math.PI) / 180);
+    for (let i = 0; i < 8; i++) {
+      const lx = i & 1 ? v.maxs[0] : v.mins[0];
+      const ly = i & 2 ? v.maxs[1] : v.mins[1];
+      const lz = i & 4 ? v.maxs[2] : v.mins[2];
+      const wx = v.origin[0] + lx * cs - ly * sn;
+      const wy = v.origin[1] + lx * sn + ly * cs;
+      const wz = v.origin[2] + lz;
+      gmin[0] = Math.min(gmin[0], wx);
+      gmin[1] = Math.min(gmin[1], wy);
+      gmin[2] = Math.min(gmin[2], wz);
+      gmax[0] = Math.max(gmax[0], wx);
+      gmax[1] = Math.max(gmax[1], wy);
+      gmax[2] = Math.max(gmax[2], wz);
+    }
+  }
+
   return {
     volumes: vols.length,
+    /** Source-space AABB covering every volume. */
+    bounds: { min: gmin, max: gmax },
     /**
      * Irradiance at a source-space point for a source-space normal.
      * @returns {boolean} false when no volume covers the point
@@ -1443,6 +1481,137 @@ function makeProbeSampler(dir) {
       return false;
     }
   };
+}
+
+// ---------------------------------------------------------------------------
+// The probe grid: the same baked light, sampleable at runtime.
+//
+// Static geometry gets its probe irradiance baked per vertex (below). A PLAYER
+// moves, so it cannot. CS2 answers this by sampling the same probe volumes per
+// entity per frame; this grid is that, resampled onto a regular lattice so the
+// browser needs neither the 12 MB atlas nor the volume hierarchy.
+//
+// One cell holds an ambient cube: six irradiance values, one per axis
+// direction, which is exactly what CS2 stores. A surface with normal n reads
+// Σ nᵢ² · cube[axis(nᵢ)] — cheap, and it keeps the directionality that makes a
+// body read as lit from the window rather than uniformly tinted.
+//
+// Stored in SCENE axis order (+x, −x, +y up, −y, +z, −z) so the runtime never
+// converts, and as RGBE (three bytes and a shared exponent) because the values
+// are HDR and 24 bytes a cell keeps the whole grid under a megabyte.
+// ---------------------------------------------------------------------------
+
+/** Scene-space cube directions, as the source-space normals to sample. */
+const CUBE_DIRS_SOURCE = [
+  [1, 0, 0], // scene +x
+  [-1, 0, 0], // scene −x
+  [0, 0, 1], // scene +y (up)
+  [0, 0, -1], // scene −y
+  [0, -1, 0], // scene +z
+  [0, 1, 0] // scene −z
+];
+
+/** value = byte × 2^(exponent − 136), the convention the importer's atlas uses. */
+function encodeRgbe(r, g, b, out, at) {
+  const m = Math.max(r, g, b);
+  if (!(m > 1e-9)) {
+    out[at] = out[at + 1] = out[at + 2] = out[at + 3] = 0;
+    return;
+  }
+  let e = Math.ceil(136 + Math.log2(m / 255));
+  if (e < 1) e = 1;
+  else if (e > 255) e = 255;
+  const s = Math.pow(2, e - 136);
+  out[at] = Math.min(255, Math.max(0, Math.round(r / s)));
+  out[at + 1] = Math.min(255, Math.max(0, Math.round(g / s)));
+  out[at + 2] = Math.min(255, Math.max(0, Math.round(b / s)));
+  out[at + 3] = e;
+}
+
+/**
+ * Resample the probe volumes onto a regular grid over their union.
+ *
+ * Cells outside every volume (the union AABB is a superset, and volumes have
+ * gaps) are filled by dilating their covered neighbours, so a body that steps
+ * a little outside the authored coverage keeps the light of the place it just
+ * left instead of going black.
+ */
+function bakeProbeGrid(probes, cellSize, worldBox) {
+  const { min, max } = probes.bounds;
+  // Source (x, y, z) → scene (x, z, −y): the grid is indexed in scene axes so
+  // the runtime can address it with a body's own position.
+  let sMin = [min[0], min[2], -max[1]];
+  let sMax = [max[0], max[2], -min[1]];
+  // Clipped to the world: CS2's volumes reach a long way past the playable map
+  // (Nuke's union is half again the size of its geometry), and every cell out
+  // there is one nothing can ever stand in.
+  if (worldBox) {
+    const pad = cellSize;
+    sMin = sMin.map((v, i) => Math.max(v, worldBox.min[i] - pad));
+    sMax = sMax.map((v, i) => Math.min(v, worldBox.max[i] + pad));
+    for (let i = 0; i < 3; i++) if (sMax[i] < sMin[i]) sMax[i] = sMin[i];
+  }
+  const dims = [0, 1, 2].map((i) => Math.max(1, Math.ceil((sMax[i] - sMin[i]) / cellSize) + 1));
+  const cells = dims[0] * dims[1] * dims[2];
+  const data = Buffer.alloc(cells * 6 * 4);
+  const covered = new Uint8Array(cells);
+  const out = [0, 0, 0];
+  let hit = 0;
+  for (let iz = 0; iz < dims[2]; iz++) {
+    for (let iy = 0; iy < dims[1]; iy++) {
+      for (let ix = 0; ix < dims[0]; ix++) {
+        const sx = sMin[0] + ix * cellSize;
+        const sy = sMin[1] + iy * cellSize;
+        const sz = sMin[2] + iz * cellSize;
+        // Back to source space for the sampler.
+        const px = sx;
+        const py = -sz;
+        const pz = sy;
+        const cell = (iz * dims[1] + iy) * dims[0] + ix;
+        let any = false;
+        for (let c = 0; c < 6; c++) {
+          const d = CUBE_DIRS_SOURCE[c];
+          if (probes.sample(px, py, pz, d[0], d[1], d[2], out)) {
+            encodeRgbe(out[0], out[1], out[2], data, (cell * 6 + c) * 4);
+            any = true;
+          }
+        }
+        if (any) {
+          covered[cell] = 1;
+          hit++;
+        }
+      }
+    }
+  }
+  // Dilate into the gaps: repeated 6-neighbour fills from covered cells.
+  const at = (x, y, z) => (z * dims[1] + y) * dims[0] + x;
+  for (let pass = 0; pass < 8; pass++) {
+    const grew = [];
+    for (let iz = 0; iz < dims[2]; iz++) {
+      for (let iy = 0; iy < dims[1]; iy++) {
+        for (let ix = 0; ix < dims[0]; ix++) {
+          const cell = at(ix, iy, iz);
+          if (covered[cell]) continue;
+          const n = [
+            ix > 0 && at(ix - 1, iy, iz),
+            ix < dims[0] - 1 && at(ix + 1, iy, iz),
+            iy > 0 && at(ix, iy - 1, iz),
+            iy < dims[1] - 1 && at(ix, iy + 1, iz),
+            iz > 0 && at(ix, iy, iz - 1),
+            iz < dims[2] - 1 && at(ix, iy, iz + 1)
+          ].filter((c) => c !== false && covered[c] === 1);
+          if (n.length) grew.push([cell, n[0]]);
+        }
+      }
+    }
+    if (!grew.length) break;
+    for (const [cell, from] of grew) {
+      data.copy(data, cell * 24, from * 24, from * 24 + 24);
+      covered[cell] = 2;
+    }
+    for (let i = 0; i < cells; i++) if (covered[i] === 2) covered[i] = 1;
+  }
+  return { data, dims, min: sMin, cell: cellSize, cells, hit };
 }
 
 /**
@@ -2511,7 +2680,8 @@ async function packMap(entry) {
   const skyJson = path.join(raw, 'sky', 'sky.json');
   const probeDir = path.join(raw, 'probes');
   // The baked light probes CS2 lights its props with. Sampled per vertex during
-  // packWorld and then dropped: the atlas never reaches the browser.
+  // packWorld, and resampled onto a coarse grid for things that MOVE (players,
+  // bots) — the atlas itself never reaches the browser either way.
   let probes = null;
   try {
     probes = makeProbeSampler(probeDir);
@@ -2580,6 +2750,25 @@ async function packMap(entry) {
   stats.materials = world.materials.length;
   stats.rawMeshes = world.stats.rawMeshes;
   stats.rawMaterials = world.stats.rawMaterials;
+
+  // ---- probe grid ----------------------------------------------------------
+  // After the world, because it is clipped to the world's own box. A failure
+  // here must not cost the map: without a grid, bodies fall back to the sky
+  // probe (the pre-grid behaviour).
+  let probeGrid = null;
+  if (probes) {
+    try {
+      const g = bakeProbeGrid(probes, PROBE_GRID_CELL, world.worldBox);
+      await fsp.writeFile(path.join(out, 'probegrid.bin'), g.data);
+      probeGrid = { file: 'probegrid.bin', min: g.min, cell: g.cell, dims: g.dims, bytes: g.data.length };
+      console.log(
+        `  probe grid: ${g.dims.join('x')} cells at ${g.cell}u, ${((g.hit / g.cells) * 100).toFixed(0)}% covered by volumes, ` +
+          `${(g.data.length / 1e6).toFixed(2)} MB`
+      );
+    } catch (e) {
+      console.warn(`  ! probe grid: ${e.message}`);
+    }
+  }
 
   // ---- 3D skybox ----------------------------------------------------------
   let sky3d = null;
@@ -2748,6 +2937,8 @@ async function packMap(entry) {
     post,
     // Chartless geometry carries baked probe irradiance in its `_AMB` attribute.
     probeAmbient: !!probes,
+    // The same light on a lattice, for anything that moves (see bakeProbeGrid).
+    probeGrid,
     // ...and baked sun visibility in `_SUN`, so props take the analytic sun the
     // charted world takes rather than the runtime shadow map.
     sunVis: !!(probes && meta.sun?.dir),

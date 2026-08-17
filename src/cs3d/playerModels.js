@@ -41,9 +41,11 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { AnimationMixer, LoopRepeat, LoopOnce } from 'three';
+import { IrradianceNode, float, texture, uniform, transformedNormalWorld } from 'three/webgpu';
 import { WEAPON_SPEED, DEFAULT_WEAPON_SPEED } from '../../shared/sim/constants.js';
 import { WALK_SPEED_SCALE } from '../../shared/sim3d/constants.js';
 import { assetBase } from './mapLoader.js';
+import { SpecularOnlyEnvironmentNode } from './materials.js';
 
 export const PLAYERS_PACK_VERSION = 1;
 
@@ -74,17 +76,101 @@ const IDLE_SPEED = 6;
 const AIR_MOVE_SPEED = 40;
 
 /**
- * Bones that share the view pitch, top of the spine to the head, and how much
- * of it each takes. The clips are authored aiming level; the game blends an
- * aim matrix on top. Weights sum to 1 so the gun ends up on the pitch.
+ * Bones that share the view pitch, low spine to head, and how much of it each
+ * takes. The clips are authored aiming level; the game blends an aim matrix on
+ * top, weighted toward the head — which is why a CS2 player looking at their
+ * feet tips forward rather than folding double.
+ *
+ * The weights sum to 1 and the total is clamped (AIM_PITCH_LIMIT): applying a
+ * raw ±89° through the spine is what put a body inside its own legs.
  */
 const AIM_BONES = [
-  ['spine_1', 0.15],
-  ['spine_2', 0.2],
+  ['spine_1', 0.1],
+  ['spine_2', 0.15],
   ['spine_3', 0.25],
-  ['neck_0', 0.15],
-  ['head_0', 0.25]
+  ['neck_0', 0.2],
+  ['head_0', 0.3]
 ];
+/** How far the body is allowed to follow the view, degrees. */
+const AIM_PITCH_LIMIT = 55;
+
+/**
+ * Skin has no subsurface term here (three has no SSS), so it takes a roughness
+ * floor instead: a face rendered as a smooth dielectric is a mannequin's.
+ */
+const SKIN_ROUGHNESS_MIN = 0.45;
+
+/** Ambient a body falls back to when the map ships no probe grid, per axis. */
+const FALLBACK_AMBIENT = 0.18;
+
+/**
+ * A body's material: CS2's `csgo_character.vfx`, as close as a node material
+ * gets, lit by the map's own baked light.
+ *
+ * Two things make the difference between "a CS2 player" and the wet plastic
+ * mannequin the first pass drew:
+ *
+ * **The light.** A body used to take the scene's global sky probe as its
+ * diffuse ambient and its reflection — an environment with no occlusion, so a
+ * player in a sealed hall got exactly the sky a player in the open yard did,
+ * blue and from above, with a mirror sheen over it. The map's world geometry
+ * has not been lit that way since the bake landed, and its props have not
+ * either (materials.js: probe irradiance per vertex, sky probe reflections
+ * only). This does for a moving body what the vertex bake does for a static
+ * prop: `ambient` is the ambient cube from the map's own probe grid, sampled
+ * at the body's chest every frame (mapLoader.js ProbeGrid), evaluated per pixel
+ * against the surface normal. The sky probe keeps its reflection and loses its
+ * diffuse, exactly as everything else in the map does.
+ *
+ * **The BRDF.** `F_CLOTH_SHADING` is most of a player: vest, fatigues,
+ * balaclava. Cloth is not a smooth dielectric — it has a sheen lobe with a
+ * wide, soft falloff — and drawn as one it reads as latex. three's physical
+ * material has a sheen term, so the vmat's `g_flSheenScale` and tint go
+ * straight into it. Skin (`F_SUBSURFACE_SCATTERING`) has no equivalent here;
+ * it takes a roughness floor instead, which at least stops it shining.
+ */
+class BodyMaterial extends THREE.MeshPhysicalNodeMaterial {
+  /** @param {{ambient: import('three/webgpu').UniformNode[]}} lighting shared by one body's materials */
+  constructor(lighting) {
+    super();
+    this.cs3dLighting = lighting;
+    // The scene's sun and its shadow map still light the body — that is the
+    // dynamic half CS2 also keeps for players. Only the ambient changes.
+  }
+
+  setupLightMap() {
+    const amb = this.cs3dLighting?.ambient;
+    if (!amb) return null;
+    // Ambient cube: Σ nᵢ² · cube[the axis nᵢ points down]. Written with max()
+    // rather than a branch — max(n,0)² and max(−n,0)² are the same selection,
+    // and one of the pair is always zero — because it is the same expression on
+    // both backends and needs no conditional node.
+    //
+    // × π for the same reason materials.js does it: the bake stores radiance
+    // and three's indirect diffuse wants irradiance, so a body and the crate
+    // beside it come out of one bake at one brightness.
+    const n = transformedNormalWorld;
+    const sq = (v) => {
+      const c = v.max(float(0));
+      return c.mul(c);
+    };
+    const irr = amb[0]
+      .mul(sq(n.x))
+      .add(amb[1].mul(sq(n.x.negate())))
+      .add(amb[2].mul(sq(n.y)))
+      .add(amb[3].mul(sq(n.y.negate())))
+      .add(amb[4].mul(sq(n.z)))
+      .add(amb[5].mul(sq(n.z.negate())));
+    return new IrradianceNode(irr.mul(float(Math.PI)));
+  }
+
+  setupEnvironment(builder) {
+    const node = super.setupEnvironment(builder);
+    // Reflections yes, diffuse no: the probe grid is the diffuse now.
+    if (!node || !this.cs3dLighting?.ambient) return node;
+    return new SpecularOnlyEnvironmentNode(node.envNode);
+  }
+}
 
 /** Which clip set animates a weapon; grenades and the bomb use pistol legs. */
 export function weaponClassOf(weaponName) {
@@ -139,8 +225,13 @@ export class PlayerModels {
     this.clips = {};
     /** set → { run, walk, crouch } authored u/s */
     this.gait = {};
+    /**
+     * The map's baked ambient, for bodies to stand in. Set by whoever owns the
+     * pack (main.js, view3d.js) once it has loaded; null falls back to a flat
+     * ambient, which is what a pack from before the grid gets.
+     */
+    this.getProbeGrid = () => null;
     this._loading = null;
-    this._materials = new Map();
   }
 
   /** Fetch the manifest, both models and every clip set. Resolves to `ready`. */
@@ -176,7 +267,6 @@ export class PlayerModels {
       const scene = gltf.scene;
       scene.traverse((o) => {
         if (!o.isMesh) return;
-        o.material = this._bodyMaterial(o.material);
         // Bounds are the bind pose; a running body leaves them every stride.
         o.frustumCulled = false;
         o.castShadow = true;
@@ -211,14 +301,16 @@ export class PlayerModels {
   }
 
   /**
-   * The body material: the loader's PBR maps on a node material of ours, lit
-   * by the scene's directional sun (with its shadow map) and the sky probe —
-   * the same path a map prop takes when it carries no baked terms.
+   * The body material for ONE body: the loader's PBR maps, the vmat's shading
+   * model, and this body's own ambient uniforms (see BodyMaterial).
+   *
+   * Per body rather than shared, because the ambient is a property of where
+   * that body is standing. Two agents × five materials is ten pipelines per
+   * body — next to a map's three hundred, that is not the cost worth saving.
    */
-  _bodyMaterial(src) {
-    let m = this._materials.get(src);
-    if (m) return m;
-    m = new THREE.MeshStandardNodeMaterial();
+  buildMaterial(src, lighting) {
+    const cs3d = src.userData?.cs3d || {};
+    const m = new BodyMaterial(lighting);
     m.name = src.name;
     m.color.copy(src.color);
     m.map = src.map || null;
@@ -227,11 +319,21 @@ export class PlayerModels {
     m.roughnessMap = src.roughnessMap || null;
     m.metalnessMap = src.metalnessMap || null;
     m.aoMap = src.aoMap || null;
+    m.aoMapIntensity = Number.isFinite(cs3d.aoMasking) ? cs3d.aoMasking : 1;
     m.roughness = src.roughness;
     m.metalness = src.metalness;
     m.side = THREE.FrontSide;
+    // Cloth: the sheen lobe CS2 gives fatigues, vests and balaclavas.
+    if (cs3d.cloth && cs3d.sheen > 0) {
+      m.sheen = cs3d.sheen;
+      m.sheenRoughness = 0.35;
+      if (Array.isArray(cs3d.sheenTint)) m.sheenColor = new THREE.Color(...cs3d.sheenTint);
+    }
+    // Skin, without subsurface: a roughness floor so it stops shining.
+    if (cs3d.sss && m.roughnessMap) {
+      m.roughnessNode = texture(m.roughnessMap).g.max(float(SKIN_ROUGHNESS_MIN));
+    }
     for (const t of [m.map, m.normalMap, m.roughnessMap, m.aoMap]) if (t) t.anisotropy = 8;
-    this._materials.set(src, m);
     return m;
   }
 
@@ -265,6 +367,13 @@ export class PlayerBody {
     this.side = null;
     this.group = new THREE.Group();
     this.group.name = 'player';
+    /**
+     * This body's ambient cube, six irradiance uniforms in scene axis order
+     * (+x, −x, +y up, −y, +z, −z), resampled from the map's probe grid every
+     * frame. Shared by every material on the body.
+     */
+    this.lighting = { ambient: Array.from({ length: 6 }, () => uniform(new THREE.Color(FALLBACK_AMBIENT, FALLBACK_AMBIENT, FALLBACK_AMBIENT))) };
+    this._cube = new Float32Array(18);
     this.model = null;
     this.mixer = null;
     this.actions = new Map(); // `${set}/${name}` → AnimationAction
@@ -303,9 +412,20 @@ export class PlayerBody {
       this.mixer.stopAllAction();
       this.mixer.uncacheRoot(this.model);
       this.group.remove(this.model);
+      for (const m of this._ownMaterials || []) m.dispose();
     }
     this.side = side;
     this.model = cloneSkinned(tmpl.scene);
+    // Materials are this body's own, because the ambient in them is where this
+    // body is standing. SkeletonUtils.clone shares them with the template.
+    const mine = new Map();
+    this.model.traverse((o) => {
+      if (!o.isMesh) return;
+      let m = mine.get(o.material);
+      if (!m) mine.set(o.material, (m = this.models.buildMaterial(o.material, this.lighting)));
+      o.material = m;
+    });
+    this._ownMaterials = [...mine.values()];
     this.group.add(this.model);
     this.mixer = new AnimationMixer(this.model);
     this.actions.clear();
@@ -391,6 +511,23 @@ export class PlayerBody {
     this._blend(set, dt);
     this.mixer.update(dt);
     this._aim();
+    this._light();
+  }
+
+  /**
+   * The map's baked ambient where this body is standing, into its uniforms.
+   *
+   * Sampled at chest height rather than at the feet: the grid is interpolated,
+   * and a point 40 units up is the better single answer for a whole body
+   * (feet-height cells sit inside the floor's own darkening).
+   */
+  _light() {
+    const grid = this.models.getProbeGrid?.();
+    const amb = this.lighting.ambient;
+    if (!grid) return;
+    const p = this.group.position;
+    const cube = grid.sample(p.x, p.y + 40, p.z, this._cube);
+    for (let c = 0; c < 6; c++) amb[c].value.setRGB(cube[c * 3], cube[c * 3 + 1], cube[c * 3 + 2]);
   }
 
   /**
@@ -537,7 +674,8 @@ export class PlayerBody {
    */
   _aim() {
     if (!this.aimBones.length) return;
-    const total = this.pitch * DEG;
+    // Clamped: the view goes to ±89°, the body does not follow it there.
+    const total = Math.max(-AIM_PITCH_LIMIT, Math.min(AIM_PITCH_LIMIT, this.pitch)) * DEG;
     if (Math.abs(total) < 1e-4) return;
     for (const { bone, w } of this.aimBones) {
       _qDelta.setFromAxisAngle(_yAxis, total * w);
@@ -555,6 +693,8 @@ export class PlayerBody {
       this.mixer.stopAllAction();
       this.mixer.uncacheRoot(this.model);
     }
+    for (const m of this._ownMaterials || []) m.dispose();
+    this._ownMaterials = [];
     this.group.removeFromParent();
   }
 }

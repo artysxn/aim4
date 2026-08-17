@@ -317,6 +317,9 @@ async function boot() {
     }
     // Player models alongside the tiles: their 9 MB would otherwise sit in
     // front of the first geometry request.
+    // Bodies stand in the map's own baked light (mapLoader.js ProbeGrid), not
+    // in a global sky probe — the same rule the map's props follow.
+    playerModels.getProbeGrid = () => pack?.probeGrid || null;
     playerModels.load().then((ok) => ok && console.log('cs3d: player models ready'));
     await pack.load(manifest);
     // The material library exists now; any lighting knob set before this had

@@ -48,6 +48,63 @@ export function assetBase() {
 const WALK_SOLID = new Set(['solid', 'playerclip', 'sky', 'ladder', 'entity']);
 
 /**
+ * The map's baked light on a lattice: an ambient cube per cell, which is how
+ * CS2 lights everything that moves. cs3d-pack resamples the game's own
+ * `env_light_probe_volume` atlas into this (see bakeProbeGrid) because a
+ * player cannot carry a per-vertex bake the way a crate can.
+ *
+ * Values are HDR, stored RGBE, in SCENE axis order (+x, −x, +y up, −y, +z, −z)
+ * so nothing here converts frames. `sample` reads trilinearly — a body walking
+ * a corridor should brighten smoothly at the door, not step at each cell.
+ */
+class ProbeGrid {
+  constructor(meta, buffer) {
+    this.min = meta.min;
+    this.cell = meta.cell;
+    this.dims = meta.dims;
+    this.data = new Uint8Array(buffer);
+    this.stride = 24; // 6 components x RGBE
+  }
+
+  /**
+   * The ambient cube at a scene-space point, into `out` (18 floats: six RGB
+   * triples in the axis order above).
+   */
+  sample(x, y, z, out) {
+    const [dx, dy, dz] = this.dims;
+    const gx = Math.min(dx - 1, Math.max(0, (x - this.min[0]) / this.cell));
+    const gy = Math.min(dy - 1, Math.max(0, (y - this.min[1]) / this.cell));
+    const gz = Math.min(dz - 1, Math.max(0, (z - this.min[2]) / this.cell));
+    const x0 = Math.floor(gx);
+    const y0 = Math.floor(gy);
+    const z0 = Math.floor(gz);
+    const fx = gx - x0;
+    const fy = gy - y0;
+    const fz = gz - z0;
+    for (let i = 0; i < 18; i++) out[i] = 0;
+    const d = this.data;
+    for (let k = 0; k < 8; k++) {
+      const w = (k & 1 ? fx : 1 - fx) * (k & 2 ? fy : 1 - fy) * (k & 4 ? fz : 1 - fz);
+      if (w <= 0) continue;
+      const cx = Math.min(dx - 1, x0 + (k & 1 ? 1 : 0));
+      const cy = Math.min(dy - 1, y0 + (k & 2 ? 1 : 0));
+      const cz = Math.min(dz - 1, z0 + (k & 4 ? 1 : 0));
+      let o = ((cz * dy + cy) * dx + cx) * this.stride;
+      for (let c = 0; c < 6; c++, o += 4) {
+        const e = d[o + 3];
+        if (!e) continue;
+        // value = byte x 2^(e - 136), the encoding cs3d-pack writes.
+        const s = w * Math.pow(2, e - 136);
+        out[c * 3] += d[o] * s;
+        out[c * 3 + 1] += d[o + 1] * s;
+        out[c * 3 + 2] += d[o + 2] * s;
+      }
+    }
+    return out;
+  }
+}
+
+/**
  * Whether a material's per-tile tint is applied through a mask (per texel, via
  * COLOR_0.gba) rather than as a BatchedMesh instance colour over the whole
  * tile. True for a dedicated tint mask, for a mask on either blend layer, or
@@ -377,6 +434,8 @@ export class MapPack {
     this.forceReceiveShadow = false;
     this.placeholder = null;
     this.collider = null; // { geometry, bvh }
+    /** The map's baked ambient on a lattice, for things that move. See ProbeGrid. */
+    this.probeGrid = null;
     this.groupsLoaded = 0;
     this.groupsTotal = 0;
     this.bytesLoaded = 0;
@@ -437,6 +496,15 @@ export class MapPack {
 
     await this._loadPhys();
     this._progress('phys');
+    // Small, and everything that moves waits on it: fetched before the tiles.
+    if (manifest.probeGrid) {
+      try {
+        const res = await fetch(`${this.base}/${manifest.probeGrid.file}${this.v}`);
+        if (res.ok) this.probeGrid = new ProbeGrid(manifest.probeGrid, await res.arrayBuffer());
+      } catch (e) {
+        console.warn('cs3d: probe grid unavailable, dynamic bodies fall back to the sky probe', e);
+      }
+    }
     // Textures start right away: the bundle is one connection and the
     // geometry fetches are a few more; both stream side by side.
     this.materials.streamAll();

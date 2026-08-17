@@ -94,8 +94,54 @@ in both boots, and re-applied for `sky` after `loadSkybox` (which used to race
 the pack load in the explorer). `MapLighting.sunIntensity` / `SUN_BOOST` are
 starting values the look replaces.
 
+**Bodies stand in the map's own light** (2026-08-17, second pass). The first
+pass lit them the one way nothing else in the map is lit any more: the scene's
+global sky probe, as both diffuse and reflection. An environment with no
+occlusion gives a player in a sealed hall exactly the sky a player in the yard
+gets — blue, from above, with a mirror sheen over it. That is the "wet plastic
+from another dimension" look, and it is the same defect `materials.js`
+documents for props, which is why props stopped being lit that way.
+
+CS2's answer for anything that moves is its `env_light_probe_volume` atlas,
+which the importer already extracts and the pack already samples per vertex for
+static geometry. A player cannot carry a vertex bake, so `cs3d-pack` now also
+resamples that atlas onto a lattice — `bakeProbeGrid`, one **ambient cube**
+(six irradiance values, the game's own representation) per 192-unit cell,
+clipped to the world box, RGBE, in scene axis order. Nuke: 57×18×43 cells,
+1.06 MB, 94% covered by volumes, and its luminance distribution (p50 0.43,
+p90 0.65) sits right on the lightmap's (0.29 / 0.68), so a body and the crate
+beside it come out of one bake at one brightness. `mapLoader.js ProbeGrid`
+reads it trilinearly; `playerModels.js BodyMaterial` samples it at chest height
+each frame into six uniforms and evaluates Σ nᵢ²·cube[axis] per pixel, with the
+sky probe demoted to reflections-only (`SpecularOnlyEnvironmentNode`, now
+exported from materials.js). The dynamic sun and its shadow map stay — that is
+the half CS2 also keeps for players. `manifest.probeGrid` is optional, so a
+pack from before this still loads and its bodies fall back to a flat ambient.
+
+Three more material defects, all in the packer:
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Roughness, AO and metalness smeared across the wrong parts of a model | The ORM was resized `fit: 'fill'` to a **square** while the albedo kept its aspect. Most character sheets are 2:1 or 1:2 (legs 2048×1024, arms 1024×2048), so every ORM texel sat off the UV it belonged to | `channelAt` takes a width and a height; the ORM follows the normal map's shape |
+| Cloth read as latex | `csgo_character.vfx` shades vest, fatigues and balaclava with `F_CLOTH_SHADING` + a sheen lobe (`g_flSheenScale`, `g_flSheenTintColor`), and they were drawn as smooth dielectrics | The vmat's shading model rides in the packed material's extras (`readVmat`) and becomes three's `sheen` / `sheenColor` on a `MeshPhysicalNodeMaterial` |
+| Skin shiny; AO at full strength everywhere | `F_SUBSURFACE_SCATTERING` has no equivalent in three, and `g_flAmbientOcclusionMasking` (0.4) was ignored | Skin takes a roughness floor (0.45) instead of SSS; AO takes the vmat's strength |
+
+Also: `TextureMetalness [0,0,0,0]` and friends are VRF's **constant stand-ins**
+for a slot with no texture, and now win over the 1×1 placeholder exported for
+that slot.
+
+**Bodies folding into themselves** was the aim tilt: the full view pitch (±89°)
+distributed across the spine, so a player looking down bent double and ended up
+inside their own legs. CS2 clamps how far the world model follows the view and
+weights it toward the head. `AIM_PITCH_LIMIT` is 55°, and the per-bone weights
+now run 0.10 / 0.15 / 0.25 / 0.20 / 0.30 up the chain.
+
 Open, in the order they matter:
 
+0. **The other six maps need a re-pack** for their probe grids
+   (`npm run cs3d:pack -- --map <slug> --force`, ~90 s each; nuke is done).
+   Without one a body falls back to a flat ambient — better than the sky probe
+   was, but not the map's own light. R2 then needs `npm run cs3d:upload`.
 1. **Operator eye-test.** Direction naming is assumed `e` = the body's right;
    if the legs cross the wrong way on a strafe, swap the sign of `relYaw` in
    `playerModels.js` `DIRS`. Playback cadence and the pitch weights are first
