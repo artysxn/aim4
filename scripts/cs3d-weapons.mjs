@@ -63,6 +63,7 @@ import { Matrix4, Quaternion, Vector3 } from 'three';
 
 import { ROOT, fail as failWith, assertLocalOutput, findVrf, findGameDir, runVrf } from './lib/vrf.mjs';
 import { parseKv3, resolveBase } from './lib/kv3.mjs';
+import { dropAlpha, normalIsBlank } from './lib/texAlpha.mjs';
 
 const TAG = 'cs3d-weapons';
 const fail = (msg) => failWith(TAG, msg);
@@ -296,7 +297,10 @@ async function channelAt(tex, channel, w, h, fallback) {
     const { data } = await img.raw().toBuffer({ resolveWithObject: true });
     return { data: null, constant: data[Math.min(channel, (meta.channels || 1) - 1)] };
   }
-  const { data, info } = await img.ensureAlpha().resize(w, h, { fit: 'fill', kernel: 'lanczos3' }).raw().toBuffer({ resolveWithObject: true });
+  // Channel 3 IS the alpha and keeps it; every other channel drops it first, or
+  // the resize premultiplies it away (lib/texAlpha.mjs).
+  const src = channel === 3 ? img.ensureAlpha() : await dropAlpha(sharpOf(tex));
+  const { data, info } = await src.resize(w, h, { fit: 'fill', kernel: 'lanczos3' }).raw().toBuffer({ resolveWithObject: true });
   const out = Buffer.alloc(w * h);
   const ch = Math.min(channel, info.channels - 1);
   for (let i = 0; i < w * h; i++) out[i] = data[i * info.channels + ch];
@@ -336,7 +340,21 @@ async function packMaterials(doc, label, cap = 512) {
         bytes += buf.length;
       }
       if (normal) {
-        const buf = await sharpOf(normal).removeAlpha().resize(cap / 2, cap / 2, { fit: 'inside', withoutEnlargement: true }).webp({ nearLossless: true, quality: 30, effort: 4 }).toBuffer();
+        const { data, info } = await (await dropAlpha(sharpOf(normal)))
+          .resize(cap / 2, cap / 2, { fit: 'inside', withoutEnlargement: true })
+          .raw({ depth: 'uchar' })
+          .toBuffer({ resolveWithObject: true });
+        if (normalIsBlank(data, info.channels)) {
+          console.warn(`cs3d-weapons: ${label} — the normal map is blank across ${info.width}x${info.height}; using a flat normal`);
+          for (let i = 0; i < data.length; i += info.channels) {
+            data[i] = 128;
+            data[i + 1] = 128;
+            data[i + 2] = 255;
+          }
+        }
+        const buf = await sharp(data, { raw: { width: info.width, height: info.height, channels: info.channels } })
+          .webp({ nearLossless: true, quality: 30, effort: 4 })
+          .toBuffer();
         p.normal = doc.createTexture(`${label}_n`).setMimeType('image/webp').setImage(buf);
         bytes += buf.length;
       }

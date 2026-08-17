@@ -69,6 +69,7 @@ import sharp from 'sharp';
 import { Quaternion, Vector3, Matrix4 } from 'three';
 
 import { ROOT, fail as failWith, assertLocalOutput, findVrf, findGameDir, runVrf } from './lib/vrf.mjs';
+import { dropAlpha, normalIsBlank } from './lib/texAlpha.mjs';
 
 const TAG = 'cs3d-models';
 const fail = (msg) => failWith(TAG, msg);
@@ -274,8 +275,10 @@ async function channelAt(tex, channel, w, h, fallback) {
     const v = data[Math.min(channel, (meta.channels || 1) - 1)];
     return { data: Buffer.alloc(w * h, v), constant: v };
   }
-  const { data, info } = await img
-    .ensureAlpha()
+  // Channel 3 IS the alpha, so that read has to keep it (a resize never scales
+  // alpha by itself). Every other channel has to lose it first — see dropAlpha.
+  const src = channel === 3 ? img.ensureAlpha() : await dropAlpha(sharpOf(tex));
+  const { data, info } = await src
     .resize(w, h, { fit: 'fill', kernel: 'lanczos3' })
     .raw()
     .toBuffer({ resolveWithObject: true });
@@ -391,9 +394,25 @@ async function packMaterials(doc, label) {
         bytes += buf.length;
       }
       if (normal) {
-        const buf = await sharpOf(normal)
-          .removeAlpha()
+        // dropAlpha, not `.removeAlpha()`: the alpha here is roughness, and a
+        // resize would premultiply the normal by it. See lib/texAlpha.mjs.
+        const { data, info } = await (await dropAlpha(sharpOf(normal)))
           .resize(512, 512, { fit: 'inside', withoutEnlargement: true })
+          .raw({ depth: 'uchar' })
+          .toBuffer({ resolveWithObject: true });
+        if (normalIsBlank(data, info.channels)) {
+          console.warn(
+            `cs3d-models: ${label}/${mat.getName()} — the normal map is blank ` +
+              `(no blue anywhere across ${info.width}x${info.height}); using a flat normal ` +
+              `instead of shading the surface with (-1,-1,-1)`
+          );
+          for (let i = 0; i < data.length; i += info.channels) {
+            data[i] = 128;
+            data[i + 1] = 128;
+            data[i + 2] = 255;
+          }
+        }
+        const buf = await sharp(data, { raw: { width: info.width, height: info.height, channels: info.channels } })
           .webp({ nearLossless: true, quality: 30, effort: 4 })
           .toBuffer();
         packed.normal = doc.createTexture(`${label}_${mat.getName()}_normal`).setMimeType('image/webp').setImage(buf);
