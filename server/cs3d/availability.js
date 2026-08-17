@@ -16,16 +16,14 @@
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { PACK_DIR } from './routes.js';
-import { CS3D_MAPS } from '../../shared/cs3d/maps.js';
+import { CS3D_MAPS, cs3dMap } from '../../shared/cs3d/maps.js';
 
 const TTL_MS = 30_000;
 const cache = new Map(); // slug -> { at, ok }
 
-/** The 3D map for a 2D map code (NUK, INF, …), or null if there is none. */
+/** The 3D map for a 2D map code, slug, or file name, or null if there is none. */
 export function cs3dMapByCode(code) {
-  const want = String(code || '').toUpperCase();
-  if (!want) return null;
-  return CS3D_MAPS.find((m) => m.code === want) || null;
+  return cs3dMap(code);
 }
 
 /**

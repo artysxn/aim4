@@ -75,6 +75,7 @@ import {
   summarizeDuelStats
 } from '../duels/duelStats.js';
 import { spinnerHtml } from '../../lib/spinner.js';
+import { cs3dMap } from '../../../shared/cs3d/maps.js';
 import view2dIcon from '../../icons/demo_2d.svg?raw';
 import view3dIcon from '../../icons/demo_3d.svg?raw';
 import explore3dIcon from '../../icons/demo_3d_EXPLORE.svg?raw';
@@ -623,10 +624,35 @@ export function createTimelineViewer({
   const note3dEl = el.querySelector('#rv-3d-note');
   let view3d = null;
   let mode3d = false;
-  let map3dSlug = null;
+  let map3dSlug = cs3dMap(rounds[0]?.map || '')?.slug || null;
   /** Last /3d payload: dataReady, mapReady, upgradeable, job. */
   let avail3d = null;
   let poll3d = 0;
+
+  function resolveMapSlug() {
+    return (
+      avail3d?.mapSlug ||
+      map3dSlug ||
+      cs3dMap(activeMeta?.map || rounds[0]?.map || '')?.slug ||
+      null
+    );
+  }
+
+  function cs3dAssetBase() {
+    const explicit = import.meta.env?.VITE_CS3D_ASSET_BASE;
+    if (explicit) return String(explicit).replace(/\/$/, '');
+    return `${apiBase()}/api/cs3d`;
+  }
+
+  async function probeClientPack(slug) {
+    if (!slug) return false;
+    try {
+      const res = await fetch(`${cs3dAssetBase()}/${encodeURIComponent(slug)}/manifest.json`);
+      return res.ok;
+    } catch {
+      return false;
+    }
+  }
 
   async function probe3d(method = 'GET') {
     if (!statsDemoId) return;
@@ -643,20 +669,22 @@ export function createTimelineViewer({
       );
       if (!res.ok) return;
       avail3d = await res.json();
-      map3dSlug = avail3d.mapSlug || null;
+      map3dSlug = avail3d.mapSlug || resolveMapSlug();
+      // The API checks pack files on the API host. /nuke loads the same pack
+      // from the asset base the explorer uses, which can be a different disk
+      // or CDN — so a live map page does not mean this host said mapReady.
+      if (map3dSlug && !avail3d.mapReady && (await probeClientPack(map3dSlug))) {
+        avail3d = { ...avail3d, mapReady: true, mapSlug: map3dSlug };
+      }
       sync3dButtons();
       const job = avail3d.job;
       const busy = job && ['queued', 'downloading', 'parsing'].includes(job.state);
       clearTimeout(poll3d);
       if (busy) poll3d = setTimeout(() => probe3d('GET'), 4000);
     } catch {
-      /* offline or signed out: the button stays in its unavailable state */
+      /* offline or signed out: local slug still lets the button switch views */
     }
   }
-  // Paint the unavailable state first. The probe answers late, early-returns on
-  // a round selection (no demo id) and gives up quietly when signed out — and
-  // the button is in the bar the whole time either way, so it has to look
-  // disabled from the first frame rather than live and inert.
   sync3dButtons();
   probe3d();
 
@@ -664,7 +692,11 @@ export function createTimelineViewer({
     const s = avail3d;
     const job = s?.job;
     const busy = job && ['queued', 'downloading', 'parsing'].includes(job.state);
-    const ready = !!(s?.dataReady && s?.mapReady);
+    const slug = resolveMapSlug();
+    // The in-viewer switch only needs a map slug. Jump/crouch quality and the
+    // API host's pack folder are separate gates; they must not leave a live-
+    // looking button that ignores clicks while /nuke already serves the map.
+    const ready = !!slug;
 
     toggle3dBtn.classList.toggle('is-busy', !!busy);
     toggle3dBtn.classList.toggle('active', mode3d);
@@ -689,7 +721,7 @@ export function createTimelineViewer({
               ? 'downloading'
               : 'reparsing';
       } else if (job?.state === 'failed') {
-        toggle3dBtn.title = 'Reparse failed — click to try again';
+        toggle3dBtn.title = 'Reparse failed. Click to try again';
         note3dEl.textContent = 'failed, retry';
       } else if (s?.upgradeable) {
         toggle3dBtn.title = 'Request 3D: this demo needs a reparse for jump & crouch';
@@ -698,10 +730,6 @@ export function createTimelineViewer({
         toggle3dBtn.title = `${s.mapName || 'This map'} has no 3D map yet`;
         note3dEl.textContent = 'no 3D map';
       } else {
-        // Nothing to act on: a disabled button and a tooltip say it. A caption
-        // over the tool bar is for a state that is going somewhere — a queue
-        // position, a retry, an offer — not for the ordinary case of a demo
-        // that will never have 3D.
         toggle3dBtn.title = !statsDemoId
           ? '3D needs a full demo, not a round selection'
           : s
@@ -715,13 +743,15 @@ export function createTimelineViewer({
     exploreBtn.hidden = !mode3d;
     exploreBtn.classList.toggle('is-on', mode3d && view3d?.mode === 'free');
     exploreBtn.title =
-      view3d?.mode === 'free' ? 'Free look on — right click to return to POV' : 'Free look (right click in 3D)';
+      view3d?.mode === 'free' ? 'Free look on. Right click to return to POV' : 'Free look (right click in 3D)';
     mapEl.classList.toggle('is-3d', mode3d);
   }
 
   async function setMode3d(on) {
     if (on === mode3d) return;
-    if (on && !map3dSlug) return;
+    const slug = resolveMapSlug();
+    if (on && !slug) return;
+    map3dSlug = slug || map3dSlug;
     mode3d = on;
     if (on) {
       if (!view3d) {
@@ -731,17 +761,24 @@ export function createTimelineViewer({
         try {
           const { createView3d } = await import('./view3d.js');
           view3d = createView3d({ slug: map3dSlug, onModeChange: () => sync3dButtons() });
-          await view3d.start(mapEl);
+          const starting = view3d.start(mapEl);
+          view3d.show();
+          sync3dButtons();
+          await starting;
         } finally {
           toggle3dBtn.classList.remove('is-loading');
         }
         if (view3d.failed) {
           mode3d = false;
+          view3d.hide();
+          view3d.dispose();
+          view3d = null;
           sync3dButtons();
           return;
         }
+      } else {
+        view3d.show();
       }
-      view3d.show();
       // Push the current moment straight in, so the switch shows the same
       // instant rather than an empty map until the next tick.
       draw();
@@ -754,14 +791,12 @@ export function createTimelineViewer({
 
   toggle3dBtn.addEventListener('click', (e) => {
     e.stopPropagation();
-    const s = avail3d;
-    // Ready: this is the view switch. Behind: this is the request. Same
-    // button, because to the user it is the same intent.
-    if (s?.dataReady && s?.mapReady) {
+    const slug = resolveMapSlug();
+    if (slug) {
       setMode3d(!mode3d);
       return;
     }
-    if (s?.upgradeable || s?.job?.state === 'failed') probe3d('POST');
+    if (avail3d?.upgradeable || avail3d?.job?.state === 'failed') probe3d('POST');
   });
   exploreBtn.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -855,18 +890,16 @@ export function createTimelineViewer({
         const sideClass = side === 'T' ? 'wt' : 'wct';
         const noted = coachOn && coachNotedFiles.has(r.file);
         const coachClass = noted ? ' has-coach' : '';
-        // A side swap is a break in the strip, not another gap the eye has to
-        // measure — the arrows say what the extra space used to only imply.
-        // The strip is spread edge to edge, so spacing is the layout's job and
-        // the old per-chip margins would only fight it.
+        // A side swap sits inside the first square of the new half, so the
+        // 1:1 row stays a continuous bar.
         const swap =
           i > 0 && gapAfterRound(rounds[i - 1].round) > 1
             ? '<span class="rv-round-swap" aria-hidden="true">⇄</span>'
             : '';
         const coachHint = noted ? ' · coach notes' : '';
-        return `${swap}<button type="button" class="rv-round ${sideClass}${coachClass}" data-index="${i}" title="${escapeHtml(
+        return `<button type="button" class="rv-round ${sideClass}${coachClass}" data-index="${i}" title="${escapeHtml(
           `Round ${r.round} · ${side} win · ${economyLabel(r.econ1)} vs ${economyLabel(r.econ2)}${coachHint}`
-        )}">${String(r.round).padStart(2, '0')}</button>`;
+        )}">${swap}${String(r.round).padStart(2, '0')}</button>`;
       })
       .join('');
     markActiveRound();
@@ -1624,7 +1657,7 @@ export function createTimelineViewer({
 
   /**
    * Keep the eye on the same side through halftime. When T↔CT swap, the
-   * selected team flips so yellow stays T and blue stays CT.
+   * selected team flips so T red stays T and CT blue stays CT.
    */
   function realignPovToFollowSide() {
     if (!povFollowSide) return;

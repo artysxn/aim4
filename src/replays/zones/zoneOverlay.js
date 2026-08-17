@@ -10,7 +10,7 @@
 // of the pipeline point-samples a grid, and nothing is ever drawn as cells.
 //
 // Six paint classes, and only six: T and CT each get an active and a soft tone,
-// plus neutral gray and contested red.
+// plus neutral gray and contested purple (half T red, half CT blue).
 // ---------------------------------------------------------------------------
 
 import { RADAR_SIZE, worldToRadar } from '../viewer/mapCalibration.js';
@@ -41,13 +41,26 @@ import { contoursFor } from './fieldContours.js';
 
 /** @typedef {'empty'|'t-active'|'t-control'|'ct-active'|'ct-control'|'contested'} ZonePaint */
 
+/** Same tokens as `--rv-t` / `--rv-ct` in replays.css. */
+const T_RED = { r: 230, g: 6, b: 17 };
+const CT_BLUE = { r: 91, g: 159, b: 212 };
+const CONTESTED = {
+  r: Math.round((T_RED.r + CT_BLUE.r) / 2),
+  g: Math.round((T_RED.g + CT_BLUE.g) / 2),
+  b: Math.round((T_RED.b + CT_BLUE.b) / 2)
+};
+
+const rgba = ({ r, g, b }, a) => `rgba(${r},${g},${b},${a})`;
+const hex = ({ r, g, b }) =>
+  `#${[r, g, b].map((n) => n.toString(16).padStart(2, '0')).join('')}`;
+
 export const ZONE_PAINT = {
   empty: { fill: 'rgba(130,138,150,0.22)', stroke: 'rgba(170,178,190,0.55)' },
-  't-active': { fill: 'rgba(240,193,74,0.48)', stroke: '#f0c14a' },
-  't-control': { fill: 'rgba(150,115,28,0.34)', stroke: '#9a7620' },
-  'ct-active': { fill: 'rgba(91,159,212,0.48)', stroke: '#5b9fd4' },
+  't-active': { fill: rgba(T_RED, 0.48), stroke: hex(T_RED) },
+  't-control': { fill: rgba(T_RED, 0.28), stroke: '#8c080c' },
+  'ct-active': { fill: rgba(CT_BLUE, 0.48), stroke: hex(CT_BLUE) },
   'ct-control': { fill: 'rgba(40,90,130,0.34)', stroke: '#2f6a96' },
-  contested: { fill: 'rgba(210,70,70,0.40)', stroke: '#d45555' }
+  contested: { fill: rgba(CONTESTED, 0.40), stroke: hex(CONTESTED) }
 };
 
 /** Half-angle of the vision cone (degrees). */

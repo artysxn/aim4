@@ -1590,17 +1590,13 @@ body.rv-open {
   background: #050505;
 }
 
-/* Spread edge to edge, so the strip lines up with the scrubber above it and a
-   chip sits under the stretch of round it belongs to. Centring left the two
-   on different scales: the bar spanned the window while the chips huddled in
-   the middle, and neither told you anything about the other.
-   space-between collapses to a plain row once the chips overflow, which is
-   what the scroller is for. */
+/* 1:1 squares packed from the left, under the scrubber. They grow together
+   up to a cap so a short match does not turn the chrome into a tall grid. */
 .rv-rounds {
   display: flex;
   flex-wrap: nowrap;
-  justify-content: space-between;
-  align-items: center;
+  justify-content: flex-start;
+  align-items: stretch;
   gap: 0;
   min-width: 0;
   max-width: 100%;
@@ -1902,9 +1898,14 @@ body.rv-open {
   height: 19px;
 }
 
-.rv-tool:hover {
+.rv-tool:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.08);
   color: var(--text);
+}
+
+.rv-tool:disabled {
+  opacity: 0.35;
+  cursor: default;
 }
 
 .rv-tool.active {
@@ -2623,19 +2624,29 @@ body.rv-open {
 
 /* ---- Round chips (T / CT win colors) ------------------------------------ */
 
-/* The win side is the number's own colour. An underline rule under every chip
-   was a second row of marks competing with the coach diamonds below them. */
+/* The win side is the number's own colour. */
 .rv-round {
   position: relative;
-  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1 1 0;
+  aspect-ratio: 1 / 1;
   min-width: 28px;
-  padding: 4px 0 10px;
+  max-width: 40px;
+  height: auto;
+  padding: 0;
   border: 0;
-  background: transparent;
+  border-right: 1px solid var(--border);
+  background: #0a0a0a;
   color: var(--muted);
   font: 600 13px var(--font-body);
   font-variant-numeric: tabular-nums;
   cursor: pointer;
+}
+
+.rv-round:first-child {
+  border-left: 1px solid var(--border);
 }
 
 .rv-round.wt {
@@ -2666,9 +2677,9 @@ body.rv-open {
 .rv-round.active::before {
   content: '';
   position: absolute;
-  left: 2px;
-  right: 2px;
-  bottom: 6px;
+  left: 4px;
+  right: 4px;
+  bottom: 3px;
   height: 2px;
   border-radius: 1px;
   background: #ffffff;
@@ -2679,20 +2690,23 @@ body.rv-open {
   content: '';
   position: absolute;
   left: 50%;
-  bottom: 1px;
+  bottom: 2px;
   width: 5px;
   height: 5px;
   background: #3ee87a;
   transform: translateX(-50%) rotate(45deg);
 }
 
-/* Half-time / overtime side swap, in place of an unexplained wider gap. */
+/* Half-time / overtime side swap, parked in the square it belongs to. */
 .rv-round-swap {
-  flex: 0 0 auto;
-  color: rgba(181, 181, 181, 0.45);
-  font-size: 12px;
+  position: absolute;
+  top: 1px;
+  right: 2px;
+  color: rgba(181, 181, 181, 0.55);
+  font-size: 9px;
   line-height: 1;
   user-select: none;
+  pointer-events: none;
 }
 
 /* ---- Transport ---------------------------------------------------------- */
@@ -8694,10 +8708,11 @@ th.tm-rl-name,
   white-space: nowrap;
 }
 
-/* Timeline: bottom-right of the map, clear of the round strip below it. */
+/* Timeline: bottom-right of the map, clear of the round strip below it.
+   The extra -50px drops the legend off the right roster. */
 .rv-timeline > .rv-keys {
   right: 16px;
-  bottom: calc(var(--rv-chrome-h, 60px) + var(--rv-keys-inset, 10px));
+  bottom: calc(var(--rv-chrome-h, 60px) + var(--rv-keys-inset, 10px) - 50px);
   z-index: 6;
 }
 
@@ -10782,11 +10797,9 @@ th.tm-rl-name,
     padding: 0 10px calc(8px + env(safe-area-inset-bottom));
   }
 
-  /* Centering a strip that overflows puts its first chips out of reach of the
-     scroller. The active round is scrolled into view on selection anyway. */
   .rv-rounds {
     justify-content: flex-start;
-    padding: 2px 2px 4px;
+    padding: 0;
   }
 
   /* The transport shares the bottom band with two rosters, so it loses its
