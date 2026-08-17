@@ -52,6 +52,25 @@ export const VIEWMODEL_FOV = 68;
  */
 const RIG_OFFSET = new THREE.Vector3(0, -1.5, 0);
 
+/**
+ * The yaw that turns the packed rig to face the camera, radians.
+ *
+ * The pack ships its frame in the manifest (`forward: '+x'`, up +z folded to
+ * three's +y by the packer's −90° root rotation), and the bind pose agrees:
+ * `wpn` sits at (17, 0, 0), `hand_R` at z +18 and `hand_L` at z −18. So model
+ * +x is forward, +y is up, +z is RIGHT.
+ *
+ * three's camera looks down −z with +x to its right, and `Ry(θ)` maps
+ * (1,0,0) → (cos θ, 0, −sin θ). Only +π/2 sends forward to −z and right to +x;
+ * −π/2 sends forward to +z, which is directly behind the eye. That is what it
+ * was, and it is why no weapon ever appeared: `wpn` rendered at z +17, a clean
+ * 17 units behind the near plane, while `hand_R` landed at z +1.1 — barely
+ * behind it, close enough that a knife swing threw a sliver of it into frame at
+ * the bottom left. Getting the sign wrong here mirrors left/right as well, so
+ * "the hands look swapped" is the same bug and not a separate one.
+ */
+const RIG_YAW = Math.PI / 2;
+
 /** Bob and sway, the Source shapes. All `[verify]`. */
 const BOB = {
   /** Cycle speed at full run, rad/s. */
@@ -251,7 +270,7 @@ export class ViewModel {
     // The rig is authored looking down Source +x; three's camera looks down
     // −z. One rotation puts the whole thing in front of the eye.
     this.rig = new THREE.Group();
-    this.rig.rotation.set(0, -Math.PI / 2, 0);
+    this.rig.rotation.set(0, RIG_YAW, 0);
     this.rig.position.copy(RIG_OFFSET);
     this.group.add(this.rig);
 
@@ -465,7 +484,7 @@ export class ViewModel {
     // is right, y is up and z is back toward the eye.
     this._offset.set(bobX + this._sway.x, bobY + this._sway.y, this._kick * KICK.back);
     this.rig.position.copy(RIG_OFFSET).add(this._offset);
-    this.rig.rotation.set(this._kick * KICK.up * DEG * 10, -Math.PI / 2, this._kick * KICK.roll);
+    this.rig.rotation.set(this._kick * KICK.up * DEG * 10, RIG_YAW, this._kick * KICK.roll);
 
     this.mixer.update(dt);
     // A one-shot that has run out returns to idle rather than freezing on its
