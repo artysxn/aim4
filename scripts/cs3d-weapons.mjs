@@ -431,7 +431,17 @@ async function packMaterials(doc, label, cap = 512, { convention = 'weapon' } = 
     if (!p) {
       p = {};
       if (base) {
-        const buf = await sharpOf(base).resize(cap, cap, { fit: 'inside', withoutEnlargement: true }).webp({ quality: 88, alphaQuality: 90, smartSubsample: true, effort: 4 }).toBuffer();
+        // dropAlpha here too. `g_tColor`'s alpha is a MASK, not opacity — on a
+        // weapon it averages 17/255 — and a resize premultiplies the colour by
+        // it and divides it back out, which cannot recover a texel whose alpha
+        // was 0. The AWP's albedo came out of that with its minimum at 0 where
+        // the source floor was 40, and its mean down a quarter: a green rifle
+        // rendered black with blown-out speckle. Nothing here reads the alpha —
+        // every material is OPAQUE — so it goes before the resize can use it.
+        const buf = await (await dropAlpha(sharpOf(base)))
+          .resize(cap, cap, { fit: 'inside', withoutEnlargement: true })
+          .webp({ quality: 88, smartSubsample: true, effort: 4 })
+          .toBuffer();
         p.base = doc.createTexture(`${label}_c`).setMimeType('image/webp').setImage(buf);
         bytes += buf.length;
       }
@@ -563,8 +573,7 @@ async function packWeapon(w) {
 function rebindArms(out, agentDoc, vmDoc, label) {
   const vmRootSrc = normalizeSkeletonRoot(vmDoc, `${label} viewmodel rig`);
   const vmRest = restWorld(vmRootSrc);
-  const agentRoot = normalizeSkeletonRoot(agentDoc, `${label} agent`);
-  const agentRest = restWorld(agentRoot);
+  normalizeSkeletonRoot(agentDoc, `${label} agent`);
 
   // Copy the viewmodel skeleton into the output document.
   const buffer = out.getRoot().listBuffers()[0] || out.createBuffer();
@@ -592,11 +601,13 @@ function rebindArms(out, agentDoc, vmDoc, label) {
   let moved = 0;
   let dropped = 0;
   const skinJoints = [];
+  const jointIbm = [];
   const seenJoint = new Map();
-  const jointIndex = (name) => {
+  const jointIndex = (name, ibm) => {
     if (seenJoint.has(name)) return seenJoint.get(name);
     const i = skinJoints.length;
     skinJoints.push(nodes.get(name));
+    jointIbm.push(ibm);
     seenJoint.set(name, i);
     return i;
   };
@@ -607,31 +618,38 @@ function rebindArms(out, agentDoc, vmDoc, label) {
     if (!mesh || !skin || !/firstperson/i.test(mesh.getName())) continue;
     const srcJoints = skin.listJoints().map((j) => j.getName());
     const ibmAcc = skin.getInverseBindMatrices();
-    // agentBind(b) is the inverse of its inverse-bind; vmRest(b) is where the
-    // same bone sits in the viewmodel's rest pose.
+    // Where each agent joint lands on the viewmodel rig, and whose inverse bind
+    // it keeps.
+    //
+    // **The vertices are NOT moved.** An earlier pass baked each one through
+    // `vmRest(b) · agentBind(b)⁻¹` and gave the skin `vmRest(b)⁻¹` as its
+    // inverse bind. That is exact for a vertex owned by one joint and wrong for
+    // every vertex shared between two, because linear blend skinning then runs
+    // twice: the bake blends the joints' rest deltas into one position, and the
+    // runtime applies each joint's animated delta to that already-blended
+    // point instead of to its own share. At rest the two cancel and the arms
+    // look perfect, which is exactly why it survived — the error only appears
+    // once a clip bends something, and it grows with the bend. Smeared
+    // forearms, worst at the elbow, where the most weight is shared.
+    //
+    // Keeping the agent's own positions and handing the skin the AGENT's
+    // inverse binds makes the runtime compute `Σ w · vmWorld(b) · agentBind(b)⁻¹`
+    // — ordinary LBS, correct in any pose. The rest pose comes out bit for bit
+    // what the bake produced, so this costs nothing and fixes the motion.
     //
     // A joint that FOLDS (a `…_TWIST` helper the viewmodel rig does not carry)
-    // has to take its parent's inverse bind, not its own. Pairing the parent's
-    // vm rest with the helper's own bind is a translation by the gap between
-    // them, and that gap is the length of half a forearm: `arm_lower_L_TWIST1`
-    // came out 5.65 units from where `arm_lower_L` put its neighbours, and the
-    // two TWIST1 helpers carry 22.7% of the arms' vertex weight between them.
-    // The result was a forearm torn between two positions — clean at the
-    // fingers, where every joint is real, and worse the further up the arm the
-    // helpers take over. Folding onto the parent's bind is what "rides its
-    // parent" has to mean: the vertex behaves exactly as if it had been
-    // weighted to the parent to begin with.
+    // takes its PARENT's inverse bind, not its own: pairing the parent's bone
+    // with the helper's bind is a translation by the gap between them, half a
+    // forearm, and the two TWIST1 helpers carry 22.7% of the arms' weight.
     const xform = srcJoints.map((name, i) => {
       const target = resolveJoint(name);
-      if (!target) return null;
+      if (!target || !vmRest.has(target)) return null;
+      let src = i;
       if (target !== name) {
         const p = srcJoints.indexOf(target);
-        if (p >= 0) i = p;
+        if (p >= 0) src = p;
       }
-      const rest = vmRest.get(target);
-      if (!rest) return null;
-      const ibm = new Matrix4().fromArray(ibmAcc.getElement(i, []));
-      return { target, m: rest.clone().multiply(ibm) };
+      return { target, ibm: new Matrix4().fromArray(ibmAcc.getElement(src, [])) };
     });
 
     const outMesh = out.createMesh(mesh.getName().split('.').pop());
@@ -650,17 +668,11 @@ function rebindArms(out, agentDoc, vmDoc, label) {
       const jj = [];
       const ww = [];
       const nn = [];
-      const v = new Vector3();
-      const acc = new Vector3();
-      const accN = new Vector3();
-      const tmp = new Vector3();
       for (let i = 0; i < count; i++) {
         pos.getElement(i, el);
         ji.getElement(i, jj);
         wt.getElement(i, ww);
         if (nrm) nrm.getElement(i, nn);
-        acc.set(0, 0, 0);
-        accN.set(0, 0, 0);
         let total = 0;
         for (let k = 0; k < 4; k++) {
           const w = ww[k];
@@ -670,32 +682,22 @@ function rebindArms(out, agentDoc, vmDoc, label) {
             dropped++;
             continue;
           }
-          tmp.set(el[0], el[1], el[2]).applyMatrix4(x.m).multiplyScalar(w);
-          acc.add(tmp);
-          if (nrm) {
-            tmp.set(nn[0], nn[1], nn[2]).transformDirection(x.m).multiplyScalar(w);
-            accN.add(tmp);
-          }
-          const idx = jointIndex(x.target);
-          J[i * 4 + total] = idx;
+          J[i * 4 + total] = jointIndex(x.target, x.ibm);
           W[i * 4 + total] = w;
           total++;
         }
         if (!total) {
-          // Nothing survived: leave the vertex where it was, unweighted.
-          v.set(el[0], el[1], el[2]);
-          acc.copy(v);
+          // Nothing survived; ride the first joint rather than vanish.
           J[i * 4] = 0;
           W[i * 4] = 1;
         }
-        P[i * 3] = acc.x;
-        P[i * 3 + 1] = acc.y;
-        P[i * 3 + 2] = acc.z;
+        P[i * 3] = el[0];
+        P[i * 3 + 1] = el[1];
+        P[i * 3 + 2] = el[2];
         if (nrm) {
-          accN.normalize();
-          N[i * 3] = accN.x;
-          N[i * 3 + 1] = accN.y;
-          N[i * 3 + 2] = accN.z;
+          N[i * 3] = nn[0];
+          N[i * 3 + 1] = nn[1];
+          N[i * 3 + 2] = nn[2];
         }
         moved++;
       }
@@ -731,13 +733,11 @@ function rebindArms(out, agentDoc, vmDoc, label) {
     outMesh.setExtras({ needsSkin: true });
   }
 
-  // One skin over every joint the arms actually use.
+  // One skin over every joint the arms actually use, each keeping the AGENT's
+  // inverse bind — which is what makes the mesh above correct rather than only
+  // correct at rest. See the note on rebindArms.
   const ibm = new Float32Array(skinJoints.length * 16);
-  skinJoints.forEach((j, i) => {
-    const rest = vmRest.get(j.getName());
-    const inv = rest ? rest.clone().invert() : new Matrix4();
-    inv.toArray(ibm, i * 16);
-  });
+  jointIbm.forEach((m, i) => (m || new Matrix4()).toArray(ibm, i * 16));
   const skin = out
     .createSkin('viewmodel')
     .setInverseBindMatrices(out.createAccessor().setType('MAT4').setArray(ibm).setBuffer(buffer))

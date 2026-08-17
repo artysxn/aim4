@@ -372,26 +372,30 @@ export class ViewModel {
     // the clips animate it (65 nodes a clip, `wpn` among them), so a gun
     // parented here moves with the hands.
     this.wpnBone = this.arms.getObjectByName('wpn') || this.arms.getObjectByName('weapon') || this.arms;
-    // ...but parented DIRECTLY it gets the bone's rest pose applied twice.
+    // ...but parented DIRECTLY it takes the pack's frame rotation twice.
     //
-    // Both halves of the pack are normalized to the same frame — eye at the
-    // origin, +x forward, the whole thing turned by −90° about x (see
-    // cs3d-weapons.mjs normalizeSkeletonRoot, and the manifest's `frame`). A
-    // weapon glb is authored in THAT space, not in the space of the bone it
-    // hangs from: `w_ak47`'s mesh sits at x ≈ 7 with the −90° already baked in,
-    // measured from the eye. The `wpn` bone is at (17, 0, 0) carrying the same
-    // −90°. Add one to the other and the gun is shoved 17 units further down
-    // the barrel axis and rolled a second −90° — which is the gun hanging at a
-    // broken angle out past the hands.
+    // Every glb in this pack is normalized to one frame: Source units, +x
+    // forward, turned −90° about x to put Source's +z up on three's +y. The
+    // manifest states it (`frame.rootRotationX`), the rig root carries it, and
+    // cs3d-weapons.mjs stamps the same −90° onto a rigid weapon's mesh nodes so
+    // the model stands up correctly on its own — as a world model must.
     //
-    // So the mount cancels the bone's rest transform. A weapon under it lands
-    // exactly where its own transform says, and still rides `wpn` when the clip
-    // moves it. Fixed matrix, because it is a constant of the rig.
+    // A weapon hung off `wpn` does not need it: the bone is already in that
+    // frame, so the two compose to −180° and the gun hangs inverted through the
+    // hands. What the bone DOES supply is the placement, and that is wanted —
+    // the weapon's own origin is its grip (the AK's geometry straddles it, from
+    // 11 units behind to 26 in front), so it belongs at the bone, not at the
+    // eye. Cancelling the bone outright put every gun back at the eye and left
+    // the AWP flying off the top of the frame.
+    //
+    // So the mount cancels the ROTATION only. Fixed matrix, because it is a
+    // constant of the pack, and read from the manifest rather than assumed.
     this.arms.updateWorldMatrix(true, true);
+    const frameX = (this.assets.manifest?.frame?.rootRotationX ?? -90) * DEG;
     this.wpnMount = new THREE.Group();
     this.wpnMount.name = 'wpnMount';
     this.wpnMount.matrixAutoUpdate = false;
-    this.wpnMount.matrix.copy(this.arms.matrixWorld).invert().multiply(this.wpnBone.matrixWorld).invert();
+    this.wpnMount.matrix.makeRotationX(-frameX);
     this.wpnBone.add(this.wpnMount);
     if (this.weaponModel) this.wpnMount.add(this.weaponModel);
   }
