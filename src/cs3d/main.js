@@ -20,13 +20,14 @@ import { Controls } from './controls.js';
 import { Hud } from './hud.js';
 import { FpsView } from './fpsView.js';
 import { DemoView } from './demoView.js';
-import { sharedPlayerModels } from './playerModels.js';
+import { sharedPlayerModels, liveBodies } from './playerModels.js';
 import { LiveBody } from './liveBody.js';
 import { createBuyMenu } from './buyMenu.js';
 import { placeThirdPersonCamera } from './thirdPerson.js';
 import { mountCrosshair } from './crosshairOverlay.js';
-import { ViewModelAssets, ViewModel, createViewModelPass } from './viewModel.js';
+import { ViewModelAssets, ViewModel, createViewModelPass, VIEWMODEL_ENV_INTENSITY, VIEWMODEL_SUN } from './viewModel.js';
 import { createViewModelTuner } from './vmTuner.js';
+import { SunTracker } from './sunlight.js';
 import { SettingsManager, VIEWMODEL_FOV_MIN, VIEWMODEL_FOV_MAX } from '../core/SettingsManager.js';
 import { loadDemoBytes, loadDemoFile } from './demoData.js';
 
@@ -201,6 +202,9 @@ const vmAssets = new ViewModelAssets();
 const viewModel = new ViewModel(vmAssets);
 const vmPass = createViewModelPass(renderer);
 vmPass.scene.add(viewModel.group);
+// Whether the player is standing in the sun. Drives the viewmodel's key light
+// and how much sky it reflects; see sunlight.js.
+const sunTracker = new SunTracker();
 // Hand, FOV and the hand offsets are account settings, shared with the trainer
 // and synced to the profile — the same store the sensitivity above comes from.
 const vmSettings = new SettingsManager();
@@ -369,7 +373,10 @@ async function boot() {
     scene,
     renderer,
     onProgress: (p) => hud.setProgress(p),
-    onPhys: (collider) => player.setCollider(collider),
+    onPhys: (collider) => {
+      player.setCollider(collider);
+      sunTracker.setCollider(collider);
+    },
     onWorldChanged: () => lighting?.markShadowDirty()
   });
   try {
@@ -411,6 +418,9 @@ async function boot() {
     // The gun reflects the same sky the map stands under. Without it every
     // metallic surface in the viewmodel pass is black (see setEnvironment).
     vmPass.setEnvironment(scene.environment);
+    // ...and stands in the same sun. `sunTracker` only needs its direction;
+    // the collision hull it traces against arrives with onPhys.
+    sunTracker.setSun(lighting.toSun);
     pack.lightmapIntensity = lighting.lightmapIntensity;
     // The world's sun. Lightmapped geometry adds it itself, masked by the
     // baked shadow atlas, because CS2 leaves the sun out of the irradiance
@@ -688,10 +698,10 @@ function updateViewModel(dt, inThird) {
     });
   }
   // The gun stands in the map's own light, like every other moving thing.
+  const eye = pov ? pov.eye : camera.position;
   const grid = pack?.probeGrid;
   if (grid) {
-    const p = pov ? pov.eye : camera.position;
-    const cube = grid.sample(p.x, p.y, p.z, _vmCube);
+    const cube = grid.sample(eye.x, eye.y, eye.z, _vmCube);
     // The ambient cube's upward and lateral terms, as one fill colour.
     _vmColor.setRGB(
       (cube[6] + cube[0] + cube[3]) / 3,
@@ -699,6 +709,19 @@ function updateViewModel(dt, inThird) {
       (cube[8] + cube[2] + cube[5]) / 3
     );
     vmPass.setAmbient(_vmColor, 1.6);
+  }
+  // ...and in its sun. The pass's scene is view space, so the world direction
+  // has to be rotated into it — that is the whole point: turn on the spot and
+  // the highlight travels down the barrel instead of riding along with you.
+  // Indoors the sun is not cut, only turned down (sunlight.js INDOOR).
+  if (lighting?.sun) {
+    const shade = sunTracker.update(dt, eye);
+    _toSunView.copy(lighting.toSun).applyQuaternion(_invView.copy(camera.quaternion).invert());
+    vmPass.setSun(_toSunView, lighting.sunColor, VIEWMODEL_SUN * shade);
+    // The sky it reflects turns with the view for the same reason, and dims
+    // with the same factor: a gun in a doorway should not mirror open sky.
+    vmPass.setViewRotation(camera.quaternion);
+    vmPass.setEnvironment(vmPass.scene.environment, VIEWMODEL_ENV_INTENSITY * shade);
   }
 }
 
@@ -730,6 +753,11 @@ let last = performance.now();
 const _src = [0, 0, 0];
 const _vmCube = new Float32Array(18);
 const _vmColor = new THREE.Color();
+const _toSunView = new THREE.Vector3();
+const _invView = new THREE.Quaternion();
+/** Milliseconds between shadow-map redraws while a body is on screen. */
+const DYNAMIC_SHADOW_MS = 33;
+let _bodyShadowAt = 0;
 function frame(now) {
   requestAnimationFrame(frame);
   const dt = Math.min(0.1, (now - last) / 1000);
@@ -745,6 +773,21 @@ function frame(now) {
   // After the player: in POV the demo owns the camera, and writing second wins.
   demoView.update(now);
   if (demoView.active) hud.setDemoStatus(demoView.status());
+  // A body on screen is a shadow caster that walks and animates, so the sun's
+  // cached shadow map (sky.js: static map, static sun, redraw only when the
+  // volume moves) has to be redrawn while one is visible. Only while one is —
+  // an empty map keeps the cheap path — and at 30 Hz, not per frame: the pass
+  // draws the whole map, which measured about a third again on top of a frame,
+  // and a walking player's shadow being one 30th of a second stale is not
+  // something anyone can see.
+  if (lighting?.sun?.castShadow && now - _bodyShadowAt >= DYNAMIC_SHADOW_MS) {
+    for (const b of liveBodies) {
+      if (!b.group.visible || !b.group.parent) continue;
+      _bodyShadowAt = now;
+      lighting.markShadowDirty();
+      break;
+    }
+  }
   lighting?.update();
   pack.materials?.setTime(now / 1000);
   if (renderer.backend) renderFrame();
@@ -775,5 +818,7 @@ boot();
 requestAnimationFrame(frame);
 
 if (import.meta.env.DEV) {
-  window.__cs3d = { THREE, scene, camera, player, get pack() { return pack; }, renderer, lighting: () => lighting, fpsView, demoView, playerModels, viewModel, vmPass, vmTuner, buyMenu };
+  // `frame` too: a hidden tab gets no rAF, so driving it by hand is the only
+  // way to render (and screenshot) the real path from a headless session.
+  window.__cs3d = { THREE, scene, camera, player, get pack() { return pack; }, renderer, lighting: () => lighting, fpsView, demoView, playerModels, viewModel, vmPass, vmTuner, buyMenu, frame, renderFrame, sunTracker, get mapRenderer() { return mapRenderer; } };
 }

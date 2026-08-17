@@ -47,6 +47,12 @@ export function assetBase() {
 
 /** Collision kinds a player body collides with (grenadeclip is for nades only). */
 const WALK_SOLID = new Set(['solid', 'playerclip', 'sky', 'ladder', 'entity']);
+/**
+ * ...and the ones that also stop light. `playerclip` and `sky` are tool brushes
+ * — a movement boundary and the lid the sky is drawn through — and neither
+ * casts a shadow in the game either; `ladder` is a climb volume, not a ladder.
+ */
+const LIGHT_SOLID = new Set(['solid', 'entity']);
 
 /**
  * The map's baked light on a lattice: an ambient cube per cell, which is how
@@ -536,20 +542,35 @@ export class MapPack {
   async _loadPhys() {
     const gltf = await this._fetchGlb(`${this.base}/${this.manifest.phys || 'phys.glb'}`);
     gltf.scene.updateMatrixWorld(true);
-    const solid = [];
+    // Two lists, one BVH: what stops a player and, inside it, what stops
+    // LIGHT. They are not the same set and the difference is not small — a
+    // Source map is roofed over the whole playable area by a `sky` brush and
+    // fenced by `playerclip`, both invisible and both transparent to the sun.
+    // Tracing sun visibility against the walk hull therefore reports "indoors"
+    // everywhere below that lid, which is exactly what it did: the viewmodel lit
+    // correctly only when the camera climbed above the clip.
+    //
+    // The light blockers are merged FIRST so they occupy triangles [0, lightTriangles),
+    // which is all a ray needs to tell them apart — no second BVH, no second copy
+    // of the geometry.
+    const blocking = [];
+    const clipOnly = [];
     const kinds = {};
     gltf.scene.traverse((o) => {
       if (!o.isMesh) return;
       const kind = o.userData?.kind || 'solid';
       kinds[kind] = (kinds[kind] || 0) + 1;
-      if (WALK_SOLID.has(kind)) solid.push(worldFloatGeometry(o));
+      if (!WALK_SOLID.has(kind)) return;
+      (LIGHT_SOLID.has(kind) ? blocking : clipOnly).push(worldFloatGeometry(o));
     });
+    const solid = [...blocking, ...clipOnly];
     if (!solid.length) return;
+    const lightTriangles = blocking.reduce((n, g) => n + (g.index ? g.index.count : g.attributes.position.count) / 3, 0);
     const merged = mergePositionGeometries(solid);
     for (const g of solid) g.dispose();
     const bvh = new MeshBVH(merged, { targetLeafSize: 8 });
     merged.boundsTree = bvh;
-    this.collider = { geometry: merged, bvh, kinds };
+    this.collider = { geometry: merged, bvh, kinds, lightTriangles };
     // Stand-in world: flat grey collision geometry until real surfaces arrive.
     const ph = new THREE.Mesh(merged, new THREE.MeshLambertMaterial({ color: 0x6b6b6b, flatShading: true }));
     ph.name = 'phys-placeholder';

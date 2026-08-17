@@ -606,6 +606,7 @@ export class PlayerBody {
     this.side = null;
     this.group = new THREE.Group();
     this.group.name = 'player';
+    liveBodies.add(this);
     /**
      * This body's ambient cube, six irradiance uniforms in scene axis order
      * (+x, −x, +y up, −y, +z, −z), resampled from the map's probe grid every
@@ -982,8 +983,19 @@ export class PlayerBody {
     for (const m of this._ownMaterials || []) m.dispose();
     this._ownMaterials = [];
     this.group.removeFromParent();
+    liveBodies.delete(this);
   }
 }
+
+/**
+ * Every body that exists right now — the walking one, the demo's, a bot's.
+ *
+ * The sun's shadow map is not redrawn per frame (sky.js: the map is static and
+ * the sun does not move, so the pass only runs when the shadow volume has
+ * shifted). A body is neither static nor still, so whoever owns the sun needs
+ * to know when one of these is on screen. This is that list.
+ */
+export const liveBodies = new Set();
 
 const _yAxis = new THREE.Vector3(0, 1, 0);
 const _qDelta = new THREE.Quaternion();

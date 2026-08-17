@@ -71,7 +71,7 @@ import { dropAlpha, normalIsBlank, roughnessIsEmpty, ROUGHNESS_DEFAULT } from '.
 const TAG = 'cs3d-weapons';
 const fail = (msg) => failWith(TAG, msg);
 
-export const PACK_VERSION = 2;
+export const PACK_VERSION = 3;
 const RAW_DIR = path.join(ROOT, 'server', 'data', 'cs3d', 'raw', 'weapons');
 const PACK_DIR = path.join(ROOT, 'server', 'data', 'cs3d', 'pack', 'weapons');
 const PLAYERS_RAW = path.join(ROOT, 'server', 'data', 'cs3d', 'raw', 'players', 'models');
@@ -257,6 +257,21 @@ function readWeaponTable(dumpText) {
 
 // ---- import -----------------------------------------------------------------
 
+/**
+ * Does this glb carry a skin? Cheap enough to ask of every cached model: the
+ * JSON chunk is at a fixed offset and the answer decides whether an export from
+ * before `--gltf_export_animations` has to be taken again.
+ */
+function hasSkin(file) {
+  try {
+    const buf = fs.readFileSync(file);
+    if (buf.length < 20 || buf.readUInt32LE(0) !== 0x46546c67) return false;
+    return /"skins"\s*:/.test(buf.subarray(20, 20 + buf.readUInt32LE(12)).toString('utf8'));
+  } catch {
+    return false;
+  }
+}
+
 async function importAll(vrf, gameDir) {
   const pak = path.join(gameDir, 'pak01_dir.vpk');
   await fsp.mkdir(RAW_DIR, { recursive: true });
@@ -277,11 +292,33 @@ async function importAll(vrf, gameDir) {
   let exported = 0;
   for (const w of wanted) {
     const glb = path.join(models, ...`${w.model}.glb`.split('/'));
-    if (!force && fs.existsSync(glb)) continue;
+    if (!force && fs.existsSync(glb) && hasSkin(glb)) continue;
     try {
       await runVrf(
         vrf,
-        ['-i', pak, '-f', `${w.model}.vmdl_c`, '-d', '-o', models, '--gltf_export_format', 'glb', '--gltf_export_materials', '--threads', String(threads)],
+        [
+          '-i',
+          pak,
+          '-f',
+          `${w.model}.vmdl_c`,
+          '-d',
+          '-o',
+          models,
+          '--gltf_export_format',
+          'glb',
+          '--gltf_export_materials',
+          // Without this VRF writes the meshes and NOTHING else: no skeleton,
+          // no skin, just vertices carrying joint indices that point at bones
+          // it did not export. A weapon then only exists in its bind pose, and
+          // the bind pose is not the pose the gun is held in — the revolver's
+          // crane is swung out, the Dual Berettas are stacked in one hand and
+          // the molotov's lighter sits inside the bottle. The clips animate
+          // those bones by name (`cylinder`, `weapon_hand_l`, `lighter`); this
+          // is what gives them something to animate.
+          '--gltf_export_animations',
+          '--threads',
+          String(threads)
+        ],
         `${w.name}`,
         { quiet: true }
       );
@@ -333,11 +370,36 @@ function restWorld(rootNode) {
   return out;
 }
 
+/** Per-joint `restWorld · inverseBind` for a skin: skin space → rest pose. */
+function skinRestBones(skin, doc) {
+  const world = new Map();
+  const walk = (n, parent) => {
+    if (n.getMesh()) return;
+    const m = parent.clone().multiply(new Matrix4().fromArray(n.getMatrix()));
+    world.set(n, m);
+    for (const c of n.listChildren()) walk(c, m);
+  };
+  for (const sc of doc.getRoot().listScenes()) for (const c of sc.listChildren()) walk(c, new Matrix4());
+  const ibm = skin.getInverseBindMatrices();
+  return skin.listJoints().map((jointNode, i) => {
+    const w = world.get(jointNode) || new Matrix4();
+    return ibm ? w.clone().multiply(new Matrix4().fromArray(ibm.getElement(i, []))) : w;
+  });
+}
+
 /**
- * The skeleton root of a VRF export: the one top-level node that holds bones
+ * The skeleton roots of a VRF export: the top-level nodes that hold bones
  * rather than a mesh. Normalized to our frame (Source units, −90° about x) the
  * same way cs3d-models.mjs does it, so a weapon, a body and a pair of hands
  * all agree about which way is up.
+ *
+ * EVERY such root, not just the first. A viewmodel clip carries two skeletons
+ * side by side — `characters/viewmodel.vnmskel` and, for a weapon that has its
+ * own bones, `weapons/<name>.vnmskel` — and VRF gives them the SAME root matrix
+ * (0.0254 with an axis permutation), which is what puts them in one space.
+ * Normalizing only the first broke that: the arms came out in Source units the
+ * right way up and the gun stayed 1/39th the size in a permuted frame, so its
+ * bones could not be used and the model had to be hung off `wpn` by hand.
  */
 function normalizeSkeletonRoot(doc, label) {
   const scene = doc.getRoot().listScenes()[0];
@@ -346,8 +408,13 @@ function normalizeSkeletonRoot(doc, label) {
   const root = roots[0];
   const s = root.getScale();
   if (Math.abs(s[0] - 0.0254) > 1e-6) throw new Error(`${label}: unexpected root scale ${s}`);
-  root.setTranslation([0, 0, 0]).setScale([1, 1, 1]);
-  root.setRotation(new Quaternion().setFromAxisAngle(new Vector3(1, 0, 0), -Math.PI / 2).toArray());
+  const q = new Quaternion().setFromAxisAngle(new Vector3(1, 0, 0), -Math.PI / 2).toArray();
+  for (const n of roots) {
+    // The `.empty_mesh_reference` stubs beside each skeleton are already at
+    // identity and are not one of them.
+    if (Math.abs(n.getScale()[0] - 0.0254) > 1e-6) continue;
+    n.setTranslation([0, 0, 0]).setScale([1, 1, 1]).setRotation(q);
+  }
   // root_motion carries a rotation on models and none on clips; fold it into
   // the children so both conventions meet (cs3d-models.mjs normalizeRootMotion).
   const rm = doc.getRoot().listNodes().find((n) => n.getName() === 'root_motion');
@@ -564,7 +631,13 @@ async function packWeapon(w) {
       if (Math.abs(s[0] - 0.0254) < 1e-6) n.setScale([1, 1, 1]).setRotation(q).setTranslation([0, 0, 0]);
     }
   }
-  if (root) root.setName(w.name);
+  // NOT `w.name`: a clip addresses a bone by name, and several weapons carry a
+  // bone with the weapon's own name — `molotov` names both the bottle's bone
+  // and, if this were `w.name`, the model root above it. three binds a track to
+  // the first match in the subtree, so `molotov.position` drove the whole model
+  // 26 units out of frame instead of the bottle within it, and the molotov
+  // vanished off the side of the screen.
+  if (root) root.setName(`${w.name}.model`);
   const texBytes = await packMaterials(doc, w.name, 512);
   await doc.transform(prune(), dedup());
   await doc.transform(reorder({ encoder: MeshoptEncoder, target: 'size' }), quantize({ quantizePosition: 14, quantizeNormal: 10, quantizeTexcoord: 12 }));
@@ -666,12 +739,43 @@ async function computeVmOffsets(weapons, weaponAnims, vmanims) {
         );
       const mesh = node.getMesh();
       if (mesh) {
+        // Skinned, so the node transform is not where the geometry is: the
+        // bones are, and `quantize` folds its scale into the inverse binds
+        // rather than onto a skinned mesh's node (it cannot put it there
+        // without shearing the skin). Read the vertices through the rest pose
+        // — the same thing the renderer draws before a clip touches it — or
+        // this measures a model 1/20th of its real length and every weapon
+        // fails the sanity gate.
+        const skin = node.getSkin();
+        const bones = skin ? skinRestBones(skin, doc) : null;
         for (const prim of mesh.listPrimitives()) {
           const pos = prim.getAttribute('POSITION');
           if (!pos) continue;
+          const J = prim.getAttribute('JOINTS_0');
+          const W = prim.getAttribute('WEIGHTS_0');
           const el = [];
+          const j = [];
+          const wt = [];
           for (let i = 0; i < pos.getCount(); i++) {
-            const v = new Vector3().fromArray(pos.getElement(i, el)).applyMatrix4(m);
+            const raw = new Vector3().fromArray(pos.getElement(i, el));
+            let v;
+            if (bones && J && W) {
+              J.getElement(i, j);
+              W.getElement(i, wt);
+              v = new Vector3();
+              let sum = 0;
+              for (let k = 0; k < 4; k++) {
+                const b = bones[j[k]];
+                if (!b || !wt[k]) continue;
+                v.add(raw.clone().applyMatrix4(b).multiplyScalar(wt[k]));
+                sum += wt[k];
+              }
+              if (sum > 1e-4) v.divideScalar(sum);
+              else v = raw.clone();
+              v.applyMatrix4(m);
+            } else {
+              v = raw.applyMatrix4(m);
+            }
             pts.push(v);
             if (v.x < minX) minX = v.x;
             if (v.x > maxX) maxX = v.x;
@@ -1028,6 +1132,11 @@ async function packVmSet(set, { quiet = false } = {}) {
   const buffer = out.createBuffer();
   const scene = out.createScene('vmanims');
   const nodes = new Map();
+  // Bones that belong to the weapon's skeleton rather than the arms'. Their
+  // "still" translations have to survive: see the filter below.
+  const weaponSide = new Set();
+  // ...except the one at the top of it, whose translation must NOT.
+  const weaponRoot = new Set();
   const clips = [];
   let kept = 0;
   let dropped = 0;
@@ -1039,15 +1148,19 @@ async function packVmSet(set, { quiet = false } = {}) {
     if (!nodes.size) {
       normalizeSkeletonRoot(doc, `${set.key} rig`);
       const src = doc.getRoot().listScenes()[0].listChildren().filter((n) => !n.getMesh());
-      const copy = (n, parent) => {
+      const copy = (n, parent, weapon, depth) => {
         if (n.getMesh()) return;
         const nn = out.createNode(n.getName()).setTranslation(n.getTranslation()).setRotation(n.getRotation()).setScale(n.getScale());
         nodes.set(n.getName(), nn);
+        if (weapon) {
+          weaponSide.add(n.getName());
+          if (depth === 1) weaponRoot.add(n.getName());
+        }
         if (parent) parent.addChild(nn);
         else scene.addChild(nn);
-        for (const ch of n.listChildren()) copy(ch, nn);
+        for (const ch of n.listChildren()) copy(ch, nn, weapon, depth + 1);
       };
-      for (const n of src) copy(n, null);
+      for (const n of src) copy(n, null, /skeletons\/weapons\//.test(n.getName()), 0);
     }
     const a = out.createAnimation(c.name);
     // The clip's length first, over every channel. A clip where some bones are
@@ -1074,7 +1187,21 @@ async function packVmSet(set, { quiet = false } = {}) {
       const s = ch.getSampler();
       const inArr = s.getInput().getArray();
       const outArr = s.getOutput().getArray();
-      if (pathName === 'translation') {
+      // The weapon skeleton's own root carries no translation worth having.
+      // The clip pins it to the origin — all 441 of these channels are a
+      // constant [0,0,0] — while the MODEL's bone of that name holds the offset
+      // from the hand attachment to that gun's origin, which is different for
+      // every weapon (the Deagle's is 1.8 forward and 2.9 up). Writing the
+      // clip's zero over it drops the gun that far out of the grip, which is
+      // exactly how far the pistols were sitting above the fist.
+      if (pathName === 'translation' && weaponRoot.has(target.getName())) continue;
+      // A channel that never leaves the rest pose is the mixer's default, so
+      // it can go — but only on the arms, where the rest pose in this file is
+      // the rest pose at runtime too. Below the weapon's root it is not: the
+      // model's rest there is a bind pose, not a held pose (the revolver's
+      // crane is swung open in it), and the clip's "still" value is what closes
+      // it.
+      if (pathName === 'translation' && !weaponSide.has(target.getName())) {
         const rest = target.getTranslation();
         let still = true;
         for (let i = 0; i < outArr.length && still; i += 3) {

@@ -37,7 +37,7 @@ import { AnimationMixer, LoopOnce, LoopRepeat } from 'three';
 import { assetBase } from './mapLoader.js';
 import { UNIT_M } from '../../shared/sim3d/units.js';
 
-export const WEAPONS_PACK_VERSION = 2;
+export const WEAPONS_PACK_VERSION = 3;
 
 const DEG = Math.PI / 180;
 
@@ -54,7 +54,29 @@ export const VIEWMODEL_FOV = 68;
  * the probe at something like full strength, and inheriting the world's 0.1
  * leaves metal exactly as black as having no environment at all. `[verify]`
  */
-const VIEWMODEL_ENV_INTENSITY = 1;
+export const VIEWMODEL_ENV_INTENSITY = 1;
+/**
+ * The pass's sun, in irradiance.
+ *
+ * Direction, colour and shade come from the map; this level does not, and
+ * deliberately. `MapLighting.sunIntensity` is a world number (60 on Nuke —
+ * `brightness × SUN_SCALE × SUN_BOOST`) that the lightmapped materials and the
+ * props' own DirectionalLight consume, and feeding it to a standard material
+ * renders white: three's Lambert divides by π, so π units of irradiance is what
+ * puts an albedo of 1 on screen at 1.0 (fpsView.js says the same thing).
+ *
+ * 0.7π is what this pass has always used, and it is the right anchor for a
+ * reason beyond continuity: MapLighting sets the tone-mapping exposure so that
+ * a world surface facing the unshadowed sun lands on EXPOSURE_TARGET. A gun
+ * rendering its own albedo at 1.0 therefore lands in the same place, on any
+ * map, without knowing anything about that map's numbers.
+ */
+export const VIEWMODEL_SUN = 0.7 * Math.PI;
+/** Half-width of the viewmodel pass's shadow frustum, in Source units. */
+const VM_SHADOW_EXTENT = 30;
+/** How far out the pass's sun sits. Only the direction matters to the shading;
+ *  the distance is there so the whole viewmodel is in front of its shadow camera. */
+const VM_SUN_DISTANCE = 200;
 
 /**
  * Where the rig sits in view space, units. The viewmodel rig is authored with
@@ -210,8 +232,10 @@ export class ViewModelAssets {
           gltf.scene.traverse((o) => {
             if (!o.isMesh) return;
             o.frustumCulled = false;
-            o.castShadow = false;
-            o.receiveShadow = false;
+            // Both, so the gun shades the hands and a hand shades the arm
+            // behind it (createViewModelPass's key carries a shadow map).
+            o.castShadow = true;
+            o.receiveShadow = true;
           });
           this.arms[side] = gltf.scene;
         })
@@ -258,8 +282,8 @@ export class ViewModelAssets {
         gltf.scene.traverse((o) => {
           if (!o.isMesh) return;
           o.frustumCulled = false;
-          o.castShadow = false;
-          o.receiveShadow = false;
+          o.castShadow = true;
+          o.receiveShadow = true;
         });
         this.models.set(key, gltf.scene);
         this._pending.delete(key);
@@ -276,15 +300,22 @@ export class ViewModelAssets {
   }
 
   /**
-   * Drop clip channels aimed at bones the arms rig does not carry — the
-   * weapon's own `bolt`, `trigger`, `magazine`. Left in, each is one
-   * PropertyBinding warning per track per action, thousands of them. Returns
-   * how many went.
+   * Drop clip channels aimed at bones nothing in the scene carries. Left in,
+   * each is one PropertyBinding warning per track per action, thousands of
+   * them. Returns how many went.
+   *
+   * `own` is the held weapon's own bone list, from the manifest. A weapon's
+   * clips animate its own skeleton as well as the arms — `slide_r` on a pistol,
+   * `crane` and `cylinder` on the revolver, `lighter` on the molotov — and now
+   * that the model ships those bones, those tracks are the point, not noise.
    */
-  _trimToRig(map) {
+  _trimToRig(map, own = null) {
     let dropped = 0;
     for (const clip of map.values()) {
-      const kept = clip.tracks.filter((t) => this._rigBones.has(t.name.slice(0, t.name.lastIndexOf('.'))));
+      const kept = clip.tracks.filter((t) => {
+        const bone = t.name.slice(0, t.name.lastIndexOf('.'));
+        return this._rigBones.has(bone) || !!own?.has(bone);
+      });
       dropped += clip.tracks.length - kept.length;
       clip.tracks = kept;
     }
@@ -304,11 +335,12 @@ export class ViewModelAssets {
     if (this._pendingSets.has(key)) return this._pendingSets.get(key);
     const s = this.manifest?.viewmodel?.weaponAnims?.[key];
     if (!s?.file) return Promise.resolve(null);
+    const own = new Set(this.stats(key)?.bones || []);
     const job = this._fetch(s.file)
       .then((gltf) => {
         const map = new Map();
         for (const c of gltf.animations) map.set(c.name, c);
-        this._trimToRig(map);
+        this._trimToRig(map, own);
         this.weaponSets.set(key, map);
         this._pendingSets.delete(key);
         return map;
@@ -400,12 +432,17 @@ export class ViewModel {
     this.side = side;
     if (this.arms) {
       this.mixer?.stopAllAction();
-      this.mixer?.uncacheRoot(this.arms);
+      this.mixer?.uncacheRoot(this.rig);
       this.rig.remove(this.arms);
     }
     this.arms = cloneSkinned(tmpl);
     this.rig.add(this.arms);
-    this.mixer = new AnimationMixer(this.arms);
+    // Rooted at the rig, not the arms: a viewmodel clip drives TWO skeletons.
+    // The arms are one; the weapon's own bones are the other, and they are a
+    // sibling of the arms in the clip, not a child. Rooting on the arms left
+    // every weapon-side track unresolvable, which is why they had to be
+    // trimmed away and the gun hung off `wpn` by a solved offset instead.
+    this.mixer = new AnimationMixer(this.rig);
     this.actions.clear();
     // Where the weapon hangs. `wpn` is the viewmodel rig's own weapon bone and
     // the clips animate it (65 nodes a clip, `wpn` among them), so a gun
@@ -539,6 +576,11 @@ export class ViewModel {
     }
     this.actions.clear();
     this.mixer?.stopAllAction();
+    // And drop the mixer's cached bindings with them. Every weapon's skeleton
+    // uses the same bone names (`weapon`, `trigger`, `magazine`), so a binding
+    // cached against the rig would still be pointing at the LAST gun's bone of
+    // that name — an object no longer in the scene.
+    this.mixer?.uncacheRoot(this.rig);
     // The weapon's own clips ride along with its model — one round touches a
     // handful of weapons, and CS2 animates each of them differently.
     const [model, own] = await Promise.all([this.assets.model(bare), this.assets.weaponClips(bare)]);
@@ -547,6 +589,17 @@ export class ViewModel {
     this.applyWeaponTune(); // this weapon's own placement, not the last one's
     if (model) {
       this.weaponModel = cloneSkinned(model);
+      // Still on the mount, even now that the weapon brings its own skeleton.
+      //
+      // A clip carries the weapon's bones as a SIBLING of the arms', both at
+      // the origin, but that is only how VRF writes two skeletons to one file —
+      // it is not where the gun goes. The engine attaches the weapon skeleton
+      // to the arms' `wpn`, and the clips say so: `attachHand_R` is animated to
+      // exactly `wpn` on every frame. Measured both ways, the weapon's own
+      // `ag1_hand_r` grip marker lands 14-17 units from `hand_R` as a sibling
+      // and 2.5-3.5 from it on the mount — and on the mount the residual is the
+      // SAME vector in hand space for every weapon (wrist to palm), which is
+      // what says it is anatomy and not a placement error.
       (this.wpnMount || this.rig).add(this.weaponModel);
       this._applyCull(); // a freshly cloned gun starts on the default side
     }
@@ -723,16 +776,66 @@ export function createViewModelPass(renderer, { fov = VIEWMODEL_FOV } = {}) {
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(fov, 1, 0.5, 400);
   scene.add(camera);
-  // A key over the shoulder and a soft fill: enough shape on a gun barrel
-  // without pretending to be the map's lighting.
+  // The map's sun, once `setSun` has it — until then a key over the shoulder,
+  // which is what this pass used to have permanently.
   const key = new THREE.DirectionalLight(0xffffff, 2.2);
   key.position.set(-0.4, 1, 0.6);
   const fill = new THREE.AmbientLight(0xffffff, 0.55);
   scene.add(key, key.target, fill);
+  // The gun shades the hands holding it. Cheap here in a way it is not in the
+  // world: this scene is two meshes inside a 40-unit box, so a small map over a
+  // tight frustum gives a texel a twentieth of a unit — fine enough for a
+  // thumb across a slide, where the world's 4096 over 4400 units is not.
+  key.castShadow = true;
+  key.shadow.mapSize.set(1024, 1024);
+  key.shadow.camera.left = -VM_SHADOW_EXTENT;
+  key.shadow.camera.right = VM_SHADOW_EXTENT;
+  key.shadow.camera.top = VM_SHADOW_EXTENT;
+  key.shadow.camera.bottom = -VM_SHADOW_EXTENT;
+  key.shadow.camera.near = Math.max(0.1, VM_SUN_DISTANCE - 3 * VM_SHADOW_EXTENT);
+  key.shadow.camera.far = VM_SUN_DISTANCE + 3 * VM_SHADOW_EXTENT;
+  key.shadow.bias = -0.0015;
+  key.shadow.normalBias = 0.05;
+  key.shadow.camera.updateProjectionMatrix();
+  const _euler = new THREE.Euler();
 
   return {
     scene,
     camera,
+    /**
+     * Point the pass's sun where the map's sun is, from where the player is
+     * standing and facing.
+     *
+     * This scene is camera space: the gun sits at the origin looking down −z
+     * and never moves, so a light fixed in it is a light bolted to the player's
+     * head. Turning around changed nothing — the same highlight stayed on the
+     * same side of the barrel with the sun behind you. The direction has to be
+     * the world's sun run through the camera's rotation, which is what the
+     * caller passes.
+     *
+     * @param {THREE.Vector3} toSunView  unit vector toward the sun, in view space
+     * @param {THREE.Color} color
+     * @param {number} intensity
+     */
+    setSun(toSunView, color, intensity) {
+      if (toSunView) key.position.copy(toSunView).multiplyScalar(VM_SUN_DISTANCE);
+      if (color) key.color.copy(color);
+      if (Number.isFinite(intensity)) key.intensity = intensity;
+      key.updateMatrixWorld();
+    },
+    /**
+     * Turn the sky probe with the view, for the same reason.
+     *
+     * Reflections are sampled in this scene's space, which is view space, so
+     * without this the sky is glued to the player's head: a barrel reflects the
+     * same slice of sky whichever way you face. Rotating the environment by the
+     * camera's own rotation puts the reflected sky back in the world, so a
+     * chrome Deagle sweeps the horizon past its slide as you turn.
+     */
+    setViewRotation(quaternion) {
+      if (!quaternion) return;
+      scene.environmentRotation = _euler.setFromQuaternion(quaternion);
+    },
     /**
      * Hand the pass the map's own sky probe.
      *
