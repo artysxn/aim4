@@ -63,7 +63,7 @@ import { Matrix4, Quaternion, Vector3 } from 'three';
 
 import { ROOT, fail as failWith, assertLocalOutput, findVrf, findGameDir, runVrf } from './lib/vrf.mjs';
 import { parseKv3, resolveBase } from './lib/kv3.mjs';
-import { dropAlpha, normalIsBlank } from './lib/texAlpha.mjs';
+import { dropAlpha, normalIsBlank, roughnessIsEmpty, ROUGHNESS_DEFAULT } from './lib/texAlpha.mjs';
 
 const TAG = 'cs3d-weapons';
 const fail = (msg) => failWith(TAG, msg);
@@ -317,11 +317,26 @@ async function sizeOf(tex, cap) {
 }
 
 /**
- * The same channel layout the maps and the players use: albedo lossy, normal
- * near-lossless RGB, and one lossless ORM built from AO's R, the normal's
- * alpha (Source 2 keeps roughness there) and metalness's R.
+ * Albedo lossy, normal near-lossless RGB, and one lossless ORM — but where the
+ * roughness and metalness come from depends on what is being packed, because
+ * CS2 does not use one convention for both.
+ *
+ * `convention: 'character'` is `csgo_character.vfx`, which the agents and the
+ * viewmodel ARMS use (the arms are cut out of the agent models — see the header
+ * note 3, and cs3d-models.mjs, which packs the same textures the same way):
+ * roughness rides in `g_tNormal`'s ALPHA, and the metallicRoughness slot holds
+ * a metalness map, so metalness is its R.
+ *
+ * `convention: 'weapon'` is `csgo_weapon.vfx`, and it is a different layout
+ * entirely: the normal's alpha is EMPTY, and the metallicRoughness slot holds
+ * the weapon's `_rough` texture with **roughness in R and metalness in G**.
+ * The tell is the stand-in Source ships for a weapon with no map of its own,
+ * `default_rough.tga` = (128, 0, 0): half rough, not metal. Read with the
+ * character rule instead — which is what this packer did — every weapon in the
+ * pack came out roughness 0 (a perfect mirror) with its metalness lifted from
+ * the roughness map, and all 66 rendered as polished chrome.
  */
-async function packMaterials(doc, label, cap = 512) {
+async function packMaterials(doc, label, cap = 512, { convention = 'weapon' } = {}) {
   doc.createExtension(EXTTextureWebP).setRequired(true);
   let bytes = 0;
   const seen = new Map();
@@ -359,7 +374,23 @@ async function packMaterials(doc, label, cap = 512) {
         bytes += buf.length;
       }
       const { w, h } = await sizeOf(normal || ao || metal, cap / 2);
-      const [o, r, m] = await Promise.all([channelAt(ao, 0, w, h, 255), channelAt(normal, 3, w, h, 180), channelAt(metal, 0, w, h, 0)]);
+      // `metal` is the metallicRoughness slot, which holds a metalness map on a
+      // character and the `_rough` map on a weapon — see the convention note.
+      const [o, r, m] = await Promise.all([
+        channelAt(ao, 0, w, h, 255),
+        convention === 'weapon' ? channelAt(metal, 0, w, h, ROUGHNESS_DEFAULT) : channelAt(normal, 3, w, h, ROUGHNESS_DEFAULT),
+        convention === 'weapon' ? channelAt(metal, 1, w, h, 0) : channelAt(metal, 0, w, h, 0)
+      ]);
+      // The same rail cs3d-models.mjs carries: an all-zero roughness is a
+      // channel that was never authored, not a mirror finish. Reading one at
+      // face value is what put chrome on every gun.
+      if (r.data && roughnessIsEmpty(r.data)) {
+        console.warn(
+          `cs3d-weapons: ${label} — the ${convention === 'weapon' ? 'roughness map' : "normal map's alpha"} is empty ` +
+            `across ${w}x${h}; using ${(ROUGHNESS_DEFAULT / 255).toFixed(2)} instead of rendering it as a mirror`
+        );
+        r.data = Buffer.alloc(w * h, ROUGHNESS_DEFAULT);
+      }
       if (o.data || r.data || m.data) {
         const fill = (c) => c.data || Buffer.alloc(w * h, c.constant);
         const od = fill(o);
@@ -497,9 +528,25 @@ function rebindArms(out, agentDoc, vmDoc, label) {
     const ibmAcc = skin.getInverseBindMatrices();
     // agentBind(b) is the inverse of its inverse-bind; vmRest(b) is where the
     // same bone sits in the viewmodel's rest pose.
+    //
+    // A joint that FOLDS (a `…_TWIST` helper the viewmodel rig does not carry)
+    // has to take its parent's inverse bind, not its own. Pairing the parent's
+    // vm rest with the helper's own bind is a translation by the gap between
+    // them, and that gap is the length of half a forearm: `arm_lower_L_TWIST1`
+    // came out 5.65 units from where `arm_lower_L` put its neighbours, and the
+    // two TWIST1 helpers carry 22.7% of the arms' vertex weight between them.
+    // The result was a forearm torn between two positions — clean at the
+    // fingers, where every joint is real, and worse the further up the arm the
+    // helpers take over. Folding onto the parent's bind is what "rides its
+    // parent" has to mean: the vertex behaves exactly as if it had been
+    // weighted to the parent to begin with.
     const xform = srcJoints.map((name, i) => {
       const target = resolveJoint(name);
       if (!target) return null;
+      if (target !== name) {
+        const p = srcJoints.indexOf(target);
+        if (p >= 0) i = p;
+      }
       const rest = vmRest.get(target);
       if (!rest) return null;
       const ibm = new Matrix4().fromArray(ibmAcc.getElement(i, []));
@@ -866,7 +913,9 @@ async function main() {
           prim.setMaterial(copy);
         }
       }
-      const texBytes = await packMaterials(out, `${a.side}_arms`, 1024);
+      // The arms are agent geometry with agent materials, so they take the
+      // character channel layout, not the weapon one.
+      const texBytes = await packMaterials(out, `${a.side}_arms`, 1024, { convention: 'character' });
       // Prune everything EXCEPT nodes: the arms glb is also the rig, and the
       // bones the mesh does not weight are exactly the ones that matter for
       // attaching — `wpn` and the weapon's own `weapon` / `weapon_offset`,

@@ -322,9 +322,31 @@ export class ViewModel {
     this.mixer = new AnimationMixer(this.arms);
     this.actions.clear();
     // Where the weapon hangs. `wpn` is the viewmodel rig's own weapon bone and
-    // the clips animate it, so a gun parented here moves with the hands.
+    // the clips animate it (65 nodes a clip, `wpn` among them), so a gun
+    // parented here moves with the hands.
     this.wpnBone = this.arms.getObjectByName('wpn') || this.arms.getObjectByName('weapon') || this.arms;
-    if (this.weaponModel) this.wpnBone.add(this.weaponModel);
+    // ...but parented DIRECTLY it gets the bone's rest pose applied twice.
+    //
+    // Both halves of the pack are normalized to the same frame — eye at the
+    // origin, +x forward, the whole thing turned by −90° about x (see
+    // cs3d-weapons.mjs normalizeSkeletonRoot, and the manifest's `frame`). A
+    // weapon glb is authored in THAT space, not in the space of the bone it
+    // hangs from: `w_ak47`'s mesh sits at x ≈ 7 with the −90° already baked in,
+    // measured from the eye. The `wpn` bone is at (17, 0, 0) carrying the same
+    // −90°. Add one to the other and the gun is shoved 17 units further down
+    // the barrel axis and rolled a second −90° — which is the gun hanging at a
+    // broken angle out past the hands.
+    //
+    // So the mount cancels the bone's rest transform. A weapon under it lands
+    // exactly where its own transform says, and still rides `wpn` when the clip
+    // moves it. Fixed matrix, because it is a constant of the rig.
+    this.arms.updateWorldMatrix(true, true);
+    this.wpnMount = new THREE.Group();
+    this.wpnMount.name = 'wpnMount';
+    this.wpnMount.matrixAutoUpdate = false;
+    this.wpnMount.matrix.copy(this.arms.matrixWorld).invert().multiply(this.wpnBone.matrixWorld).invert();
+    this.wpnBone.add(this.wpnMount);
+    if (this.weaponModel) this.wpnMount.add(this.weaponModel);
   }
 
   /**
@@ -353,7 +375,7 @@ export class ViewModel {
     if (this.weaponName !== bare) return; // switched again while fetching
     if (model) {
       this.weaponModel = cloneSkinned(model);
-      (this.wpnBone || this.rig).add(this.weaponModel);
+      (this.wpnMount || this.rig).add(this.weaponModel);
     }
     this.nextAttack = draw ? stats.deploy || 0 : 0;
     if (draw) this._play('draw', { loop: false });

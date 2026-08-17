@@ -41,6 +41,31 @@ export async function dropAlpha(img) {
 }
 
 /**
+ * The default roughness for a slot that has none: 180/255 ≈ 0.71, the value
+ * `channelAt` fills in when the texture is absent altogether.
+ */
+export const ROUGHNESS_DEFAULT = 180;
+
+/**
+ * Is this extracted roughness channel empty rather than authored?
+ *
+ * VRF does not always carry roughness through, and it goes missing in a
+ * different place for each shader: `csgo_character.vfx` keeps it in the normal
+ * map's ALPHA, and `ctm_sas_body`'s comes out zero across every texel;
+ * `csgo_weapon.vfx` keeps it in a `_rough` map's R. Read at face value either
+ * one is roughness 0 — a perfect mirror — which put chrome on the CT's vest and
+ * on all 66 weapons.
+ *
+ * A material can legitimately be fully rough, and a small dark patch is
+ * ordinary; what cannot happen is an entire sheet at zero. So the test is
+ * "nothing above ~1/255 anywhere", which no authored roughness map satisfies.
+ */
+export function roughnessIsEmpty(buf) {
+  for (let i = 0; i < buf.length; i++) if (buf[i] > 1) return false;
+  return true;
+}
+
+/**
  * Is this normal map blank rather than authored?
  *
  * The rail under dropAlpha, and under whatever VRF does next: a tangent-space
