@@ -594,10 +594,10 @@ export class UIOverlay {
               <option value="left">Left</option>
             </select>
           </div>
-          ${rf('set-vm-fov', 'Viewmodel FOV', 50, 90, 1)}
-          ${rf('set-vm-ox', 'Offset X (right)', -0.5, 0.5, 0.01)}
-          ${rf('set-vm-oy', 'Offset Y (up)', -0.5, 0.5, 0.01)}
-          ${rf('set-vm-oz', 'Offset Z (forward)', 0.2, 1.0, 0.01)}
+          ${rf('set-vm-fov', 'Viewmodel FOV', 55, 68, 1)}
+          ${rf('set-vm-ox', 'Hands right', -0.5, 0.5, 0.01)}
+          ${rf('set-vm-oy', 'Hands up', -0.5, 0.5, 0.01)}
+          ${rf('set-vm-oz', 'Hands forward', -0.5, 1.0, 0.01)}
           <label class="field-check"><input type="checkbox" id="set-vm-bob" /> Weapon bob while moving</label>
           <label class="field-check"><input type="checkbox" id="set-vm-aimpunch" /> Aimpunch (view-punch recoil)</label>
           <div class="field field-plain">

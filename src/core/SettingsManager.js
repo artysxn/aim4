@@ -15,6 +15,14 @@ import { normalizeGraphicsConfig, replayBloomSettingsFrom } from '../utils/graph
 
 const SETTINGS_VERSION = 2;
 
+/**
+ * Viewmodel FOV bounds, CS2's own for `viewmodel_fov`. Lower is a bigger gun
+ * closer to the eye. Anything outside this stops looking like the game, which
+ * is the point of the setting, so it is clamped on load as well as in the UI.
+ */
+export const VIEWMODEL_FOV_MIN = 55;
+export const VIEWMODEL_FOV_MAX = 68;
+
 export const RESOLUTIONS = {
   native: { label: 'Native', size: null },
   '1920x1080': { label: '1920 × 1080 (16:9)', size: [1920, 1080] },
@@ -121,8 +129,8 @@ export const DEFAULTS = {
     outlineOpacity: 1
   },
   viewmodel: {
-    hand: 'right', // 'right' | 'left'
-    fov: 68, // viewmodel field of view (approx; lower = bigger/closer)
+    hand: 'right', // 'right' | 'left' — left mirrors the whole viewmodel
+    fov: 68, // viewmodel field of view; CS2's own range (VIEWMODEL_FOV_MIN..MAX)
     offsetX: 0.16, // metres right of centre (flipped for left hand)
     offsetY: -0.15, // metres below the eye
     offsetZ: 0.5, // metres forward
@@ -611,7 +619,17 @@ export class SettingsManager {
     const merged = this._deepMerge(structuredClone(DEFAULTS), saved);
     this._normalizeSensitivity(merged);
     this._normalizeCrosshair(merged);
+    this._normalizeViewmodel(merged);
     return merged;
+  }
+
+  /** Keep the viewmodel FOV inside CS2's range and the hand to the two it has. */
+  _normalizeViewmodel(data) {
+    const vm = data.viewmodel;
+    if (!vm) return;
+    const fov = Number(vm.fov);
+    vm.fov = Number.isFinite(fov) ? Math.min(VIEWMODEL_FOV_MAX, Math.max(VIEWMODEL_FOV_MIN, fov)) : DEFAULTS.viewmodel.fov;
+    if (vm.hand !== 'left') vm.hand = 'right';
   }
 
   /** Migrate legacy crosshair.outline boolean → outlineThickness. */

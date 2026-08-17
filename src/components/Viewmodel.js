@@ -340,7 +340,10 @@ export class Viewmodel {
     const hand = cfg.hand === 'left' ? -1 : 1;
     const ox = (cfg.offsetX ?? 0.16) * hand;
     const oy = cfg.offsetY ?? -0.15;
-    const oz = cfg.offsetZ ?? 0.5;
+    // The setting's range now reaches back past the eye, because the cs3d
+    // viewmodel reads it as a delta. Here it is an absolute distance in front,
+    // so it keeps a floor rather than letting the gun end up behind the camera.
+    const oz = Math.max(0.1, cfg.offsetZ ?? 0.5);
 
     let bobX = 0;
     let bobY = 0;

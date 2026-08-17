@@ -229,6 +229,13 @@ export class Controls {
         case 'KeyM':
           this.hooks.onSpeed?.();
           break;
+        // The viewmodel placement sliders (src/cs3d/vmTuner.js). U because it
+        // is one of the few letters nothing else in here claims; Backslash
+        // rides along for keyboards that have it.
+        case 'KeyU':
+        case 'Backslash':
+          this.hooks.onVmTune?.();
+          break;
         case 'KeyX':
           this.hooks.onPovExit?.();
           break;

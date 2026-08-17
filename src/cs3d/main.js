@@ -26,6 +26,8 @@ import { createBuyMenu } from './buyMenu.js';
 import { placeThirdPersonCamera } from './thirdPerson.js';
 import { mountCrosshair } from './crosshairOverlay.js';
 import { ViewModelAssets, ViewModel, createViewModelPass } from './viewModel.js';
+import { createViewModelTuner } from './vmTuner.js';
+import { SettingsManager, VIEWMODEL_FOV_MIN, VIEWMODEL_FOV_MAX } from '../core/SettingsManager.js';
 import { loadDemoBytes, loadDemoFile } from './demoData.js';
 
 const params = new URLSearchParams(location.search);
@@ -128,7 +130,13 @@ const controls = new Controls(canvas, player, {
   // B: the buy menu. It needs the mouse, so opening it gives the pointer back
   // and closing it takes the lock again.
   onBuy: () => buyMenu.toggle(),
-  onCancel: () => buyMenu.close()
+  // Backslash: the viewmodel placement sliders. Same deal as the buy menu —
+  // it needs the cursor, so it drops the pointer lock while it is up.
+  onVmTune: () => vmTuner.toggle(),
+  onCancel: () => {
+    buyMenu.close();
+    vmTuner.close();
+  }
 });
 let thirdPerson = false;
 const hud = new Hud(uiRoot, {
@@ -193,6 +201,23 @@ const vmAssets = new ViewModelAssets();
 const viewModel = new ViewModel(vmAssets);
 const vmPass = createViewModelPass(renderer);
 vmPass.scene.add(viewModel.group);
+// Hand, FOV and the hand offsets are account settings, shared with the trainer
+// and synced to the profile — the same store the sensitivity above comes from.
+const vmSettings = new SettingsManager();
+const applyVmSettings = () => {
+  const vm = vmSettings.data.viewmodel || {};
+  viewModel.applySettings(vm);
+  vmPass.setFov(Math.min(VIEWMODEL_FOV_MAX, Math.max(VIEWMODEL_FOV_MIN, Number(vm.fov) || VIEWMODEL_FOV_MAX)));
+};
+applyVmSettings();
+vmSettings.onChange(applyVmSettings);
+// The vm camera is constructed at aspect 1 and was only ever corrected by the
+// resize listener, so the first frames of every session drew the viewmodel
+// stretched across the width of the window until something resized it (F11,
+// a drag, anything). Set it up front from the size we already have.
+vmPass.resize(window.innerWidth, window.innerHeight);
+// U opens the same settings as live sliders (src/cs3d/vmTuner.js).
+const vmTuner = createViewModelTuner({ viewModel, vmPass, settings: vmSettings, apply: applyVmSettings });
 
 /** 1 / 2 / 3, the game's slots. The draw animation and its lockout come free. */
 const SLOTS = { 1: 'ak47', 2: 'glock', 3: 'knife' };
@@ -383,6 +408,9 @@ async function boot() {
       }
     });
     lighting = new MapLighting(scene, camera, manifest, { shadows, renderer });
+    // The gun reflects the same sky the map stands under. Without it every
+    // metallic surface in the viewmodel pass is black (see setEnvironment).
+    vmPass.setEnvironment(scene.environment);
     pack.lightmapIntensity = lighting.lightmapIntensity;
     // The world's sun. Lightmapped geometry adds it itself, masked by the
     // baked shadow atlas, because CS2 leaves the sun out of the irradiance
@@ -402,6 +430,9 @@ async function boot() {
           // loadSkybox re-derives environmentIntensity from the real sky; the
           // look's sky knob is the value that stands (same in the 3D viewer).
           look.apply('sky');
+          // The real sky replaces the procedural probe, so the gun takes the
+          // new one too — at the viewmodel's own strength, not the world's.
+          vmPass.setEnvironment(scene.environment);
         })
         .catch(() => {});
     }
@@ -744,5 +775,5 @@ boot();
 requestAnimationFrame(frame);
 
 if (import.meta.env.DEV) {
-  window.__cs3d = { THREE, scene, camera, player, get pack() { return pack; }, renderer, lighting: () => lighting, fpsView, demoView, playerModels, viewModel, vmPass, buyMenu };
+  window.__cs3d = { THREE, scene, camera, player, get pack() { return pack; }, renderer, lighting: () => lighting, fpsView, demoView, playerModels, viewModel, vmPass, vmTuner, buyMenu };
 }

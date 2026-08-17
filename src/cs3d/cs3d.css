@@ -581,3 +581,63 @@ body {
 .c3-keys-demo b {
   color: #b9c6e8;
 }
+
+/* Viewmodel placement sliders (src/cs3d/vmTuner.js), Backslash. */
+.cs3d-vmtune {
+  position: fixed;
+  top: 56px;
+  right: 12px;
+  z-index: 40;
+  width: 268px;
+  padding: 10px 12px 12px;
+  border-radius: 10px;
+  background: rgba(12, 14, 18, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #e8ebf0;
+  font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+  backdrop-filter: blur(6px);
+}
+.cs3d-vmtune[hidden] { display: none; }
+.cs3d-vmtune header {
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.75;
+  margin-bottom: 8px;
+}
+.cs3d-vmtune-w { opacity: 0.6; text-transform: none; letter-spacing: 0; }
+.cs3d-vmtune label {
+  display: grid;
+  grid-template-columns: 74px 1fr 44px;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0;
+}
+.cs3d-vmtune label span { opacity: 0.7; }
+.cs3d-vmtune label b { font-weight: 500; text-align: right; font-variant-numeric: tabular-nums; }
+.cs3d-vmtune input[type='range'] { width: 100%; accent-color: #6ea8ff; }
+.cs3d-vmtune footer { display: flex; gap: 6px; margin-top: 10px; }
+.cs3d-vmtune button {
+  flex: 1;
+  padding: 5px 0;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.06);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.cs3d-vmtune button:hover { background: rgba(255, 255, 255, 0.12); }
+.cs3d-vmtune hr { border: 0; border-top: 1px solid rgba(255, 255, 255, 0.12); margin: 9px 0 6px; }
+.cs3d-vmtune-hand { display: flex; gap: 6px; margin-bottom: 8px; }
+.cs3d-vmtune-hand button {
+  flex: 1;
+  padding: 5px 0;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.06);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.cs3d-vmtune-hand button.on { background: #2f6df6; border-color: #2f6df6; }

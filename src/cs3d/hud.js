@@ -50,7 +50,7 @@ export class Hud {
             <div><b>1</b> T spawn, <b>2</b> CT spawn, <b>R</b> respawn</div>
             <div><b>Esc</b> release, <b>H</b> this panel</div>
             <div><b>I</b> inspect what you are looking at</div>
-            <div><b>G</b> colour grade sliders</div>
+            <div><b>G</b> colour grade sliders, <b>U</b> viewmodel placement</div>
             <div><b>V</b> flat view — no textures, max fps</div>
             <div class="c3-keys-demo"><b>Drop</b> an .aim4replay on the page to watch it here</div>
             <div class="c3-keys-demo"><b>1-0</b> player POV, <b>X</b> free camera</div>

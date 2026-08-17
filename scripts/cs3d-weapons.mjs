@@ -522,11 +522,34 @@ async function packWeapon(w) {
   if (!fs.existsSync(src)) return null;
   const doc = await io.read(src);
   // The physics/collision twin VRF writes beside the render model is not this.
+  //
+  // Neither are the OTHER mesh groups. A CS2 weapon vmdl carries alternates that
+  // the game picks between with a bodygroup and never draws together:
+  // `body_legacy` is the CS:GO-era mesh and `body_hd` the CS2 one, each with its
+  // own material. VRF exports every group, so packing them all put two whole
+  // guns in the same place — 13k tris of `ak47` inside 26k of `weapon_rif_ak47`
+  // — and what reached the screen was the two z-fighting texel by texel. That
+  // is the "wrongly unwrapped" banding: not a UV problem, two textures at the
+  // same depth. It is also why grenades and knives looked right and every rifle
+  // and pistol did not — those ship a single group.
+  //
+  // `eholster` goes for a different reason: the Dual Berettas' vmdl includes the
+  // belt holster, which is worn, not held, and it is a large object right in
+  // front of the eye. Anything else (`c4_screen`, `healthshot_content_src`) is a
+  // real part of the model and stays.
+  const meshNames = new Set(doc.getRoot().listMeshes().map((m) => m.getName().split('.').pop()));
+  const dropMesh = (name) => {
+    const short = name.split('.').pop();
+    if (/physics/i.test(name)) return true;
+    if (/^eholster$/i.test(short)) return true;
+    // An alternate that a higher-detail sibling replaces.
+    const hd = short.replace(/_legacy$/, '_hd');
+    return hd !== short && meshNames.has(hd);
+  };
   for (const mesh of doc.getRoot().listMeshes()) {
-    if (/physics/i.test(mesh.getName())) {
-      for (const parent of mesh.listParents()) if (parent.propertyType === PropertyType.NODE) parent.dispose();
-      mesh.dispose();
-    }
+    if (!dropMesh(mesh.getName())) continue;
+    for (const parent of mesh.listParents()) if (parent.propertyType === PropertyType.NODE) parent.dispose();
+    mesh.dispose();
   }
   for (const a of doc.getRoot().listAnimations()) a.dispose();
   let root = null;
@@ -553,6 +576,173 @@ async function packWeapon(w) {
   const tris = doc.getRoot().listMeshes().reduce((a, m) => a + m.listPrimitives().reduce((b, p) => b + (p.getIndices()?.getCount() || 0) / 3, 0), 0);
   const bones = [...boneMap(doc).keys()];
   return { file, bytes: glb.length, tris, texBytes, bones };
+}
+
+/**
+ * Where each weapon sits in the hand, solved per weapon instead of dialled in
+ * by hand 66 times.
+ *
+ * The alignment IS in the game files, just not where you would look for it. A
+ * weapon vmdl has no bones and no viewmodel attachment — but the viewmodel rig
+ * carries three helper bones parented to `wpn`, and the clips animate them per
+ * weapon: `wpnEnd` at the stock, `wpnTip` at the muzzle, `wpnHand_R` at the
+ * grip. Their rest pose is a placeholder (±6 on every weapon); the per-weapon
+ * values only exist once a clip poses them. Measured on the idle frame, the
+ * `wpnEnd`→`wpnTip` span comes out within 2% of each model's own length —
+ * 37.6 against 38.2 for the AK, 54.4 against 54.7 for the AWP — which is what
+ * says these two points are that gun's rear and muzzle and not something else.
+ *
+ * So: slide the model along its barrel until its rear meets `wpnEnd`, and lift
+ * it until its BARREL sits on the `wpnEnd`→`wpnTip` line. The barrel, not the
+ * bounding box: a box is thrown by whatever hangs off the weapon, an AWP's
+ * scope one way and an AK's magazine the other, and those are exactly the two
+ * that were furthest out. Near the muzzle there is nothing but barrel, so the
+ * centroid of the forward-most slice of geometry is the axis itself.
+ *
+ * Checked against two placements tuned by eye: the forward term predicts −4.99
+ * where the AWP wanted −5.25, and −3.02 where the AK wanted −2.
+ *
+ * A weapon whose helpers do not separate (a grenade is a ball, `wpnEnd` and
+ * `wpnTip` land on top of each other) has no axis to align and keeps zero,
+ * which is what grenades and knives already looked right at.
+ */
+async function computeVmOffsets(weapons, weaponAnims, vmanims) {
+  /**
+   * First-frame local translation of a helper bone, from any clip in the set
+   * that actually poses it — `idle` first, then whatever else is there.
+   *
+   * Not every clip animates every helper: the SCAR-20's idle drives `wpnTip`
+   * and leaves `wpnEnd` at its rest placeholder, which read as a 32-unit gun
+   * and lost it the alignment. Its draw and reload carry both.
+   */
+  const docs = new Map();
+  const helperAt = async (setFile, bone) => {
+    if (!setFile) return null;
+    if (!docs.has(setFile)) docs.set(setFile, await io.read(path.join(PACK_DIR, setFile)));
+    const anims = docs.get(setFile).getRoot().listAnimations();
+    const order = [...anims].sort((a, b) => (b.getName() === 'idle') - (a.getName() === 'idle'));
+    for (const anim of order) {
+      for (const ch of anim.listChannels()) {
+        if (ch.getTargetNode()?.getName() !== bone || ch.getTargetPath() !== 'translation') continue;
+        return new Vector3().fromArray(ch.getSampler().getOutput().getElement(0, []));
+      }
+    }
+    return null;
+  };
+
+  // The mount cancels the pack's frame rotation before the model is placed, so
+  // the geometry has to be measured through that same rotation.
+  const toWpn = new Matrix4().makeRotationX(Math.PI / 2);
+  let solved = 0;
+  const misses = [];
+  const rejected = [];
+  for (const [name, w] of Object.entries(weapons)) {
+    w.vmOffset = [0, 0, 0];
+    // A thrown weapon and a knife are held, not aimed: there is no barrel for
+    // the helpers to describe, and a molotov's bottle is long enough to pass
+    // for one and be shoved 7 units by it. Both classes already sit right.
+    if (w.class === 'grenade' || w.class === 'knife') continue;
+    const setFile = (weaponAnims[name] || vmanims[w.class])?.file;
+    const end = await helperAt(setFile, 'wpnEnd');
+    const tip = await helperAt(setFile, 'wpnTip');
+    // Either end of the barrel will do, because the span equals the model's own
+    // length: matching the stock to `wpnEnd` and the muzzle to `wpnTip` are the
+    // same alignment from opposite ends. The SCAR-20 poses only `wpnTip`, in
+    // any of its clips, so it is placed by its muzzle.
+    const axis = end && tip && Math.abs(tip.x - end.x) >= 4 ? 'both' : tip ? 'tip' : end ? 'end' : null;
+    if (!axis) {
+      misses.push(name);
+      continue;
+    }
+    const doc = await io.read(path.join(PACK_DIR, w.file));
+    let minX = Infinity;
+    let maxX = -Infinity;
+    const pts = [];
+    const walk = (node, parent) => {
+      const m = parent
+        .clone()
+        .multiply(
+          new Matrix4().compose(new Vector3().fromArray(node.getTranslation()), new Quaternion().fromArray(node.getRotation()), new Vector3().fromArray(node.getScale()))
+        );
+      const mesh = node.getMesh();
+      if (mesh) {
+        for (const prim of mesh.listPrimitives()) {
+          const pos = prim.getAttribute('POSITION');
+          if (!pos) continue;
+          const el = [];
+          for (let i = 0; i < pos.getCount(); i++) {
+            const v = new Vector3().fromArray(pos.getElement(i, el)).applyMatrix4(m);
+            pts.push(v);
+            if (v.x < minX) minX = v.x;
+            if (v.x > maxX) maxX = v.x;
+          }
+        }
+      }
+      for (const c of node.listChildren()) walk(c, m);
+    };
+    for (const n of doc.getRoot().listScenes()[0].listChildren()) walk(n, toWpn);
+    if (!pts.length) {
+      misses.push(name);
+      continue;
+    }
+    // A weapon with only one helper still needs a length to check against; a
+    // model that is barely longer than it is wide has no barrel to speak of.
+    if (axis !== 'both' && maxX - minX < 8) {
+      misses.push(name);
+      continue;
+    }
+    // The forward-most tenth of the model is barrel and nothing else.
+    const cut = maxX - (maxX - minX) * 0.1;
+    let n = 0;
+    let sy = 0;
+    let sz = 0;
+    for (const p of pts) {
+      if (p.x < cut) continue;
+      n++;
+      sy += p.y;
+      sz += p.z;
+    }
+    if (!n) {
+      misses.push(name);
+      continue;
+    }
+    // Stored in the frame the runtime nudges in (forward, up, right), which is
+    // wpn's (x, z, −y) — so these read the same as the tuner's own sliders.
+    const ref = tip || end;
+    const dx = axis === 'tip' ? ref.x - maxX : end.x - minX;
+    const dy = ref.y - sy / n;
+    const dz = ref.z - sz / n;
+
+    // Two sanity gates, because the rule is only sound when the helpers really
+    // do describe THIS model, and on two weapons they do not.
+    //
+    // Length: the span and the model agree to within a couple of percent on
+    // every weapon this works for. The revolver comes out 1.59× its span — a
+    // short gun whose helpers sit somewhere else entirely — and aligning to it
+    // lifted the whole thing out of the hand. The band stops at 1.5 rather
+    // than tighter because a silenced variant borrows its sibling's clips and
+    // is legitimately longer at the muzzle while sharing the stock the rear
+    // alignment actually uses (the M4A1-S, 1.30×); the USP-S at 2.28× is past
+    // anything that reasoning covers.
+    //
+    // Lateral: a gun that is held straight needs essentially no sideways
+    // shift, and every weapon that works lands under a third of a unit. The
+    // Dual Berettas ask for 9.94, because the model is a PAIR and its muzzle
+    // slice averages across both barrels — which shoved them clean out of
+    // frame and left two empty hands.
+    const ratio = axis === 'both' ? (maxX - minX) / (tip.x - end.x) : 1;
+    if (ratio < 0.8 || ratio > 1.5 || Math.abs(dy) > 1.5) {
+      rejected.push(`${name}(${ratio > 1.25 || ratio < 0.8 ? `len×${ratio.toFixed(2)}` : `side ${dy.toFixed(1)}`})`);
+      continue;
+    }
+    w.vmOffset = [+dx.toFixed(3), +dz.toFixed(3), +(-dy).toFixed(3)];
+    solved++;
+  }
+  console.log(
+    `  placement: ${solved} weapons aligned to wpnEnd/wpnTip` +
+      (rejected.length ? `, ${rejected.length} rejected by the sanity gates — ${rejected.join(' ')}` : '') +
+      (misses.length ? `, ${misses.length} with no barrel axis (kept at 0)` : '')
+  );
 }
 
 // ---- viewmodel arms ---------------------------------------------------------
@@ -1109,6 +1299,9 @@ async function main() {
       console.warn(`  ! ${a.side} arms: ${e.stack || e.message}`);
     }
   }
+
+  // ---- where each gun sits in the hand ----
+  await computeVmOffsets(weapons, weaponAnims, vmanims);
 
   const manifest = {
     version: PACK_VERSION,

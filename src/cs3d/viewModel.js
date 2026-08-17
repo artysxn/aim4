@@ -35,6 +35,7 @@ import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.j
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { AnimationMixer, LoopOnce, LoopRepeat } from 'three';
 import { assetBase } from './mapLoader.js';
+import { UNIT_M } from '../../shared/sim3d/units.js';
 
 export const WEAPONS_PACK_VERSION = 2;
 
@@ -44,6 +45,18 @@ const DEG = Math.PI / 180;
 export const VIEWMODEL_FOV = 68;
 
 /**
+ * How much sky the viewmodel reflects.
+ *
+ * NOT the world's `environmentIntensity`. The map crushes its probe to a
+ * hundredth (sky.js SKY_PROBE_SCALE) because every lightmapped surface already
+ * carries baked light and a second, unoccluded environment on top would wash it
+ * out. The viewmodel has no bake — a key light, a fill, and this — so it wants
+ * the probe at something like full strength, and inheriting the world's 0.1
+ * leaves metal exactly as black as having no environment at all. `[verify]`
+ */
+const VIEWMODEL_ENV_INTENSITY = 1;
+
+/**
  * Where the rig sits in view space, units. The viewmodel rig is authored with
  * its root at the eye looking down +x (Source), so the group is rotated into
  * three's −z and nudged by CS2's `viewmodel_offset_*` defaults (0, 0, 0) plus
@@ -51,6 +64,19 @@ export const VIEWMODEL_FOV = 68;
  * against the game rather than trusting these three numbers.
  */
 const RIG_OFFSET = new THREE.Vector3(0, -1.5, 0);
+
+/**
+ * The account settings this viewmodel honours, and what they mean here.
+ *
+ * `viewmodel.offsetX/Y/Z` are the trainer's, in METRES, and its own viewmodel
+ * has been placed by them since before this one existed — so they are read as a
+ * DELTA from their defaults rather than as absolute positions. Default settings
+ * therefore leave the placement solved by the pack exactly where it is, and a
+ * slider nudges from there. Their metres become Source units, which is what
+ * this whole file counts in.
+ */
+const SETTING_DEFAULT = { offsetX: 0.16, offsetY: -0.15, offsetZ: 0.5 };
+const M_TO_UNIT = 1 / UNIT_M;
 
 /**
  * The yaw that turns the packed rig to face the camera, radians.
@@ -330,6 +356,19 @@ export class ViewModel {
     this.clipSet = 'rifle';
     /** This weapon's own clip set, when CS2 ships one; the class set backs it. */
     this.weaponSet = null;
+    /**
+     * Live placement offsets driven by the tuner (src/cs3d/vmTuner.js). `rig`
+     * is view space (x right, y up, z back); `wpn` and `rot` are the pack's rig
+     * frame relative to the hand bone (x forward, y up, z RIGHT — the bind pose
+     * puts `hand_R` at z +18, so z is right and not up).
+     */
+    this.tune = { rig: new THREE.Vector3(), wpn: new THREE.Vector3(), rot: new THREE.Euler() };
+    this._frameX = -Math.PI / 2;
+    /** The account's hand offsets, already converted to units (see SETTING_DEFAULT). */
+    this._settingOffset = new THREE.Vector3();
+    /** 'right' | 'left'. Left mirrors the group; see setHand. */
+    this.hand = 'right';
+    this.bob = true;
 
     /** Seconds until the weapon can fire again (deploy, then cycle time). */
     this.nextAttack = 0;
@@ -391,13 +430,91 @@ export class ViewModel {
     // So the mount cancels the ROTATION only. Fixed matrix, because it is a
     // constant of the pack, and read from the manifest rather than assumed.
     this.arms.updateWorldMatrix(true, true);
-    const frameX = (this.assets.manifest?.frame?.rootRotationX ?? -90) * DEG;
+    this._frameX = (this.assets.manifest?.frame?.rootRotationX ?? -90) * DEG;
     this.wpnMount = new THREE.Group();
     this.wpnMount.name = 'wpnMount';
     this.wpnMount.matrixAutoUpdate = false;
-    this.wpnMount.matrix.makeRotationX(-frameX);
     this.wpnBone.add(this.wpnMount);
+    this.applyWeaponTune();
+    this._applyCull();
     if (this.weaponModel) this.wpnMount.add(this.weaponModel);
+  }
+
+  /**
+   * Apply the account's viewmodel settings (SettingsManager `viewmodel`).
+   * Safe to call whenever they change; nothing here allocates.
+   */
+  applySettings(vm = {}) {
+    this.setHand(vm.hand === 'left' ? 'left' : 'right');
+    this.bob = vm.bob !== false;
+    const d = (v, k) => ((Number.isFinite(v) ? v : SETTING_DEFAULT[k]) - SETTING_DEFAULT[k]) * M_TO_UNIT;
+    // z is BACK in view space and the setting is forward, hence the negation.
+    this._settingOffset.set(d(vm.offsetX, 'offsetX'), d(vm.offsetY, 'offsetY'), -d(vm.offsetZ, 'offsetZ'));
+  }
+
+  /**
+   * Right or left handed. Left is a true mirror of the whole viewmodel, not a
+   * nudge across the screen: these are real hands, and negating an offset the
+   * way a floating gun can get away with would leave a right hand holding the
+   * gun on the left side of the frame, thumb and trigger finger on the wrong
+   * faces of it.
+   *
+   * Mirroring flips triangle winding, and the two backends do NOT agree about
+   * what to do with that. three's WebGL path checks
+   * `object.matrixWorld.determinant() < 0` and reverses front-face by itself;
+   * its WebGPU pipeline (r169) hardcodes `frontFace: CCW` and picks `cullMode`
+   * from `material.side` alone, with no determinant anywhere in the file. So on
+   * WebGPU — which is what this renderer runs — a mirrored viewmodel has every
+   * triangle reclassified as back-facing and culled, and the left hand renders
+   * as nothing at all.
+   *
+   * Swapping FrontSide for BackSide swaps the cull to match, which is the
+   * compensation the backend does not do. `side` is restored on the way back.
+   */
+  setHand(hand) {
+    const want = hand === 'left' ? 'left' : 'right';
+    if (want === this.hand) return;
+    this.hand = want;
+    this.group.scale.x = want === 'left' ? -1 : 1;
+    this._applyCull();
+    this.group.updateMatrixWorld(true);
+  }
+
+  /** Cull side for the current hand; see setHand. Call after new meshes arrive. */
+  _applyCull() {
+    const mirrored = this.hand === 'left';
+    this.group.traverse((o) => {
+      if (!o.isMesh) return;
+      for (const m of Array.isArray(o.material) ? o.material : [o.material]) {
+        if (!m) continue;
+        if (m.userData.cs3dSide === undefined) m.userData.cs3dSide = m.side;
+        const base = m.userData.cs3dSide;
+        const flipped = base === THREE.FrontSide ? THREE.BackSide : base === THREE.BackSide ? THREE.FrontSide : base;
+        const next = mirrored ? flipped : base;
+        if (m.side !== next) {
+          m.side = next;
+          m.needsUpdate = true;
+        }
+      }
+    });
+  }
+
+  /**
+   * Rebuild the weapon mount: the pack's frame rotation cancelled, then the
+   * tuner's offset and rotation in the rig axes that leaves behind (x forward
+   * down the barrel, y up, z right). Cheap enough to call per change.
+   */
+  applyWeaponTune() {
+    if (!this.wpnMount) return;
+    const t = this.tune;
+    // The pack solves each weapon's own placement (cs3d-weapons.mjs
+    // computeVmOffsets); the tuner rides on top of it as a correction.
+    const b = this.weapon?.vmOffset || [0, 0, 0];
+    this.wpnMount.matrix
+      .makeRotationX(-this._frameX)
+      .multiply(new THREE.Matrix4().makeTranslation(b[0] + t.wpn.x, b[1] + t.wpn.y, b[2] + t.wpn.z))
+      .multiply(new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(t.rot.x * DEG, t.rot.y * DEG, t.rot.z * DEG)));
+    this.wpnMount.matrixWorldNeedsUpdate = true;
   }
 
   /**
@@ -427,9 +544,11 @@ export class ViewModel {
     const [model, own] = await Promise.all([this.assets.model(bare), this.assets.weaponClips(bare)]);
     if (this.weaponName !== bare) return; // switched again while fetching
     this.weaponSet = own || null;
+    this.applyWeaponTune(); // this weapon's own placement, not the last one's
     if (model) {
       this.weaponModel = cloneSkinned(model);
       (this.wpnMount || this.rig).add(this.weaponModel);
+      this._applyCull(); // a freshly cloned gun starts on the default side
     }
     this.nextAttack = draw ? stats.deploy || 0 : 0;
     if (draw) this._play('draw', { loop: false });
@@ -532,7 +651,7 @@ export class ViewModel {
     const { speed = 0, onGround = true, viewYaw = 0, viewPitch = 0 } = state;
 
     // ---- bob: a walk cycle whose amplitude follows speed -------------------
-    const target = onGround ? Math.min(1, speed / BOB.fullSpeed) : 0;
+    const target = onGround && this.bob ? Math.min(1, speed / BOB.fullSpeed) : 0;
     this._bobAmp += (target - this._bobAmp) * (1 - Math.exp(-dt / BOB.ease));
     this._bobPhase += dt * BOB.frequency * (0.4 + 0.6 * this._bobAmp);
     const bobX = Math.sin(this._bobPhase) * BOB.lateral * this._bobAmp;
@@ -569,7 +688,9 @@ export class ViewModel {
     // The rig looks down −z after its own rotation, so in the group's frame x
     // is right, y is up and z is back toward the eye.
     this._offset.set(bobX + this._sway.x, bobY + this._sway.y, this._kick * KICK.back);
-    this.rig.position.copy(RIG_OFFSET).add(this._offset);
+    // View space here is x right, y up, z BACK, so the setting's "forward" is
+    // negated into it.
+    this.rig.position.copy(RIG_OFFSET).add(this._offset).add(this.tune.rig).add(this._settingOffset);
     this.rig.rotation.set(this._kick * KICK.up * DEG * 10, RIG_YAW, this._kick * KICK.roll);
 
     this.mixer.update(dt);
@@ -612,6 +733,25 @@ export function createViewModelPass(renderer, { fov = VIEWMODEL_FOV } = {}) {
   return {
     scene,
     camera,
+    /**
+     * Hand the pass the map's own sky probe.
+     *
+     * Metal has no diffuse term at all — it is lit entirely by what it
+     * reflects — so a metallic surface in a scene with only punctual lights
+     * renders black except for a pinpoint highlight. This pass had a key and a
+     * fill and no environment, which is why the smoke grenade (metalness µ177)
+     * came out solid black, and why the metal parts of guns that are mostly
+     * dielectric did too: the MAC-10's receiver and the SSG's barrel are
+     * metallic texels inside a µ17 average.
+     *
+     * The world scene has had the probe since the bake landed (sky.js
+     * `_buildEnvironment`); this just points the viewmodel at the same one, so
+     * a gun reflects the sky the map is standing under rather than nothing.
+     */
+    setEnvironment(texture, intensity = VIEWMODEL_ENV_INTENSITY) {
+      scene.environment = texture || null;
+      scene.environmentIntensity = intensity;
+    },
     /** Tint the fill with the map's own ambient where the player stands. */
     setAmbient(color, intensity = 1) {
       if (color) fill.color.copy(color);
