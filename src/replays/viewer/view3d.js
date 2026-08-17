@@ -30,8 +30,9 @@ import '../../cs3d/cs3d.css';
 import { MapPack } from '../../cs3d/mapLoader.js';
 import { MapLighting } from '../../cs3d/sky.js';
 import { patchWebGPUPartialAttributeUpload } from '../../cs3d/threePatches.js';
-import { applyLookDefaults, createMapRenderer, loadPostLut, installMapGrade, setupBloom } from '../../cs3d/look.js';
+import { createLook, createMapRenderer, loadPostLut, installMapGrade, setupBloom } from '../../cs3d/look.js';
 import { createBootScreen } from '../../cs3d/bootScreen.js';
+import { sharedPlayerModels } from '../../cs3d/playerModels.js';
 import { cs3dMap } from '../../../shared/cs3d/maps.js';
 import { cameraYawFromSource } from '../../../shared/sim3d/units.js';
 import {
@@ -41,9 +42,10 @@ import {
   EYE_DUCK,
   HULL_HALF_WIDE
 } from '../../../shared/sim3d/constants.js';
-import { FLAG_DUCKING } from '../shared/tickFormat.js';
+import { FLAG_DUCKING, FLAG_AIRBORNE } from '../shared/tickFormat.js';
 
 const DEG = Math.PI / 180;
+const RAD = 180 / Math.PI;
 
 const TEAM_COLOR = { T: 0xd9a24a, CT: 0x5b87e0 };
 const NADE_COLOR = {
@@ -91,8 +93,16 @@ export function createView3d({ slug, onModeChange }) {
   let orbit = { yaw: 0.6, pitch: -0.85, dist: 1400, target: new THREE.Vector3() };
   let eyeSmooth = EYE_STAND;
 
-  // Last frame handed in by the viewer.
+  // Last frame handed in by the viewer, and the tick before it (the animation
+  // clock is demo time: the mixers advance by the tick delta between frames,
+  // never by wall time, so scrubbing and speed changes stay tick-exact).
   let frame = null;
+  let lastTick = null;
+
+  // The agents: CS2's own models, animated from the tick record
+  // (src/cs3d/playerModels.js). Shared with the explorer; one download per
+  // page. Until it lands — or without the pack — the placeholder cylinders draw.
+  const models = sharedPlayerModels();
 
   const bodies = [];
   const nades = new Map();
@@ -123,7 +133,9 @@ export function createView3d({ slug, onModeChange }) {
       nose.position.set(HULL_HALF_WIDE + 6, EYE_STAND - 4, 0);
       group.add(body, nose);
       group.visible = false;
-      bodies.push({ group, body, nose });
+      // `model` is the animated agent once the pack is in; `prev` the last
+      // sample this slot was drawn at, for the velocity the blend runs on.
+      bodies.push({ group, body, nose, model: null, prev: null });
     }
   }
 
@@ -154,9 +166,14 @@ export function createView3d({ slug, onModeChange }) {
       onProgress: (p) => boot.setProgress(p),
       onWorldChanged: () => lighting?.markShadowDirty()
     });
+    // From here on this is src/cs3d/main.js boot(), step for step: the same
+    // look controller with the same knobs applied at the same points, so the
+    // picture is the explorer's — same sun, same probe, same grade.
     const manifest = await pack.fetchManifest();
     const post = await loadPostLut(pack, manifest);
     const knobs = installMapGrade(renderer, new URLSearchParams(), post);
+    const look = createLook({ scene, getPack: () => pack, getLighting: () => lighting, slug, knobs });
+    look.applyAll(); // the explorer's panel sets its defaults here, before the lighting exists
     const bloomPass = setupBloom(renderer, manifest, new URLSearchParams());
     mapRenderer = createMapRenderer({
       renderer,
@@ -172,15 +189,20 @@ export function createView3d({ slug, onModeChange }) {
     if (manifest.sky?.equirect) {
       lighting
         .loadSkybox(pack.base, manifest.sky, pack.v)
-        .then(() => pack.materials?.setSkyAmbient(lighting.skyAmbient))
+        .then(() => {
+          pack.materials?.setSkyAmbient(lighting.skyAmbient);
+          look.apply('sky');
+        })
         .catch(() => {});
     }
 
     buildActors();
     for (const b of bodies) (pack.world || scene).add(b.group);
+    // The agents stream alongside the tiles, not ahead of them.
+    models.load();
 
     await pack.load(manifest);
-    applyLookDefaults({ lighting, pack, knobs, slug });
+    look.applyAll();
     boot.finish();
     ready = true;
     resize();
@@ -225,26 +247,78 @@ export function createView3d({ slug, onModeChange }) {
     if (mode === 'pov' && live.length && !live.includes(povSlot)) {
       povSlot = live.find((s) => s > povSlot) ?? live[0];
     }
+    const tick = frame.tick;
+    const rate = frame.tickRate || 64;
+    // Demo seconds since the last drawn frame: forward only (a scrub back
+    // holds the pose at its new tick), and a jump of more than a quarter
+    // second is a seek, not motion.
+    const dTicks = lastTick === null ? 0 : tick - lastTick;
+    const animDt = dTicks > 0 && dTicks <= rate / 4 ? dTicks / rate : 0;
+    lastTick = tick;
+    const useModels = models.ready;
 
     for (let slot = 0; slot < bodies.length; slot++) {
       const s = frame.states[slot];
       const b = bodies[slot];
       if (!s || !s.alive) {
         b.group.visible = false;
+        if (b.model) b.model.group.visible = false;
+        b.prev = null;
         continue;
       }
       // Hide the body you are looking through, or you see the inside of it.
-      b.group.visible = !(mode === 'pov' && slot === povSlot);
-      b.group.position.set(s.x, s.z, -s.y);
-      b.group.rotation.y = (s.yaw || 0) * DEG;
-
+      const visible = !(mode === 'pov' && slot === povSlot);
       const duck = s.duckAmount > 0 ? s.duckAmount : (s.flags & FLAG_DUCKING) !== 0 ? 1 : 0;
-      const hull = HULL_STAND + (HULL_DUCK - HULL_STAND) * duck;
       const eye = EYE_STAND + (EYE_DUCK - EYE_STAND) * duck;
-      b.body.scale.y = hull;
-      b.nose.position.y = eye - 4;
-      const m = mats[sideOf(slot)] || mats.unknown;
-      if (b.body.material !== m) b.body.material = m;
+      const side = sideOf(slot);
+
+      if (useModels && (side === 'T' || side === 'CT')) {
+        let m = b.model;
+        if (!m) {
+          m = b.model = models.createBody(side);
+          (pack.world || scene).add(m.group);
+        } else if (m.side !== side) m.setSide(side);
+        b.group.visible = false;
+        // Velocity from the tick delta since this slot was last drawn: the
+        // same numbers the radar draws, so the legs run exactly as fast as the
+        // droplet moves. Nothing here is a guess about the moment being shown.
+        let speed = 0;
+        let moveYaw = s.yaw || 0;
+        const p = b.prev;
+        if (p && p.tick !== tick) {
+          const dt = Math.abs(tick - p.tick);
+          if (dt <= 8) {
+            const dxr = (s.x - p.x) / dt;
+            const dyr = (s.y - p.y) / dt;
+            speed = Math.hypot(dxr, dyr) * rate;
+            if (speed > 1) moveYaw = Math.atan2(dyr, dxr) * RAD;
+          }
+        }
+        b.prev = { tick, x: s.x, y: s.y };
+        m.set({
+          speed,
+          moveYaw,
+          viewYaw: s.yaw || 0,
+          pitch: s.pitch || 0,
+          duck,
+          airborne: (s.flags & FLAG_AIRBORNE) !== 0,
+          weapon: frame.weapons?.[s.weapon] || '',
+          alive: true
+        });
+        m.group.position.set(s.x, s.z, -s.y);
+        m.update(animDt);
+        m.group.visible = visible;
+      } else {
+        if (b.model) b.model.group.visible = false;
+        b.group.visible = visible;
+        b.group.position.set(s.x, s.z, -s.y);
+        b.group.rotation.y = (s.yaw || 0) * DEG;
+        const hull = HULL_STAND + (HULL_DUCK - HULL_STAND) * duck;
+        b.body.scale.y = hull;
+        b.nose.position.y = eye - 4;
+        const mm = mats[side] || mats.unknown;
+        if (b.body.material !== mm) b.body.material = mm;
+      }
 
       if (mode === 'pov' && slot === povSlot) {
         eyeSmooth = s.duckAmount > 0 ? eye : eyeSmooth + (eye - eyeSmooth) * 0.35;
@@ -476,6 +550,7 @@ export function createView3d({ slug, onModeChange }) {
     dispose() {
       cancelAnimationFrame(raf);
       for (const key of [...nades.keys()]) dropNade(key);
+      for (const b of bodies) b.model?.dispose();
       pack?.dispose?.();
       renderer?.dispose?.();
       boot?.remove();

@@ -1580,7 +1580,8 @@ body.rv-open {
   overflow: hidden;
 }
 
-/* Flush under the map: the scrubber sits on the squares, no gutter. */
+/* Under the map, same band height as the side-panel tools. Squares stay 1:1
+   and left-aligned; leftover width is empty, not stretched chips. */
 .rv-chrome {
   flex: 0 0 auto;
   display: flex;
@@ -1596,6 +1597,7 @@ body.rv-open {
   justify-content: flex-start;
   align-items: stretch;
   gap: 0;
+  height: 40px;
   min-width: 0;
   max-width: 100%;
   overflow-x: auto;
@@ -2629,10 +2631,11 @@ body.rv-open {
   display: flex;
   align-items: center;
   justify-content: center;
-  flex: 1 1 0;
+  flex: 0 0 40px;
+  width: 40px;
+  height: 40px;
   aspect-ratio: 1 / 1;
-  min-width: 0;
-  height: auto;
+  min-width: 40px;
   padding: 0;
   border: 0;
   border-right: 1px solid var(--border);
@@ -2838,12 +2841,15 @@ body.rv-open {
   touch-action: none;
 }
 
-/* Full width, sitting on the squares. The track is the bottom edge. */
+/* Full-width track above the squares. Handle stays in this row so the
+   rounds cannot paint over the notch. */
 .rv-chrome > .rv-scrub {
+  position: relative;
+  z-index: 2;
   flex: 0 0 auto;
   width: 100%;
-  height: 10px;
-  align-items: flex-end;
+  height: 16px;
+  align-items: center;
 }
 
 .rv-chrome > .rv-scrub .rv-scrub-track {
@@ -2852,9 +2858,9 @@ body.rv-open {
 }
 
 .rv-chrome > .rv-scrub .rv-scrub-handle {
-  top: auto;
-  bottom: 1px;
-  transform: translate(-50%, 50%);
+  top: 50%;
+  bottom: auto;
+  transform: translate(-50%, -50%);
 }
 
 .rv-scrub-track {

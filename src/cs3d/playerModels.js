@@ -193,6 +193,21 @@ export class PlayerModels {
     });
     await Promise.all([...modelJobs, ...clipJobs]);
     if (!this.models.T || !this.models.CT) throw new Error('players pack lacks a T or CT model');
+    // The clip skeleton carries ten helper bones the agents do not have
+    // (wpnHand_L/R, wpnTip, attachHand/Foot, attachWorld …). A track aimed at
+    // a bone that is not there is a warning per track per action from
+    // PropertyBinding — thousands, with ten bodies — so drop them once here.
+    const bones = new Set();
+    for (const m of Object.values(this.models)) m.scene.traverse((o) => bones.add(o.name));
+    let dropped = 0;
+    for (const map of Object.values(this.clips)) {
+      for (const clip of map.values()) {
+        const kept = clip.tracks.filter((t) => bones.has(t.name.slice(0, t.name.lastIndexOf('.'))));
+        dropped += clip.tracks.length - kept.length;
+        clip.tracks = kept;
+      }
+    }
+    if (dropped) console.log(`cs3d: player clips — ${dropped} tracks on helper bones the models lack were dropped`);
   }
 
   /**
@@ -224,6 +239,17 @@ export class PlayerModels {
   createBody(side) {
     return new PlayerBody(this, side);
   }
+}
+
+/**
+ * One loader per page. The explorer, the timeline's 3D view and (later) the
+ * bots all draw the same two agents, and the pack is 9 MB: fetch it once and
+ * clone bodies from it wherever they are needed.
+ */
+let shared = null;
+export function sharedPlayerModels() {
+  if (!shared) shared = new PlayerModels();
+  return shared;
 }
 
 // ---------------------------------------------------------------------------

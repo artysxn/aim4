@@ -72,6 +72,28 @@ triangle floor reproduces `flatWorld()` tick for tick, wall stop-and-slide at
 250 u/s with no tunnelling, a 16 u step climbed and a 38 u ledge refused, a
 ceiling capping a jump, the headroom rule, byte-for-byte determinism.
 
+**Where the bodies show up.** Three places, one module: the explorer's demo
+playback (`demoView.js`), the timeline viewer's 3D view
+(`src/replays/viewer/view3d.js`, the same `PlayerBody` per slot, its mixers
+advanced by the tick delta between drawn frames so the animation clock is demo
+time and a scrub is exact) and the explorer's own walking body
+(`src/cs3d/liveBody.js`: the same `set()` fed from the movement sim instead of
+a tick record — `T` puts the camera behind it, which is also the path a bot's
+body will take). `sharedPlayerModels()` fetches the pack once per page.
+
+**One look, both viewers.** The timeline's 3D view was rendering the map with
+the sun at ~300 (everything white). Cause: the explorer's `applyLight('sun',
+5)` runs before `MapLighting` exists, so its base was cached as **1** and the
+"sun ×5" slider has always meant an *absolute* 5 (likewise sky = absolute 0.1);
+`look.js` had faithfully implemented the label — 5 × `sunIntensity`
+(brightness × 25 ≈ 60 on Nuke). `createLook()` in `look.js` is now the one
+controller both pages drive, with the explorer's real semantics written down
+(sun and sky absolute, bake a multiplier over the pack's lightmap intensity,
+grade uniforms straight through), applied at the same points in the same order
+in both boots, and re-applied for `sky` after `loadSkybox` (which used to race
+the pack load in the explorer). `MapLighting.sunIntensity` / `SUN_BOOST` are
+starting values the look replaces.
+
 Open, in the order they matter:
 
 1. **Operator eye-test.** Direction naming is assumed `e` = the body's right;

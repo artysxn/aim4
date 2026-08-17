@@ -4711,6 +4711,9 @@ export function createTimelineViewer({
         states,
         players: track ? activeMeta.players || [] : [],
         events: track ? activeMeta.events || {} : {},
+        // The round's weapon dictionary: the agent bodies pick their clip set
+        // (rifle / pistol / knife) from the held weapon's name.
+        weapons: activeMeta.weapons || [],
         teamSides: { 1: activeMeta.team1Side, 2: activeMeta.team2Side }
       });
     }

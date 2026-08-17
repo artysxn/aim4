@@ -40,36 +40,83 @@ export function installMapGrade(renderer, params, post) {
   return installGrade(renderer, params, post);
 }
 
+/** The knobs that are lights (applied to the scene) rather than grade (uniforms). */
+export const LIGHT_KEYS = new Set(['sun', 'bake', 'sky']);
+
 /**
- * The same starting knobs the explorer's grade panel applies after the pack
- * lands. Multipliers over the map's own sun / bake / sky, not absolutes.
+ * The look, as one object both entry points drive — the explorer's grade
+ * panel and the timeline's 3D view — so the two can never render a map
+ * differently. Same knobs, same semantics, same order of application.
+ *
+ * The semantics are the explorer's, exactly as it has always applied them,
+ * because that is the picture the maps were dialled against:
+ *
+ *   sun    ABSOLUTE intensity, written to both the world's analytic sun (the
+ *          lightmapped materials' uniform) and the props' DirectionalLight.
+ *          The map's own `MapLighting.sunIntensity` (brightness × SUN_BOOST)
+ *          is only the value they start at; the look replaces it. The panel
+ *          labels this "sun ×" and its slider ends at 5 — as a multiplier
+ *          over sunIntensity (~60 on Nuke) 5 would be 300, a white-out, and
+ *          that is precisely the bug an earlier "faithful" reading produced.
+ *   sky    ABSOLUTE `scene.environmentIntensity`; likewise replaces the value
+ *          MapLighting works out (and works out again when the real skybox
+ *          lands — hence `apply('sky')` after loadSkybox).
+ *   bake   a MULTIPLIER over the material library's own lightmap intensity,
+ *          cached the first time the library exists.
+ *   brightness / contrast / saturation / vibrance / lift
+ *          the grade uniforms (installGrade), written straight through.
+ *
+ * `set` before the pack or the lighting exist is fine: the value is kept and
+ * `applyAll()` after `pack.load()` writes everything that has something to
+ * land on. Same as the explorer's setupGradePanel-then-reapplyLight dance.
  */
-export function applyLookDefaults({ lighting, pack, knobs, slug }) {
-  const perMap = MAP_LOOK[slug] || {};
-  const sunMult = perMap.sun ?? LOOK_DEFAULTS.sun;
-  const bakeMult = perMap.bake ?? LOOK_DEFAULTS.bake;
-  const skyMult = perMap.sky ?? LOOK_DEFAULTS.sky;
+export function createLook({ scene, getPack, getLighting, slug, knobs = null }) {
+  const values = { ...LOOK_DEFAULTS, ...(MAP_LOOK[slug] || {}) };
+  let bakeBase = null;
+  let bakeLib = null;
 
-  const sunBase = lighting?.sunIntensity ?? 1;
-  const sunV = sunBase * sunMult;
-  if (pack?.materials?.sun) pack.materials.sun.intensity.value = sunV;
-  if (lighting?.sun) lighting.sun.intensity = sunV;
-
-  if (pack?.materials?.lightmapIntensity) {
-    const bakeBase = pack.materials.lightmapIntensity.value;
-    pack.materials.lightmapIntensity.value = bakeBase * bakeMult;
+  function apply(key) {
+    const v = values[key];
+    if (v === undefined) return;
+    const pack = getPack?.();
+    const lighting = getLighting?.();
+    const mats = pack?.materials;
+    if (key === 'sun') {
+      if (mats?.sun) mats.sun.intensity.value = v;
+      if (lighting?.sun) lighting.sun.intensity = v;
+    } else if (key === 'bake') {
+      if (!mats?.lightmapIntensity) return;
+      // A new library (re-pack, re-mount) starts from its own value again.
+      if (bakeLib !== mats) {
+        bakeLib = mats;
+        bakeBase = mats.lightmapIntensity.value;
+      }
+      mats.lightmapIntensity.value = bakeBase * v;
+    } else if (key === 'sky') {
+      if (scene) scene.environmentIntensity = v;
+    } else if (knobs?.[key]) {
+      knobs[key].value = v;
+    }
   }
 
-  const skyBase = lighting?.envIntensity ?? lighting?.scene?.environmentIntensity ?? 1;
-  if (lighting?.scene) lighting.scene.environmentIntensity = skyBase * skyMult;
-
-  if (knobs) {
-    knobs.brightness.value = perMap.brightness ?? LOOK_DEFAULTS.brightness;
-    knobs.contrast.value = perMap.contrast ?? LOOK_DEFAULTS.contrast;
-    knobs.saturation.value = perMap.saturation ?? LOOK_DEFAULTS.saturation;
-    knobs.vibrance.value = perMap.vibrance ?? LOOK_DEFAULTS.vibrance;
-    knobs.lift.value = perMap.lift ?? LOOK_DEFAULTS.lift;
-  }
+  return {
+    values,
+    /** The grade uniforms, once installGrade has made them. */
+    setKnobs(k) {
+      knobs = k;
+    },
+    /** Change one knob and apply it (no-op on targets that do not exist yet). */
+    set(key, value) {
+      values[key] = value;
+      apply(key);
+    },
+    apply,
+    /** Everything, in one order: lights first, then the grade. */
+    applyAll() {
+      for (const k of LIGHT_KEYS) apply(k);
+      for (const k of Object.keys(values)) if (!LIGHT_KEYS.has(k)) apply(k);
+    }
+  };
 }
 
 /**

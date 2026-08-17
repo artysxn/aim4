@@ -147,6 +147,9 @@ export class Controls {
         case 'KeyQ':
           this.hooks.onWeapon?.();
           break;
+        case 'KeyT':
+          this.hooks.onThirdPerson?.();
+          break;
         // Demo playback (no-ops until a demo is loaded; main.js decides).
         case 'KeyP':
           this.hooks.onPlayPause?.();
@@ -175,7 +178,7 @@ export class Controls {
         default:
           break;
       }
-      if (this.locked && /^(Space|Key[WASDCFQ]|Digit[12]|ShiftLeft|ControlLeft)$/.test(code)) e.preventDefault();
+      if (this.locked && /^(Space|Key[WASDCFQT]|Digit[12]|ShiftLeft|ControlLeft)$/.test(code)) e.preventDefault();
     } else if (code === 'Space') {
       this.player.input.jump = false;
     }

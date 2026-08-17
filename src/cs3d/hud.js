@@ -44,7 +44,7 @@ export class Hud {
             <div><b>Space</b> up / jump</div>
             <div><b>C</b> down, <b>Ctrl</b> slow / crouch</div>
             <div><b>Shift</b> fast / walk</div>
-            <div><b>Q</b> next weapon (walk speed cap)</div>
+            <div><b>Q</b> next weapon (walk speed cap), <b>T</b> third person</div>
             <div><b>1</b> T spawn, <b>2</b> CT spawn, <b>R</b> respawn</div>
             <div><b>Esc</b> release, <b>H</b> this panel</div>
             <div><b>I</b> inspect what you are looking at</div>
@@ -93,8 +93,8 @@ export class Hud {
     this.el.enter.hidden = !this.el.enter.hidden;
   }
 
-  setMode(mode) {
-    this.el.mode.textContent = mode;
+  setMode(mode, thirdPerson = false) {
+    this.el.mode.textContent = mode === 'walk' && thirdPerson ? 'walk 3rd' : mode;
     // The weapon only means something to the walking body.
     this.el.weapon.hidden = mode !== 'walk';
   }

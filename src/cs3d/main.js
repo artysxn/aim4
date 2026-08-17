@@ -13,14 +13,15 @@ import { cameraYawFromSource, sceneToSource } from '../../shared/sim3d/units.js'
 import { MapPack } from './mapLoader.js';
 import { MapLighting } from './sky.js';
 import { installGrade } from './grade.js';
-import { createMapRenderer, loadPostLut, LOOK_DEFAULTS, MAP_LOOK, setupBloom } from './look.js';
+import { createLook, createMapRenderer, loadPostLut, LIGHT_KEYS, LOOK_DEFAULTS, MAP_LOOK, setupBloom } from './look.js';
 import { patchWebGPUPartialAttributeUpload } from './threePatches.js';
 import { Player } from './player.js';
 import { Controls } from './controls.js';
 import { Hud } from './hud.js';
 import { FpsView } from './fpsView.js';
 import { DemoView } from './demoView.js';
-import { PlayerModels } from './playerModels.js';
+import { sharedPlayerModels } from './playerModels.js';
+import { LiveBody } from './liveBody.js';
 import { loadDemoBytes, loadDemoFile } from './demoData.js';
 
 const params = new URLSearchParams(location.search);
@@ -79,7 +80,7 @@ const controls = new Controls(canvas, player, {
   onLock: (locked) => hud.setLocked(locked),
   onToggleMode: () => {
     player.setMode(player.mode === 'fly' ? 'walk' : 'fly');
-    hud.setMode(player.mode);
+    hud.setMode(player.mode, thirdPerson);
   },
   onSpawn: (side) => spawnAt(side),
   // Digits belong to the demo when one is loaded (1-0 → slots 0-9), and to
@@ -103,8 +104,15 @@ const controls = new Controls(canvas, player, {
   onGrade: () => hud.toggleGrade(),
   onFpsView: () => fpsView.toggle(),
   // Q: the walking body's held weapon, for its run-speed cap.
-  onWeapon: () => hud.setWeapon(player.cycleWeapon(), player.maxSpeed)
+  onWeapon: () => hud.setWeapon(player.cycleWeapon(), player.maxSpeed),
+  // T: third person — the camera behind the walking body's own agent model,
+  // animated live from the movement sim (the same body the demos drive).
+  onThirdPerson: () => {
+    thirdPerson = !thirdPerson;
+    hud.setMode(player.mode, thirdPerson);
+  }
 });
+let thirdPerson = false;
 const hud = new Hud(uiRoot, {
   map,
   sens: controls.sens,
@@ -134,7 +142,7 @@ const fpsView = new FpsView({
 // The players pack (scripts/cs3d-models.mjs) is fetched once the map's own
 // manifest is in, so it never competes with the first tiles; a body created
 // before it lands is a placeholder until the next frame after it does.
-const playerModels = new PlayerModels();
+const playerModels = sharedPlayerModels();
 const demoView = new DemoView({
   camera,
   getPack: () => pack,
@@ -264,6 +272,7 @@ async function boot() {
     // later: a material built without it would keep the ungraded curve.
     const post = await loadPostLut(pack, manifest);
     const knobs = installGrade(renderer, params, post);
+    look.setKnobs(knobs);
     if (knobs) setupGradePanel(knobs, manifest.map?.slug);
     // After the grade: the composite bakes that curve in, then takes tone
     // mapping off the scene render.
@@ -291,7 +300,12 @@ async function boot() {
     if (manifest.sky?.equirect) {
       lighting
         .loadSkybox(pack.base, manifest.sky, pack.v)
-        .then(() => pack.materials?.setSkyAmbient(lighting.skyAmbient))
+        .then(() => {
+          pack.materials?.setSkyAmbient(lighting.skyAmbient);
+          // loadSkybox re-derives environmentIntensity from the real sky; the
+          // look's sky knob is the value that stands (same in the 3D viewer).
+          look.apply('sky');
+        })
         .catch(() => {});
     }
     // Place the camera before anything renders: T spawn, eye height, looking along the spawn yaw.
@@ -305,9 +319,9 @@ async function boot() {
     // front of the first geometry request.
     playerModels.load().then((ok) => ok && console.log('cs3d: player models ready'));
     await pack.load(manifest);
-    // The material library exists now; any lighting slider set before this
-    // had nothing to write to.
-    reapplyLight();
+    // The material library exists now; any lighting knob set before this had
+    // nothing to write to. Same call, same order as the timeline's 3D view.
+    look.applyAll();
   } catch (e) {
     console.error(e);
     hud.showError(e.message || String(e));
@@ -430,41 +444,16 @@ function updateInspector(now) {
 const GRADE_STORE = 'cs3d_grade';
 
 /**
- * The lighting knobs are multipliers over whatever the map's own numbers
- * worked out to, not absolutes — so 1.25 means "a quarter brighter than this
- * map asked for" and reads the same on every map.
- *
- * `sun` moves the world and the props together on purpose: the world's sun is
- * an analytic term inside the lightmapped materials and the props' is a real
- * directional light, and moving one without the other would light a crate
- * differently from the floor it stands on.
+ * The knobs themselves live in look.js (`createLook`), shared with the
+ * timeline's 3D view so a demo renders exactly as this page does: sun and sky
+ * are absolute values written over what the map worked out, bake is a
+ * multiplier over the pack's lightmap intensity, the rest are the grade
+ * uniforms. `sun` moves the world and the props together on purpose: the
+ * world's sun is an analytic term inside the lightmapped materials and the
+ * props' is a real directional light, and moving one without the other would
+ * light a crate differently from the floor it stands on.
  */
-const LIGHT_KEYS = new Set(['sun', 'bake', 'sky']);
-const lightBase = {};
-const lightMult = { sun: 1, bake: 1, sky: 1 };
-
-function applyLight(key, mult) {
-  lightMult[key] = mult;
-  const mats = pack?.materials;
-  if (key === 'sun') {
-    if (lightBase.sun === undefined) lightBase.sun = lighting?.sunIntensity ?? 1;
-    const v = lightBase.sun * mult;
-    if (mats) mats.sun.intensity.value = v;
-    if (lighting?.sun) lighting.sun.intensity = v;
-  } else if (key === 'bake') {
-    if (!mats) return;
-    if (lightBase.bake === undefined) lightBase.bake = mats.lightmapIntensity.value;
-    mats.lightmapIntensity.value = lightBase.bake * mult;
-  } else if (key === 'sky') {
-    if (lightBase.sky === undefined) lightBase.sky = lighting?.envIntensity ?? scene.environmentIntensity ?? 1;
-    scene.environmentIntensity = lightBase.sky * mult;
-  }
-}
-
-/** The materials only exist once the pack has loaded; re-apply then. */
-function reapplyLight() {
-  for (const k of LIGHT_KEYS) if (lightMult[k] !== 1) applyLight(k, lightMult[k]);
-}
+const look = createLook({ scene, getPack: () => pack, getLighting: () => lighting, slug: map.slug });
 
 /**
  * Slider defaults a single map overrides, keyed by slug.
@@ -484,11 +473,9 @@ function setupGradePanel(knobs, slug) {
   } catch {
     /* first run */
   }
-  // `def` is where each slider loads and where reset returns it. The maths
-  // behind the sliders is untouched: the lighting knobs are still plain
-  // multipliers over SUN_BOOST / LIGHTMAP_SCALE / SKY_PROBE_SCALE and the grade
-  // knobs still feed installGrade's uniforms. Only the starting positions moved,
-  // to the values dialled in against the game on Nuke.
+  // `def` is where each slider loads and where reset returns it, the values
+  // dialled in against the game on Nuke. What a knob does is look.js's
+  // business (`createLook`); this panel only moves them.
   const defs = [
     { key: 'sun', label: 'sun ×', min: 0, max: 5, step: 0.05, def: LOOK_DEFAULTS.sun },
     { key: 'bake', label: 'bounce ×', min: 0, max: 3, step: 0.05, def: LOOK_DEFAULTS.bake },
@@ -508,8 +495,7 @@ function setupGradePanel(knobs, slug) {
     // Tweaks still persist while you stay on the map; loading one resets them.
     const value = reset;
     saved[d.key] = value;
-    if (LIGHT_KEYS.has(d.key)) applyLight(d.key, value);
-    else knobs[d.key].value = value;
+    look.set(d.key, value);
     return { ...d, value, reset };
   });
   try {
@@ -518,9 +504,8 @@ function setupGradePanel(knobs, slug) {
     /* private mode */
   }
   hud.buildGrade(defs, (key, value) => {
-    if (LIGHT_KEYS.has(key)) applyLight(key, value);
-    else if (knobs[key]) knobs[key].value = value;
-    else return;
+    if (!LIGHT_KEYS.has(key) && !knobs[key]) return;
+    look.set(key, value);
     saved[key] = value;
     try {
       localStorage.setItem(GRADE_STORE, JSON.stringify(saved));
@@ -540,6 +525,42 @@ function renderFrame() {
   else renderer.render(scene, camera);
 }
 
+// ---- live body / third person ----------------------------------------------
+// The explorer's walking body wears the same agent model the demo bodies do,
+// driven from the movement sim (src/cs3d/liveBody.js). T puts the camera
+// behind it — the way to watch the locomotion blend run on live input, and
+// the path a bot's body will take.
+const liveBody = new LiveBody(playerModels, () => pack?.world || null);
+const _tpEye = { x: 0, y: 0, z: 0 };
+const _tpWant = { x: 0, y: 0, z: 0 };
+const _tpFwd = new THREE.Vector3();
+/** Camera 110u behind and 16u above the eyes, pulled in against the map so it never leaves the room. */
+const THIRD_PERSON_BACK = 110;
+const THIRD_PERSON_UP = 16;
+function placeThirdPersonCamera() {
+  const eye = camera.position; // player.syncCamera put it on the eyes
+  camera.getWorldDirection(_tpFwd);
+  const wx = eye.x - _tpFwd.x * THIRD_PERSON_BACK;
+  const wy = eye.y - _tpFwd.y * THIRD_PERSON_BACK + THIRD_PERSON_UP;
+  const wz = eye.z - _tpFwd.z * THIRD_PERSON_BACK;
+  if (player.world) {
+    // Trace a small hull (12u box, origin at its bottom like every hull) from
+    // the eyes back to where the camera wants to be — Source frame: scene
+    // (x, y, z) → (x, −z, y) — and stop at the first wall.
+    const HALF = 6;
+    _tpEye.x = eye.x;
+    _tpEye.y = -eye.z;
+    _tpEye.z = eye.y - HALF;
+    _tpWant.x = wx;
+    _tpWant.y = -wz;
+    _tpWant.z = wy - HALF;
+    const t = player.world.traceHull(_tpEye, _tpWant, HALF, 2 * HALF);
+    camera.position.set(t.endpos.x, t.endpos.z + HALF, -t.endpos.y);
+  } else {
+    camera.position.set(wx, wy, wz);
+  }
+}
+
 // ---- loop ------------------------------------------------------------------
 let last = performance.now();
 const _src = [0, 0, 0];
@@ -548,6 +569,12 @@ function frame(now) {
   const dt = Math.min(0.1, (now - last) / 1000);
   last = now;
   player.update(dt);
+  // The walking body's own agent model, posed from the sim every frame; shown
+  // in third person, kept in step (hidden) in first.
+  const inThird = thirdPerson && player.mode === 'walk';
+  liveBody.setSide(lastSide);
+  liveBody.update(player, dt, { visible: inThird });
+  if (inThird) placeThirdPersonCamera();
   // After the player: in POV the demo owns the camera, and writing second wins.
   demoView.update(now);
   if (demoView.active) hud.setDemoStatus(demoView.status());
@@ -556,8 +583,10 @@ function frame(now) {
   if (renderer.backend) renderFrame();
   updateInspector(now);
   // HUD read-outs are cheap; positions shown in Source coordinates.
-  const p = camera.position;
-  const s = sceneToSource(p.x, p.y - (player.mode === 'walk' ? player.eyeSmooth : 64), p.z);
+  // The walking body reports its feet (the camera may be behind it in third
+  // person); the fly camera reports the ground under its eyes.
+  const p = player.mode === 'walk' ? player.feet : camera.position;
+  const s = sceneToSource(p.x, player.mode === 'walk' ? p.y : p.y - 64, p.z);
   _src[0] = s[0];
   _src[1] = s[1];
   _src[2] = s[2];
