@@ -24,7 +24,14 @@
 // Fetched once per session per model, then cached.
 // ---------------------------------------------------------------------------
 
-const ENDPOINT = '/api/replays/models';
+import { apiBase } from '../api.js';
+
+// Absolute, via apiBase(): the site and the API are different hosts in
+// production, so a bare path hits the SPA catch-all rewrite and comes back as
+// 200 text/html. The `.catch(() => null)` below then turns that into "no
+// runtime weights" without a word, and the models quietly ran on their baked
+// defaults on aim4.io while dev — where Vite proxies /api — got the real ones.
+const ENDPOINT = () => `${apiBase()}/api/replays/models`;
 
 /** kind -> { values, specHash, ... } once fetched and accepted. */
 const runtime = new Map();
@@ -46,7 +53,7 @@ export function loadRuntimeParams(kind, expectedSpecHash) {
   if (pending.has(kind)) return pending.get(kind);
   if (typeof fetch !== 'function') return Promise.resolve(null);
 
-  const req = fetch(`${ENDPOINT}/${kind}`, { credentials: 'omit' })
+  const req = fetch(`${ENDPOINT()}/${kind}`, { credentials: 'omit' })
     .then((res) => (res.ok ? res.json() : null))
     .then((body) => {
       if (!body?.values || typeof body.values !== 'object') return null;

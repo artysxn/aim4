@@ -8,6 +8,7 @@
 
 import {
   NOTE_MAX,
+  apiBase,
   countDemoView,
   fetchPlaylists,
   fetchRoundMeta,
@@ -245,9 +246,10 @@ export function createTimelineViewer({
         }>${icon(coachIcon)}</button>
         <button type="button" class="rv-tool" id="rv-bookmark" title="Save to a playlist">${icon(bookmarkAddIcon)}</button>
         <button type="button" class="rv-tool" id="rv-note" title="Notes">${icon(commentsIcon)}</button>
-        <!-- Hidden until /3d says there is something to say about this demo:
-             ready to switch, reparsing, or available on request. -->
-        <button type="button" class="rv-tool rv-tool-3d" id="rv-toggle3d" title="Switch to 3D" hidden
+        <!-- Always in the bar. It is one of the eight tools, and a tool that
+             comes and goes leaves a hole where the user learned a button was;
+             when 3D is not available for a demo it says so instead. -->
+        <button type="button" class="rv-tool rv-tool-3d" id="rv-toggle3d" title="Switch to 3D"
           ><span class="rv-3d-icon" id="rv-3d-icon">${icon(view3dIcon)}</span
           ><span class="rv-3d-note" id="rv-3d-note" hidden></span></button>
         <!-- Starts inactive to match chartOn: the tiers that hold the chart
@@ -304,10 +306,10 @@ export function createTimelineViewer({
                 </button>
               </div>
               <div class="rv-transport-group">
-                <button type="button" class="rv-skip" id="rv-fwd"
-                  aria-label="Forward ${SKIP_SECONDS} seconds" title="Forward ${SKIP_SECONDS}s">${skipIconSvg(false)}</button>
                 <button type="button" class="rv-skip" id="rv-back"
                   aria-label="Rewind ${SKIP_SECONDS} seconds" title="Rewind ${SKIP_SECONDS}s">${skipIconSvg(true)}</button>
+                <button type="button" class="rv-skip" id="rv-fwd"
+                  aria-label="Forward ${SKIP_SECONDS} seconds" title="Forward ${SKIP_SECONDS}s">${skipIconSvg(false)}</button>
               </div>
               <div class="rv-transport-group">
                 <button type="button" class="rv-speed" id="rv-speed">1X</button>
@@ -629,25 +631,33 @@ export function createTimelineViewer({
   async function probe3d(method = 'GET') {
     if (!statsDemoId) return;
     try {
-      const res = await fetch(`/api/replays/demos/${encodeURIComponent(statsDemoId)}/3d`, {
-        method,
-        credentials: 'include'
-      });
+      // apiBase(), not a bare path: in production the site and the API are on
+      // different hosts, and `/api/...` here resolved against the site, where
+      // the SPA catch-all rewrite answered 200 with train.html. res.ok was
+      // true, res.json() threw on the doctype, and the catch below swallowed
+      // it — so 3D looked unavailable on every demo on aim4.io while working
+      // in dev, where Vite proxies /api to the backend.
+      const res = await fetch(
+        `${apiBase()}/api/replays/demos/${encodeURIComponent(statsDemoId)}/3d`,
+        { method, credentials: 'include' }
+      );
       if (!res.ok) return;
       avail3d = await res.json();
       map3dSlug = avail3d.mapSlug || null;
-      // Visible whenever there is anything to say — including "this needs a
-      // reparse", which is the case the old version hid.
-      toggle3dBtn.hidden = !(avail3d.dataReady || avail3d.upgradeable || avail3d.job);
       sync3dButtons();
       const job = avail3d.job;
       const busy = job && ['queued', 'downloading', 'parsing'].includes(job.state);
       clearTimeout(poll3d);
       if (busy) poll3d = setTimeout(() => probe3d('GET'), 4000);
     } catch {
-      /* offline or signed out: the control stays hidden */
+      /* offline or signed out: the button stays in its unavailable state */
     }
   }
+  // Paint the unavailable state first. The probe answers late, early-returns on
+  // a round selection (no demo id) and gives up quietly when signed out — and
+  // the button is in the bar the whole time either way, so it has to look
+  // disabled from the first frame rather than live and inert.
+  sync3dButtons();
   probe3d();
 
   function sync3dButtons() {
@@ -688,8 +698,16 @@ export function createTimelineViewer({
         toggle3dBtn.title = `${s.mapName || 'This map'} has no 3D map yet`;
         note3dEl.textContent = 'no 3D map';
       } else {
-        toggle3dBtn.title = 'No source demo on file to reparse';
-        note3dEl.textContent = 'unavailable';
+        // Nothing to act on: a disabled button and a tooltip say it. A caption
+        // over the tool bar is for a state that is going somewhere — a queue
+        // position, a retry, an offer — not for the ordinary case of a demo
+        // that will never have 3D.
+        toggle3dBtn.title = !statsDemoId
+          ? '3D needs a full demo, not a round selection'
+          : s
+            ? 'No source demo on file to reparse'
+            : 'Checking whether this demo can be viewed in 3D';
+        note3dEl.hidden = true;
       }
     }
 
@@ -779,8 +797,11 @@ export function createTimelineViewer({
   }
 
   /**
-   * Spacing multiplier for the gap *after* round number `n` (before n+1).
-   * Half: 12→13 ×2. OT start: 24→25 ×4. Then every 3 OT rounds: ×2 / ×4.
+   * Is there a side swap *after* round number `n` (before n+1)?
+   *
+   * Half: 12→13. OT start: 24→25, then every 3 OT rounds. Used to be a
+   * spacing multiplier; the strip now spreads itself and marks the break with
+   * an arrow glyph instead, so all that is left is where the break falls.
    */
   function gapAfterRound(n) {
     const r = Number(n) || 0;
@@ -793,8 +814,6 @@ export function createTimelineViewer({
     }
     return 1;
   }
-
-  const ROUND_GAP_PX = 3;
 
   /** Global timeline seconds at the end of freezetime for a round index. */
   function liveOffsetOf(index) {
@@ -838,12 +857,14 @@ export function createTimelineViewer({
         const coachClass = noted ? ' has-coach' : '';
         // A side swap is a break in the strip, not another gap the eye has to
         // measure — the arrows say what the extra space used to only imply.
-        const gapMul = i === 0 ? 0 : gapAfterRound(rounds[i - 1].round);
-        const swap = gapMul > 1 ? '<span class="rv-round-swap" aria-hidden="true">⇄</span>' : '';
-        const gap = gapMul * ROUND_GAP_PX;
-        const margin = gap && !swap ? ` style="margin-left:${gap}px"` : '';
+        // The strip is spread edge to edge, so spacing is the layout's job and
+        // the old per-chip margins would only fight it.
+        const swap =
+          i > 0 && gapAfterRound(rounds[i - 1].round) > 1
+            ? '<span class="rv-round-swap" aria-hidden="true">⇄</span>'
+            : '';
         const coachHint = noted ? ' · coach notes' : '';
-        return `${swap}<button type="button" class="rv-round ${sideClass}${coachClass}" data-index="${i}"${margin} title="${escapeHtml(
+        return `${swap}<button type="button" class="rv-round ${sideClass}${coachClass}" data-index="${i}" title="${escapeHtml(
           `Round ${r.round} · ${side} win · ${economyLabel(r.econ1)} vs ${economyLabel(r.econ2)}${coachHint}`
         )}">${String(r.round).padStart(2, '0')}</button>`;
       })
@@ -3545,7 +3566,7 @@ export function createTimelineViewer({
 
     const series = result.series;
     const span = Math.max(1, series.length - 1);
-    // Always CT share on Y: top = CT 100% (blue), bottom = T 100% (yellow).
+    // Always CT share on Y: top = CT 100% (blue), bottom = T 100% (red).
     // `ctDuel` is the same moment with the fights that were open in it resolved
     // forward; it is what the badges and the playhead read, so the line has to
     // read it too or the dot would sit off its own curve during every fight.
@@ -3605,7 +3626,7 @@ export function createTimelineViewer({
     const mid = h / 2;
     ctx.fillStyle = 'rgba(91, 159, 212, 0.42)'; // CT
     fillTo(mid, true);
-    ctx.fillStyle = 'rgba(232, 184, 74, 0.42)'; // T
+    ctx.fillStyle = 'rgba(230, 6, 17, 0.42)'; // T
     fillTo(mid, false);
 
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.22)';
@@ -3898,7 +3919,7 @@ export function createTimelineViewer({
     fillBand(
       yNeuTop,
       () => 0,
-      'rgba(232, 184, 74, 0.72)'
+      'rgba(230, 6, 17, 0.72)'
     );
 
     // Jagged separators.

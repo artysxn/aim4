@@ -43,7 +43,10 @@ export const TEAM_COLORS = {
 
 /** Live T / CT colors â€” preferred when the tick buffer carries side. */
 export const SIDE_COLORS = {
-  T: { base: '#e60611', bright: '#ff6a70', dim: '#7d1015' },
+  // One red. `bright` carries the nametag text, trails and view cones; giving
+  // it a lightened variant put a second, almost-matching red on the same
+  // screen as the base one.
+  T: { base: '#e60611', bright: '#e60611', dim: '#7d1015' },
   CT: { base: '#5b9fd4', bright: '#8fc4ef', dim: '#2a5578' }
 };
 

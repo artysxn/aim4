@@ -2,12 +2,31 @@
 // src/cs3d/controls.js
 // Pointer lock + keyboard for the explorer. Writes into player.input; the
 // page-level keys (mode toggle, spawn, help) fire callbacks so main.js owns
-// what they mean. Mouse sensitivity is CS convention: degrees per count =
-// 0.022 × sens, persisted in localStorage.
+// what they mean.
+//
+// Sensitivity is the trainer's, not a second number: this page reads and
+// writes `aimtrainer:settings`.sensitivity on the unified scale, so a turn
+// here is the same turn as a turn in a gamemode. The explorer used to keep
+// its own `cs3d_sens` on the CS 0.022°/count convention, which meant two
+// settings that looked alike, read alike and moved the camera differently.
 // ---------------------------------------------------------------------------
 
-const SENS_KEY = 'cs3d_sens';
-const CS_DEG_PER_COUNT = 0.022;
+import * as Storage from '../utils/Storage.js';
+import { SENSITIVITY_DEFAULT, radiansPerCountFromSensitivity } from '../utils/MathUtils.js';
+
+const DEG_PER_RAD = 180 / Math.PI;
+
+/** The trainer's saved sensitivity, or its default when nothing is stored. */
+function readSensitivity() {
+  const v = Number(Storage.read('settings', {})?.sensitivity);
+  return Number.isFinite(v) && v > 0 ? v : SENSITIVITY_DEFAULT;
+}
+
+/** Whether the trainer is set to ask for raw (unadjusted) mouse movement. */
+function readRawInput() {
+  const v = Storage.read('settings', {})?.rawInput;
+  return v === undefined ? true : !!v;
+}
 
 export class Controls {
   constructor(canvas, player, hooks = {}) {
@@ -15,14 +34,15 @@ export class Controls {
     this.player = player;
     this.hooks = hooks;
     this.locked = false;
-    this.sens = Number(localStorage.getItem(SENS_KEY)) || 1.0;
+    this.sens = readSensitivity();
+    this.rawInput = readRawInput();
     this.keys = new Set();
     this._onMouseMove = this._onMouseMove.bind(this);
     this._onKey = this._onKey.bind(this);
     this._onLockChange = this._onLockChange.bind(this);
 
     canvas.addEventListener('click', () => {
-      if (!this.locked) canvas.requestPointerLock?.();
+      if (!this.locked) this._requestLock();
     });
     document.addEventListener('pointerlockchange', this._onLockChange);
     document.addEventListener('mousemove', this._onMouseMove);
@@ -31,9 +51,46 @@ export class Controls {
     window.addEventListener('blur', () => this._releaseAll());
   }
 
+  /**
+   * Lock with unadjusted movement when the trainer asks for it.
+   *
+   * Without it the browser hands over pointer-accelerated deltas, and a fast
+   * flick arrives as a few enormous jumps rather than a smooth sweep — the
+   * "skipping and spinning" the gamemodes fixed the same way. The option can
+   * reject on its own (older Chrome, some platforms), so the plain form is the
+   * fallback rather than the primary.
+   */
+  _requestLock() {
+    const el = this.canvas;
+    if (!el.requestPointerLock) return;
+    // requestPointerLock rejects, loudly, when the document is not focused.
+    if (!document.hasFocus()) return;
+    let res;
+    try {
+      res = this.rawInput ? el.requestPointerLock({ unadjustedMovement: true }) : el.requestPointerLock();
+    } catch {
+      return; // older browsers throw synchronously on the options form
+    }
+    if (res && typeof res.catch === 'function') {
+      res.catch(() => {
+        if (!this.rawInput || !document.hasFocus()) return;
+        try {
+          const plain = el.requestPointerLock();
+          if (plain && typeof plain.catch === 'function') plain.catch(() => {});
+        } catch {
+          /* ignore */
+        }
+      });
+    }
+  }
+
   setSensitivity(v) {
-    this.sens = Math.max(0.05, Math.min(10, Number(v) || 1));
-    localStorage.setItem(SENS_KEY, String(this.sens));
+    const n = Number(v);
+    this.sens = Number.isFinite(n) && n > 0 ? n : SENSITIVITY_DEFAULT;
+    // Merged, not replaced: this page owns one field of the trainer's settings.
+    const data = Storage.read('settings', {}) || {};
+    data.sensitivity = this.sens;
+    Storage.write('settings', data);
     this.hooks.onSensitivity?.(this.sens);
   }
 
@@ -45,7 +102,8 @@ export class Controls {
 
   _onMouseMove(e) {
     if (!this.locked) return;
-    this.player.look(e.movementX, e.movementY, CS_DEG_PER_COUNT * this.sens);
+    // player.look takes degrees per count; the trainer's scale is radians.
+    this.player.look(e.movementX, e.movementY, radiansPerCountFromSensitivity(this.sens) * DEG_PER_RAD);
   }
 
   _releaseAll() {

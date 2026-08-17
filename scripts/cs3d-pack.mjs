@@ -511,11 +511,23 @@ function classifyMaterial(mat) {
   // required a layer-1-suffixed slot *and* a layer-2 one, matched nothing at
   // all on the map and every blended road, floor and plaster wall rendered as
   // layer 1 alone. A layer-2 colour slot is on its own proof of a blend.
+  //
+  // The inferred half of that test is only safe on world surfaces. A layered
+  // material that is NOT one — an unlit card, an effects card — has no vertex
+  // paint to blend by, so the weight comes out of an attribute that was never
+  // written and layer 2 washes over the whole card. Dust 2's 3D skybox cloud
+  // dome (`nuke_clouds_002`, csgo_unlitgeneric, F_LAYERS 1, 229 tiles) is
+  // exactly that: 229 cards of flat blue slab across the sky. Nuke's dome is
+  // the same art on `csgo_effects`, which takes the effect path and was never
+  // caught by this, which is why only Dust 2 showed it. A shader that names
+  // itself a 2-way blend still counts — that one is not an inference.
+  const cardShader = /unlit/.test(shader) || effect;
   const blend =
     /csgo_environment_blend|csgo_simple_2way_blend|_2way_blend|csgo_blend/.test(shader) ||
-    ints.F_LAYERS >= 1 ||
-    ints.F_MULTIBLEND >= 1 ||
-    !!(tex.g_tColor2 || tex.g_tColorB || tex.g_tLayer2Color);
+    (!cardShader &&
+      (ints.F_LAYERS >= 1 ||
+        ints.F_MULTIBLEND >= 1 ||
+        !!(tex.g_tColor2 || tex.g_tColorB || tex.g_tLayer2Color)));
   const scale1 = Array.isArray(vecs.g_vTexCoordScale1) ? vecs.g_vTexCoordScale1 : Array.isArray(vecs.g_vTexCoordScale) ? vecs.g_vTexCoordScale : [1, 1];
   const scale2 = Array.isArray(vecs.g_vTexCoordScale2) ? vecs.g_vTexCoordScale2 : scale1;
   /**

@@ -11,10 +11,11 @@
 :root {
   --rv-team1: #38a3e8;
   --rv-team2: #e8913c;
-  /* T side is the aim4 red. --rv-t-bright is for text and thin marks, where
-     the flat brand red goes muddy against black. */
+  /* T side is the aim4 red — one value everywhere it appears: the clock row,
+     the radar nametags, the HP bars and the graph bands. An earlier cut had a
+     lightened variant for text on black, which just meant three reds on screen
+     that were nearly but not quite the same. */
   --rv-t: #e60611;
-  --rv-t-bright: #ff4d55;
   --rv-ct: #5b9fd4;
   --rv-stage: #050505;
   --rv-panel: #0c0c0c;
@@ -1589,17 +1590,23 @@ body.rv-open {
   background: #050505;
 }
 
+/* Spread edge to edge, so the strip lines up with the scrubber above it and a
+   chip sits under the stretch of round it belongs to. Centring left the two
+   on different scales: the bar spanned the window while the chips huddled in
+   the middle, and neither told you anything about the other.
+   space-between collapses to a plain row once the chips overflow, which is
+   what the scroller is for. */
 .rv-rounds {
   display: flex;
   flex-wrap: nowrap;
-  justify-content: center;
+  justify-content: space-between;
   align-items: center;
   gap: 0;
   min-width: 0;
   max-width: 100%;
   overflow-x: auto;
   overflow-y: hidden;
-  padding: 2px 8px 4px;
+  padding: 0;
 }
 
 /* ---- Viewer tool menus --------------------------------------------------- */
@@ -1948,7 +1955,7 @@ body.rv-open {
 /* Team POV eye: color by the side being followed, not the team number. */
 .rv-tool.active.pov-t {
   background: color-mix(in srgb, var(--rv-t) 22%, transparent);
-  color: var(--rv-t-bright);
+  color: var(--rv-t);
 }
 
 .rv-tool.active.pov-ct {
@@ -2160,7 +2167,7 @@ body.rv-open {
 }
 
 .rv-killfeed-name.side-t {
-  color: var(--rv-t-bright);
+  color: var(--rv-t);
 }
 
 .rv-killfeed-name.side-ct {
@@ -2244,7 +2251,7 @@ body.rv-open {
 }
 
 .rv-duel-feed-name.side-t {
-  color: var(--rv-t-bright);
+  color: var(--rv-t);
 }
 
 .rv-duel-feed-name.side-ct {
@@ -2265,7 +2272,7 @@ body.rv-open {
 }
 
 .rv-duel-feed-odds b.side-t {
-  color: var(--rv-t-bright);
+  color: var(--rv-t);
 }
 
 .rv-duel-feed-odds b.side-ct {
@@ -2336,7 +2343,7 @@ body.rv-open {
 }
 
 .rv-clock-team[data-side='T'] {
-  color: var(--rv-t-bright);
+  color: var(--rv-t);
 }
 
 .rv-clock-team[data-side='CT'] {
@@ -2355,7 +2362,7 @@ body.rv-open {
 }
 
 .rv-clock-odds[data-side='T'] {
-  color: var(--rv-t-bright);
+  color: var(--rv-t);
 }
 
 .rv-clock-odds[data-side='CT'] {
@@ -2399,7 +2406,7 @@ body.rv-open {
 }
 
 .rv-match-score[data-side='T'] {
-  color: var(--rv-t-bright);
+  color: var(--rv-t);
 }
 
 .rv-match-score[data-side='CT'] {
@@ -2503,7 +2510,7 @@ body.rv-open {
 }
 
 .rv-player[data-side='T'] .rv-player-hp {
-  background: #8a1219;
+  background: var(--rv-t);
 }
 
 .rv-player[data-side='CT'] .rv-player-hp {
@@ -2616,13 +2623,13 @@ body.rv-open {
 
 /* ---- Round chips (T / CT win colors) ------------------------------------ */
 
+/* The win side is the number's own colour. An underline rule under every chip
+   was a second row of marks competing with the coach diamonds below them. */
 .rv-round {
   position: relative;
   flex: 0 0 auto;
-  min-width: 36px;
-  margin-left: 3px;
-  /* Bottom padding is the room the win rule and the coach diamond live in. */
-  padding: 5px 0 14px;
+  min-width: 28px;
+  padding: 4px 0 10px;
   border: 0;
   background: transparent;
   color: var(--muted);
@@ -2631,29 +2638,12 @@ body.rv-open {
   cursor: pointer;
 }
 
-/* The win colour is a rule under the number, not a filled chip: twenty-four
-   filled boxes across the bottom of the screen out-shouted the map. */
-.rv-round::before {
-  content: '';
-  position: absolute;
-  left: 5px;
-  right: 5px;
-  bottom: 9px;
-  height: 2px;
-  border-radius: 1px;
-  background: rgba(255, 255, 255, 0.14);
+.rv-round.wt {
+  color: var(--rv-t);
 }
 
-.rv-round:first-child {
-  margin-left: 0;
-}
-
-.rv-round.wt::before {
-  background: var(--rv-t);
-}
-
-.rv-round.wct::before {
-  background: var(--rv-ct);
+.rv-round.wct {
+  color: var(--rv-ct);
 }
 
 .rv-chrome.wt .rv-scrub-fill {
@@ -2668,13 +2658,20 @@ body.rv-open {
   color: var(--text);
 }
 
+/* The round on screen: white, and the only chip carrying a rule. */
 .rv-round.active {
   color: #ffffff;
 }
 
 .rv-round.active::before {
-  height: 3px;
-  bottom: 8px;
+  content: '';
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  bottom: 6px;
+  height: 2px;
+  border-radius: 1px;
+  background: #ffffff;
 }
 
 /* Green diamond under the number — round has at least one coach note. */
@@ -2692,7 +2689,6 @@ body.rv-open {
 /* Half-time / overtime side swap, in place of an unexplained wider gap. */
 .rv-round-swap {
   flex: 0 0 auto;
-  padding: 0 7px;
   color: rgba(181, 181, 181, 0.45);
   font-size: 12px;
   line-height: 1;
@@ -4644,7 +4640,7 @@ body.rv-open {
 }
 
 .st-table td.st-role-t {
-  color: var(--rv-t-bright);
+  color: var(--rv-t);
   font-weight: 600;
   white-space: nowrap;
 }
@@ -4900,7 +4896,7 @@ body.rv-open {
 }
 
 .rv-wingraph-label.t {
-  color: var(--rv-t-bright);
+  color: var(--rv-t);
 }
 
 .rv-wingraph-label.neu {

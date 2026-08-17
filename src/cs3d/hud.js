@@ -53,7 +53,9 @@ export class Hud {
             <div class="c3-keys-demo"><b>P</b> play / pause, <b>, .</b> step (Shift: half-second)</div>
             <div class="c3-keys-demo"><b>[ ]</b> previous / next round, <b>M</b> speed</div>
           </div>
-          <label class="c3-sens">Sensitivity <input type="number" step="0.05" min="0.05" max="10" value="${sens}"></label>
+          <!-- The trainer's sensitivity, on the trainer's scale and step:
+               editing it here changes it for the gamemodes too. -->
+          <label class="c3-sens">Sensitivity <input type="number" step="0.001" min="0.001" value="${sens}"></label>
           <div class="c3-maps"></div>
         </div>
       </div>

@@ -12,6 +12,19 @@ import { decodePacked, isPacked } from './shared/tickPacked.js';
 
 const API_BASE = (import.meta.env?.VITE_API_URL || '').replace(/\/$/, '');
 
+/**
+ * The API host, for the few callers that build a request themselves.
+ *
+ * Exported because a bare `/api/...` fetch does not fail loudly in production:
+ * the site is on Vercel and the API is on another host, so that path hits the
+ * SPA catch-all rewrite and comes back as 200 text/html. `res.ok` is true and
+ * the JSON parse is what throws, several lines later, usually inside someone's
+ * catch. Anything talking to the API goes through this.
+ */
+export function apiBase() {
+  return API_BASE;
+}
+
 /** @deprecated Library is shared; account id is ignored. */
 export function setAccount(_id) {}
 

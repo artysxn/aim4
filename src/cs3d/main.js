@@ -177,7 +177,12 @@ window.addEventListener('drop', async (e) => {
 if (params.get('demo')) {
   const ref = params.get('demo');
   const isId = /^[A-Za-z0-9_-]+$/.test(ref);
-  const src = isId ? `/api/replays/demos/${ref}/package` : ref;
+  // Absolute: the API is a different host in production, and a bare path here
+  // resolved against the site, where the SPA catch-all rewrite answers 200
+  // with train.html — so the 2D viewer's "watch in 3D" link handed the demo
+  // loader a page of HTML instead of a package on aim4.io.
+  const apiBase = String(import.meta.env?.VITE_API_URL || '').replace(/\/$/, '');
+  const src = isId ? `${apiBase}/api/replays/demos/${ref}/package` : ref;
   fetch(src, isId ? { credentials: 'include' } : undefined)
     .then(async (res) => {
       if (!res.ok) {
