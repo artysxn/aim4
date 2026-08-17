@@ -219,14 +219,29 @@ export function drawSkyWorld(renderer, scene, camera, pack, lighting) {
  * mapping, grade and bloom with everything else, which is also what it should
  * have been doing all along.
  */
-export function createMapRenderer({ renderer, scene, getPack, getLighting, bloom, overlay }) {
+export function createMapRenderer({ renderer, scene, getPack, getLighting, bloom, overlay, overlayAfter = false }) {
   const pass = bloom || { render: (draw) => draw(), resize() {} };
+  let told = false;
+  const drawOverlay = () => {
+    if (!overlay) return;
+    const drew = overlay();
+    if (!told) {
+      told = true;
+      console.log(`cs3d: overlay pass ran ${overlayAfter ? 'AFTER the composite (?vm=after)' : 'inside the scene pass'}${drew === false ? ' — nothing to draw' : ''}`);
+    }
+  };
   return {
     render(camera) {
       pass.render(() => {
         drawSkyWorld(renderer, scene, camera, getPack(), getLighting());
-        overlay?.();
+        if (!overlayAfter) drawOverlay();
       });
+      // `?vm=after` puts it back where it was before the bloom fix: on the
+      // canvas, after the composite. That path draws the viewmodel and wipes
+      // the map, so it is a diagnostic and not a mode — if the gun appears
+      // here and not inside the pass, the depth clear inside the HDR target is
+      // what to look at next.
+      if (overlayAfter) drawOverlay();
     },
     resize() {
       pass.resize();

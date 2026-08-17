@@ -374,9 +374,12 @@ async function boot() {
       getPack: () => pack,
       getLighting: () => lighting,
       bloom: bloomPass,
+      overlayAfter: params.get('vm') === 'after',
       // The gun, in the same target as the world (see createMapRenderer).
       overlay: () => {
-        if (viewModel.visible && viewModel.ready) vmPass.render();
+        if (!viewModel.visible || !viewModel.ready) return false;
+        vmPass.render();
+        return true;
       }
     });
     lighting = new MapLighting(scene, camera, manifest, { shadows, renderer });

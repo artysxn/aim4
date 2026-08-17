@@ -138,8 +138,69 @@ const SHEEN_SCALE = 0.5;
 /** Ambient a body falls back to when the map ships no probe grid, per axis. */
 const FALLBACK_AMBIENT = 0.18;
 
+/**
+ * Ceiling on the ORM's AO influence. The agents' own `g_flAmbientOcclusionMasking`
+ * runs 0.4 on almost everything and 0.99 on the SAS torso; at 0.99 a dark or
+ * empty channel takes the body to black, at 0.4 the same channel is ordinary
+ * shading. Half is the most a crease may cost.
+ */
+const AO_MASK_MAX = 0.5;
+
 /** Material names already reported by buildMaterial; one line each, not per body. */
 const SEEN_MATS = new Set();
+
+/** channelStats results, by texture image, so a shared ORM is read once. */
+const STATS = new WeakMap();
+
+/**
+ * min / max / mean of a packed texture's R, G and B, 0..1.
+ *
+ * The point is to stop guessing at what is in the ORM. Every rail in
+ * buildMaterial exists because a channel came out of VRF holding something
+ * other than what its slot means — the normal's alpha empty, the occlusion
+ * slot's constant stand-in zero — and from the client the only way to know
+ * which is to look. 32×32 is enough for "is this channel degenerate": a real
+ * AO or metalness map has structure at any resolution, a constant fill has
+ * none at any.
+ */
+function channelStats(tex) {
+  const img = tex?.image;
+  if (!img) return null;
+  if (STATS.has(img)) return STATS.get(img);
+  let out = null;
+  try {
+    let d = null;
+    if (ArrayBuffer.isView(img.data)) {
+      // A data-backed texture (DataTexture): the bytes are already here.
+      d = img.data;
+    } else {
+      const N = 32;
+      const ctx = new OffscreenCanvas(N, N).getContext('2d', { willReadFrequently: true });
+      ctx.drawImage(img, 0, 0, N, N);
+      d = ctx.getImageData(0, 0, N, N).data;
+    }
+    const ch = [0, 1, 2].map(() => ({ min: 255, max: 0, sum: 0 }));
+    let n = 0;
+    for (let i = 0; i + 3 < d.length; i += 4) {
+      n++;
+      for (let c = 0; c < 3; c++) {
+        const v = d[i + c];
+        if (v < ch[c].min) ch[c].min = v;
+        if (v > ch[c].max) ch[c].max = v;
+        ch[c].sum += v;
+      }
+    }
+    if (!n) throw new Error('empty');
+    const norm = (o) => ({ min: o.min / 255, max: o.max / 255, mean: o.sum / n / 255 });
+    out = { r: norm(ch[0]), g: norm(ch[1]), b: norm(ch[2]) };
+  } catch {
+    out = null; // a texture nothing here can read; the rails fall back to their defaults
+  }
+  STATS.set(img, out);
+  return out;
+}
+
+const pct = (v) => (v === undefined ? '?' : Math.round(v * 100));
 
 /** Drops whatever is accumulated into it (see DiffuseSunLightingModel). */
 const DISCARD_ACCUMULATOR = { addAssign() {} };
@@ -403,12 +464,34 @@ export class PlayerModels {
     if (src.normalScale) m.normalScale.copy(src.normalScale);
     m.roughnessMap = src.roughnessMap || null;
     m.aoMap = src.aoMap || null;
-    // `g_flAmbientOcclusionMasking` is not three's `aoMapIntensity`, the same
-    // way `g_flSheenScale` is not its `sheen`: three documents this one as a
-    // 0..1 blend toward the map, and a vmat float above 1 drives
-    // `1 + (ao − 1)·k` negative, which is a hole rather than a shadow. Measured
-    // at 3 it costs a third of the body's ambient.
-    m.aoMapIntensity = Math.max(0, Math.min(1, Number.isFinite(cs3d.aoMasking) ? cs3d.aoMasking : 1));
+    // ---- the AO rail, which is what blacked out the CT's torso -------------
+    //
+    // three's AO is `1 + (ao − 1)·intensity`, multiplied into the body's whole
+    // indirect diffuse — and for a body that IS its light, because the probe
+    // grid is where a moving player's ambient comes from. So an AO channel of
+    // zero at intensity 1 renders black, full stop.
+    //
+    // Both halves of that were wrong here.
+    //
+    // The intensity: `g_flAmbientOcclusionMasking` is not three's
+    // `aoMapIntensity` any more than `g_flSheenScale` was its `sheen`. The
+    // agents ship 0.4 on nearly everything and 0.99 on exactly two materials —
+    // `ctm_sas_body` and `ctm_sas_bodylegs`, which are exactly the two that
+    // rendered black while the head, gloves and defuser beside them at 0.4 came
+    // out fine. Capped, because no crease on a character should be able to take
+    // more than half its ambient light away.
+    //
+    // The channel: an all-zero AO is VRF's constant stand-in for a slot with no
+    // texture (`TextureAmbientOcclusion [0,0,0,0]`), which cs3d-models packs
+    // faithfully as zeros — and read at face value that is "fully occluded"
+    // rather than "no AO map". Same failure as the normal map's empty alpha
+    // being read as roughness 0, and the same answer: measure the channel and
+    // do not believe a degenerate one.
+    const orm = m.aoMap || m.roughnessMap;
+    const stats = orm ? channelStats(orm) : null;
+    const aoEmpty = !!stats && stats.r.max <= 2 / 255;
+    if (aoEmpty) m.aoMap = null;
+    m.aoMapIntensity = Math.max(0, Math.min(AO_MASK_MAX, Number.isFinite(cs3d.aoMasking) ? cs3d.aoMasking : 1));
     m.roughness = src.roughness;
     m.metalness = src.metalness;
     m.metalnessMap = src.metalnessMap || null;
@@ -481,11 +564,13 @@ export class PlayerModels {
     // flagged it cloth at all, and what it asked for.
     if (!SEEN_MATS.has(m.name)) {
       SEEN_MATS.add(m.name);
+      const band = (c) => (c ? `${pct(c.min)}-${pct(c.max)}(µ${pct(c.mean)})` : 'n/a');
       console.log(
         `cs3d: body material ${m.name || '(unnamed)'} —` +
           ` cloth=${!!cs3d.cloth} sss=${!!cs3d.sss} sheen=${cs3d.sheen ?? 0}` +
-          ` ao=${cs3d.aoMasking ?? 1}→${m.aoMapIntensity} metal=${src.metalness}→${m.metalness}` +
-          ` rough=${src.roughness} maps[base=${!!m.map} nrm=${!!m.normalMap} orm=${!!m.roughnessMap}]`
+          ` ao=${cs3d.aoMasking ?? 1}→${m.aoMapIntensity}${aoEmpty ? ' (channel empty, AO dropped)' : ''}` +
+          ` metal=${m.metalness}` +
+          ` | ORM%  AO ${band(stats?.r)}  rough ${band(stats?.g)}  metal ${band(stats?.b)}`
       );
     }
     return m;

@@ -225,9 +225,12 @@ export function createView3d({ slug, onModeChange }) {
       getPack: () => pack,
       getLighting: () => lighting,
       bloom: bloomPass,
+      overlayAfter: new URLSearchParams(location.search).get('vm') === 'after',
       // Inside the scene pass, never after it — see createMapRenderer.
       overlay: () => {
-        if (viewModel.visible && viewModel.ready) vmPass.render();
+        if (!viewModel.visible || !viewModel.ready) return false;
+        vmPass.render();
+        return true;
       }
     });
     lighting = new MapLighting(scene, camera, manifest, { shadows: true, renderer });
