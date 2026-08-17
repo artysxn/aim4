@@ -204,11 +204,29 @@ export function drawSkyWorld(renderer, scene, camera, pack, lighting) {
   if (dome) dome.visible = domeWas;
 }
 
-export function createMapRenderer({ renderer, scene, getPack, getLighting, bloom }) {
+/**
+ * @param {object} o
+ * @param {() => void} [o.overlay]  drawn last, INSIDE the scene pass: the
+ *   viewmodel, and anything else that wants its own camera over the world.
+ *
+ * Inside, not after. With bloom on, `pass.render` draws the world into an HDR
+ * target and then composites it to the canvas; a `renderer.render()` issued
+ * after that composite does not draw over it, it REPLACES the frame — the map
+ * vanishes and only the overlay is left. (Without bloom the same call works,
+ * which is why the explorer's viewmodel looked fine on some maps and blacked
+ * the screen on the ones whose post-processing volume asks for bloom.) Drawn
+ * here it lands in the same target as the world, so it takes the map's tone
+ * mapping, grade and bloom with everything else, which is also what it should
+ * have been doing all along.
+ */
+export function createMapRenderer({ renderer, scene, getPack, getLighting, bloom, overlay }) {
   const pass = bloom || { render: (draw) => draw(), resize() {} };
   return {
     render(camera) {
-      pass.render(() => drawSkyWorld(renderer, scene, camera, getPack(), getLighting()));
+      pass.render(() => {
+        drawSkyWorld(renderer, scene, camera, getPack(), getLighting());
+        overlay?.();
+      });
     },
     resize() {
       pass.resize();

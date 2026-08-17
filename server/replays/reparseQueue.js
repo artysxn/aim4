@@ -31,7 +31,7 @@
 
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { PARSER_REVISION } from '../demoparser/schema.js';
+import { MOVEMENT_REVISION, PARSER_REVISION } from '../demoparser/schema.js';
 import { readRecord as readDemoRecord, writeMaterialized, listDemos, invalidateDemoList } from './demoStore.js';
 
 /** Job states, forward-only except a retry which returns to `queued`. */
@@ -99,6 +99,9 @@ export async function statusFor(user, demoId) {
     revision,
     targetRevision: PARSER_REVISION,
     current,
+    // Jump/crouch landed at 3. Later revisions (grenade Z, …) are quality,
+    // not a reason to hide the 3D viewer.
+    movementReady: revision >= MOVEMENT_REVISION,
     // Upgradeable only when a source exists. Uploads and locally-ingested
     // demos have no handle and are frozen at whatever revision made them.
     upgradeable: !current && !!handle,

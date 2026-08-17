@@ -46,6 +46,7 @@ export class Hud {
             <div><b>Shift</b> fast / walk</div>
             <div><b>Q</b> next weapon (walk speed cap), <b>T</b> third person</div>
             <div><b>1 2 3</b> rifle / pistol / knife, <b>Mouse</b> fire</div>
+            <div><b>B</b> buy menu — every gun and grenade</div>
             <div><b>1</b> T spawn, <b>2</b> CT spawn, <b>R</b> respawn</div>
             <div><b>Esc</b> release, <b>H</b> this panel</div>
             <div><b>I</b> inspect what you are looking at</div>
@@ -86,8 +87,19 @@ export class Hud {
   }
 
   setLocked(locked) {
-    this.el.enter.hidden = locked;
+    this.locked = locked;
+    this.el.enter.hidden = locked || !!this.panelOpen;
     this.root.classList.toggle('is-locked', locked);
+  }
+
+  /**
+   * Another panel owns the screen (the buy menu). It needs the pointer, so the
+   * lock is released while it is up — and without this the enter panel would
+   * come back the moment it was, behind it.
+   */
+  setPanelOpen(on) {
+    this.panelOpen = !!on;
+    this.el.enter.hidden = !!this.locked || this.panelOpen;
   }
 
   toggleHelp() {

@@ -65,28 +65,36 @@ export class Player {
     this.sim = createPlayerState();
     this.simInput = createInput();
     this.jumpLatched = false;
-    this.weaponIndex = 0;
+    this.weaponName = EXPLORER_WEAPONS[0];
     this._flat = flatWorld(0);
   }
 
   get weapon() {
-    return EXPLORER_WEAPONS[this.weaponIndex];
-  }
-
-  /** Q: next weapon in the explorer's pocket, for its speed cap. */
-  cycleWeapon() {
-    this.weaponIndex = (this.weaponIndex + 1) % EXPLORER_WEAPONS.length;
-    return this.weapon;
+    return this.weaponName;
   }
 
   /**
-   * Hold a named weapon (the slot keys). Unknown names are ignored rather than
-   * silently capping the body at the default speed.
+   * Q: next weapon in the explorer's pocket, for its speed cap.
+   *
+   * From anything outside that pocket — the buy menu holds every gun in the
+   * game — this lands on the first entry rather than nowhere, so Q is always
+   * a way back to a known set.
+   */
+  cycleWeapon() {
+    const i = EXPLORER_WEAPONS.indexOf(this.weaponName);
+    this.weaponName = EXPLORER_WEAPONS[(i + 1) % EXPLORER_WEAPONS.length];
+    return this.weaponName;
+  }
+
+  /**
+   * Hold a named weapon. Any name goes: the speed cap reads WEAPON_SPEED, which
+   * covers every gun, and falls back to DEFAULT_WEAPON_SPEED for a grenade or a
+   * name it does not know — which is what CS2 does with one in hand anyway.
    */
   setWeapon(name) {
-    const i = EXPLORER_WEAPONS.indexOf(String(name || '').replace(/^weapon_/, ''));
-    if (i >= 0) this.weaponIndex = i;
-    return this.weapon;
+    const n = String(name || '').replace(/^weapon_/, '');
+    if (n) this.weaponName = n;
+    return this.weaponName;
   }
 
   get maxSpeed() {

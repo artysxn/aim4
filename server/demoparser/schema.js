@@ -34,8 +34,15 @@ export const SCHEMA_VERSION = 1;
  *      indices undecoded, so a future per-map table can read them without
  *      re-downloading anything. Doors are NOT captured and cannot be: their
  *      entity is not replicated and no door event exists in the demo.
+ *   4  grenade flight simplify measures error in XYZ, not XY. Revisions 1-3
+ *      drop the apex of a lofted smoke because it sits on the ground track.
+ *      Same 6-unit tolerance, now on height too. Throw and land are unchanged.
  */
-export const PARSER_REVISION = 3;
+export const PARSER_REVISION = 4;
+
+/** First revision whose tick buffer has real jump and crouch. The 3D viewer
+ *  needs this, not the latest adapter. Grenade-path quality is revision 4. */
+export const MOVEMENT_REVISION = 3;
 
 /**
  * @typedef {object} NormalizedPlayer

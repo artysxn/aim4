@@ -32,6 +32,7 @@ import { patchWebGPUPartialAttributeUpload } from '../../cs3d/threePatches.js';
 import { createLook, createMapRenderer, loadPostLut, installMapGrade, setupBloom } from '../../cs3d/look.js';
 import { createBootScreen } from '../../cs3d/bootScreen.js';
 import { sharedPlayerModels } from '../../cs3d/playerModels.js';
+import { ViewModelAssets, ViewModel, createViewModelPass } from '../../cs3d/viewModel.js';
 import { cs3dMap } from '../../../shared/cs3d/maps.js';
 import { cameraYawFromSource } from '../../../shared/sim3d/units.js';
 import {
@@ -64,6 +65,10 @@ const FIRE_SECONDS = 7;
 const POP_SECONDS = 0.3;
 const SMOKE_RADIUS = 144;
 const FIRE_RADIUS = 110;
+
+/** Scratch for the viewmodel's ambient sample; see updateViewModel. */
+const _vmCube = new Float32Array(18);
+const _vmColor = new THREE.Color();
 
 const FOV_DEFAULT = 90;
 const FOV_MIN = 25;
@@ -112,6 +117,22 @@ export function createView3d({ slug, onModeChange }) {
   // (src/cs3d/playerModels.js). Shared with the explorer; one download per
   // page. Until it lands — or without the pack — the placeholder cylinders draw.
   const models = sharedPlayerModels();
+
+  // The hands and the gun in them (src/cs3d/viewModel.js), over the pack
+  // scripts/cs3d-weapons.mjs builds. POV only: in third person, fly or walk
+  // there is nobody whose hands these are.
+  //
+  // Everything it needs comes from the tick the viewer is showing — the held
+  // weapon, the eye angles, the speed, whether the feet are on the ground — so
+  // the gun sways and bobs on the demo's own motion rather than on wall time,
+  // and it kicks on the ticks that player actually pulled the trigger.
+  const vmAssets = new ViewModelAssets();
+  const viewModel = new ViewModel(vmAssets);
+  let vmPass = null;
+  /** The POV player's state for the viewmodel, rebuilt by applyFrame(). */
+  let povState = null;
+  /** Tick the shot scan last ran to, so each shot kicks the gun exactly once. */
+  let shotTick = null;
 
   const bodies = [];
   const nades = new Map();
@@ -194,12 +215,18 @@ export function createView3d({ slug, onModeChange }) {
     const look = createLook({ scene, getPack: () => pack, getLighting: () => lighting, slug, knobs });
     look.applyAll(); // the explorer's panel sets its defaults here, before the lighting exists
     const bloomPass = setupBloom(renderer, manifest, new URLSearchParams());
+    vmPass = createViewModelPass(renderer);
+    vmPass.scene.add(viewModel.group);
     mapRenderer = createMapRenderer({
       renderer,
       scene,
       getPack: () => pack,
       getLighting: () => lighting,
-      bloom: bloomPass
+      bloom: bloomPass,
+      // Inside the scene pass, never after it — see createMapRenderer.
+      overlay: () => {
+        if (viewModel.visible && viewModel.ready) vmPass.render();
+      }
     });
     lighting = new MapLighting(scene, camera, manifest, { shadows: true, renderer });
     pack.lightmapIntensity = lighting.lightmapIntensity;
@@ -221,6 +248,12 @@ export function createView3d({ slug, onModeChange }) {
     // the map's own baked light (mapLoader.js ProbeGrid) like its props do.
     models.getProbeGrid = () => pack?.probeGrid || null;
     models.load();
+    // `ViewModel.ready` is "has a pair of hands", and the hands are only built
+    // by setSide — so without this call the viewmodel would never become ready
+    // and updateViewModel would never reach the setSide that would have made it.
+    vmAssets.load().then((ok) => {
+      if (ok !== false) viewModel.setSide('T');
+    });
 
     await pack.load(manifest);
     look.applyAll();
@@ -238,6 +271,7 @@ export function createView3d({ slug, onModeChange }) {
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
     mapRenderer?.resize();
+    vmPass?.resize(w, h);
     lighting?.resize?.();
   }
 
@@ -261,6 +295,57 @@ export function createView3d({ slug, onModeChange }) {
     return (p.team === 1 ? sides[1] : sides[2]) || frame.states[slot]?.side || '';
   }
 
+  /**
+   * How many shots this slot fired in the ticks the clock just crossed.
+   *
+   * Playing forward that is normally 0 or 1; at 4× or after a step it can be
+   * several, and each one kicks the viewmodel. A scrub backwards, a seek, or a
+   * pause returns 0 — a rewind must not fire the gun, and a held frame must not
+   * fire it again.
+   */
+  function shotsCrossed(slot, tick, rate) {
+    const shots = frame?.events?.shots;
+    const from = shotTick;
+    shotTick = tick;
+    if (!shots?.length || from === null || !(tick > from) || tick - from > rate) return 0;
+    const who = (frame.players || []).find((x) => x.slot === slot)?.id;
+    let n = 0;
+    for (const sh of shots) {
+      if (sh.tick > from && sh.tick <= tick && (sh.slot === slot || (who !== undefined && sh.player === who))) n++;
+    }
+    return n;
+  }
+
+  /**
+   * The gun, once per drawn frame.
+   *
+   * `dt` is wall time on purpose, unlike the bodies: sway and bob are the
+   * viewer's own motion over a held frame, and a paused demo should still
+   * settle rather than freeze mid-swing. What the demo owns — the weapon, the
+   * angles, the speed, the trigger — comes from `povState`.
+   */
+  function updateViewModel(dt) {
+    if (!viewModel.ready) return;
+    const pov = mode === 'pov' ? povState : null;
+    viewModel.visible = !!pov;
+    if (!pov) return;
+    if (pov.side) viewModel.setSide(pov.side);
+    viewModel.setWeapon(pov.weapon || 'knife', { draw: false });
+    for (let i = 0; i < pov.shots; i++) viewModel.attack('primary', 0);
+    viewModel.update(dt, { speed: pov.speed, onGround: !pov.airborne, viewYaw: pov.yaw, viewPitch: pov.pitch });
+    // The gun stands in the map's own light where that player stands, the same
+    // ambient cube their body takes (mapLoader.js ProbeGrid).
+    const grid = pack?.probeGrid;
+    if (!grid) return;
+    const cube = grid.sample(pov.eye.x, pov.eye.y, pov.eye.z, _vmCube);
+    _vmColor.setRGB(
+      (cube[6] + cube[0] + cube[3]) / 3,
+      (cube[7] + cube[1] + cube[4]) / 3,
+      (cube[8] + cube[2] + cube[5]) / 3
+    );
+    vmPass.setAmbient(_vmColor, 1.6);
+  }
+
   function applyFrame() {
     if (!ready || !frame) return;
     const live = liveSlots();
@@ -278,6 +363,7 @@ export function createView3d({ slug, onModeChange }) {
     const animDt = dTicks > 0 && dTicks <= rate / 4 ? dTicks / rate : 0;
     lastTick = tick;
     const useModels = models.ready;
+    povState = null;
 
     for (let slot = 0; slot < bodies.length; slot++) {
       const s = frame.states[slot];
@@ -294,6 +380,25 @@ export function createView3d({ slug, onModeChange }) {
       const eye = EYE_STAND + (EYE_DUCK - EYE_STAND) * duck;
       const side = sideOf(slot);
 
+      // Velocity from the tick delta since this slot was last drawn: the same
+      // numbers the radar draws, so the legs run exactly as fast as the droplet
+      // moves. Nothing here is a guess about the moment being shown. Computed
+      // for every slot, not only the ones with an agent model, because the
+      // viewmodel's bob wants it too.
+      let speed = 0;
+      let moveYaw = s.yaw || 0;
+      const p = b.prev;
+      if (p && p.tick !== tick) {
+        const dt = Math.abs(tick - p.tick);
+        if (dt <= 8) {
+          const dxr = (s.x - p.x) / dt;
+          const dyr = (s.y - p.y) / dt;
+          speed = Math.hypot(dxr, dyr) * rate;
+          if (speed > 1) moveYaw = Math.atan2(dyr, dxr) * RAD;
+        }
+      }
+      b.prev = { tick, x: s.x, y: s.y };
+
       if (useModels && (side === 'T' || side === 'CT')) {
         let m = b.model;
         if (!m) {
@@ -301,22 +406,6 @@ export function createView3d({ slug, onModeChange }) {
           (pack.world || scene).add(m.group);
         } else if (m.side !== side) m.setSide(side);
         b.group.visible = false;
-        // Velocity from the tick delta since this slot was last drawn: the
-        // same numbers the radar draws, so the legs run exactly as fast as the
-        // droplet moves. Nothing here is a guess about the moment being shown.
-        let speed = 0;
-        let moveYaw = s.yaw || 0;
-        const p = b.prev;
-        if (p && p.tick !== tick) {
-          const dt = Math.abs(tick - p.tick);
-          if (dt <= 8) {
-            const dxr = (s.x - p.x) / dt;
-            const dyr = (s.y - p.y) / dt;
-            speed = Math.hypot(dxr, dyr) * rate;
-            if (speed > 1) moveYaw = Math.atan2(dyr, dxr) * RAD;
-          }
-        }
-        b.prev = { tick, x: s.x, y: s.y };
         m.set({
           speed,
           moveYaw,
@@ -348,6 +437,16 @@ export function createView3d({ slug, onModeChange }) {
         if (mode === 'pov') {
           camera.position.copy(orbit.target);
           camera.rotation.set(-(s.pitch || 0) * DEG, cameraYawFromSource(s.yaw || 0), 0, 'YXZ');
+          povState = {
+            side,
+            weapon: frame.weapons?.[s.weapon] || '',
+            speed,
+            airborne: (s.flags & FLAG_AIRBORNE) !== 0,
+            yaw: s.yaw || 0,
+            pitch: s.pitch || 0,
+            eye: camera.position,
+            shots: shotsCrossed(slot, tick, rate)
+          };
         } else {
           if (!orbit.seeded) seedOrbitFromPlayer(s);
           applyThirdOrbit();
@@ -479,6 +578,7 @@ export function createView3d({ slug, onModeChange }) {
     if (!ready || !visible) return;
     if (isFree() && player) player.update(dt);
     else if (mode === 'third') applyThirdOrbit();
+    updateViewModel(dt);
     pack?.materials?.setTime(t / 1000);
     lighting?.update();
     if (mapRenderer) mapRenderer.render(camera);
@@ -624,6 +724,7 @@ export function createView3d({ slug, onModeChange }) {
       crosshair?.remove();
       for (const key of [...nades.keys()]) dropNade(key);
       for (const b of bodies) b.model?.dispose();
+      viewModel.dispose();
       pack?.dispose?.();
       renderer?.dispose?.();
       boot?.remove();

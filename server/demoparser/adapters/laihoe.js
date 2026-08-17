@@ -822,7 +822,7 @@ function grenadeEventFrom(flight, det, idOf, sideOf, fireType = null) {
   const last = path[path.length - 1];
   const at = det ? { x: round1(det.x), y: round1(det.y), z: round1(det.z) } : last || null;
   // The detonation point is authoritative; make sure the line reaches it.
-  if (at && last && Math.hypot(at.x - last.x, at.y - last.y) > PATH_EPSILON) {
+  if (at && last && dist3(at, last) > PATH_EPSILON) {
     path.push({ tick: detonateTick, ...at });
   }
   // Both fire grenades arrive as one projectile class. The shot log knows which
@@ -912,11 +912,11 @@ function flightsFromFire(byName, dets, tickRate) {
  *
  * The viewer walks a path by tick, so a dropped sample costs the distance
  * between where the grenade really was and where interpolating between the
- * two kept samples puts it at that moment. That metric keeps two things plain
- * perpendicular RDP throws away: the deceleration of a lofted throw (the
- * ground track is a straight line, but the grenade does not cover it at a
- * constant rate) and a bounce that comes straight back down its own track (the
- * corner sits exactly on the line, so its perpendicular distance is zero).
+ * two kept samples puts it at that moment. Measured in XYZ: a lofted smoke's
+ * apex sits on the ground track, so XY-only error is ~0 and the height would
+ * vanish. The same metric still keeps deceleration along the ground track and
+ * a bounce that comes straight back down it (the corner's perpendicular
+ * distance is zero; the tick-lerp miss is not).
  *
  * A 7-second lofted smoke is ~460 samples and simplifies to a handful.
  */
@@ -938,7 +938,11 @@ export function simplifyPath(points, epsilon) {
     for (let i = lo + 1; i < hi; i++) {
       const p = points[i];
       const f = span > 0 ? (p.tick - a.tick) / span : 0;
-      const d = Math.hypot(p.x - (a.x + (b.x - a.x) * f), p.y - (a.y + (b.y - a.y) * f));
+      const d = dist3(p, {
+        x: a.x + (b.x - a.x) * f,
+        y: a.y + (b.y - a.y) * f,
+        z: a.z + (b.z - a.z) * f
+      });
       if (d > worst) {
         worst = d;
         worstAt = i;
@@ -953,6 +957,10 @@ export function simplifyPath(points, epsilon) {
   const out = [];
   for (let i = 0; i < points.length; i++) if (keep[i]) out.push(roundPoint(points[i]));
   return out;
+}
+
+function dist3(a, b) {
+  return Math.hypot(a.x - b.x, a.y - b.y, (a.z || 0) - (b.z || 0));
 }
 
 function roundPoint(p) {

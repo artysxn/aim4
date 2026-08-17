@@ -979,8 +979,9 @@ export async function handleReplayRequest(req, res, url) {
       ok: queue.ok !== false,
       error: queue.ok === false ? queue.error : undefined,
       demoId: id,
-      // Gate 1: does the stored data carry jump and crouch?
-      dataReady: !!queue.current,
+      // Gate 1: does the stored data carry jump and crouch? (revision 3+)
+      // Later parser revisions still upgrade via the queue; they do not block 3D.
+      dataReady: !!queue.movementReady,
       revision: queue.revision,
       targetRevision: queue.targetRevision,
       upgradeable: !!queue.upgradeable,

@@ -22,6 +22,7 @@ import { FpsView } from './fpsView.js';
 import { DemoView } from './demoView.js';
 import { sharedPlayerModels } from './playerModels.js';
 import { LiveBody } from './liveBody.js';
+import { createBuyMenu } from './buyMenu.js';
 import { placeThirdPersonCamera } from './thirdPerson.js';
 import { mountCrosshair } from './crosshairOverlay.js';
 import { ViewModelAssets, ViewModel, createViewModelPass } from './viewModel.js';
@@ -115,20 +116,45 @@ const controls = new Controls(canvas, player, {
   },
   onGrade: () => hud.toggleGrade(),
   onFpsView: () => fpsView.toggle(),
-  // Q: the walking body's held weapon, for its run-speed cap.
-  onWeapon: () => hud.setWeapon(player.cycleWeapon(), player.maxSpeed),
+  // Q: the next weapon in the explorer's pocket — the run-speed cap and the
+  // hands both follow it.
+  onWeapon: () => equipWeapon(player.cycleWeapon()),
   // T: third person — the camera behind the walking body's own agent model,
   // animated live from the movement sim (the same body the demos drive).
   onThirdPerson: () => {
     thirdPerson = !thirdPerson;
     hud.setMode(player.mode, thirdPerson);
-  }
+  },
+  // B: the buy menu. It needs the mouse, so opening it gives the pointer back
+  // and closing it takes the lock again.
+  onBuy: () => buyMenu.toggle(),
+  onCancel: () => buyMenu.close()
 });
 let thirdPerson = false;
 const hud = new Hud(uiRoot, {
   map,
   sens: controls.sens,
   onSensitivity: (v) => controls.setSensitivity(v)
+});
+const buyMenu = createBuyMenu({
+  root: uiRoot,
+  getSide: () => lastSide,
+  // The header switch is the only way to change sides once you are walking:
+  // 1 / 2 are weapon slots then, not spawns. It changes the hands and the agent
+  // model with the list, because being a CT is what it means.
+  onSide: (s) => {
+    lastSide = s;
+  },
+  getHeld: () => player.weapon,
+  // Only a loaded pack can say a weapon is missing from it. Before it lands
+  // (or without one at all) nothing is marked, because nothing is known.
+  has: (name) => !vmAssets.ready || !!vmAssets.stats(name),
+  onPick: (name) => equipWeapon(name),
+  onToggle: (open) => {
+    hud.setPanelOpen(open);
+    if (open) controls.exitLock();
+    else controls.requestLock();
+  }
 });
 hud.setLocked(false);
 hud.setMode(player.mode);
@@ -171,16 +197,28 @@ vmPass.scene.add(viewModel.group);
 /** 1 / 2 / 3, the game's slots. The draw animation and its lockout come free. */
 const SLOTS = { 1: 'ak47', 2: 'glock', 3: 'knife' };
 const attackHeld = { primary: false, secondary: false };
-let equipped = 3;
+let held = 'knife';
 
-function equipSlot(n) {
-  const name = SLOTS[n];
-  if (!name || !vmAssets.ready) return;
-  equipped = n;
-  viewModel.setWeapon(name);
+/**
+ * Hold a weapon by name — the slot keys, Q, and every row of the buy menu all
+ * come through here.
+ *
+ * The speed cap applies whether or not the weapons pack is in: it is the
+ * movement sim's business, not the viewmodel's, and without the pack the
+ * explorer is still a place to walk an AWP's 200 u/s around a map.
+ */
+function equipWeapon(name, { draw = true } = {}) {
+  if (!name) return;
+  held = name;
+  if (vmAssets.ready) viewModel.setWeapon(name, { draw });
   // The body's speed cap follows what it is holding, as it does in the game.
   player.setWeapon(name);
   hud.setWeapon(player.weapon, player.maxSpeed);
+  buyMenu.refresh();
+}
+
+function equipSlot(n) {
+  equipWeapon(SLOTS[n]);
 }
 
 /**
@@ -277,6 +315,9 @@ function spawnAt(side) {
   if (side) {
     lastSide = side;
     spawnIndex = 0;
+    // Half the guns are one side's only; a respawn on the other side changes
+    // what the list should be showing.
+    buyMenu.refresh();
   } else {
     spawnIndex++;
   }
@@ -332,7 +373,11 @@ async function boot() {
       scene,
       getPack: () => pack,
       getLighting: () => lighting,
-      bloom: bloomPass
+      bloom: bloomPass,
+      // The gun, in the same target as the world (see createMapRenderer).
+      overlay: () => {
+        if (viewModel.visible && viewModel.ready) vmPass.render();
+      }
     });
     lighting = new MapLighting(scene, camera, manifest, { shadows, renderer });
     pack.lightmapIntensity = lighting.lightmapIntensity;
@@ -376,7 +421,7 @@ async function boot() {
     vmAssets.load().then((ok) => {
       if (ok === false) return;
       viewModel.setSide(lastSide);
-      equipSlot(equipped);
+      equipWeapon(held);
       console.log('cs3d: viewmodel ready');
     });
     await pack.load(manifest);
@@ -629,11 +674,14 @@ function renderFrame() {
     renderer.render(scene, camera);
     return;
   }
+  // The viewmodel rides along inside this call (createMapRenderer's `overlay`),
+  // last and with its own depth, so the gun is never clipped by a wall the
+  // player is standing against — and never drawn after the bloom composite.
   if (mapRenderer) mapRenderer.render(camera);
-  else renderer.render(scene, camera);
-  // Last, over everything, with its own depth: the gun is never clipped by a
-  // wall the player is standing against.
-  if (viewModel.visible && viewModel.ready) vmPass.render();
+  else {
+    renderer.render(scene, camera);
+    if (viewModel.visible && viewModel.ready) vmPass.render();
+  }
 }
 
 // ---- live body / third person ----------------------------------------------
@@ -693,5 +741,5 @@ boot();
 requestAnimationFrame(frame);
 
 if (import.meta.env.DEV) {
-  window.__cs3d = { THREE, scene, camera, player, get pack() { return pack; }, renderer, lighting: () => lighting, fpsView, demoView, playerModels };
+  window.__cs3d = { THREE, scene, camera, player, get pack() { return pack; }, renderer, lighting: () => lighting, fpsView, demoView, playerModels, viewModel, vmPass, buyMenu };
 }

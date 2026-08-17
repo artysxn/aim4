@@ -41,7 +41,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { AnimationMixer, LoopRepeat, LoopOnce } from 'three';
-import { IrradianceNode, PhysicalLightingModel, float, texture, uniform, transformedNormalWorld } from 'three/webgpu';
+import { IrradianceNode, PhysicalLightingModel, float, texture, uniform, transformedNormalWorld, vec3 } from 'three/webgpu';
 import { WEAPON_SPEED, DEFAULT_WEAPON_SPEED } from '../../shared/sim/constants.js';
 import { WALK_SPEED_SCALE } from '../../shared/sim3d/constants.js';
 import { assetBase } from './mapLoader.js';
@@ -114,13 +114,26 @@ const CLOTH_ROUGHNESS_MIN = 0.35;
  * How broad the cloth sheen lobe is.
  *
  * Not a taste knob: three's `BRDF_Sheen` divides by `4·(N·L + N·V − N·L·N·V)`,
- * which goes to zero at the silhouette, so the lobe's peak scales roughly with
- * `D_Charlie`'s maximum — (2 + 1/α) / 2π. At 0.35 that peak lands near 2.0 with
- * the sun at 5, twice what a fully lit concrete wall reaches, and every body
- * had a white rim burned around it. At 0.7 it lands near 0.8, about what
- * sunlit stone reads, which is a fabric edge rather than a blowout.
+ * which goes to zero at the silhouette, so the lobe's peak is independent of
+ * N·L and scales with `D_Charlie`'s maximum — (2 + 1/α) / 2π. At 0.35 that
+ * peak is 2.4× what it is at 0.7, all of it concentrated on the rim.
  */
 const SHEEN_ROUGHNESS = 0.7;
+
+/**
+ * How much of the albedo comes back as sheen. See buildMaterial for why the
+ * sheen is the albedo at all.
+ *
+ * The lobe's peak is `sunIntensity/4 × D_Charlie(α) × sheenColor`, and the
+ * diffuse beside it is `N·L × sunIntensity × albedo/π`. With the sheen tied to
+ * the albedo the two scale together and the ratio is all that is left:
+ * `π·D_Charlie/(4·N·L) × SHEEN_SCALE`, about 0.5 × SHEEN_SCALE / N·L. So at
+ * half a unit of scale a fabric edge lit square-on comes back at half the
+ * brightness of the surface it is on, and a rim the sun only grazes — the worst
+ * case, N·L small — at roughly the same brightness as the lit side. That is a
+ * sheen. Anything that reads as a light source is this number being too high.
+ */
+const SHEEN_SCALE = 0.5;
 
 /** Ambient a body falls back to when the map ships no probe grid, per axis. */
 const FALLBACK_AMBIENT = 0.18;
@@ -394,16 +407,39 @@ export class PlayerModels {
     m.side = THREE.FrontSide;
     // Cloth: the sheen lobe CS2 gives fatigues, vests and balaclavas.
     //
-    // `g_flSheenScale` is not three's `sheen`, whatever the names suggest: the
-    // vmats ship 0.667, 1.0 and 1.2, and three documents its own as a 0..1
-    // weight over an already strong lobe. Passed through, the 1.2 on the SAS
-    // legs and the 1.0 on the Phoenix trousers are what lit those two panels
-    // white before anything else on the body moved. Clamped, and widened by
-    // SHEEN_ROUGHNESS, which is the half that actually mattered.
+    // **The sheen is the albedo.** `g_flSheenTintColor` is a tint over the
+    // surface's own colour, not a colour of its own — fabric sheen is light off
+    // the fibres, and the fibres are whatever colour the cloth is. Read as a
+    // standalone colour (three's `sheenColor`, default white) the lobe is an
+    // additive white light that owes nothing to the texture under it, and since
+    // its peak sits at the silhouette and is independent of N·L, that is
+    // literally a rim light welded to every body: measured on this scene it more
+    // than doubled the brightest pixel on tan fatigues and multiplied it by
+    // **18** on the CT's near-black kit, where the vest's own colour then
+    // accounted for about 5% of what you saw. Hence the black torsos that
+    // rendered as grey smears and the halo around everyone.
+    //
+    // Driven from the base map instead, the two scale together: black cloth
+    // gets a black sheen (nothing), tan cloth gets a tan one, and no lighting
+    // condition can make either brighter than the material's own colour allows.
+    // `g_flSheenScale` rides along as the weight it is, clamped, over
+    // SHEEN_SCALE — the vmats ship 0.667, 1.0 and 1.2, and three's `sheen` is
+    // documented as a 0..1 weight over an already strong lobe.
+    //
+    // Same class of error as the sun's mirror lobe (DiffuseSunLightingModel),
+    // and the reason that fix did not take: only the GGX highlight was removed,
+    // and the cloth lobe beside it was left holding a white light.
     if (cs3d.cloth && cs3d.sheen > 0) {
-      m.sheen = Math.min(1, cs3d.sheen);
+      const tint = Array.isArray(cs3d.sheenTint) ? cs3d.sheenTint : [1, 1, 1];
+      const k = Math.min(1, cs3d.sheen) * SHEEN_SCALE;
+      // `texture()` decodes the map's sRGB to working space, so this is the
+      // same linear albedo the diffuse term uses.
+      const albedo = m.map ? texture(m.map).rgb : vec3(m.color.r, m.color.g, m.color.b);
+      // The weight rides in the node; this only turns the lobe on (`useSheen`),
+      // and `sheenColor` is unused once `sheenNode` is set.
+      m.sheen = 1;
       m.sheenRoughness = SHEEN_ROUGHNESS;
-      if (Array.isArray(cs3d.sheenTint)) m.sheenColor = new THREE.Color(...cs3d.sheenTint);
+      m.sheenNode = albedo.mul(vec3(tint[0], tint[1], tint[2])).mul(float(k));
     }
     // Roughness floors. Skin has no subsurface term here (three has no SSS) and
     // cloth has no business being glossy at all; both stop a surface reading as
