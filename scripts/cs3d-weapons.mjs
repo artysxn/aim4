@@ -11,6 +11,7 @@
 //     w_<name>.glb                   one model per weapon and grenade
 //     vm_arms_T.glb / _CT.glb        first-person arms on the viewmodel rig
 //     vmanims_<class>.glb            viewmodel clips: draw, idle, shoot, …
+//     vmanims_w_<name>.glb           the per-weapon set, where CS2 ships one
 //
 // Four things worth knowing, each of which decided the design:
 //
@@ -36,7 +37,9 @@
 //      viewmodel skeleton: every vertex through `vmRest · agentBindInverse`,
 //      and new inverse binds from the viewmodel rest pose. 48 joints, of which
 //      only 4 are missing on the viewmodel rig, all procedural forearm TWIST
-//      helpers — those fold into their parent.
+//      helpers — those fold onto their parent's inverse bind (NOT their own:
+//      pairing the parent's rest with the helper's bind displaced 40% of the
+//      arm vertices by up to 7.4 units, two thirds of a forearm).
 //   4. A melee weapon has no attack timing in the vdata (the knife inherits
 //      the base `m_flCycleTime = [0.15, 0.3]`, which is not its swing rate).
 //      Its rate is the animation: the pack measures `light_*`/`heavy_*` clip
@@ -68,7 +71,7 @@ import { dropAlpha, normalIsBlank, roughnessIsEmpty, ROUGHNESS_DEFAULT } from '.
 const TAG = 'cs3d-weapons';
 const fail = (msg) => failWith(TAG, msg);
 
-export const PACK_VERSION = 1;
+export const PACK_VERSION = 2;
 const RAW_DIR = path.join(ROOT, 'server', 'data', 'cs3d', 'raw', 'weapons');
 const PACK_DIR = path.join(ROOT, 'server', 'data', 'cs3d', 'pack', 'weapons');
 const PLAYERS_RAW = path.join(ROOT, 'server', 'data', 'cs3d', 'raw', 'players', 'models');
@@ -84,10 +87,8 @@ const skipImport = flag('--skip-import');
 const threads = Number(opt('--threads') || 8);
 
 /**
- * The viewmodel clip sets. CS2 ships a per-weapon set as well
- * (`viewmodel/rifle/rifle_ak/…`); these generic ones drive every weapon of a
- * class, which is what the runtime needs before per-weapon bolt and slide
- * animation is worth the bytes.
+ * The generic viewmodel clip sets, one per class. Every weapon falls back to
+ * the one for its class; most of them do not have to (see VM_TOKEN / weaponVmSet).
  */
 const VM_SETS = [
   { key: 'rifle', res: 'animation/anims/viewmodel/rifle/_default_rifle/', strip: /_rifle$/ },
@@ -95,6 +96,84 @@ const VM_SETS = [
   { key: 'knife', res: 'animation/anims/viewmodel/knife/_default_knife/', strip: /_knife$/ },
   { key: 'grenade', res: 'animation/anims/viewmodel/grenade/_default_grenade/', strip: /_grenade$/ }
 ];
+
+/**
+ * The per-weapon viewmodel clip sets, which is how CS2 actually animates a
+ * gun: `_default_<class>` is a fallback, and beside it sit 61 folders of the
+ * real thing. A Tec-9 is not held like a Deagle, the Dual Berettas fire one
+ * pistol at a time (`shoot_left1` / `shoot_right1` — there is no `shoot1` in
+ * that folder at all), and every knife has its own draw and its own two-swing
+ * light attack. Driving all of them from one set per class is visibly wrong.
+ *
+ * A folder's clips carry the folder's own token as a suffix — `draw_deagle`,
+ * `shoot1_ak`, `light_miss1_karambit` — which is what `strip` removes so the
+ * runtime can look up one action name whatever is in hand.
+ *
+ * The token is usually the weapon's own name, and where it is not, it is not
+ * derivable: the Navaja ships as `gypsy_jackknife`, the Talon as `widowmaker`,
+ * and `weapon_m4a1` is the M4A4. Hence the table. Anything that resolves to no
+ * folder keeps the class default and is reported at pack time rather than
+ * silently downgraded.
+ */
+const VM_TOKEN = {
+  glock: 'glock18',
+  ak47: 'ak',
+  m4a1: 'm4a4',
+  knife_t: 'default_t',
+  knife_m9_bayonet: 'm9',
+  knife_survival_bowie: 'bowie',
+  knife_gypsy_jackknife: 'navaja',
+  knife_widowmaker: 'talon',
+  incgrenade: 'incendiary',
+  // A `<class>/<folder>` value overrides the folder's CLASS as well, for the
+  // weapons whose animation does not live under the class the vdata gives them:
+  // the vdata calls the zeus, the bomb and the healthshot `rifle`, and CS2
+  // animates them as a pistol and as equipment.
+  taser: 'pistol/pistol_taser',
+  c4: 'equipment/c4',
+  healthshot: 'equipment/healthshot',
+  // Approximations: pak01 ships no folder for either silenced variant, and the
+  // unsilenced sibling is the same weapon in the hands. Better than the generic
+  // class set, and flagged here so it is not mistaken for extracted truth.
+  m4a1_silencer: 'm4a4',
+  usp_silencer: 'pistol/pistol_hkp2000'
+};
+
+/**
+ * Clips worth packing. The folders also carry `lookat*` (the inspect
+ * animations), `transfix`, `ui_keychain` and the grenade `throwcharge_*` ramp,
+ * none of which the runtime plays — and at ~24 kB a clip over 61 weapons that
+ * is most of the bytes.
+ */
+/**
+ * Files that are not action clips, dropped BEFORE the shared suffix is derived
+ * because they are what breaks it. `_lgcy` are the pre-CS2 duplicates of a set
+ * (`draw_ssg08` beside `draw_ssg08_lgcy`), and the revolver ships a chamber
+ * index as eight clips ending in a digit. Either one leaves no common trailing
+ * segment, so nothing gets stripped and every action name misses.
+ */
+const VM_CLIP_IGNORE = /(_lgcy$|^chamber_position_anim)/;
+
+const VM_CLIP_SELECT =
+  /^(draw|draw_silenced|deploy|idle\d?|shoot\d*|shoot_empty|shoot_(left|right)(\d+|last)|reload|reload_empty|light_(miss|hit)\d|light_backstab\d?|heavy_(miss|hit)\d|heavy_backstab|pullpin|throw_overhand|throw_underhand)$/;
+
+/** `<class>/<class>_<token>/` for a weapon, or null when CS2 ships no such set. */
+function weaponVmSet(name, cls, available) {
+  const override = VM_TOKEN[name];
+  let dir;
+  if (override?.includes('/')) [cls, dir] = override.split('/');
+  else dir = `${cls}_${override || name.replace(/^knife_/, '')}`;
+  if (!available.has(`${cls}/${dir}`)) return null;
+  return {
+    key: name,
+    // `w_` prefixed so a per-weapon file can never collide with a class one.
+    fileKey: `w_${name}`,
+    res: `animation/anims/viewmodel/${cls}/${dir}/`,
+    // No `strip`: listVmClips reads the shared suffix off the files, which is
+    // the only thing that gets `pistol_glock18`'s `_glock` clips right.
+    select: VM_CLIP_SELECT
+  };
+}
 
 /** The agents whose arms become viewmodel hands, matching the players pack. */
 const AGENTS = [
@@ -213,18 +292,20 @@ async function importAll(vrf, gameDir) {
   }
   console.log(`  models: ${exported} exported, ${wanted.length - exported} already present`);
 
-  // Viewmodel clips.
-  for (const s of VM_SETS) {
-    const dir = path.join(RAW_DIR, 'vmanims', ...s.res.split('/').filter(Boolean));
-    const have = fs.existsSync(dir) ? (await fsp.readdir(dir)).filter((f) => f.endsWith('.glb')).length : 0;
-    if (force || !have) {
+  // Viewmodel clips: the whole `viewmodel/` tree in one pass rather than one
+  // VRF call per folder. It is 65 folders now that the per-weapon sets are
+  // packed (VM_TOKEN), and VRF walks a subtree as cheaply as a leaf.
+  {
+    const root = path.join(RAW_DIR, 'vmanims', 'animation', 'anims', 'viewmodel');
+    const have = vmClassDirs(root).reduce((n, c) => n + c.dirs.length, 0);
+    if (force || have < VM_SETS.length + 1) {
       await runVrf(
         vrf,
-        ['-i', pak, '-f', s.res, '-d', '-o', path.join(RAW_DIR, 'vmanims'), '--gltf_export_format', 'glb', '--threads', String(threads)],
-        `${s.key} viewmodel clips`
+        ['-i', pak, '-f', 'animation/anims/viewmodel/', '-d', '-o', path.join(RAW_DIR, 'vmanims'), '--gltf_export_format', 'glb', '--threads', String(threads)],
+        'viewmodel clips'
       );
     } else {
-      console.log(`  ${s.key} viewmodel clips: ${have} present, skipping (use --force)`);
+      console.log(`  viewmodel clips: ${have} sets present, skipping (use --force)`);
     }
   }
   return table;
@@ -670,14 +751,76 @@ function rebindArms(out, agentDoc, vmDoc, label) {
 // ---- viewmodel clips --------------------------------------------------------
 
 /** Every exported clip of a set, by its stripped name. */
+/**
+ * The `_<token>` suffix every clip in a folder shares, as a RegExp.
+ *
+ * Derived rather than assumed, because the suffix is NOT reliably the folder's
+ * name: `pistol_glock18` ships `draw_glock`, `pistol_hkp2000` ships `draw_hkp`,
+ * and `grenade_smokegrenade` ships `draw_smoke`. Assuming the folder token left
+ * those three named `draw_glock` after the strip, which matches no action the
+ * runtime looks for, so all three silently fell back to the class set.
+ *
+ * The longest run of trailing `_`-segments common to every file, never the
+ * whole name — one clip in a folder is not evidence of anything, so that case
+ * keeps the caller's guess.
+ */
+function clipSuffix(names, fallback) {
+  if (names.length < 2) return fallback;
+  const parts = names.map((n) => n.split('_'));
+  let k = 0;
+  for (;;) {
+    const at = (p) => p.length - 1 - k;
+    const want = parts[0][at(parts[0])];
+    if (want === undefined) break;
+    if (!parts.every((p) => at(p) >= 1 && p[at(p)] === want)) break;
+    k++;
+  }
+  if (!k) return fallback;
+  const suffix = '_' + parts[0].slice(parts[0].length - k).join('_');
+  return new RegExp(`${suffix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`);
+}
+
 function listVmClips(set) {
   const dir = path.join(RAW_DIR, 'vmanims', ...set.res.split('/').filter(Boolean));
   if (!fs.existsSync(dir)) return [];
-  return fs
+  const raw = fs
     .readdirSync(dir)
     .filter((f) => f.endsWith('.glb'))
-    .map((f) => ({ name: f.replace(/\.glb$/, '').replace(set.strip, ''), file: path.join(dir, f) }))
+    .map((f) => f.replace(/\.glb$/, ''))
+    .filter((n) => !VM_CLIP_IGNORE.test(n));
+  const strip = clipSuffix(raw, set.strip);
+  return raw
+    .map((n) => ({ name: strip ? n.replace(strip, '') : n, file: path.join(dir, `${n}.glb`) }))
+    .filter((c) => !set.select || set.select.test(c.name))
     .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/**
+ * The viewmodel clip folders VRF actually extracted, as `<class>/<dir>` — what
+ * `weaponVmSet` matches a weapon against. Reading the filesystem rather than
+ * hard-coding 61 names means a CS2 update that adds a knife needs one line in
+ * VM_TOKEN at most, and nothing at all when the folder is named for the weapon.
+ */
+function vmClassDirs(root) {
+  if (!fs.existsSync(root)) return [];
+  return fs
+    .readdirSync(root, { withFileTypes: true })
+    .filter((e) => e.isDirectory())
+    .map((e) => ({
+      cls: e.name,
+      dirs: fs
+        .readdirSync(path.join(root, e.name), { withFileTypes: true })
+        .filter((d) => d.isDirectory())
+        .map((d) => d.name)
+    }));
+}
+
+/** Every `<class>/<dir>` present under raw/weapons/vmanims, as a Set. */
+function vmAvailable() {
+  const root = path.join(RAW_DIR, 'vmanims', 'animation', 'anims', 'viewmodel');
+  const out = new Set();
+  for (const c of vmClassDirs(root)) for (const d of c.dirs) out.add(`${c.cls}/${d}`);
+  return out;
 }
 
 /**
@@ -685,7 +828,7 @@ function listVmClips(set) {
  * animation, retargetable by bone name — the same shape cs3d-models.mjs packs
  * the world-model clips in.
  */
-async function packVmSet(set) {
+async function packVmSet(set, { quiet = false } = {}) {
   const files = listVmClips(set);
   if (!files.length) {
     console.warn(`  ! ${set.key}: no viewmodel clips under raw/weapons/vmanims/${set.res}`);
@@ -776,10 +919,10 @@ async function packVmSet(set) {
 
   await out.transform(resample({ tolerance: 1e-4 }), dedup({ propertyTypes: [PropertyType.ACCESSOR] }), prune());
   out.createExtension(EXTMeshoptCompression).setRequired(true).setEncoderOptions({ method: EXTMeshoptCompression.EncoderMethod.FILTER });
-  const file = `vmanims_${set.key}.glb`;
+  const file = `vmanims_${set.fileKey || set.key}.glb`;
   const glb = await io.writeBinary(out);
   await fsp.writeFile(path.join(PACK_DIR, file), glb);
-  console.log(`  ${set.key} viewmodel: ${clips.length} clips, ${nodes.size} bones, ${kept} channels (${dropped} off-rig) → ${fmtMB(glb.length)}`);
+  if (!quiet) console.log(`  ${set.key} viewmodel: ${clips.length} clips, ${nodes.size} bones, ${kept} channels (${dropped} off-rig) → ${fmtMB(glb.length)}`);
   return { file, bytes: glb.length, clips };
 }
 
@@ -856,6 +999,35 @@ async function main() {
   for (const s of VM_SETS) {
     const r = await packVmSet(s);
     if (r) vmanims[s.key] = r;
+  }
+
+  // ---- per-weapon viewmodel clips ----
+  // One glb per weapon that has a set of its own, fetched by the runtime
+  // beside the weapon model and only when that weapon is drawn. The class set
+  // above stays as the fallback for the handful CS2 ships nothing for.
+  const weaponAnims = {};
+  {
+    const available = vmAvailable();
+    const missing = [];
+    let bytes = 0;
+    let clipCount = 0;
+    for (const [name, w] of Object.entries(weapons)) {
+      const set = weaponVmSet(name, w.class, available);
+      if (!set) {
+        missing.push(name);
+        continue;
+      }
+      const r = await packVmSet(set, { quiet: true });
+      if (!r) {
+        missing.push(name);
+        continue;
+      }
+      weaponAnims[name] = r;
+      bytes += r.bytes;
+      clipCount += r.clips.length;
+    }
+    console.log(`  per-weapon viewmodel: ${Object.keys(weaponAnims).length} weapons, ${clipCount} clips → ${fmtMB(bytes)}`);
+    if (missing.length) console.log(`  per-weapon viewmodel: ${missing.length} on the class default (CS2 ships no set) — ${missing.join(' ')}`);
   }
   // The knife's rate is in neither data file; see KNIFE_ATTACK.
   if (vmanims.knife) {
@@ -943,10 +1115,14 @@ async function main() {
     generated: new Date().toISOString(),
     frame: { units: 'source', up: 'z', forward: '+x', rootRotationX: -90 },
     weapons,
-    viewmodel: { arms, anims: vmanims }
+    viewmodel: { arms, anims: vmanims, weaponAnims }
   };
   await fsp.writeFile(path.join(PACK_DIR, 'manifest.json'), JSON.stringify(manifest, null, 1));
-  const total = wBytes + Object.values(vmanims).reduce((a, s) => a + s.bytes, 0) + Object.values(arms).reduce((a, s) => a + s.bytes, 0);
+  const total =
+    wBytes +
+    Object.values(vmanims).reduce((a, s) => a + s.bytes, 0) +
+    Object.values(weaponAnims).reduce((a, s) => a + s.bytes, 0) +
+    Object.values(arms).reduce((a, s) => a + s.bytes, 0);
   console.log(`${TAG}: done — ${fmtMB(total)} in ${path.relative(ROOT, PACK_DIR)} (local only, not in git)`);
 }
 

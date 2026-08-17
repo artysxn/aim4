@@ -36,7 +36,7 @@ import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js
 import { AnimationMixer, LoopOnce, LoopRepeat } from 'three';
 import { assetBase } from './mapLoader.js';
 
-export const WEAPONS_PACK_VERSION = 1;
+export const WEAPONS_PACK_VERSION = 2;
 
 const DEG = Math.PI / 180;
 
@@ -111,8 +111,10 @@ const KICK = {
 /** Clip names the runtime looks for, in preference order, per action. */
 const CLIP_ALIASES = {
   draw: ['draw', 'draw_silenced', 'deploy'],
-  idle: ['idle', 'idle2'],
-  fire: ['shoot1', 'shoot', 'shoot_empty'],
+  // Knives author `idle1`/`idle2` and no plain `idle`.
+  idle: ['idle', 'idle1', 'idle2'],
+  // The Dual Berettas fire one pistol at a time and have no `shoot1` at all.
+  fire: ['shoot1', 'shoot', 'shoot_right1', 'shoot_left1', 'shoot_empty'],
   reload: ['reload', 'reload_empty'],
   /** The knife swings, alternated so repeated slices do not look identical. */
   light: ['light_miss1', 'light_miss2', 'light_hit1', 'light_hit2'],
@@ -140,6 +142,10 @@ export class ViewModelAssets {
     /** weapon name → Object3D template */
     this.models = new Map();
     this._pending = new Map();
+    /** weapon name → Map<clip name, AnimationClip>, or null for "use the class set" */
+    this.weaponSets = new Map();
+    this._pendingSets = new Map();
+    this._rigBones = new Set();
     this._loading = null;
     this._loader = null;
     this._v = '';
@@ -196,19 +202,10 @@ export class ViewModelAssets {
     }
     await Promise.all(jobs);
     if (!this.arms.T && !this.arms.CT) throw new Error('weapons pack has no viewmodel arms');
-    // Clip channels aimed at bones the arms rig does not carry (the weapon's
-    // own `bolt`, `trigger`, `magazine`) would be one PropertyBinding warning
-    // per track per action. Drop them once, here.
-    const rigBones = new Set();
-    for (const s of Object.values(this.arms)) s.traverse((o) => rigBones.add(o.name));
+    this._rigBones = new Set();
+    for (const s of Object.values(this.arms)) s.traverse((o) => this._rigBones.add(o.name));
     let dropped = 0;
-    for (const map of Object.values(this.clips)) {
-      for (const clip of map.values()) {
-        const kept = clip.tracks.filter((t) => rigBones.has(t.name.slice(0, t.name.lastIndexOf('.'))));
-        dropped += clip.tracks.length - kept.length;
-        clip.tracks = kept;
-      }
-    }
+    for (const map of Object.values(this.clips)) dropped += this._trimToRig(map);
     if (dropped) console.log(`cs3d: viewmodel clips — ${dropped} tracks for weapon-side bones dropped`);
   }
 
@@ -251,6 +248,54 @@ export class ViewModelAssets {
     this._pending.set(key, job);
     return job;
   }
+
+  /**
+   * Drop clip channels aimed at bones the arms rig does not carry — the
+   * weapon's own `bolt`, `trigger`, `magazine`. Left in, each is one
+   * PropertyBinding warning per track per action, thousands of them. Returns
+   * how many went.
+   */
+  _trimToRig(map) {
+    let dropped = 0;
+    for (const clip of map.values()) {
+      const kept = clip.tracks.filter((t) => this._rigBones.has(t.name.slice(0, t.name.lastIndexOf('.'))));
+      dropped += clip.tracks.length - kept.length;
+      clip.tracks = kept;
+    }
+    return dropped;
+  }
+
+  /**
+   * This weapon's own clip set, fetched once, or null when CS2 ships none and
+   * the class default has to do.
+   *
+   * Streamed beside the model rather than up front for the same reason the
+   * models are: 61 sets is ~12 MB, and a round touches a handful of weapons.
+   */
+  weaponClips(name) {
+    const key = String(name || '').replace(/^weapon_/, '');
+    if (this.weaponSets.has(key)) return Promise.resolve(this.weaponSets.get(key));
+    if (this._pendingSets.has(key)) return this._pendingSets.get(key);
+    const s = this.manifest?.viewmodel?.weaponAnims?.[key];
+    if (!s?.file) return Promise.resolve(null);
+    const job = this._fetch(s.file)
+      .then((gltf) => {
+        const map = new Map();
+        for (const c of gltf.animations) map.set(c.name, c);
+        this._trimToRig(map);
+        this.weaponSets.set(key, map);
+        this._pendingSets.delete(key);
+        return map;
+      })
+      .catch((e) => {
+        console.warn(`cs3d: viewmodel clips for ${key} failed, using the ${this.stats(key)?.class || 'class'} set`, e);
+        this.weaponSets.set(key, null);
+        this._pendingSets.delete(key);
+        return null;
+      });
+    this._pendingSets.set(key, job);
+    return job;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -283,6 +328,8 @@ export class ViewModel {
     this.wpnBone = null;
     this.weaponModel = null;
     this.clipSet = 'rifle';
+    /** This weapon's own clip set, when CS2 ships one; the class set backs it. */
+    this.weaponSet = null;
 
     /** Seconds until the weapon can fire again (deploy, then cycle time). */
     this.nextAttack = 0;
@@ -371,8 +418,11 @@ export class ViewModel {
     }
     this.actions.clear();
     this.mixer?.stopAllAction();
-    const model = await this.assets.model(bare);
+    // The weapon's own clips ride along with its model — one round touches a
+    // handful of weapons, and CS2 animates each of them differently.
+    const [model, own] = await Promise.all([this.assets.model(bare), this.assets.weaponClips(bare)]);
     if (this.weaponName !== bare) return; // switched again while fetching
+    this.weaponSet = own || null;
     if (model) {
       this.weaponModel = cloneSkinned(model);
       (this.wpnMount || this.rig).add(this.weaponModel);
@@ -382,13 +432,23 @@ export class ViewModel {
     else this._play('idle', { loop: true });
   }
 
-  /** The first clip of an action that this weapon's set actually has. */
+  /**
+   * The first clip of an action that this weapon actually has.
+   *
+   * The weapon's own set first, the class default behind it. Both, rather than
+   * one or the other, because a per-weapon folder is not a superset: the Dual
+   * Berettas have no `reload_empty` and every knife folder omits the pistol
+   * actions entirely. An action the weapon does not author falls back to the
+   * generic one rather than to nothing at all.
+   */
   _clip(action) {
-    const set = this.assets.clips[this.clipSet];
-    if (!set) return null;
-    for (const name of CLIP_ALIASES[action] || [action]) {
-      const c = set.get(name);
-      if (c) return c;
+    const names = CLIP_ALIASES[action] || [action];
+    for (const set of [this.weaponSet, this.assets.clips[this.clipSet]]) {
+      if (!set) continue;
+      for (const name of names) {
+        const c = set.get(name);
+        if (c) return c;
+      }
     }
     return null;
   }
