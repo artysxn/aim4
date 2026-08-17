@@ -14,8 +14,6 @@
 import * as Storage from '../utils/Storage.js';
 import { SENSITIVITY_DEFAULT, radiansPerCountFromSensitivity } from '../utils/MathUtils.js';
 
-const DEG_PER_RAD = 180 / Math.PI;
-
 /** The trainer's saved sensitivity, or its default when nothing is stored. */
 function readSensitivity() {
   const v = Number(Storage.read('settings', {})?.sensitivity);
@@ -45,6 +43,7 @@ export class Controls {
       if (!this.locked) this._requestLock();
     });
     document.addEventListener('pointerlockchange', this._onLockChange);
+    document.addEventListener('pointerlockerror', this._onLockChange);
     document.addEventListener('mousemove', this._onMouseMove);
     window.addEventListener('keydown', this._onKey);
     window.addEventListener('keyup', this._onKey);
@@ -102,8 +101,7 @@ export class Controls {
 
   _onMouseMove(e) {
     if (!this.locked) return;
-    // player.look takes degrees per count; the trainer's scale is radians.
-    this.player.look(e.movementX, e.movementY, radiansPerCountFromSensitivity(this.sens) * DEG_PER_RAD);
+    this.player.look(e.movementX, e.movementY, radiansPerCountFromSensitivity(this.sens));
   }
 
   _releaseAll() {
@@ -143,6 +141,9 @@ export class Controls {
         case 'KeyV':
           this.hooks.onFpsView?.();
           break;
+        case 'KeyQ':
+          this.hooks.onWeapon?.();
+          break;
         // Demo playback (no-ops until a demo is loaded; main.js decides).
         case 'KeyP':
           this.hooks.onPlayPause?.();
@@ -171,7 +172,7 @@ export class Controls {
         default:
           break;
       }
-      if (this.locked && /^(Space|Key[WASDCF]|Digit[12]|ShiftLeft|ControlLeft)$/.test(code)) e.preventDefault();
+      if (this.locked && /^(Space|Key[WASDCFQ]|Digit[12]|ShiftLeft|ControlLeft)$/.test(code)) e.preventDefault();
     } else if (code === 'Space') {
       this.player.input.jump = false;
     }
@@ -194,6 +195,7 @@ export class Controls {
 
   dispose() {
     document.removeEventListener('pointerlockchange', this._onLockChange);
+    document.removeEventListener('pointerlockerror', this._onLockChange);
     document.removeEventListener('mousemove', this._onMouseMove);
     window.removeEventListener('keydown', this._onKey);
     window.removeEventListener('keyup', this._onKey);

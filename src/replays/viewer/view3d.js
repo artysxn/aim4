@@ -26,9 +26,13 @@
 // ---------------------------------------------------------------------------
 
 import * as THREE from 'three/webgpu';
+import '../../cs3d/cs3d.css';
 import { MapPack } from '../../cs3d/mapLoader.js';
 import { MapLighting } from '../../cs3d/sky.js';
 import { patchWebGPUPartialAttributeUpload } from '../../cs3d/threePatches.js';
+import { applyLookDefaults, createMapRenderer, loadPostLut, installMapGrade, setupBloom } from '../../cs3d/look.js';
+import { createBootScreen } from '../../cs3d/bootScreen.js';
+import { cs3dMap } from '../../../shared/cs3d/maps.js';
 import { cameraYawFromSource } from '../../../shared/sim3d/units.js';
 import {
   HULL_STAND,
@@ -73,6 +77,8 @@ export function createView3d({ slug, onModeChange }) {
   let camera = null;
   let pack = null;
   let lighting = null;
+  let mapRenderer = null;
+  let boot = null;
   let raf = 0;
   let ready = false;
   let failed = null;
@@ -121,12 +127,14 @@ export function createView3d({ slug, onModeChange }) {
     }
   }
 
-  async function boot() {
+  async function bootScene(container) {
     renderer = new THREE.WebGPURenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.NeutralToneMapping;
+    renderer.toneMappingExposure = 1.0;
     renderer.shadowMap.enabled = true;
+    if (THREE.PCFSoftShadowMap !== undefined) renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
     scene = new THREE.Scene();
     camera = new THREE.PerspectiveCamera(FOV_DEFAULT, 16 / 9, 4, 120000);
@@ -136,17 +144,44 @@ export function createView3d({ slug, onModeChange }) {
     await renderer.init();
     patchWebGPUPartialAttributeUpload(renderer);
 
-    pack = new MapPack({ slug, scene, renderer, onProgress: () => {} });
+    const mapName = cs3dMap(slug)?.name || slug;
+    boot = createBootScreen(container, mapName);
+
+    pack = new MapPack({
+      slug,
+      scene,
+      renderer,
+      onProgress: (p) => boot.setProgress(p),
+      onWorldChanged: () => lighting?.markShadowDirty()
+    });
     const manifest = await pack.fetchManifest();
+    const post = await loadPostLut(pack, manifest);
+    const knobs = installMapGrade(renderer, new URLSearchParams(), post);
+    const bloomPass = setupBloom(renderer, manifest, new URLSearchParams());
+    mapRenderer = createMapRenderer({
+      renderer,
+      scene,
+      getPack: () => pack,
+      getLighting: () => lighting,
+      bloom: bloomPass
+    });
     lighting = new MapLighting(scene, camera, manifest, { shadows: true, renderer });
     pack.lightmapIntensity = lighting.lightmapIntensity;
     pack.sun = lighting.worldSun();
-    if (manifest.sky?.equirect) lighting.loadSkybox(pack.base, manifest.sky, pack.v).catch(() => {});
+    pack.skyAmbient = lighting.skyAmbient;
+    if (manifest.sky?.equirect) {
+      lighting
+        .loadSkybox(pack.base, manifest.sky, pack.v)
+        .then(() => pack.materials?.setSkyAmbient(lighting.skyAmbient))
+        .catch(() => {});
+    }
 
     buildActors();
     for (const b of bodies) (pack.world || scene).add(b.group);
 
     await pack.load(manifest);
+    applyLookDefaults({ lighting, pack, knobs, slug });
+    boot.finish();
     ready = true;
     resize();
   }
@@ -159,6 +194,7 @@ export function createView3d({ slug, onModeChange }) {
     renderer.setSize(w, h, false);
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
+    mapRenderer?.resize();
     lighting?.resize?.();
   }
 
@@ -308,7 +344,8 @@ export function createView3d({ slug, onModeChange }) {
     if (!ready || !visible) return;
     pack?.materials?.setTime(performance.now() / 1000);
     lighting?.update();
-    renderer.render(scene, camera);
+    if (mapRenderer) mapRenderer.render(camera);
+    else renderer.render(scene, camera);
   }
 
   return {
@@ -333,12 +370,13 @@ export function createView3d({ slug, onModeChange }) {
       if (renderer || failed) return;
       container.appendChild(canvas);
       try {
-        await boot();
+        await bootScene(container);
         applyFrame();
         loop();
       } catch (err) {
         failed = String(err?.message || err);
         console.error('view3d: boot failed', err);
+        boot?.finish();
       }
     },
 
@@ -440,6 +478,7 @@ export function createView3d({ slug, onModeChange }) {
       for (const key of [...nades.keys()]) dropNade(key);
       pack?.dispose?.();
       renderer?.dispose?.();
+      boot?.remove();
       canvas.remove();
       renderer = null;
       ready = false;

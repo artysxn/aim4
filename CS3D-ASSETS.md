@@ -53,15 +53,18 @@ anything; the level split happens in the importer.
 
 ## 2. Character models — once, not per map
 
-- [ ] One default CT model with full skeleton (ctm_sas or equivalent) → GLB
-- [ ] One default T model (tm_phoenix or equivalent) → GLB
-- [ ] Their textures
-- [ ] Whatever **animations** the model export carries. CS2 animgraph
-      extraction is the flaky part of the toolchain: take what VRF gives,
-      list what it refused, and the replica repo fills the gaps (that is
-      what it is for). Wanted set, in priority order: idle, run (with
-      directional blend if available), crouch-idle, crouch-walk, jump,
-      plant, defuse, a death. Viewer v1 survives on idle+run+aim pose.
+**Automated (2026-08-17):** `npm run cs3d:models` does all of this from the
+CS2 install (no manual GUI export) and writes `server/data/cs3d/pack/players/`.
+See CS3D-RENDERER.md "fourth pass" for what it found. What it pulls:
+
+- [x] CT: `agents/models/ctm_sas/ctm_sas.vmdl_c` (NOT `characters/models/…`,
+      those are stubs) → GLB with skeleton, third-person meshes, hitboxes
+- [x] T: `agents/models/tm_phoenix/tm_phoenix.vmdl_c`
+- [x] Their textures (albedo 1024, normal 512, ORM 512, webp)
+- [x] **Animations**: CS2's Nm clips (`animation/anims/world/…`), which VRF
+      19.2 exports cleanly — idle, 8-way run / walk / crouch, in-air, jump,
+      shoot, draw, deaths, defuse, plant, throw. The graphs (`.vnmgraph_c`)
+      are not exported; the runtime blend replaces them.
 
 Skip agent skins and cosmetic variants entirely.
 
@@ -119,6 +122,10 @@ because they are large, re-acquirable, or Valve's to distribute:
 | `cs3d/maps/*.vpk` | 2.0 GB | Copy from the old machine, or re-pull from your own CS2 install (`game/csgo/maps/de_*.vpk`). |
 | `tools/vrf/` | 166 MB | Source2Viewer CLI, `cli-windows-x64.zip` from the ValveResourceFormat releases page, unzipped in place. |
 | `tools/cs3d-tex/bin/` | 245 MB | `dotnet build -c Release` in `tools/cs3d-tex/`. |
+
+The players pack (`server/data/cs3d/pack/players/`, 8.7 MB) is likewise not
+in git: `npm run cs3d:models` rebuilds it from the install in ~15 s. Without
+it the 3D demo viewer draws placeholder cylinders.
 
 **de_nuke ships packed** (`server/data/cs3d/pack/nuke/`, ~91 MB) so the
 renderer has something to draw on a fresh clone without any of the above.

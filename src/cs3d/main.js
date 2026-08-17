@@ -12,14 +12,15 @@ import { cs3dMapForPath, cs3dMap, CS3D_MAPS } from '../../shared/cs3d/maps.js';
 import { cameraYawFromSource, sceneToSource } from '../../shared/sim3d/units.js';
 import { MapPack } from './mapLoader.js';
 import { MapLighting } from './sky.js';
-import { bloom, screenUV, texture } from 'three/webgpu';
-import { installGrade, makeLut } from './grade.js';
+import { installGrade } from './grade.js';
+import { createMapRenderer, loadPostLut, LOOK_DEFAULTS, MAP_LOOK, setupBloom } from './look.js';
 import { patchWebGPUPartialAttributeUpload } from './threePatches.js';
 import { Player } from './player.js';
 import { Controls } from './controls.js';
 import { Hud } from './hud.js';
 import { FpsView } from './fpsView.js';
 import { DemoView } from './demoView.js';
+import { PlayerModels } from './playerModels.js';
 import { loadDemoBytes, loadDemoFile } from './demoData.js';
 
 const params = new URLSearchParams(location.search);
@@ -71,6 +72,7 @@ scene.add(camera);
 
 const player = new Player(camera);
 let lighting = null;
+let mapRenderer = null;
 
 // ---- UI --------------------------------------------------------------------
 const controls = new Controls(canvas, player, {
@@ -99,7 +101,9 @@ const controls = new Controls(canvas, player, {
     inspectAt = 0;
   },
   onGrade: () => hud.toggleGrade(),
-  onFpsView: () => fpsView.toggle()
+  onFpsView: () => fpsView.toggle(),
+  // Q: the walking body's held weapon, for its run-speed cap.
+  onWeapon: () => hud.setWeapon(player.cycleWeapon(), player.maxSpeed)
 });
 const hud = new Hud(uiRoot, {
   map,
@@ -108,6 +112,7 @@ const hud = new Hud(uiRoot, {
 });
 hud.setLocked(false);
 hud.setMode(player.mode);
+hud.setWeapon(player.weapon, player.maxSpeed);
 
 // The flat view (V). Reads `pack` and `lighting` through getters because both
 // are filled in by boot(), long after the key is bound.
@@ -121,12 +126,19 @@ const fpsView = new FpsView({
 
 // ---- demo playback ---------------------------------------------------------
 // Drop an .aim4replay (the compact package the local parser and the library
-// both use) onto the page to watch it on this map: placeholder bodies, every
+// both use) onto the page to watch it on this map: the game's agent models
+// when the players pack is present (placeholder bodies otherwise), every
 // grenade, and 1-0 for any player's POV. Rejected when the package is for a
 // different map — the geometry under the ticks would be nonsense.
+//
+// The players pack (scripts/cs3d-models.mjs) is fetched once the map's own
+// manifest is in, so it never competes with the first tiles; a body created
+// before it lands is a placeholder until the next frame after it does.
+const playerModels = new PlayerModels();
 const demoView = new DemoView({
   camera,
   getPack: () => pack,
+  playerModels,
   onChange: (dv) => {
     hud.setRoster(dv.active ? dv.roster() : null);
     hud.setDemoStatus(dv.status());
@@ -250,20 +262,20 @@ async function boot() {
     // The map's colour grade, before any material compiles. The LUT is part of
     // the tone mapping function every material calls, so it cannot arrive
     // later: a material built without it would keep the ungraded curve.
-    let post;
-    if (manifest.post?.lut && manifest.post.lutDim) {
-      try {
-        const res = await fetch(`${pack.base}/${manifest.post.lut}${pack.v}`);
-        if (res.ok) post = { lut: makeLut(await res.arrayBuffer(), manifest.post.lutDim), dim: manifest.post.lutDim };
-      } catch (e) {
-        console.warn('cs3d: colour grade failed to load', e);
-      }
-    }
+    const post = await loadPostLut(pack, manifest);
     const knobs = installGrade(renderer, params, post);
     if (knobs) setupGradePanel(knobs, manifest.map?.slug);
     // After the grade: the composite bakes that curve in, then takes tone
     // mapping off the scene render.
-    if (setupBloom(manifest)) console.log('cs3d: bloom from the map post-processing volume');
+    const bloomPass = setupBloom(renderer, manifest, params);
+    if (bloomPass.enabled) console.log('cs3d: bloom from the map post-processing volume');
+    mapRenderer = createMapRenderer({
+      renderer,
+      scene,
+      getPack: () => pack,
+      getLighting: () => lighting,
+      bloom: bloomPass
+    });
     lighting = new MapLighting(scene, camera, manifest, { shadows, renderer });
     pack.lightmapIntensity = lighting.lightmapIntensity;
     // The world's sun. Lightmapped geometry adds it itself, masked by the
@@ -289,6 +301,9 @@ async function boot() {
       camera.position.set(s.pos[0], s.pos[1] + 64.5, s.pos[2]);
       player.syncCamera();
     }
+    // Player models alongside the tiles: their 9 MB would otherwise sit in
+    // front of the first geometry request.
+    playerModels.load().then((ok) => ok && console.log('cs3d: player models ready'));
     await pack.load(manifest);
     // The material library exists now; any lighting slider set before this
     // had nothing to write to.
@@ -459,9 +474,7 @@ function reapplyLight() {
  * one number tuned on Nuke leaves it flat. Everything not listed here uses the
  * `def` on the slider itself.
  */
-const MAP_GRADE = {
-  anubis: { bake: 2 }
-};
+const MAP_GRADE = MAP_LOOK;
 
 function setupGradePanel(knobs, slug) {
   const perMap = MAP_GRADE[slug] || {};
@@ -477,14 +490,14 @@ function setupGradePanel(knobs, slug) {
   // knobs still feed installGrade's uniforms. Only the starting positions moved,
   // to the values dialled in against the game on Nuke.
   const defs = [
-    { key: 'sun', label: 'sun ×', min: 0, max: 5, step: 0.05, def: 5 },
-    { key: 'bake', label: 'bounce ×', min: 0, max: 3, step: 0.05, def: 0.9 },
-    { key: 'sky', label: 'sky probe ×', min: 0, max: 3, step: 0.05, def: 0.1 },
-    { key: 'brightness', label: 'brightness', min: 0.2, max: 3, step: 0.01, def: 1 },
-    { key: 'contrast', label: 'contrast', min: 0.5, max: 2.5, step: 0.01, def: 1.12 },
-    { key: 'saturation', label: 'saturation', min: 0, max: 2.5, step: 0.01, def: 1.14 },
-    { key: 'vibrance', label: 'vibrance', min: 0, max: 2, step: 0.01, def: 0.1 },
-    { key: 'lift', label: 'black lift', min: 0, max: 0.08, step: 0.001, def: 0.004 }
+    { key: 'sun', label: 'sun ×', min: 0, max: 5, step: 0.05, def: LOOK_DEFAULTS.sun },
+    { key: 'bake', label: 'bounce ×', min: 0, max: 3, step: 0.05, def: LOOK_DEFAULTS.bake },
+    { key: 'sky', label: 'sky probe ×', min: 0, max: 3, step: 0.05, def: LOOK_DEFAULTS.sky },
+    { key: 'brightness', label: 'brightness', min: 0.2, max: 3, step: 0.01, def: LOOK_DEFAULTS.brightness },
+    { key: 'contrast', label: 'contrast', min: 0.5, max: 2.5, step: 0.01, def: LOOK_DEFAULTS.contrast },
+    { key: 'saturation', label: 'saturation', min: 0, max: 2.5, step: 0.01, def: LOOK_DEFAULTS.saturation },
+    { key: 'vibrance', label: 'vibrance', min: 0, max: 2, step: 0.01, def: LOOK_DEFAULTS.vibrance },
+    { key: 'lift', label: 'black lift', min: 0, max: 0.08, step: 0.001, def: LOOK_DEFAULTS.lift }
   ].map((d) => {
     // A per-map override is the map's default, so reset returns there too.
     const reset = perMap[d.key] ?? d.def;
@@ -517,154 +530,14 @@ function setupGradePanel(knobs, slug) {
   });
 }
 
-// ---- bloom -----------------------------------------------------------------
-/**
- * The map's bloom, without giving up the two-pass depth clear.
- *
- * Both wanted the same thing — control of where the scene is drawn — so the
- * scene goes into an HDR render target instead of the canvas, keeping the two
- * passes and the depth clear between them exactly as they were, and a single
- * fullscreen composite adds the bloom and puts it on screen.
- *
- * The scene is rendered with tone mapping OFF so the target holds linear HDR.
- * That is not a detail: the vmat thresholds bloom at 1.055, a number that only
- * means anything before tone mapping, and Source 2 extracts bloom from HDR for
- * the same reason. The composite then applies the graded curve and the map's
- * LUT once, at the end, which is also where the exposure lands.
- *
- * Tone mapping is switched once at setup, never per frame: it is part of every
- * material's shader cache key, so flipping it each frame would recompile the
- * world twice a frame. `PostProcessing.update()` bakes the graded curve into
- * the composite while the renderer still reports it, and the scene is left on
- * NoToneMapping afterwards.
- *
- * `?bloom=0` turns it off, which also restores the direct-to-canvas path.
- */
-let sceneRT = null;
-let composite = null;
-
-function setupBloom(manifest) {
-  const b = manifest.post?.bloom;
-  // BLOOM_BLEND_SCREEN is the mode both maps author, and its strength is the
-  // one that is actually non-zero (Dust 2 0.184, Nuke 0.0112).
-  const strength = b ? b.screenStrength || b.strength || 0 : 0;
-  if (!(strength > 0) || params.get('bloom') === '0') return false;
-  try {
-    const size = renderer.getDrawingBufferSize(new THREE.Vector2());
-    sceneRT = new THREE.RenderTarget(Math.max(1, size.x), Math.max(1, size.y), {
-      type: THREE.HalfFloatType, // linear HDR: bloom needs values above 1
-      depthBuffer: true,
-      // The scene still wants its multisampling; a plain target would hand back
-      // the aliasing the canvas was created with `antialias: true` to avoid.
-      // three's own PassNode takes the renderer's count the same way.
-      samples: renderer.samples
-    });
-    const src = texture(sceneRT.texture, screenUV);
-    const bl = bloom(src, strength, b.computeRadius ?? 0, b.threshold ?? 1);
-    // Added rather than screen-blended: screen is defined on 0..1 and this is
-    // an HDR buffer. At these strengths the two agree to well under a bit.
-    composite = new THREE.PostProcessing(renderer, src.add(bl));
-    // Bake the composite now, while the renderer still reports the graded
-    // curve; from here on the scene renders untone-mapped.
-    composite.update();
-    renderer.toneMapping = THREE.NoToneMapping;
-    return true;
-  } catch (e) {
-    // Never let the grade cost us the map: fall back to drawing straight to
-    // the canvas with tone mapping in the materials, exactly as before.
-    console.warn('cs3d: bloom unavailable, rendering direct', e);
-    sceneRT?.dispose?.();
-    sceneRT = null;
-    composite = null;
-    return false;
-  }
-}
-
-// ---- render ----------------------------------------------------------------
-/**
- * Two passes: the 3D skybox, then a depth clear, then the map.
- *
- * The skybox is drawn at its true ×16 size and distance, which is what makes
- * its parallax and the map's own haze come out right — but it also means its
- * ground genuinely passes through the map's floor (Dust 2's rock, Nuke's
- * asphalt). Sharing one depth buffer, whichever is nearer wins, and the
- * skybox's ground surfaces inside the playable space as a sheet of sludge.
- *
- * Source draws the skybox first and clears depth before the world, so the world
- * wins wherever it exists and the skybox shows only through the gaps. That is
- * exactly the rule wanted: the ground is hidden inside the map because there is
- * a floor in front of it, while hills, palms and rooftops stay visible over the
- * walls because nothing there occludes them — no bounds test, no per-map
- * tuning, and nothing that has to know which part of the skybox is "ground".
- *
- * One scene, so lights, fog and the probe stay shared; only the two roots are
- * toggled. `scene.background` has to be pulled for the second pass because
- * three unshifts it onto the render list whatever `autoClear` says.
- */
 function renderFrame() {
-  // The flat view is one pass to the canvas and nothing else. There is no 3D
-  // skybox to draw first, so the depth clear and the second render have nothing
-  // to separate, and the composite's HDR target and fullscreen pass would only
-  // put the map's LUT back over greys chosen to be exact.
   if (fpsView.enabled) {
     renderer.setRenderTarget(null);
     renderer.render(scene, camera);
     return;
   }
-  // With bloom on, both passes go to the HDR target and the composite puts the
-  // result on screen; without it, straight to the canvas as before.
-  if (composite) renderer.setRenderTarget(sceneRT);
-  drawScene();
-  if (composite) {
-    renderer.setRenderTarget(null);
-    composite.render();
-  }
-}
-
-function drawScene() {
-  const sky = pack.sky3d;
-  const world = pack.world;
-  if (!sky || !world) {
-    renderer.render(scene, camera);
-    return;
-  }
-  const dome = lighting?.dome || null;
-  // The shadow map is driven by hand (`shadow.autoUpdate = false`). The distant
-  // pass must not consume a pending request, or the map's shadows get baked
-  // from a scene with no map in it.
-  const shadow = lighting?.sun?.castShadow ? lighting.sun.shadow : null;
-  const wantShadow = shadow ? shadow.needsUpdate : false;
-  if (shadow) shadow.needsUpdate = false;
-  // Restored, not forced back on: the dome retires itself (visible = false)
-  // the moment the map's real skybox lands, and forcing it would raise it from
-  // the dead once a frame.
-  const skyWas = sky.visible;
-  const domeWas = dome ? dome.visible : false;
-
-  // The distant pass gets the fog whose height band is scaled to the ×16
-  // skybox (see fog.js). Each material only ever draws in one of these two
-  // passes, so each still compiles against a single fog node.
-  const worldFog = scene.fogNode;
-  const skyFog = lighting?.fog?.skyNode || worldFog;
-
-  world.visible = false;
-  scene.fogNode = skyFog;
-  renderer.render(scene, camera); // clears colour + depth; background, dome, skybox
-  renderer.clearDepth();
-  scene.fogNode = worldFog;
-
-  world.visible = true;
-  sky.visible = false;
-  if (dome) dome.visible = false;
-  if (shadow) shadow.needsUpdate = wantShadow;
-  const background = scene.background;
-  scene.background = null;
-  renderer.autoClear = false;
-  renderer.render(scene, camera);
-  renderer.autoClear = true;
-  scene.background = background;
-  sky.visible = skyWas;
-  if (dome) dome.visible = domeWas;
+  if (mapRenderer) mapRenderer.render(camera);
+  else renderer.render(scene, camera);
 }
 
 // ---- loop ------------------------------------------------------------------
@@ -697,10 +570,7 @@ window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight, false);
-  if (sceneRT) {
-    const s = renderer.getDrawingBufferSize(new THREE.Vector2());
-    sceneRT.setSize(Math.max(1, s.x), Math.max(1, s.y));
-  }
+  mapRenderer?.resize();
   lighting?.resize();
 });
 
@@ -708,5 +578,5 @@ boot();
 requestAnimationFrame(frame);
 
 if (import.meta.env.DEV) {
-  window.__cs3d = { THREE, scene, camera, player, get pack() { return pack; }, renderer, lighting: () => lighting, fpsView, demoView };
+  window.__cs3d = { THREE, scene, camera, player, get pack() { return pack; }, renderer, lighting: () => lighting, fpsView, demoView, playerModels };
 }

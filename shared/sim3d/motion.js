@@ -14,7 +14,9 @@
 //
 // What this file deliberately is NOT yet:
 //   - the real duck state machine (constants.js DUCK explains why; duck here
-//     is an instant hull/speed change, honest about being provisional),
+//     is an instant hull/speed change, honest about being provisional — the
+//     one rule it does keep is FinishUnDuck's headroom trace: no standing up
+//     into a ceiling),
 //   - subtick input timing (inputs land on tick boundaries; a no-input tick
 //     is bit-identical either way, which is what the oracle exercises),
 //   - stamina (present but disabled until measured — STAMINA.ENABLED).
@@ -23,7 +25,9 @@
 //   world.traceHull(start, end, halfWide, height) →
 //     { fraction, endpos:{x,y,z}, normal:{x,y,z}|null, startSolid }
 // flatWorld() below is the analytic implementation the oracle uses for pure
-// dynamics; the BVH world over a map pack's phys.glb plugs in the same way.
+// dynamics; shared/sim3d/hullTrace.js is the swept-hull implementation over
+// triangles (a map pack's phys.glb through src/cs3d/hullWorld.js in the
+// browser, any triangle list in Node) and plugs in the same way.
 // ---------------------------------------------------------------------------
 
 import { fr, fmul, fdiv, v3, v3set, v3copy, v3dot, v3mulAdd, v3len, v3scale, v3normalize, yawBasis } from './fp.js';
@@ -91,8 +95,17 @@ const _clipped = v3();
 export function stepPlayer(state, input, world, dt = TICK_DT) {
   const vel = state.vel;
 
-  // Duck, provisional (see header): instant cap + hull swap.
-  state.ducking = !!input.duck;
+  // Duck, provisional (see header): instant cap + hull swap — but never stand
+  // up into a ceiling. Source's FinishUnDuck traces the standing hull first
+  // and keeps the player ducked while it does not fit; without that rule a
+  // player releasing crouch under a vent would start the tick inside the
+  // world and every trace would report startsolid.
+  let ducking = !!input.duck;
+  if (!ducking && state.ducking) {
+    const room = world.traceHull(state.pos, state.pos, HULL_HALF_WIDE, HULL_STAND);
+    if (room.startSolid) ducking = true;
+  }
+  state.ducking = ducking;
   const hull = state.ducking ? HULL_DUCK : HULL_STAND;
 
   // StartGravity: first half-tick. Applied on ground too — the ground branch

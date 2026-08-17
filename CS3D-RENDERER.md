@@ -1,5 +1,93 @@
 # CS3D renderer notes
 
+## Status after the fourth pass (2026-08-17): player models, clips, the movement sim in the explorer
+
+The first slice of CS3D-ENGINE-PLAN Group C (E-10 player models, E-8
+animations) and of E-2 (the movement controller under the walking body). Two
+new pipelines, one new runtime module, and the explorer's walking body now
+runs the real sim.
+
+**The players pack.** `npm run cs3d:models` (`scripts/cs3d-models.mjs`) pulls
+one T (`tm_phoenix`) and one CT (`ctm_sas`) agent, their `cstrike` hitbox sets
+and the world-model locomotion clips out of pak01 and packs them under
+`server/data/cs3d/pack/players/` (local only, gitignored, 8.7 MB): two skinned
+glbs with webp textures + meshopt, one glb per clip set (`rifle`, `pistol`,
+`knife`, `shared`, `c4`, `grenade`) holding the worldmodel skeleton and every
+selected clip as a glTF animation, and a `manifest.json` with the clip lists,
+per-gait authored ground speeds and the hitboxes. Served like a map pack at
+`/api/cs3d/players/…` (`server/cs3d/routes.js` and the Vite dev middleware
+already take any slug). Four facts about the game files, learned by probing
+and written down nowhere else:
+
+| Fact | Consequence |
+|---|---|
+| `characters/models/<agent>.vmdl_c` in pak01 are 4.8 KB **stubs** (a 5-unit cube on a `dummy` bone). The real agents are `agents/models/<agent>/<agent>.vmdl_c` (~560 KB): four mesh groups (third-person body / gloves, first-person arms / sleeves), 86–94 bones, the `cstrike` hitbox set, a ragdoll PHYS block | The pack keeps the third-person half; the first-person meshes are E-9's |
+| CS2 does not animate players through `.vanim`/`.vagrp`/`.vanmgraph`. It is the **Nm** system: `animation/skeletons/characters/worldmodel.vnmskel_c` (74 bones), 2,355 `.vnmclip_c` under `animation/anims/world/` (`rifle/_default_rifle`, `pistol/…`, `knife/…` each 194–214 clips: 8-way run / walk / crouch, in-air, jump, turn, ladder, plant, shoot; `shared/` deaths, flinches, defuse, flashed; `equipment/c4`, `grenade/…`), and `.vnmgraph_c` graphs | VRF 19.2 exports an NmClip straight to glb (a skeleton + one animation) — 194 clips in 4 s — so this is a script, not a research project. The graphs are behaviour and are re-derived in `src/cs3d/playerModels.js` |
+| VRF only writes the skeleton and skins when `--gltf_export_animations` is on; without it the model export is four unskinned meshes | The flag is always passed; the two embedded animations it brings (`tools_preview`, `eye_test`) are dropped |
+| The model's skeleton and the clip skeleton agree bone for bone in world space but factor `root_motion` differently: the model carries a 120° rotation on `root_motion` and expresses its children in that frame, the clips leave `root_motion` at identity. Applied blindly, every clip lays the body on its side | `normalizeRootMotion()` rewrites the **model** to the clip convention (world pose unchanged, inverse bind matrices stay valid); every clip then binds by bone name with no per-track fix-up. `verifyPack()` re-poses each packed model with `run_n` and checks the head is at 65 and the feet on the floor, so this cannot silently regress |
+
+Also: clips carry **no root motion** (`m_rootMotion` is identity, the game
+moves the entity), so the pack measures each locomotion loop's authored ground
+speed from the planted foot (run 182, walk 104, crouch 92 u/s — identical
+across weapon classes, the legs are shared) and the runtime scales playback by
+actual speed / authored speed. Roughness lives in `g_tNormal`'s alpha and
+`g_tMetalness` is a packed mask with metalness in R, exactly as on the maps;
+VRF's own metallicRoughness slot is the raw metalness map and reads as chrome.
+The 19 hitboxes are capsules on bones (`m_nShapeType 2`, two points + radius,
+group ids 1 head / 2 chest / 3 stomach / 4-5 arms / 6-7 legs / 8 neck) with
+lower-case bone names where the skeleton's are mixed case.
+
+**The runtime** (`src/cs3d/playerModels.js`). Loads the pack once, clones a
+skinned body per player (`SkeletonUtils.clone`), one `AnimationMixer` each,
+and drives it from what the tick record carries — speed, heading relative to
+the view, duck amount, airborne, held weapon — through a small blend that
+stands in for the graph: stand and crouch layers mixed by duck amount, each an
+8-way directional loop (the two nearest directions blended by angle), the
+stand layer blending idle → walk → run by speed, everything read at one shared
+phase so the walk/run cross-blend never double-steps, in-air poses replacing
+the lot while airborne, weapon-class sets (`rifle` / `pistol` / `knife`,
+grenades and the bomb on pistol legs) cross-fading on a switch, and the view
+pitch applied after the mixer as a spine-to-head tilt because every clip is
+authored level. `demoView.js` uses it for the ten bodies when the pack is
+present and keeps the cylinders as the fallback. Build-of-three note: the
+loader and mixer are plain `three` (a second copy of the core next to
+`three/webgpu`); the WebGPU renderer reads the skinned meshes by duck typing,
+and the materials are rebuilt as `MeshStandardNodeMaterial` so the body takes
+the scene sun and probe like any prop.
+
+**Movement.** `shared/sim3d/motion.js` (Source's `CGameMovement` in f32,
+already oracle-verified for gravity, jump, air-accelerate) now has a world to
+run in: `shared/sim3d/sweptBox.js` (13-axis SAT time of impact, box vs
+triangle, exact and allocation-free) under `shared/sim3d/hullTrace.js` (the
+`traceHull` contract over any triangle query: Source frame in, scene-frame
+triangles, DIST_EPSILON = 1/32 pull-back, startsolid above 0.25 u of overlap),
+and `src/cs3d/hullWorld.js` is the ten-line adapter over the pack's BVH.
+`src/cs3d/player.js` lost its capsule controller: it turns keys into the sim's
+per-tick input, steps `stepPlayer`, and puts the camera on the eyes; Q cycles a
+held weapon for its speed cap. Two rules landed with it: no standing up into a
+ceiling (`FinishUnDuck`'s headroom trace, in motion.js) and Source's IN_JUMP
+latch (no bunny-hop from holding space, in player.js).
+`shared/sim3d/hullTrace.test.js` (in `npm test`) checks the primitive, that a
+triangle floor reproduces `flatWorld()` tick for tick, wall stop-and-slide at
+250 u/s with no tunnelling, a 16 u step climbed and a 38 u ledge refused, a
+ceiling capping a jump, the headroom rule, byte-for-byte determinism.
+
+Open, in the order they matter:
+
+1. **Operator eye-test.** Direction naming is assumed `e` = the body's right;
+   if the legs cross the wrong way on a strafe, swap the sign of `relYaw` in
+   `playerModels.js` `DIRS`. Playback cadence and the pitch weights are first
+   guesses. The lighting on bodies is the dynamic sun + probe, not the map's
+   baked terms (CS3D-RENDERER known-remaining #2 still stands).
+2. Deaths, plant, defuse, throw, flashed and flinch clips are packed but not
+   triggered: `PlayerBody.playOnce(set, name)` exists, the round events that
+   would call it are not wired. Airborne comes only from `FLAG_AIRBORNE`, which
+   the pre-revision corpus does not carry (bodies do not jump there).
+3. No weapon world models on the `wpn` bone (E-7), no twist/jiggle bones
+   driven (the model's `CTiltTwistConstraint` list is in its DATA block).
+4. `constants.js` DUCK is still [guessed] and the sim's duck is an instant hull
+   swap; the camera eases, the sim does not.
+
 ## Status after the third pass (2026-08-15, night): atmosphere and grade
 
 The second pass got the geometry, the textures and the baked light right. What

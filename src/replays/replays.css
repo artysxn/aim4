@@ -18,7 +18,7 @@
   --rv-t: #e60611;
   --rv-ct: #5b9fd4;
   --rv-stage: #050505;
-  --rv-panel: #0c0c0c;
+  --rv-panel: #050505;
   --rv-ink: #b5b5b5;
   /* Width of the timeline viewer's collapsible side panel. */
   --rv-side-w: 360px;
@@ -1580,18 +1580,16 @@ body.rv-open {
   overflow: hidden;
 }
 
-/* The strip's own row under the map — it no longer overlays and crops it. */
+/* Flush under the map: the scrubber sits on the squares, no gutter. */
 .rv-chrome {
   flex: 0 0 auto;
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 0 16px 10px;
-  background: #050505;
+  gap: 0;
+  padding: 0;
+  background: var(--rv-stage);
 }
 
-/* 1:1 squares packed from the left, under the scrubber. They grow together
-   up to a cap so a short match does not turn the chrome into a tall grid. */
 .rv-rounds {
   display: flex;
   flex-wrap: nowrap;
@@ -2129,6 +2127,7 @@ body.rv-open {
   min-height: 0;
   overflow: hidden;
   touch-action: none;
+  background: var(--rv-stage);
 }
 
 /* Top-right feeds. Kill feed and engagements are separate absolute panels so
@@ -2632,21 +2631,20 @@ body.rv-open {
   justify-content: center;
   flex: 1 1 0;
   aspect-ratio: 1 / 1;
-  min-width: 28px;
-  max-width: 40px;
+  min-width: 0;
   height: auto;
   padding: 0;
   border: 0;
   border-right: 1px solid var(--border);
-  background: #0a0a0a;
+  background: var(--rv-stage);
   color: var(--muted);
   font: 600 13px var(--font-body);
   font-variant-numeric: tabular-nums;
   cursor: pointer;
 }
 
-.rv-round:first-child {
-  border-left: 1px solid var(--border);
+.rv-round:last-child {
+  border-right: 0;
 }
 
 .rv-round.wt {
@@ -2840,11 +2838,23 @@ body.rv-open {
   touch-action: none;
 }
 
-/* Full width under the map, above the round strip. */
+/* Full width, sitting on the squares. The track is the bottom edge. */
 .rv-chrome > .rv-scrub {
   flex: 0 0 auto;
   width: 100%;
-  height: 20px;
+  height: 10px;
+  align-items: flex-end;
+}
+
+.rv-chrome > .rv-scrub .rv-scrub-track {
+  height: 3px;
+  border-radius: 0;
+}
+
+.rv-chrome > .rv-scrub .rv-scrub-handle {
+  top: auto;
+  bottom: 1px;
+  transform: translate(-50%, 50%);
 }
 
 .rv-scrub-track {
@@ -10794,7 +10804,7 @@ th.tm-rl-name,
   }
 
   .rv-chrome {
-    padding: 0 10px calc(8px + env(safe-area-inset-bottom));
+    padding: 0;
   }
 
   .rv-rounds {
@@ -11513,6 +11523,11 @@ th.tm-rl-name,
   height: 100%;
   display: block;
   z-index: 2;
+}
+
+.rv-map > .c3-boot {
+  z-index: 8;
+  pointer-events: auto;
 }
 .rv-3d-canvas[hidden] {
   display: none;

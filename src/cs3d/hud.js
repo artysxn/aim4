@@ -17,6 +17,7 @@ export class Hud {
       <div class="c3-top">
         <div class="c3-title">${esc(map.name)}</div>
         <div class="c3-stat" data-k="mode">fly</div>
+        <div class="c3-stat" data-k="weapon"></div>
         <div class="c3-stat" data-k="pos">0 0 0</div>
         <div class="c3-stat" data-k="speed">0 u/s</div>
         <div class="c3-stat" data-k="fps"></div>
@@ -43,6 +44,7 @@ export class Hud {
             <div><b>Space</b> up / jump</div>
             <div><b>C</b> down, <b>Ctrl</b> slow / crouch</div>
             <div><b>Shift</b> fast / walk</div>
+            <div><b>Q</b> next weapon (walk speed cap)</div>
             <div><b>1</b> T spawn, <b>2</b> CT spawn, <b>R</b> respawn</div>
             <div><b>Esc</b> release, <b>H</b> this panel</div>
             <div><b>I</b> inspect what you are looking at</div>
@@ -93,6 +95,13 @@ export class Hud {
 
   setMode(mode) {
     this.el.mode.textContent = mode;
+    // The weapon only means something to the walking body.
+    this.el.weapon.hidden = mode !== 'walk';
+  }
+
+  /** The walking body's held weapon and the run speed it allows. */
+  setWeapon(name, speed) {
+    this.el.weapon.textContent = `${name} ${speed}`;
   }
 
   setBackend(name) {

@@ -5,12 +5,15 @@
 // puts you behind any player's recorded eyes. CS3D-PLAN's "3D timeline
 // viewer", first standing version.
 //
-// Bodies are deliberately primitive — a team-coloured cylinder with a nose
-// block for facing — because the real player models and animations are a
-// Windows-extraction phase. Everything positional is already exact: origins,
-// view angles, duck state and deaths come straight from the demo, and the
-// interpolation between rows is the same shortest-path angle lerp the 2D
-// viewer uses.
+// Bodies are the game's own agent models when the players pack is present
+// (scripts/cs3d-models.mjs → src/cs3d/playerModels.js): a T and a CT model,
+// animated by the world-model locomotion clips from the tick record's speed,
+// heading, duck amount and held weapon, aiming on the recorded pitch. Without
+// the pack (a fresh clone, a host without the local assets) the placeholder
+// stays: a team-coloured cylinder with a nose block for facing. Everything
+// positional is exact either way: origins, view angles, duck state and deaths
+// come straight from the demo, and the interpolation between rows is the same
+// shortest-path angle lerp the 2D viewer uses.
 //
 // Grenades come from GrenadeEvents: a small sphere flies the recorded path
 // (linear between the parser's waypoints), and the detonation leaves a
@@ -26,11 +29,12 @@
 // ---------------------------------------------------------------------------
 
 import * as THREE from 'three/webgpu';
-import { FLAG_DUCKING, readRecord, lerpAngle } from '../replays/shared/tickFormat.js';
+import { FLAG_DUCKING, FLAG_AIRBORNE, readRecord, lerpAngle } from '../replays/shared/tickFormat.js';
 import { cameraYawFromSource } from '../../shared/sim3d/units.js';
 import { HULL_STAND, HULL_DUCK, EYE_STAND, EYE_DUCK, HULL_HALF_WIDE } from '../../shared/sim3d/constants.js';
 
 const DEG = Math.PI / 180;
+const RAD = 180 / Math.PI;
 
 const SPEEDS = [0.25, 0.5, 1, 2, 4];
 
@@ -60,12 +64,15 @@ export class DemoView {
    * @param {object} o
    * @param {THREE.Camera} o.camera
    * @param {() => import('./mapLoader.js').MapPack|null} o.getPack
+   * @param {import('./playerModels.js').PlayerModels} [o.playerModels]  the
+   *   agent models + clips; bodies fall back to placeholders until it is ready
    * @param {(view: DemoView) => void} [o.onChange]  fired on state changes
    *   (round, play, POV) — not per frame; the HUD polls status() for the clock.
    */
-  constructor({ camera, getPack, onChange }) {
+  constructor({ camera, getPack, playerModels, onChange }) {
     this.camera = camera;
     this.getPack = getPack;
+    this.playerModels = playerModels || null;
     this.onChange = onChange || (() => {});
 
     this.demo = null;
@@ -78,6 +85,7 @@ export class DemoView {
     this.povSlot = null;
     this._eye = EYE_STAND;
     this._last = 0;
+    this._lastRow = -1;
 
     this.root = new THREE.Group();
     this.root.name = 'demo';
@@ -100,7 +108,10 @@ export class DemoView {
       g.add(body, nose);
       g.visible = false;
       this.root.add(g);
-      this._bodies.push({ group: g, body, nose });
+      // `model` is the animated agent body once the players pack has loaded;
+      // `group` (the placeholder) then stays hidden. `prev` is the last frame's
+      // sample, for the velocity the locomotion blend runs on.
+      this._bodies.push({ group: g, body, nose, model: null, prev: null });
     }
 
     this._nades = new Map(); // grenade index -> { mesh, kind }
@@ -127,7 +138,11 @@ export class DemoView {
     this.ticks = null;
     this.playing = false;
     this.povSlot = null;
-    for (const b of this._bodies) b.group.visible = false;
+    for (const b of this._bodies) {
+      b.group.visible = false;
+      if (b.model) b.model.group.visible = false;
+      b.prev = null;
+    }
     this._clearNades();
     this.root.removeFromParent();
     this.onChange(this);
@@ -244,12 +259,21 @@ export class DemoView {
     const r0 = Math.floor(this.row);
     const r1 = Math.min(h.tickCount - 1, r0 + 1);
     const f = this.row - r0;
+    // Demo seconds this frame advanced, for the animation mixers: paused, the
+    // pose holds; a frame-step while paused moves it one tick; at 4× the legs
+    // run 4×.
+    const demoDt = this.playing ? dt * this.speed : this.row !== this._lastRow ? 1 / (h.tickRate || 64) : 0;
+    this._lastRow = this.row;
+    const rowsPerSecond = (h.tickRate || 64) / (h.stride || 1);
+    const useModels = !!this.playerModels?.ready;
 
     for (let slot = 0; slot < (h.playerCount || 10); slot++) {
       const a = readRecord(this.ticks.view, r0, slot, _a);
       const bodyState = this._bodies[slot];
       if (!a.alive) {
         bodyState.group.visible = false;
+        if (bodyState.model) bodyState.model.group.visible = false;
+        bodyState.prev = null;
         continue;
       }
       const b = readRecord(this.ticks.view, r1, slot, _b);
@@ -268,17 +292,58 @@ export class DemoView {
       const amount = useB ? a.duckAmount + (b.duckAmount - a.duckAmount) * f : a.duckAmount;
       const duck = amount > 0 ? amount : (a.flags & FLAG_DUCKING) !== 0 ? 1 : 0;
 
-      const g = bodyState.group;
-      g.visible = slot !== this.povSlot;
-      // Source (x, y, z) → scene (x, z, −y); yaw is rotation.y for a +x-forward object.
-      g.position.set(x, z, -y);
-      g.rotation.y = yaw * DEG;
-      const hull = HULL_STAND + (HULL_DUCK - HULL_STAND) * duck;
       const eye = EYE_STAND + (EYE_DUCK - EYE_STAND) * duck;
-      bodyState.body.scale.y = hull;
-      bodyState.nose.position.y = eye - 4;
-      const mat = this._teamMats[a.side] || this._teamMats.unknown;
-      if (bodyState.body.material !== mat) bodyState.body.material = mat;
+      const visible = slot !== this.povSlot;
+      if (useModels && (a.side === 'T' || a.side === 'CT')) {
+        // The agent model. Velocity from the row-to-row delta (¼-unit
+        // quantised, smoothed inside the body); heading from that velocity;
+        // airborne only when the record says so — the derived flag is not
+        // worth a body that hops on every staircase.
+        let m = bodyState.model;
+        if (!m) {
+          m = bodyState.model = this.playerModels.createBody(a.side);
+          this.root.add(m.group);
+        } else if (m.side !== a.side) m.setSide(a.side);
+        bodyState.group.visible = false;
+        const prev = bodyState.prev;
+        let speed = 0;
+        let moveYaw = yaw;
+        if (prev && prev.row !== this.row) {
+          const dtRows = Math.abs(this.row - prev.row);
+          if (dtRows > 0 && dtRows < 8) {
+            const dxr = (x - prev.x) / dtRows;
+            const dyr = (y - prev.y) / dtRows;
+            speed = Math.hypot(dxr, dyr) * rowsPerSecond;
+            if (speed > 1) moveYaw = Math.atan2(dyr, dxr) * RAD;
+          }
+        }
+        bodyState.prev = { row: this.row, x, y, z };
+        m.set({
+          speed,
+          moveYaw,
+          viewYaw: yaw,
+          pitch,
+          duck,
+          airborne: (a.flags & FLAG_AIRBORNE) !== 0,
+          weapon: this.meta.weapons?.[a.weapon] || '',
+          alive: true
+        });
+        m.group.position.set(x, z, -y);
+        m.update(demoDt);
+        m.group.visible = visible;
+      } else {
+        if (bodyState.model) bodyState.model.group.visible = false;
+        const g = bodyState.group;
+        g.visible = visible;
+        // Source (x, y, z) → scene (x, z, −y); yaw is rotation.y for a +x-forward object.
+        g.position.set(x, z, -y);
+        g.rotation.y = yaw * DEG;
+        const hull = HULL_STAND + (HULL_DUCK - HULL_STAND) * duck;
+        bodyState.body.scale.y = hull;
+        bodyState.nose.position.y = eye - 4;
+        const mat = this._teamMats[a.side] || this._teamMats.unknown;
+        if (bodyState.body.material !== mat) bodyState.body.material = mat;
+      }
 
       if (slot === this.povSlot) {
         // With a real duck amount the camera follows it exactly, which is the
