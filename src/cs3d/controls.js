@@ -12,18 +12,16 @@
 // ---------------------------------------------------------------------------
 
 import * as Storage from '../utils/Storage.js';
+import { SettingsManager } from '../core/SettingsManager.js';
 import { SENSITIVITY_DEFAULT, radiansPerCountFromSensitivity } from '../utils/MathUtils.js';
 
-/** The trainer's saved sensitivity, or its default when nothing is stored. */
-function readSensitivity() {
-  const v = Number(Storage.read('settings', {})?.sensitivity);
-  return Number.isFinite(v) && v > 0 ? v : SENSITIVITY_DEFAULT;
-}
-
-/** Whether the trainer is set to ask for raw (unadjusted) mouse movement. */
-function readRawInput() {
-  const v = Storage.read('settings', {})?.rawInput;
-  return v === undefined ? true : !!v;
+/** Same migrated sensitivity / raw-input flags the trainer's InputManager uses. */
+function trainerMouse() {
+  const s = new SettingsManager();
+  return {
+    sens: s.data.sensitivity,
+    rawInput: s.data.rawInput !== false
+  };
 }
 
 export class Controls {
@@ -32,19 +30,24 @@ export class Controls {
     this.player = player;
     this.hooks = hooks;
     this.locked = false;
-    this.sens = readSensitivity();
-    this.rawInput = readRawInput();
+    const mouse = trainerMouse();
+    this.sens = mouse.sens;
+    this.rawInput = mouse.rawInput;
     this.keys = new Set();
     this._onMouseMove = this._onMouseMove.bind(this);
     this._onKey = this._onKey.bind(this);
     this._onLockChange = this._onLockChange.bind(this);
+    // pointerrawupdate is the un-coalesced path. mousemove merges deltas across
+    // a long WebGPU frame into one jump; the trainer stays smooth because its
+    // frames are cheap. Same handler, different event.
+    this._lookEvent = 'onpointerrawupdate' in document ? 'pointerrawupdate' : 'mousemove';
 
     canvas.addEventListener('click', () => {
       if (!this.locked) this._requestLock();
     });
     document.addEventListener('pointerlockchange', this._onLockChange);
     document.addEventListener('pointerlockerror', this._onLockChange);
-    document.addEventListener('mousemove', this._onMouseMove);
+    document.addEventListener(this._lookEvent, this._onMouseMove);
     window.addEventListener('keydown', this._onKey);
     window.addEventListener('keyup', this._onKey);
     window.addEventListener('blur', () => this._releaseAll());
@@ -196,7 +199,7 @@ export class Controls {
   dispose() {
     document.removeEventListener('pointerlockchange', this._onLockChange);
     document.removeEventListener('pointerlockerror', this._onLockChange);
-    document.removeEventListener('mousemove', this._onMouseMove);
+    document.removeEventListener(this._lookEvent, this._onMouseMove);
     window.removeEventListener('keydown', this._onKey);
     window.removeEventListener('keyup', this._onKey);
   }

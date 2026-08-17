@@ -139,11 +139,7 @@ export class Player {
     this.syncCamera();
   }
 
-  /**
-   * Same path as InputManager: movementX/Y × radians-per-count, written onto
-   * the camera on this event. Deferring to the render tick is what made flicks
-   * land as skips; the trainer never did that.
-   */
+  /** InputManager._onMouseMove: counts × radians-per-count, written now. */
   look(dx, dy, radiansPerCount) {
     this.yaw -= dx * radiansPerCount;
     this.pitch -= dy * radiansPerCount;
