@@ -1,36 +1,25 @@
 // ---------------------------------------------------------------------------
 // src/cs3d/thirdPerson.js
-// Pull the camera back from the eyes along the look vector, and stop at the
-// first wall so third person never leaves the room. Map Practice and the
-// timeline 3D viewer share this so a later tweak lands in both.
+// Pull the camera back from a point (usually the eyes) and stop at the first
+// wall so third person never leaves the room. Map Practice and the timeline
+// 3D viewer both sit behind the look vector.
 // ---------------------------------------------------------------------------
 
 import * as THREE from 'three/webgpu';
 
-const BACK = 110;
-const UP = 16;
+export const THIRD_PERSON_BACK = 110;
+export const THIRD_PERSON_UP = 16;
 const HALF = 6;
 
 const _fwd = new THREE.Vector3();
 const _eye = { x: 0, y: 0, z: 0 };
 const _want = { x: 0, y: 0, z: 0 };
 
-/**
- * `camera` is already on the eyes, looking the right way. After this it sits
- * 110u behind and 16u above, or closer if a hull trace hits a wall.
- * @param {import('three').Camera} camera
- * @param {{ traceHull: Function }|null} world  hullWorld from Player, or null
- */
-export function placeThirdPersonCamera(camera, world) {
-  camera.getWorldDirection(_fwd);
-  const eye = camera.position;
-  const wx = eye.x - _fwd.x * BACK;
-  const wy = eye.y - _fwd.y * BACK + UP;
-  const wz = eye.z - _fwd.z * BACK;
+function pullBack(camera, world, from, wx, wy, wz) {
   if (world) {
-    _eye.x = eye.x;
-    _eye.y = -eye.z;
-    _eye.z = eye.y - HALF;
+    _eye.x = from.x;
+    _eye.y = -from.z;
+    _eye.z = from.y - HALF;
     _want.x = wx;
     _want.y = -wz;
     _want.z = wy - HALF;
@@ -39,4 +28,25 @@ export function placeThirdPersonCamera(camera, world) {
     return;
   }
   camera.position.set(wx, wy, wz);
+}
+
+/**
+ * `camera` is already on the eyes, looking the right way. After this it sits
+ * `dist` behind and 16u above, or closer if a hull trace hits a wall.
+ * @param {import('three').Camera} camera
+ * @param {{ traceHull: Function }|null} world  hullWorld from Player, or null
+ * @param {number} [dist]
+ */
+export function placeThirdPersonCamera(camera, world, dist = THIRD_PERSON_BACK) {
+  camera.getWorldDirection(_fwd);
+  const eye = camera.position;
+  const d = dist > 0 ? dist : THIRD_PERSON_BACK;
+  pullBack(
+    camera,
+    world,
+    eye,
+    eye.x - _fwd.x * d,
+    eye.y - _fwd.y * d + THIRD_PERSON_UP,
+    eye.z - _fwd.z * d
+  );
 }

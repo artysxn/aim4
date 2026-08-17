@@ -41,7 +41,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { AnimationMixer, LoopRepeat, LoopOnce } from 'three';
-import { IrradianceNode, float, texture, uniform, transformedNormalWorld } from 'three/webgpu';
+import { IrradianceNode, PhysicalLightingModel, float, texture, uniform, transformedNormalWorld } from 'three/webgpu';
 import { WEAPON_SPEED, DEFAULT_WEAPON_SPEED } from '../../shared/sim/constants.js';
 import { WALK_SPEED_SCALE } from '../../shared/sim3d/constants.js';
 import { assetBase } from './mapLoader.js';
@@ -100,8 +100,66 @@ const AIM_PITCH_LIMIT = 55;
  */
 const SKIN_ROUGHNESS_MIN = 0.45;
 
+/**
+ * Cloth is never a mirror, and this floor is what stops one bad texture from
+ * making it one. `ctm_sas_body`'s normal map came out of VRF with an empty
+ * alpha, which is where Source 2 keeps roughness, so the CT's whole torso
+ * packed as roughness 0. cs3d-models now catches that at pack time; this is
+ * the rail under it, because the pack on the CDN is older than the fix and a
+ * roughness of zero on a vest is never right whatever produced it.
+ */
+const CLOTH_ROUGHNESS_MIN = 0.35;
+
+/**
+ * How broad the cloth sheen lobe is.
+ *
+ * Not a taste knob: three's `BRDF_Sheen` divides by `4·(N·L + N·V − N·L·N·V)`,
+ * which goes to zero at the silhouette, so the lobe's peak scales roughly with
+ * `D_Charlie`'s maximum — (2 + 1/α) / 2π. At 0.35 that peak lands near 2.0 with
+ * the sun at 5, twice what a fully lit concrete wall reaches, and every body
+ * had a white rim burned around it. At 0.7 it lands near 0.8, about what
+ * sunlit stone reads, which is a fabric edge rather than a blowout.
+ */
+const SHEEN_ROUGHNESS = 0.7;
+
 /** Ambient a body falls back to when the map ships no probe grid, per axis. */
 const FALLBACK_AMBIENT = 0.18;
+
+/** Drops whatever is accumulated into it (see DiffuseSunLightingModel). */
+const DISCARD_ACCUMULATOR = { addAssign() {} };
+
+/**
+ * The physical BRDF with the sun's mirror lobe removed.
+ *
+ * Every other surface in these maps takes the sun as an `IrradianceNode` —
+ * world geometry, props, the 3D skybox (materials.js setupLightMap) — which
+ * three accumulates as indirect DIFFUSE. That is forced by the bake: CS2 ships
+ * the sun's visibility as a mask, not as anything view dependent, so no
+ * lightmapped surface in the map can show a specular highlight at all.
+ *
+ * A body was the one exception, because it is lit by the real DirectionalLight
+ * (which it needs, for the dynamic shadow the bake cannot give a moving
+ * player). So a player standing beside a crate got a GGX highlight the crate
+ * could not have, at an intensity tuned for diffuse — which is most of what
+ * "they look like they are from another dimension" was.
+ *
+ * Only the mirror lobe goes. The sheen accumulates into `sheenSpecularDirect`,
+ * a different variable, so cloth keeps reading as cloth; reflections still
+ * arrive from the sky probe through `indirectSpecular`, exactly as they do for
+ * every prop in the map.
+ */
+class DiffuseSunLightingModel extends PhysicalLightingModel {
+  direct(input, ...rest) {
+    const rl = input.reflectedLight;
+    const real = rl.directSpecular;
+    rl.directSpecular = DISCARD_ACCUMULATOR;
+    try {
+      return super.direct(input, ...rest);
+    } finally {
+      rl.directSpecular = real;
+    }
+  }
+}
 
 /**
  * A body's material: CS2's `csgo_character.vfx`, as close as a node material
@@ -169,6 +227,17 @@ class BodyMaterial extends THREE.MeshPhysicalNodeMaterial {
     // Reflections yes, diffuse no: the probe grid is the diffuse now.
     if (!node || !this.cs3dLighting?.ambient) return node;
     return new SpecularOnlyEnvironmentNode(node.envNode);
+  }
+
+  setupLightingModel() {
+    return new DiffuseSunLightingModel(
+      this.useClearcoat,
+      this.useSheen,
+      this.useIridescence,
+      this.useAnisotropy,
+      this.useTransmission,
+      this.useDispersion
+    );
   }
 }
 
@@ -324,14 +393,25 @@ export class PlayerModels {
     m.metalness = src.metalness;
     m.side = THREE.FrontSide;
     // Cloth: the sheen lobe CS2 gives fatigues, vests and balaclavas.
+    //
+    // `g_flSheenScale` is not three's `sheen`, whatever the names suggest: the
+    // vmats ship 0.667, 1.0 and 1.2, and three documents its own as a 0..1
+    // weight over an already strong lobe. Passed through, the 1.2 on the SAS
+    // legs and the 1.0 on the Phoenix trousers are what lit those two panels
+    // white before anything else on the body moved. Clamped, and widened by
+    // SHEEN_ROUGHNESS, which is the half that actually mattered.
     if (cs3d.cloth && cs3d.sheen > 0) {
-      m.sheen = cs3d.sheen;
-      m.sheenRoughness = 0.35;
+      m.sheen = Math.min(1, cs3d.sheen);
+      m.sheenRoughness = SHEEN_ROUGHNESS;
       if (Array.isArray(cs3d.sheenTint)) m.sheenColor = new THREE.Color(...cs3d.sheenTint);
     }
-    // Skin, without subsurface: a roughness floor so it stops shining.
-    if (cs3d.sss && m.roughnessMap) {
-      m.roughnessNode = texture(m.roughnessMap).g.max(float(SKIN_ROUGHNESS_MIN));
+    // Roughness floors. Skin has no subsurface term here (three has no SSS) and
+    // cloth has no business being glossy at all; both stop a surface reading as
+    // wet, and the cloth one is also what keeps a texture that lost its
+    // roughness channel from rendering as chrome.
+    const floor = cs3d.sss ? SKIN_ROUGHNESS_MIN : cs3d.cloth ? CLOTH_ROUGHNESS_MIN : 0;
+    if (floor > 0 && m.roughnessMap) {
+      m.roughnessNode = texture(m.roughnessMap).g.max(float(floor));
     }
     for (const t of [m.map, m.normalMap, m.roughnessMap, m.aoMap]) if (t) t.anisotropy = 8;
     return m;
@@ -438,8 +518,9 @@ export class PlayerBody {
     this.aimBones = [];
     for (const [name, w] of AIM_BONES) {
       const b = this.model.getObjectByName(name);
-      if (b) this.aimBones.push({ bone: b, w });
+      if (b) this.aimBones.push({ bone: b, w, base: b.quaternion.clone() });
     }
+    this._tilted = false;
     this.hitboxes = tmpl.hitboxes;
   }
 
@@ -494,20 +575,34 @@ export class PlayerBody {
 
     // Smooth the blend inputs: a demo's per-tick velocity is quantised to
     // ¼ u / tick, and the direction of a nearly-still body is noise.
-    const k = 1 - Math.exp(-dt / 0.08);
+    //
+    // On |dt|, not dt. These always converge toward the target, whichever way
+    // the clock is running — a viewer scrubbing back hands out a negative
+    // delta, and `1 − e^(−dt/τ)` for dt < 0 is negative, which walks each of
+    // these AWAY from its target and grows without bound as the step gets
+    // bigger. The phase and the mixer below do want the sign; a smoother never
+    // does.
+    const ease = (tau) => 1 - Math.exp(-Math.abs(dt) / tau);
+    const k = ease(0.08);
     this.speed += (s.speed - this.speed) * k;
     const rel = s.speed > IDLE_SPEED ? wrap180(s.moveYaw - s.viewYaw) : this.relYaw;
     this.relYaw += wrap180(rel - this.relYaw) * k;
     this.relYaw = wrap180(this.relYaw);
-    this.air += ((s.airborne ? 1 : 0) - this.air) * (1 - Math.exp(-dt / 0.06));
-    this.duck += (Math.max(0, Math.min(1, s.duck)) - this.duck) * (1 - Math.exp(-dt / 0.05));
-    this.pitch += (s.pitch - this.pitch) * (1 - Math.exp(-dt / 0.04));
+    this.air += ((s.airborne ? 1 : 0) - this.air) * ease(0.06);
+    this.duck += (Math.max(0, Math.min(1, s.duck)) - this.duck) * ease(0.05);
+    this.pitch += (s.pitch - this.pitch) * ease(0.04);
 
     const cls = weaponClassOf(s.weapon);
     const set = this.models.clips[LOCO_SET[cls]] ? LOCO_SET[cls] : 'rifle';
     this.locoSet = set;
     this.runSpeed = runSpeedOf(s.weapon);
 
+    // Order matters, and not only for the obvious reason. `_unaim` has to run
+    // before BOTH of the next two lines: before `_blend`, because it creates
+    // actions lazily and a new binding snapshots the bone it finds as the pose
+    // to blend back toward at partial weight; and before `mixer.update`,
+    // because that is what may or may not overwrite the bone at all.
+    this._unaim();
     this._blend(set, dt);
     this.mixer.update(dt);
     this._aim();
@@ -667,6 +762,32 @@ export class PlayerBody {
   }
 
   /**
+   * Put the spine back the way the mixer left it, undoing the last frame's
+   * tilt.
+   *
+   * The tilt is applied on top of the animated pose, out of band, which is only
+   * safe if the pose underneath is rewritten every frame. It is not.
+   * `PropertyMixer.apply` ends with a compare — if this frame's blended value
+   * is bit-identical to the previous frame's, it never calls
+   * `binding.setValue` and the bone keeps whatever it is currently holding.
+   * Which, after `_aim`, is OUR quaternion, not the clip's.
+   *
+   * So on any frame that does not move the pose — paused, a redraw forced by a
+   * keypress, a scrub that lands on the tick it is already on, stepping back
+   * through ticks whose spine barely differs — the tilt was multiplied onto a
+   * bone that already carried it. Twice is a lean, five times is a body folded
+   * through its own chest with its arms over its head, and it compounded down
+   * the chain because each bone inherits its parent's error as well as its own.
+   * Restoring first makes the whole thing idempotent: apply once to a known
+   * pose, every frame, whatever the mixer decided to do.
+   */
+  _unaim() {
+    if (!this._tilted) return;
+    for (const b of this.aimBones) b.bone.quaternion.copy(b.base);
+    this._tilted = false;
+  }
+
+  /**
    * View pitch as a spine-to-head tilt about the body's lateral axis, applied
    * on top of the mixer's pose. In the model root frame (Source: +x forward,
    * +y left, +z up) a positive Source pitch (looking down) is a positive
@@ -674,6 +795,11 @@ export class PlayerBody {
    */
   _aim() {
     if (!this.aimBones.length) return;
+    // Whatever the mixer settled on is this frame's base, and what `_unaim`
+    // restores next frame. Captured for every bone before any of them moves:
+    // the parent walk below reads live values, so a bone must not see a parent
+    // that has been tilted for one frame and not the other.
+    for (const b of this.aimBones) b.base.copy(b.bone.quaternion);
     // Clamped: the view goes to ±89°, the body does not follow it there.
     const total = Math.max(-AIM_PITCH_LIMIT, Math.min(AIM_PITCH_LIMIT, this.pitch)) * DEG;
     if (Math.abs(total) < 1e-4) return;
@@ -686,6 +812,7 @@ export class PlayerBody {
       _qTmp.copy(_qParent).invert().multiply(_qDelta).multiply(_qParent);
       bone.quaternion.premultiply(_qTmp);
     }
+    this._tilted = true;
   }
 
   dispose() {

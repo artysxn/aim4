@@ -2204,10 +2204,7 @@ export function createTimelineViewer({
     (e) => {
       e.preventDefault();
       const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
-      // In 3D the wheel narrows the field of view instead of scaling a radar.
-      // There is no pan to go with it on purpose: dragging a POV camera would
-      // walk it out of the player's head, which is the one thing the 3D view
-      // exists to show faithfully.
+      // In 3D the wheel is FOV (max 90), except third person, which dollies.
       if (mode3d && view3d) {
         view3d.zoomBy(factor);
         return;
@@ -2221,8 +2218,6 @@ export function createTimelineViewer({
 
   let panning = false;
   let panBtn = -1;
-  /** True while a left-drag is orbiting the 3D free camera. */
-  let orbiting = false;
   let lastX = 0;
   let lastY = 0;
   /** Pointer id currently laying down (or rubbing out) ink, or -1. */
@@ -2274,13 +2269,12 @@ export function createTimelineViewer({
     }
     closePopovers();
 
-    // In 3D: left click next player, right click previous. In fly/walk an
-    // unlocked click grabs the mouse first (Map Practice). The pencil still
+    // In 3D: left click next player, right click previous. Fly/walk/third:
+    // an unlocked click grabs the mouse first (Map Practice). The pencil still
     // owns both buttons when it is out.
     if (mode3d && view3d && !drawing.enabled) {
       if (e.button === 0 || e.button === 2) {
         pendingClick = null;
-        orbiting = false;
         view3d.pointerDown(e.button);
         sync3dButtons();
         syncPovHighlight();
@@ -2322,17 +2316,6 @@ export function createTimelineViewer({
   });
 
   mapEl.addEventListener('pointermove', (e) => {
-    if (orbiting && pendingClick?.id === e.pointerId) {
-      const dx = e.clientX - lastX;
-      const dy = e.clientY - lastY;
-      lastX = e.clientX;
-      lastY = e.clientY;
-      if (Math.hypot(e.clientX - pendingClick.x, e.clientY - pendingClick.y) > CLICK_SLOP) {
-        pendingClick.moved = true;
-        view3d?.orbitBy(dx, dy);
-      }
-      return;
-    }
     if (inkPointer === e.pointerId) {
       const pt = radarAt(e);
       if (drawing.erasing) drawing.eraseAt(pt, pt.scale);
@@ -2388,24 +2371,6 @@ export function createTimelineViewer({
   const endPan = (e) => {
     if (endStroke(e)) {
       pendingClick = null;
-      orbiting = false;
-      return;
-    }
-    // A 3D left-click that never became a drag is a request for the next
-    // player's eyes; one that moved was an orbit and must not also cycle.
-    if (orbiting && pendingClick?.id === e.pointerId) {
-      const wasClick = !pendingClick.moved && e.type === 'pointerup';
-      orbiting = false;
-      pendingClick = null;
-      try {
-        mapEl.releasePointerCapture(e.pointerId);
-      } catch {
-        /* already released */
-      }
-      if (wasClick && view3d) {
-        view3d.cyclePov();
-        sync3dButtons();
-      }
       return;
     }
     if (

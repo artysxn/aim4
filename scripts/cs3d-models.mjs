@@ -285,6 +285,30 @@ async function channelAt(tex, channel, w, h, fallback) {
   return { data: out, constant: null };
 }
 
+/**
+ * The default roughness for a slot that has none: the same 180/255 ≈ 0.71
+ * `channelAt` fills in when the texture is absent altogether.
+ */
+const ROUGHNESS_DEFAULT = 180;
+
+/**
+ * Is this extracted roughness channel empty rather than authored?
+ *
+ * Source 2 keeps a character's roughness in the normal map's ALPHA, and VRF
+ * does not always carry it: `ctm_sas_body`'s two exported normals both come out
+ * with alpha 0 across every texel. Read at face value that is roughness 0 — a
+ * perfect mirror — and the CT's torso and vest rendered as chrome, blowing out
+ * wherever the sun caught them and going black everywhere else.
+ *
+ * A material can legitimately be fully rough (alpha 1), and a small dark patch
+ * is ordinary; what cannot happen is an entire sheet at zero. So the test is
+ * "nothing above ~1/255 anywhere", which no authored roughness map satisfies.
+ */
+function roughnessIsEmpty(buf) {
+  for (let i = 0; i < buf.length; i++) if (buf[i] > 1) return false;
+  return true;
+}
+
 /** The ORM's size: the source aspect, longest side capped at `cap`. */
 async function ormSize(tex, cap) {
   const fallback = { w: cap, h: cap };
@@ -382,9 +406,17 @@ async function packMaterials(doc, label) {
         const { w, h } = await ormSize(normal || ao || metal, 512);
         const [o, r, m] = await Promise.all([
           vmat.constAo !== null ? { data: null, constant: Math.round(vmat.constAo * 255) } : channelAt(ao, 0, w, h, 255),
-          channelAt(normal, 3, w, h, 180),
+          channelAt(normal, 3, w, h, ROUGHNESS_DEFAULT),
           vmat.constMetal !== null ? { data: null, constant: Math.round(vmat.constMetal * 255) } : channelAt(metal, 0, w, h, 0)
         ]);
+        // An empty alpha is not "roughness 0", it is a missing channel.
+        if (r.data && roughnessIsEmpty(r.data)) {
+          console.warn(
+            `cs3d-models: ${label}/${mat.getName()} — the normal map carries no roughness ` +
+              `(alpha is 0 across ${w}x${h}); using ${(ROUGHNESS_DEFAULT / 255).toFixed(2)} instead of rendering it as a mirror`
+          );
+          r.data = Buffer.alloc(w * h, ROUGHNESS_DEFAULT);
+        }
         if (o.constant === null || r.constant === null || m.constant === null) {
           const fill = (c) => c.data || Buffer.alloc(w * h, c.constant);
           const od = fill(o);

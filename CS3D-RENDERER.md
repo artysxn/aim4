@@ -194,6 +194,69 @@ Also: `TextureMetalness [0,0,0,0]` and friends are VRF's **constant stand-ins**
 for a slot with no texture, and now win over the 1×1 placeholder exported for
 that slot.
 
+**Cartoonishly bright and cartoonishly dark** (2026-08-17, third pass) was three
+separate defects that happened to land on the same pixels. Worth writing down
+because two of them are only visible if you go and read the packed numbers
+rather than the picture.
+
+*The sun was hitting bodies in a way it cannot hit anything else.* Every other
+surface in these maps takes the sun as an `IrradianceNode` — charted world,
+props, the 3D skybox, all three branches of `materials.js setupLightMap` — which
+three accumulates as indirect **diffuse**. That is not a shortcut, it is forced
+by the bake: CS2 ships the sun's visibility as a mask, so no lightmapped surface
+in the map is capable of a specular highlight. A body is the one thing lit by
+the real `DirectionalLight`, because it is the one thing that needs a dynamic
+shadow, and it was therefore the only object in the scene with a GGX lobe on it,
+at an intensity dialled for diffuse. `BodyMaterial.setupLightingModel` now
+returns a `PhysicalLightingModel` whose `direct()` routes `directSpecular` into
+a discard accumulator (the same trick `SpecularOnlyEnvironmentNode` plays with
+`iblIrradiance`). The sun keeps its diffuse and its shadow; sheen is a different
+variable and survives; reflections still arrive from the sky probe, exactly as
+they do for a crate.
+
+*The sheen was a white rim, not fabric.* `g_flSheenScale` is not three's `sheen`
+whatever the names suggest — the vmats ship 0.667, 1.0 and 1.2, three documents
+its own as a 0..1 weight. Worse was the width: `BRDF_Sheen` divides by
+`4·(N·L + N·V − N·L·N·V)`, which goes to zero at the silhouette, so the lobe's
+peak scales with `D_Charlie`'s maximum, `(2 + 1/α)/2π`. At the 0.35 the second
+pass used that peak lands near **2.0** with the sun at 5 — twice what a fully
+sunlit concrete wall reaches — so every body wore a burned white outline, worst
+on the two panels with the highest scale (SAS legs 1.2, Phoenix trousers 1.0).
+`SHEEN_ROUGHNESS` is 0.7, where the same peak is about 0.8.
+
+*One material was packed as a mirror.* `ctm_sas_body` — the CT's torso and vest —
+came out with roughness **0.000, min and max**, which is a chrome ball. Source 2
+keeps character roughness in the normal map's ALPHA, and VRF exported both of
+that material's normals with an entirely empty alpha channel; the packer read it
+at face value. `roughnessIsEmpty` now catches a channel with nothing above 1/255
+anywhere (a sheet can legitimately be fully rough, never uniformly zero), falls
+back to the same 0.71 `channelAt` uses for an absent texture, and **says so on
+stdout** — this is invisible otherwise. `CLOTH_ROUGHNESS_MIN` is the rail under
+it at runtime, because a vest is never a mirror whatever produced the number.
+
+**Bodies folding through their own chest** on a paused frame was not the aim
+clamp coming back. `PlayerBody._aim` premultiplies the view pitch onto the spine
+*after* the mixer, which is only safe if the pose underneath is rewritten every
+frame, and three does not promise that: `PropertyMixer.apply` ends with a
+compare, and when this frame's blended value is bit-identical to the last one it
+never calls `binding.setValue` at all. The bone then still holds the previous
+tilt, and the next one lands on top of it — twice is a lean, five times is a
+body folded double with its arms overhead, compounding down the chain because
+each bone inherits its parent's error as well as its own.
+
+Every path that reproduces it is a path where the pose does not move:
+`view3d.js` advances the mixers by the **tick delta** and clamps it to forward
+only, so dragging the slider backwards feeds `dt = 0` on every frame, and so
+does any redraw of a paused tick. `_unaim()` restores the mixer's pose before
+`_blend` and `mixer.update` run — before both, because `_blend` creates actions
+lazily and a new binding snapshots whatever it finds as the pose to blend back
+toward at partial weight, which would otherwise bake a tilt into the rest pose
+permanently. `playerModels.test.js` holds the property that matters: applying
+the tilt N times equals applying it once. Its first case fails by 9× against the
+old code. The input smoothers also take `|dt|` now rather than `dt`, since
+`1 − e^(−dt/τ)` is negative for a backward step and walks each of them away from
+its target instead of toward it.
+
 **Two steps then a skate on the third** was the authored ground speed, and the
 lesson is about the estimator rather than the number. The clips carry no root
 motion — the game moves the entity and the legs run in place — so the pack

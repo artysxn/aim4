@@ -17,11 +17,11 @@
 //
 // Camera modes (F toggles the pair, G the other pair):
 //   pov     recorded first person. Left click next player, right click previous.
-//   third   behind that same player. Cycling is the same.
+//   third   behind that same player. Mouse look orbits; click still cycles.
 //   fly     Map Practice noclip. WASD + pointer lock; G from a follow mode
 //           lands here first.
 //   walk    Map Practice walking body. Same Player as /nuke, same sim.
-// Zoom changes the field of view. Fully zoomed out is 90.
+// Zoom changes the field of view (max 90). In third person the wheel dollies.
 // ---------------------------------------------------------------------------
 
 import * as THREE from 'three/webgpu';
@@ -44,7 +44,7 @@ import {
 import { FLAG_DUCKING, FLAG_AIRBORNE } from '../shared/tickFormat.js';
 import { Player } from '../../cs3d/player.js';
 import { Controls } from '../../cs3d/controls.js';
-import { placeThirdPersonCamera } from '../../cs3d/thirdPerson.js';
+import { placeThirdPersonCamera, THIRD_PERSON_BACK } from '../../cs3d/thirdPerson.js';
 import { mountCrosshair } from '../../cs3d/crosshairOverlay.js';
 
 const DEG = Math.PI / 180;
@@ -68,6 +68,8 @@ const FIRE_RADIUS = 110;
 const FOV_DEFAULT = 90;
 const FOV_MIN = 25;
 const FOV_MAX = 90;
+const ORBIT_MIN = 40;
+const ORBIT_MAX = 500;
 
 export function createView3d({ slug, onModeChange }) {
   const canvas = document.createElement('canvas');
@@ -94,6 +96,11 @@ export function createView3d({ slug, onModeChange }) {
   let povSlot = -1; // index into the last frame's live slots
   let fov = FOV_DEFAULT;
   let eyeSmooth = EYE_STAND;
+  const orbit = {
+    dist: THIRD_PERSON_BACK,
+    seeded: false,
+    target: new THREE.Vector3()
+  };
 
   // Last frame handed in by the viewer, and the tick before it (the animation
   // clock is demo time: the mixers advance by the tick delta between frames,
@@ -158,6 +165,11 @@ export function createView3d({ slug, onModeChange }) {
     player = new Player(camera);
     controls = new Controls(canvas, player, { pageKeys: false, lockOnClick: false });
     controls.setEnabled(false);
+    const _look = player.look.bind(player);
+    player.look = (dx, dy, rpc) => {
+      _look(dx, dy, rpc);
+      if (mode === 'third') applyThirdOrbit();
+    };
 
     await renderer.init();
     patchWebGPUPartialAttributeUpload(renderer);
@@ -332,9 +344,14 @@ export function createView3d({ slug, onModeChange }) {
 
       if ((mode === 'pov' || mode === 'third') && slot === povSlot) {
         eyeSmooth = s.duckAmount > 0 ? eye : eyeSmooth + (eye - eyeSmooth) * 0.35;
-        camera.position.set(s.x, s.z + eyeSmooth, -s.y);
-        camera.rotation.set(-(s.pitch || 0) * DEG, cameraYawFromSource(s.yaw || 0), 0, 'YXZ');
-        if (mode === 'third') placeThirdPersonCamera(camera, player?.world);
+        orbit.target.set(s.x, s.z + eyeSmooth, -s.y);
+        if (mode === 'pov') {
+          camera.position.copy(orbit.target);
+          camera.rotation.set(-(s.pitch || 0) * DEG, cameraYawFromSource(s.yaw || 0), 0, 'YXZ');
+        } else {
+          if (!orbit.seeded) seedOrbitFromPlayer(s);
+          applyThirdOrbit();
+        }
       }
     }
 
@@ -415,9 +432,26 @@ export function createView3d({ slug, onModeChange }) {
     return mode === 'fly' || mode === 'walk';
   }
 
+  function seedOrbitFromPlayer(s) {
+    player.yaw = cameraYawFromSource(s.yaw || 0);
+    player.pitch = -(s.pitch || 0) * DEG;
+    const cap = (89 * Math.PI) / 180;
+    player.pitch = Math.max(-cap, Math.min(cap, player.pitch));
+    orbit.dist = THIRD_PERSON_BACK;
+    orbit.seeded = true;
+  }
+
+  function applyThirdOrbit() {
+    if (!camera || !player) return;
+    camera.position.copy(orbit.target);
+    camera.rotation.set(player.pitch, player.yaw, 0, 'YXZ');
+    placeThirdPersonCamera(camera, player.world, orbit.dist);
+  }
+
   function setCamMode(next) {
     if (next === mode) return;
     mode = next;
+    if (next === 'third') orbit.seeded = false;
     if (!player || !controls) {
       onModeChange?.(mode);
       return;
@@ -427,6 +461,9 @@ export function createView3d({ slug, onModeChange }) {
       player.pitch = camera.rotation.x;
       player.setMode(next === 'walk' ? 'walk' : 'fly');
       controls.setEnabled(true);
+    } else if (next === 'third') {
+      controls.setEnabled(true);
+      controls.requestLock();
     } else {
       controls.setEnabled(false);
     }
@@ -441,6 +478,7 @@ export function createView3d({ slug, onModeChange }) {
     lastNow = t;
     if (!ready || !visible) return;
     if (isFree() && player) player.update(dt);
+    else if (mode === 'third') applyThirdOrbit();
     pack?.materials?.setTime(t / 1000);
     lighting?.update();
     if (mapRenderer) mapRenderer.render(camera);
@@ -460,6 +498,9 @@ export function createView3d({ slug, onModeChange }) {
     },
     get isFree() {
       return isFree();
+    },
+    get isThird() {
+      return mode === 'third';
     },
     get povSlot() {
       return povSlot;
@@ -500,7 +541,7 @@ export function createView3d({ slug, onModeChange }) {
       visible = true;
       canvas.hidden = false;
       if (crosshair) crosshair.hidden = false;
-      if (isFree()) controls.setEnabled(true);
+      if (isFree() || mode === 'third') controls.setEnabled(true);
       resize();
     },
     hide() {
@@ -543,11 +584,11 @@ export function createView3d({ slug, onModeChange }) {
     },
 
     /**
-     * Unlocked free roam: click grabs the mouse. Locked, or in follow: cycle.
-     * @returns {boolean} true if the viewer consumed the click
+     * Unlocked fly/walk/third: click grabs the mouse. Else: cycle.
+     * @returns {boolean}
      */
     pointerDown(button) {
-      if (isFree() && controls && !controls.locked) {
+      if ((mode === 'third' || isFree()) && controls && !controls.locked) {
         controls.requestLock();
         return true;
       }
@@ -564,15 +605,18 @@ export function createView3d({ slug, onModeChange }) {
       else setCamMode('pov');
     },
 
-    /** Wheel: FOV. Fully zoomed out is 90. */
+    /** Wheel: FOV in follow/free. In third person it dollies the camera. */
     zoomBy(factor) {
       if (!camera) return;
+      if (mode === 'third') {
+        orbit.dist = Math.max(ORBIT_MIN, Math.min(ORBIT_MAX, orbit.dist / factor));
+        applyThirdOrbit();
+        return;
+      }
       fov = Math.max(FOV_MIN, Math.min(FOV_MAX, fov / factor));
       camera.fov = fov;
       camera.updateProjectionMatrix();
     },
-
-    orbitBy() {},
 
     dispose() {
       cancelAnimationFrame(raf);
