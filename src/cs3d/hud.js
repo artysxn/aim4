@@ -45,7 +45,8 @@ export class Hud {
             <div><b>C</b> down, <b>Ctrl</b> slow / crouch</div>
             <div><b>Shift</b> fast / walk</div>
             <div><b>Q</b> next weapon (walk speed cap), <b>T</b> third person</div>
-            <div><b>1 2 3</b> rifle / pistol / knife, <b>Mouse</b> fire</div>
+            <div><b>1 2 3</b> rifle / pistol / knife, <b>4</b> grenades, <b>Mouse</b> fire</div>
+            <div><b>E</b> open a door</div>
             <div><b>B</b> buy menu — every gun and grenade</div>
             <div><b>1</b> T spawn, <b>2</b> CT spawn, <b>R</b> respawn</div>
             <div><b>Esc</b> release, <b>H</b> this panel</div>
@@ -114,7 +115,52 @@ export class Hud {
 
   /** The walking body's held weapon and the run speed it allows. */
   setWeapon(name, speed) {
-    this.el.weapon.textContent = `${name} ${speed}`;
+    this._weaponLine = `${name} ${speed}`;
+    this.el.weapon.textContent = this._weaponLine;
+  }
+
+  /**
+   * The grenade in hand while its pin is out: which throw the buttons are
+   * currently asking for, and the speed it would leave at. Reading the strength
+   * back is the only way to see that holding both buttons really is a different
+   * throw from holding one, since the difference is otherwise 236 u/s of
+   * something you cannot see until it lands.
+   */
+  setThrow(status) {
+    if (!status || !status.pinPulled) {
+      if (this._throwShown) {
+        this._throwShown = false;
+        this.el.weapon.textContent = this._weaponLine || '';
+      }
+      return;
+    }
+    this._throwShown = true;
+    const s = status.strength;
+    const label = s >= 0.99 ? 'long' : s <= 0.01 ? 'short' : s > 0.49 && s < 0.51 ? 'medium' : 'charging';
+    this.el.weapon.textContent = `${this._weaponLine || status.type}  ${label} ${Math.round(status.speed)}`;
+  }
+
+  /**
+   * The last shot, on the weapon line: what it went through and what was left
+   * of it. A wallbang is otherwise invisible — the bullet either arrives or it
+   * does not, and there is no way to see WHY without reading the numbers the
+   * penetration solver used (shared/sim3d/penetration.js).
+   *
+   * `null` hands the line back to the weapon.
+   */
+  setShot(shot) {
+    if (!shot) {
+      if (this._shotShown) {
+        this._shotShown = false;
+        this.el.weapon.textContent = this._weaponLine || '';
+      }
+      return;
+    }
+    this._shotShown = true;
+    const walls = shot.walls?.length
+      ? shot.walls.map((w) => `${w.surface} ${w.thickness.toFixed(0)}u`).join(' + ')
+      : 'no wall';
+    this.el.weapon.textContent = `${this._weaponLine || ''}  ${walls} → ${Math.round(shot.damage)} dmg`;
   }
 
   setBackend(name) {

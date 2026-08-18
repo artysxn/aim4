@@ -53,6 +53,29 @@ import {
 
 /** How far CategorizePosition looks down for ground under the feet. */
 const GROUND_PROBE = fr(2);
+
+// ---- ladders ---------------------------------------------------------------
+// A climb volume takes the body off gravity entirely and steers it by where it
+// is LOOKING, which is why this is the one thing in the pipeline that needs
+// view pitch and not just yaw.
+//
+// Faithful in shape, simplified in one place, and the simplification is named:
+// Source builds a "perp" from the ladder plane and applies sv_ladder_dampen to
+// the component along it, so strafing on a ladder slides you sideways along
+// the rungs slowly. Here the sideways input is damped by the same cvar's value
+// but applied to the plain right vector, which is the same motion for a flat
+// ladder face and differs only on one set at an angle to its own volume.
+
+/** [docs] Source MAX_CLIMB_SPEED. */
+export const CLIMB_SPEED = fr(200);
+/** [docs] sv_ladder_scale_speed. */
+export const LADDER_SPEED_SCALE = fr(0.78);
+/** [docs] sv_ladder_dampen: how much of a sideways input survives on a ladder. */
+export const LADDER_DAMPEN = fr(0.2);
+/** [docs] Jumping off a ladder pushes away from its face at this speed. */
+export const LADDER_JUMP_AWAY = fr(270);
+/** Ticks after letting go before the same ladder can be grabbed again. */
+const LADDER_REGRAB = 8;
 /** Collide-and-slide gives up after this many plane bumps (Source: 4). */
 const MAX_BUMPS = 4;
 /** Speeds under this are snapped to zero on ground (Source WalkMove). */
@@ -65,7 +88,11 @@ export function createPlayerState(x = 0, y = 0, z = 0) {
     onGround: false,
     ducking: false,
     /** Set by CategorizePosition when standing on a walkable plane. */
-    groundNormal: v3(0, 0, 1)
+    groundNormal: v3(0, 0, 1),
+    /** On a climb volume: no gravity, steered by the view (see ladderMove). */
+    onLadder: false,
+    /** Ticks left before a ladder just let go of can be grabbed again. */
+    ladderRegrab: 0
   };
 }
 
@@ -77,7 +104,10 @@ export function createPlayerState(x = 0, y = 0, z = 0) {
  *   maxSpeed                   active weapon's run speed, u/s (weapons.js)
  */
 export function createInput() {
-  return { forward: 0, side: 0, yaw: 0, jump: false, duck: false, walk: false, maxSpeed: 250 };
+  // `pitch` is Source's: degrees, POSITIVE looking down. Only ladders read it —
+  // everything else moves in the ground plane — and a world with no ladder
+  // probe never touches it, which is why adding it changes no oracle result.
+  return { forward: 0, side: 0, yaw: 0, pitch: 0, jump: false, duck: false, walk: false, maxSpeed: 250 };
 }
 
 // Scratch vectors: stepPlayer allocates nothing per tick.
@@ -107,6 +137,21 @@ export function stepPlayer(state, input, world, dt = TICK_DT) {
   }
   state.ducking = ducking;
   const hull = state.ducking ? HULL_DUCK : HULL_STAND;
+
+  // Ladders, before anything else: a body on one has no gravity and no
+  // friction, and is steered by where it looks. `ladderAt` is optional — a
+  // world without it (the oracle's flat plane, any Node test, a pack from
+  // before the climb volumes were read) never enters this branch, which is why
+  // this changes nothing that was already measured.
+  if (state.ladderRegrab > 0) state.ladderRegrab--;
+  const ladder =
+    world.ladderAt && state.ladderRegrab <= 0 ? world.ladderAt(state.pos, HULL_HALF_WIDE, hull) : null;
+  if (ladder) {
+    ladderMove(state, input, world, hull, ladder, dt);
+    checkVelocity(vel);
+    return state;
+  }
+  state.onLadder = false;
 
   // StartGravity: first half-tick. Applied on ground too — the ground branch
   // zeroes vel.z right after, which is exactly why the order is visible only
@@ -158,6 +203,72 @@ export function stepPlayer(state, input, world, dt = TICK_DT) {
   if (state.onGround) vel.z = 0;
 
   return state;
+}
+
+/**
+ * Source's forward vector from view angles, Source frame. Pitch is positive
+ * DOWN, which is why the z term is negated.
+ */
+function viewForward(yawDeg, pitchDeg, out) {
+  const y = fmul(yawDeg, fr(Math.PI / 180));
+  const p = fmul(pitchDeg, fr(Math.PI / 180));
+  const cp = fr(Math.cos(p));
+  return v3set(out, fmul(cp, fr(Math.cos(y))), fmul(cp, fr(Math.sin(y))), fr(-Math.sin(p)));
+}
+
+const _ladderWish = v3();
+const _ladderTmp = v3();
+
+/**
+ * Source LadderMove. No gravity, no friction, no ground: the wish velocity is
+ * built from the FULL view direction (pitch included, which is what makes
+ * looking up climb and looking down descend), flattened into the ladder's
+ * plane so a body cannot push through the rungs, and capped at the climb
+ * speed. Letting go of every key leaves it hanging still.
+ *
+ * Jump pushes off along the ladder's outward normal and locks the grab out for
+ * a few ticks, or the same volume catches the body again on the next one.
+ */
+function ladderMove(state, input, world, hull, ladder, dt) {
+  const vel = state.vel;
+  state.onLadder = true;
+  state.onGround = false;
+
+  if (input.jump) {
+    v3set(
+      vel,
+      fmul(ladder.normal.x, LADDER_JUMP_AWAY),
+      fmul(ladder.normal.y, LADDER_JUMP_AWAY),
+      fmul(ladder.normal.z, LADDER_JUMP_AWAY)
+    );
+    state.onLadder = false;
+    state.ladderRegrab = LADDER_REGRAB;
+    tryPlayerMove(state, world, hull, dt);
+    return;
+  }
+
+  const climb = fmul(CLIMB_SPEED, LADDER_SPEED_SCALE);
+  viewForward(input.yaw, input.pitch || 0, _fwd);
+  yawBasis(input.yaw, _ladderTmp, _right);
+  const fmove = fmul(input.forward, climb);
+  const smove = fmul(input.side, fmul(climb, LADDER_DAMPEN));
+  v3set(
+    _ladderWish,
+    fr(fmul(_fwd.x, fmove) + fmul(_right.x, smove)),
+    fr(fmul(_fwd.y, fmove) + fmul(_right.y, smove)),
+    fr(fmul(_fwd.z, fmove) + fmul(_right.z, smove))
+  );
+  // Into the ladder is not a direction you can go; along it is.
+  const into = v3dot(_ladderWish, ladder.normal);
+  if (into < 0) {
+    _ladderWish.x = fr(_ladderWish.x - fmul(ladder.normal.x, into));
+    _ladderWish.y = fr(_ladderWish.y - fmul(ladder.normal.y, into));
+    _ladderWish.z = fr(_ladderWish.z - fmul(ladder.normal.z, into));
+  }
+  const speed = v3len(_ladderWish);
+  if (speed > climb) v3scale(_ladderWish, _ladderWish, fdiv(climb, speed));
+  v3copy(vel, _ladderWish);
+  tryPlayerMove(state, world, hull, dt);
 }
 
 /**

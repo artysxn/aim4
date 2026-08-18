@@ -32,18 +32,24 @@ import * as THREE from 'three/webgpu';
 import { FLAG_DUCKING, FLAG_AIRBORNE, readRecord, lerpAngle } from '../replays/shared/tickFormat.js';
 import { cameraYawFromSource } from '../../shared/sim3d/units.js';
 import { HULL_STAND, HULL_DUCK, EYE_STAND, EYE_DUCK, HULL_HALF_WIDE } from '../../shared/sim3d/constants.js';
+import { SMOKE_SECONDS, SMOKE_RADIUS, FIRE_SECONDS } from './nadeEffects.js';
 
 const DEG = Math.PI / 180;
 const RAD = 180 / Math.PI;
 
 const SPEEDS = [0.25, 0.5, 1, 2, 4];
 
-/** Placeholder post-detonation lifetimes, seconds. Real ones are E-5 work. */
-const SMOKE_SECONDS = 18;
-const FIRE_SECONDS = 7;
+/**
+ * Post-detonation lifetimes and sizes come from src/cs3d/nadeEffects.js (see
+ * the import above), so a smoke in a replay stands for as long as one you throw
+ * yourself and the provenance of each number lives in one place.
+ *
+ * The volumes here stay placeholders on purpose: this view derives its whole
+ * state fresh from the event list every frame, which is what makes scrubbing
+ * backwards free, while NadeEffects owns a running clock. Two different jobs;
+ * the numbers are the part worth sharing.
+ */
 const POP_SECONDS = 0.3;
-/** CS2 nominal smoke occupancy radius, units. */
-const SMOKE_RADIUS = 144;
 const FIRE_RADIUS = 110;
 
 const TEAM_COLOR = { T: 0xd9a24a, CT: 0x5b87e0 };

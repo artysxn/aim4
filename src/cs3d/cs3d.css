@@ -641,3 +641,16 @@ body {
   cursor: pointer;
 }
 .cs3d-vmtune-hand button.on { background: #2f6df6; border-color: #2f6df6; }
+
+/* The flashbang whiteout. Over everything, including the HUD, because that is
+   what being flashed is. Opacity is written per frame from nadeEffects.flash;
+   the transition only smooths the last hop to zero. */
+.c3-flash {
+  position: absolute;
+  inset: 0;
+  background: #fff;
+  opacity: 0;
+  pointer-events: none;
+  z-index: 60;
+  transition: opacity 60ms linear;
+}

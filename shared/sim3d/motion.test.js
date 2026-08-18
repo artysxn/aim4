@@ -17,7 +17,15 @@ import {
   STOP_SPEED,
   AIR_SPEED_CAP
 } from './constants.js';
-import { createPlayerState, createInput, stepPlayer, flatWorld, emptyWorld } from './motion.js';
+import {
+  createPlayerState,
+  createInput,
+  stepPlayer,
+  flatWorld,
+  emptyWorld,
+  CLIMB_SPEED,
+  LADDER_SPEED_SCALE
+} from './motion.js';
 import { createGrenade, stepGrenade, GRENADE_GRAVITY_SCALE } from './grenade.js';
 
 function assert(cond, msg) {
@@ -154,6 +162,93 @@ const close = (a, b, tol, msg) => assert(Math.abs(a - b) <= tol, `${msg}: ${a} v
   for (let k = 0; k < 640 && !g2.resting; k++) stepGrenade(g2, floor);
   assert(g2.resting, 'grenade comes to rest on the floor');
   assert(g2.bounces > 0, 'rest came via at least one bounce');
+}
+
+// ---- ladders ---------------------------------------------------------------
+// A climb volume is the one thing in the pipeline steered by view PITCH, and
+// the one thing with no gravity. Both are checked here against a wall at
+// x = 0 whose face points back along +x, which is the shape of every ladder on
+// a Source map.
+{
+  const LADDER = { normal: { x: 1, y: 0, z: 0 } };
+  /** A world that is a ladder everywhere below z = 400 and open air above. */
+  const climbWorld = (top = 400) => ({
+    ...emptyWorld(),
+    ladderAt: (pos) => (pos.z < top ? LADDER : null)
+  });
+
+  // Facing the ladder (yaw 180, so forward is −x) and looking up: W climbs.
+  const up = createPlayerState(0, 0, 0);
+  const inp = createInput();
+  inp.yaw = 180;
+  inp.pitch = -80; // Source pitch is positive DOWN, so this is looking up
+  inp.forward = 1;
+  const world = climbWorld();
+  for (let k = 0; k < 64; k++) stepPlayer(up, inp, world);
+  assert(up.onLadder, 'still on the ladder');
+  assert(up.pos.z > 100, `W while looking up climbs (reached ${up.pos.z.toFixed(1)})`);
+  close(up.vel.z, CLIMB_SPEED * LADDER_SPEED_SCALE * Math.sin((80 * Math.PI) / 180), 1, 'at the climb speed, scaled');
+
+  // ...and looking down descends, at the same speed.
+  const down = createPlayerState(0, 0, 300);
+  const dinp = createInput();
+  dinp.yaw = 180;
+  dinp.pitch = 80;
+  dinp.forward = 1;
+  for (let k = 0; k < 32; k++) stepPlayer(down, dinp, world);
+  assert(down.pos.z < 300, 'W while looking down descends');
+  assert(down.onLadder, 'and stays on');
+
+  // Gravity is off entirely: no input, no movement, no fall.
+  const hang = createPlayerState(0, 0, 200);
+  const still = createInput();
+  still.yaw = 180;
+  for (let k = 0; k < 64; k++) stepPlayer(hang, still, world);
+  close(hang.pos.z, 200, 1e-6, 'a body on a ladder with no input hangs there');
+  close(hang.vel.z, 0, 1e-6, 'with no velocity at all');
+
+  // Pressing back descends while still looking up — direction is the INPUT
+  // through the view, not the view alone.
+  const back = createPlayerState(0, 0, 300);
+  const binp = createInput();
+  binp.yaw = 180;
+  binp.pitch = -80;
+  binp.forward = -1;
+  for (let k = 0; k < 32; k++) stepPlayer(back, binp, world);
+  assert(back.pos.z < 300, 'S while looking up goes down');
+
+  // Jump lets go, pushing away along the ladder face, and the grab is locked
+  // out for a few ticks so the same volume does not catch it again.
+  const off = createPlayerState(0, 0, 200);
+  const jinp = createInput();
+  jinp.yaw = 180;
+  jinp.jump = true;
+  stepPlayer(off, jinp, world);
+  assert(!off.onLadder, 'jumping lets go');
+  assert(off.pos.x > 0, 'and pushes away from the face');
+  jinp.jump = false;
+  const xBefore = off.pos.x;
+  for (let k = 0; k < 4; k++) stepPlayer(off, jinp, world);
+  assert(!off.onLadder, 'and it does not re-grab immediately');
+  assert(off.pos.x > xBefore, 'it keeps travelling away');
+  assert(off.vel.z < 0, 'with gravity back on');
+
+  // Climbing off the top: past the volume, it is an ordinary airborne body.
+  const exit = createPlayerState(0, 0, 380);
+  const einp = createInput();
+  einp.yaw = 180;
+  einp.pitch = -80;
+  einp.forward = 1;
+  for (let k = 0; k < 40; k++) stepPlayer(exit, einp, climbWorld(400));
+  assert(!exit.onLadder, 'above the volume it is off the ladder');
+
+  // A world with no ladder probe at all behaves exactly as it did before —
+  // which is the whole reason this can be added without re-running the oracle.
+  const plain = createPlayerState(0, 0, 100);
+  const pinp = createInput();
+  pinp.pitch = -80;
+  for (let k = 0; k < 8; k++) stepPlayer(plain, pinp, emptyWorld());
+  assert(!plain.onLadder && plain.vel.z < 0, 'no ladderAt means no ladder, and gravity as usual');
 }
 
 console.log('motion.test: ok');

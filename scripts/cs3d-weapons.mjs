@@ -240,6 +240,10 @@ function readWeaponTable(dumpText) {
       range: num(r.m_flRange, 8192),
       rangeModifier: num(r.m_flRangeModifier, 0.98),
       maxSpeed: num(r.m_flMaxSpeed, 215),
+      // Grenades only. 750 on all six today, but it is the weapon's number and
+      // shared/sim3d/grenade.js takes it as an argument rather than assuming
+      // (release speed is this times 0.9 times the strength curve).
+      throwVelocity: num(r.m_flThrowVelocity, 0) || undefined,
       bullets: num(r.m_nNumBullets, 1),
       spread: num(r.m_flSpread, 0),
       inaccuracyStand: num(r.m_flInaccuracyStand, 0),

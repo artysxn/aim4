@@ -91,6 +91,35 @@ extraction is one more click: footsteps (per surface), per-weapon fire,
 nade bounce, smoke/flash/HE detonate, molly ignite/burn, plant/defuse,
 bomb beeps, explosion. Drop as-is in `sounds/`, organization later.
 
+## 4b. Grenade effect sheets — automated, `npm run cs3d:fx`
+
+**Automated (2026-08-18):** nothing to export by hand. `scripts/cs3d-fx.mjs`
+pulls the sprite sheets CS2 draws smoke and fire with straight out of
+`pak01_dir.vpk` and writes `server/data/cs3d/pack/fx/` (~2.1 MB), which
+`src/cs3d/spriteCard.js` streams once for every map:
+
+| sheet | from | what |
+|---|---|---|
+| `smoke.webp` | `smokeloop_i_0_sc_hardedge` | 128 frames, 2 sequences |
+| `smoke_mv.webp` | `smokeloop_i_0_flwmix` | 64 motion-vector frames |
+| `fire.webp` | `fire_small_sim_b_desat` | 131 frames, 4 sequences |
+| `fire_mv.webp` | `fire_small_sim_b_mv` | 131 motion-vector frames |
+| `fx.json` | the `.vpcf` files | sheet geometry + the flame colour ramps |
+
+Two traps, both of which silently produce something that looks nearly right:
+
+1. **A Source 2 sheet is not a uniform grid.** Frames are rectangle-packed and
+   each stores a `uvUncropped` canvas alongside the `uvCropped` box its pixels
+   sit in. The offset between them is the flame's position in its own frame —
+   on the fire sheet it spans 1–112 px across x — so rebuilding the atlas by
+   centring each frame in a cell freezes the animation in place.
+2. **The motion-vector sheets keep the vector's y in the alpha channel.** Any
+   compositing step that treats alpha as opacity premultiplies it and corrupts
+   the field (measured: up to 62/255 off, which tears the frame blend). The
+   script copies raw pixels and repacks the vectors to plain RGB.
+
+Both are handled; `--report` prints what each sheet contains without writing.
+
 ## 5. The reference replica
 
 - [ ] The repo checkout into `replica/` (or a path note if it lives

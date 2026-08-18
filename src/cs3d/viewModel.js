@@ -689,6 +689,43 @@ export class ViewModel {
     return !!this.weapon?.auto;
   }
 
+  /** Is the thing in hand a grenade? */
+  get isGrenade() {
+    return !!this.weapon?.grenade;
+  }
+
+  /**
+   * A grenade action: `pullpin`, `throw_overhand` or `throw_underhand`.
+   *
+   * These are the game's own clip names and every grenade authors all three —
+   * the pack ships them per weapon, and the shared `grenade` class set carries
+   * them plus the three `throwcharge_*` hold poses. Which is itself worth
+   * noticing: CS2 animating a high, a mid and a low charge is the animation
+   * department agreeing with the three throw strengths the release speeds show.
+   */
+  playThrow(action) {
+    if (!this.isGrenade || !this.mixer) return false;
+    const clip = this.weaponSet?.get(action) || this.assets.clips[this.clipSet]?.get(action) || this.assets.clips.grenade?.get(action);
+    if (!clip) return false;
+    this._play(action, { loop: false, fade: 0.03, clip });
+    return true;
+  }
+
+  /**
+   * Show or hide what is in the hand without changing what is held — the
+   * moment between a grenade leaving and the next one being drawn.
+   */
+  showWeapon(on) {
+    if (this.weaponModel) this.weaponModel.visible = !!on;
+  }
+
+  /** Replay the draw for what is already held. */
+  redraw(now = performance.now() / 1000) {
+    this.showWeapon(true);
+    this.nextAttack = now + (this.weapon?.deploy || 0);
+    this._play('draw', { loop: false });
+  }
+
   /**
    * Advance the viewmodel.
    *

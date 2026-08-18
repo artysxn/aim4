@@ -205,6 +205,9 @@ export class Controls {
         case 'KeyB':
           this.hooks.onBuy?.();
           break;
+        case 'KeyE':
+          this.hooks.onUse?.();
+          break;
         case 'Escape':
           // Pointer lock exits on Escape by itself; this is for the panels that
           // are open while it is not held.
@@ -245,7 +248,7 @@ export class Controls {
         default:
           break;
       }
-      if (this.locked && /^(Space|Key[WASDCFQTB]|Digit[12]|ShiftLeft|ControlLeft)$/.test(code)) e.preventDefault();
+      if (this.locked && /^(Space|Key[WASDCFQTB]|Digit[1-4]|ShiftLeft|ControlLeft)$/.test(code)) e.preventDefault();
     } else if (code === 'Space') {
       this.player.input.jump = false;
     }

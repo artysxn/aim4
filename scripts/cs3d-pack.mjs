@@ -60,6 +60,7 @@ import {
 import { MeshoptEncoder, MeshoptDecoder } from 'meshoptimizer';
 import sharp from 'sharp';
 
+import { parseEnts } from './lib/ents.mjs';
 import { CS3D_MAPS, cs3dMap } from '../shared/cs3d/maps.js';
 import { encodeRgbe, RGBE_BYTES } from '../shared/cs3d/rgbe.js';
 import { VRF_TO_SCENE_MAT4 } from '../shared/sim3d/units.js';
@@ -146,35 +147,7 @@ function fail(msg) {
 
 // ---------------------------------------------------------------------------
 // Entity lump (.vents text): "====N====" blocks of "key   value" lines.
-// ---------------------------------------------------------------------------
 
-function parseEnts(text) {
-  const ents = [];
-  for (const block of text.split(/^====\d+====\s*$/m)) {
-    const e = {};
-    for (const raw of block.split('\n')) {
-      const line = raw.replace(/\r$/, '');
-      const m = line.match(/^(\S+)\s+(.*)$/);
-      if (!m) continue;
-      let v = m[2].trim();
-      if (/^resource_name:/.test(v)) v = v.replace(/^resource_name:/, '');
-      if (/^".*"$/.test(v)) v = v.slice(1, -1);
-      v = v.replace(/^\[PR#\]/, '');
-      if (/^\[.*\]$/.test(v)) {
-        v = v
-          .slice(1, -1)
-          .split(',')
-          .map((s) => Number(s.trim()));
-      } else if (v === 'true' || v === 'false') v = v === 'true';
-      else if (/^-?\d+(\.\d+)?$/.test(v)) v = Number(v);
-      // The skybox lump writes vectors as "x y z" strings.
-      else if (/^-?[\d.]+ -?[\d.]+ -?[\d.]+$/.test(v)) v = v.split(' ').map(Number);
-      e[m[1]] = v;
-    }
-    if (e.classname) ents.push(e);
-  }
-  return ents;
-}
 
 const isVec3 = (v) => Array.isArray(v) && v.length === 3 && v.every(Number.isFinite);
 

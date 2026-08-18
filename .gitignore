@@ -1,6 +1,15 @@
 node_modules/
 dist/
 
+# Scratch from driving the renderer headlessly (captured frames and the little
+# HTTP sink they are POSTed to) and from one-off measurement probes against the
+# demo corpus. Never anything a build or a run needs. The probe pattern is
+# deliberately extension-free: a probe writes .mjs, .txt, .json and whole
+# directories, and only the prefix is reliable.
+/.shots/
+/.capture-sink.mjs
+/.probe-*
+
 # Baked map geometry SHIPS: it is derived from public map data, it changes
 # only when the maps or the bake code change, and without it a deployed /sim
 # can do nothing but tell you to re-bake. simdata/ is the committed copy;
@@ -16,6 +25,10 @@ dist/
 !/server/data/cs3d/pack/
 /server/data/cs3d/pack/*
 !/server/data/cs3d/pack/nuke/
+# ...but not the pristine copy cs3d-split-interactives.mjs keeps beside it. It
+# is a byte-for-byte duplicate of geo/ (63 MB) and exists so `--restore` works
+# without git; committing it would double the map for no one's benefit.
+/server/data/cs3d/pack/*/geo.orig/
 
 # Extracted duel corpus + training logs. Regenerate with:
 #   node scripts/extract-duel-episodes.mjs

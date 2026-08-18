@@ -101,9 +101,16 @@ export class Player {
     return WEAPON_SPEED[this.weapon] ?? DEFAULT_WEAPON_SPEED;
   }
 
-  setCollider(collider) {
+  /**
+   * @param {object} collider  from MapPack.onPhys
+   * @param {object} [movers]  geometry that is not in the BVH because it moves
+   *   — the door leaves (src/cs3d/interactives.js). A closed door is solid
+   *   because of this and an open one is walk-through for the same reason.
+   */
+  setCollider(collider, movers = null) {
     this.collider = collider;
-    this.world = collider ? createHullWorld(collider) : null;
+    this.movers = movers || this.movers || null;
+    this.world = collider ? createHullWorld(collider, 'walk', this.movers) : null;
   }
 
   /** Put the body at feet position `pos` (scene) looking along `yaw` (radians). */
@@ -208,6 +215,9 @@ export class Player {
     inp.forward = keys.fwd;
     inp.side = keys.side;
     inp.yaw = sourceYawFromCamera(this.yaw);
+    // Source pitch: degrees, positive DOWN. Only the ladder branch reads it,
+    // and that is exactly the input that decides whether looking up climbs.
+    inp.pitch = -this.pitch * (180 / Math.PI);
     inp.duck = keys.crouch;
     inp.walk = keys.walk;
     inp.maxSpeed = this.maxSpeed;
@@ -231,6 +241,7 @@ export class Player {
     this.feet.set(s.pos.x, s.pos.z, -s.pos.y);
     this.vel.set(s.vel.x, s.vel.z, -s.vel.y);
     this.onGround = s.onGround;
+    this.onLadder = s.onLadder;
     this.crouched = s.ducking;
   }
 }

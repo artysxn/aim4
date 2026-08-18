@@ -120,13 +120,34 @@ export function createLook({ scene, getPack, getLighting, slug, knobs = null }) 
 }
 
 /**
+ * Effects bloom: the glow on fire and on a blast.
+ *
+ * Separate from the map's own bloom on purpose, because the map's is not up to
+ * the job. Its strength comes out of the post-processing volume and describes a
+ * SCREEN blend in CS2's compositor, not an add in three's; on Nuke it is 0.0112,
+ * which is nothing, and a molotov drawn through it does not glow at all. The
+ * threshold here is well above anything the world reaches in linear HDR — the
+ * scene renders unmapped into the target, so ordinary lit surfaces sit under 1
+ * and only the sun's disc and the effects' deliberate overbright go past 3 —
+ * and nadeEffects writes fire and the HE flash far above it.
+ *
+ * `?fxbloom=` scales it, `?fxbloom=0` turns it off.
+ */
+const FX_BLOOM = { strength: 0.85, radius: 0.8, threshold: 3 };
+
+/**
  * The map's bloom, without giving up the two-pass depth clear.
  * Same contract as the explorer: HDR target, then composite.
  */
 export function setupBloom(renderer, manifest, params = new URLSearchParams()) {
   const b = manifest.post?.bloom;
   const strength = b ? b.screenStrength || b.strength || 0 : 0;
-  if (!(strength > 0) || params.get?.('bloom') === '0') {
+  const fxRaw = params.get?.('fxbloom');
+  const fxScale = fxRaw === null || fxRaw === undefined || fxRaw === '' ? 1 : Math.max(0, Number(fxRaw) || 0);
+  const fxStrength = FX_BLOOM.strength * fxScale;
+  // The effects bloom alone is reason enough to run the composite, so this no
+  // longer bails just because the map's own bloom is zero.
+  if ((!(strength > 0) && !(fxStrength > 0)) || params.get?.('bloom') === '0') {
     return { render: (draw) => draw(), resize() {}, enabled: false };
   }
   let sceneRT = null;
@@ -139,8 +160,10 @@ export function setupBloom(renderer, manifest, params = new URLSearchParams()) {
       samples: renderer.samples
     });
     const src = texture(sceneRT.texture, screenUV);
-    const bl = bloom(src, strength, b.computeRadius ?? 0, b.threshold ?? 1);
-    composite = new THREE.PostProcessing(renderer, src.add(bl));
+    let out = src;
+    if (strength > 0) out = out.add(bloom(src, strength, b.computeRadius ?? 0, b.threshold ?? 1));
+    if (fxStrength > 0) out = out.add(bloom(src, fxStrength, FX_BLOOM.radius, FX_BLOOM.threshold));
+    composite = new THREE.PostProcessing(renderer, out);
     composite.update();
     renderer.toneMapping = THREE.NoToneMapping;
   } catch (e) {
@@ -219,7 +242,16 @@ export function drawSkyWorld(renderer, scene, camera, pack, lighting) {
  * mapping, grade and bloom with everything else, which is also what it should
  * have been doing all along.
  */
-export function createMapRenderer({ renderer, scene, getPack, getLighting, bloom, overlay, overlayAfter = false }) {
+export function createMapRenderer({
+  renderer,
+  scene,
+  getPack,
+  getLighting,
+  bloom,
+  overlay,
+  overlayAfter = false,
+  afterComposite
+}) {
   const pass = bloom || { render: (draw) => draw(), resize() {} };
   let told = false;
   const drawOverlay = () => {
@@ -242,6 +274,7 @@ export function createMapRenderer({ renderer, scene, getPack, getLighting, bloom
       // here and not inside the pass, the depth clear inside the HDR target is
       // what to look at next.
       if (overlayAfter) drawOverlay();
+      afterComposite?.(camera);
     },
     resize() {
       pass.resize();

@@ -10,7 +10,7 @@ import './cs3d.css';
 import * as THREE from 'three/webgpu';
 import { cs3dMapForPath, cs3dMap, CS3D_MAPS } from '../../shared/cs3d/maps.js';
 import { cameraYawFromSource, sceneToSource, sourceYawFromCamera } from '../../shared/sim3d/units.js';
-import { MapPack } from './mapLoader.js';
+import { MapPack, assetBase } from './mapLoader.js';
 import { MapLighting } from './sky.js';
 import { installGrade } from './grade.js';
 import { createLook, createMapRenderer, loadPostLut, LIGHT_KEYS, LOOK_DEFAULTS, MAP_LOOK, setupBloom } from './look.js';
@@ -27,7 +27,15 @@ import { placeThirdPersonCamera } from './thirdPerson.js';
 import { mountCrosshair } from './crosshairOverlay.js';
 import { ViewModelAssets, ViewModel, createViewModelPass, VIEWMODEL_ENV_INTENSITY, VIEWMODEL_SUN } from './viewModel.js';
 import { createViewModelTuner } from './vmTuner.js';
-import { SunTracker } from './sunlight.js';
+import { SunTracker, loadShadowMask } from './sunlight.js';
+import { Projectiles } from './projectiles.js';
+import { NadeEffects, HE_RADIUS, HE_DAMAGE } from './nadeEffects.js';
+import { prewarmSmoke } from './smokeVolume3d.js';
+import { prewarmSmokeDepth } from './smokeDepth.js';
+import { createSmokePass } from './smokePass.js';
+import { ThrowControl } from './throwing.js';
+import { Interactives } from './interactives.js';
+import { Shooting } from './shooting.js';
 import { SettingsManager, VIEWMODEL_FOV_MIN, VIEWMODEL_FOV_MAX } from '../core/SettingsManager.js';
 import { loadDemoBytes, loadDemoFile } from './demoData.js';
 
@@ -81,10 +89,16 @@ scene.add(camera);
 const player = new Player(camera);
 let lighting = null;
 let mapRenderer = null;
+let smokePass = null;
 
 // ---- UI --------------------------------------------------------------------
 const controls = new Controls(canvas, player, {
-  onLock: (locked) => hud.setLocked(locked),
+  onLock: (locked) => {
+    hud.setLocked(locked);
+    // Losing the mouse mid-hold must not leave a pin pulled: the button-up
+    // that would have thrown it never arrives.
+    if (!locked) throwControl.cancel();
+  },
   onToggleMode: () => {
     player.setMode(player.mode === 'fly' ? 'walk' : 'fly');
     hud.setMode(player.mode, thirdPerson);
@@ -97,13 +111,20 @@ const controls = new Controls(canvas, player, {
     // Walking: 1/2/3 are the weapon slots the way the game has them, and the
     // draw animation plays. Flying, there is no body to arm, so 1 and 2 stay
     // the T and CT spawns.
-    else if (player.mode === 'walk' && n >= 1 && n <= 3) equipSlot(n);
+    else if (player.mode === 'walk' && n >= 1 && n <= 4) equipSlot(n);
     else if (n === 1) spawnAt('T');
     else if (n === 2) spawnAt('CT');
   },
-  // Mouse: fire while held for an automatic weapon, once per click otherwise.
+  // Mouse. Holding a gun: fire while held for an automatic weapon, once per
+  // click otherwise. Holding a grenade: the buttons mean something else
+  // entirely — press pulls the pin, the combination sets the strength, and the
+  // throw is on the way UP (src/cs3d/throwing.js).
   onAttack: (button, down) => {
     attackHeld[button] = down;
+    if (controls.locked && player.mode === 'walk' && !thirdPerson && throwControl.active) {
+      throwControl.button(button, down);
+      return;
+    }
     if (down) tryAttack(button);
   },
   onPlayPause: () => demoView.togglePlay(),
@@ -131,6 +152,16 @@ const controls = new Controls(canvas, player, {
   // B: the buy menu. It needs the mouse, so opening it gives the pointer back
   // and closing it takes the lock again.
   onBuy: () => buyMenu.toggle(),
+  // E: the game's `+use`. Opens and shuts the doors the map actually has.
+  onUse: () => {
+    camera.getWorldDirection(_useDir);
+    const eye = player.mode === 'walk' ? player.eye(_useEye) : _useEye.copy(camera.position);
+    const used = interactives.use(
+      { x: eye.x, y: -eye.z, z: eye.y },
+      { x: _useDir.x, y: -_useDir.z, z: _useDir.y }
+    );
+    if (used) hud.setThrow(null);
+  },
   // Backslash: the viewmodel placement sliders. Same deal as the buy menu —
   // it needs the cursor, so it drops the pointer lock while it is up.
   onVmTune: () => vmTuner.toggle(),
@@ -223,10 +254,103 @@ vmPass.resize(window.innerWidth, window.innerHeight);
 // U opens the same settings as live sliders (src/cs3d/vmTuner.js).
 const vmTuner = createViewModelTuner({ viewModel, vmPass, settings: vmSettings, apply: applyVmSettings });
 
-/** 1 / 2 / 3, the game's slots. The draw animation and its lockout come free. */
+/**
+ * 1 / 2 / 3, the game's slots, and 4 for utility. The draw animation and its
+ * lockout come free.
+ *
+ * 4 cycles the six grenades rather than opening a sub-slot: the explorer has
+ * no inventory to hold one of each, and cycling is the fastest way to get from
+ * a smoke lineup to the molotov that follows it.
+ */
 const SLOTS = { 1: 'ak47', 2: 'glock', 3: 'knife' };
+const NADE_SLOT = ['smokegrenade', 'flashbang', 'hegrenade', 'molotov', 'incgrenade', 'decoy'];
+let nadeIndex = -1;
 const attackHeld = { primary: false, secondary: false };
 let held = 'knife';
+
+// ---- utility ----------------------------------------------------------------
+// The throw state machine (pin, charge, release), the projectiles it puts in
+// the world, and what they leave behind. See src/cs3d/throwing.js for what the
+// mouse buttons mean and why.
+const nadeEffects = new NadeEffects({
+  getCollider: () => pack?.collider || null,
+  // A CS2 smoke takes the thrower's side: sandy for T, pale blue for CT.
+  getSide: () => lastSide,
+  // The fire and blast sprites are camera-facing and alpha-blended, so their
+  // batches have to know where the camera is to sort back to front; the smoke
+  // volume uses it to flip its cull face when someone walks into a cloud.
+  camera
+});
+// The game's own smoke and fire sheets (scripts/cs3d-fx.mjs). Shared by every
+// map, so it is fetched once here rather than per pack. Effects thrown before
+// it lands still simulate; they start drawing the frame it arrives.
+nadeEffects
+  .loadFx(`${assetBase()}/fx`)
+  .catch((e) => console.warn('cs3d: grenade fx pack unavailable, utility will not draw', e));
+// The map's doors, vents and glass (src/cs3d/interactives.js). Optional: a pack
+// without interactives.json simply has none.
+const interactives = new Interactives({
+  getPack: () => pack,
+  onWorldChanged: () => lighting?.markShadowDirty()
+});
+// Bullets: the trace, what it penetrates and what that leaves of it
+// (shared/sim3d/penetration.js over the map's own surface table).
+let _shotClearAt = 0;
+const shooting = new Shooting({
+  getWeapon: () => vmAssets.stats?.(held) || null,
+  interactives,
+  onShot: (shot) => {
+    hud.setShot(shot);
+    _shotClearAt = performance.now() + 2500;
+  }
+});
+const projectiles = new Projectiles({
+  assets: vmAssets,
+  // A grenade that hits a window, a vent or a pane of glass smashes it and
+  // carries on through at a fraction of its speed instead of bouncing off.
+  onBounce: ({ pos, vel }) => interactives.grenadeHit(pos, vel)?.vel || null,
+  onDetonate: ({ type, pos, normal, vel }) => {
+    nadeEffects.spawn({ type, pos, normal, vel, side: lastSide });
+    // An HE breaks the vents and glass in its radius and shoves the doors —
+    // the same detonation, two behaviours, because a door has no prop_data to
+    // damage. A molotov deliberately does neither (shared/sim3d/interactives.js).
+    if (type === 'hegrenade') {
+      const stats = vmAssets.stats?.('hegrenade');
+      interactives.blast(pos, stats?.range || HE_RADIUS, stats?.damage || HE_DAMAGE);
+    }
+    // A flashbang you can see blinds you. The eye and the look direction are
+    // the camera's, so this is honest in third person and in fly mode too.
+    if (type === 'flashbang') {
+      camera.getWorldDirection(_flashDir);
+      nadeEffects.blind(nadeEffects.flashSeconds(pos, camera.position, _flashDir), performance.now() / 1000);
+    }
+  }
+});
+const _flashDir = new THREE.Vector3();
+const _useDir = new THREE.Vector3();
+const _useEye = new THREE.Vector3();
+const throwControl = new ThrowControl({
+  onThrow: ({ type, strength }) => {
+    const eye = player.eye(_throwEye);
+    projectiles.spawn({
+      type,
+      // The sim counts in Source; the explorer's body is in scene coordinates.
+      eye: { x: eye.x, y: -eye.z, z: eye.y },
+      yaw: sourceYawFromCamera(player.yaw),
+      pitch: -player.pitch * (180 / Math.PI),
+      velocity: { x: player.vel.x, y: -player.vel.z, z: player.vel.y },
+      strength
+    });
+    // It has left the hand. The next one is drawn a moment later.
+    viewModel.showWeapon(false);
+  },
+  onAnim: (action) => {
+    if (!viewModel.ready) return;
+    if (action === 'draw') viewModel.redraw();
+    else viewModel.playThrow(action);
+  }
+});
+const _throwEye = new THREE.Vector3();
 
 /**
  * Hold a weapon by name — the slot keys, Q, and every row of the buy menu all
@@ -242,11 +366,19 @@ function equipWeapon(name, { draw = true } = {}) {
   if (vmAssets.ready) viewModel.setWeapon(name, { draw });
   // The body's speed cap follows what it is holding, as it does in the game.
   player.setWeapon(name);
+  // A grenade puts the mouse under the throw state machine instead of the
+  // trigger; anything else stands it down (and drops a pulled pin).
+  throwControl.setWeapon(name);
   hud.setWeapon(player.weapon, player.maxSpeed);
   buyMenu.refresh();
 }
 
 function equipSlot(n) {
+  if (n === 4) {
+    nadeIndex = (nadeIndex + 1) % NADE_SLOT.length;
+    equipWeapon(NADE_SLOT[nadeIndex]);
+    return;
+  }
   equipWeapon(SLOTS[n]);
 }
 
@@ -256,8 +388,19 @@ function equipSlot(n) {
  */
 function tryAttack(button) {
   if (!controls.locked || player.mode !== 'walk' || thirdPerson) return;
-  viewModel.attack(button, performance.now() / 1000);
+  const fired = viewModel.attack(button, performance.now() / 1000);
+  // The viewmodel owns the timing, so a shot only leaves the barrel when it
+  // says one did — a click during the deploy lockout traces nothing.
+  if (fired === false || button !== 'primary') return;
+  const eye = player.eye(_shotEye);
+  camera.getWorldDirection(_shotDir);
+  shooting.fire(
+    { x: eye.x, y: -eye.z, z: eye.y },
+    { x: _shotDir.x, y: -_shotDir.z, z: _shotDir.y }
+  );
 }
+const _shotEye = new THREE.Vector3();
+const _shotDir = new THREE.Vector3();
 
 const demoView = new DemoView({
   camera,
@@ -374,10 +517,28 @@ async function boot() {
     renderer,
     onProgress: (p) => hud.setProgress(p),
     onPhys: (collider) => {
-      player.setCollider(collider);
-      sunTracker.setCollider(collider);
+      // The doors first: binding them masks their static leaf hulls out of the
+      // BVH, and every tracer built after this has to see that already done.
+      interactives.setCollider(collider);
+      player.setCollider(collider, interactives.movers);
+      // Not the same collision set: a grenade passes through `playerclip` and
+      // is stopped by `grenadeclip`, so it gets its own tracer over the same
+      // BVH (src/cs3d/hullWorld.js).
+      projectiles.setCollider(collider, interactives.movers);
+      // ...and a bullet a third set again: through the clips, stopped by the
+      // drawn world, free through `passbullets` brushes (src/cs3d/rayWorld.js).
+      shooting.setCollider(collider, interactives.movers);
     },
-    onWorldChanged: () => lighting?.markShadowDirty()
+    onWorldChanged: () => {
+      lighting?.markShadowDirty();
+      // Tiles arrived: the floor under the player may be new geometry, and
+      // anything the sun tracker cached about it is stale.
+      sunTracker.setWorld(pack?.world || null);
+      projectiles.attach(pack?.world || null);
+      nadeEffects.attach(pack?.world || null);
+      interactives.attach(pack?.world || null);
+      shooting.attach(pack?.world || null);
+    }
   });
   try {
     // WebGPU needs its device before anything touches the renderer.
@@ -400,6 +561,7 @@ async function boot() {
     // mapping off the scene render.
     const bloomPass = setupBloom(renderer, manifest, params);
     if (bloomPass.enabled) console.log('cs3d: bloom from the map post-processing volume');
+    smokePass = createSmokePass(renderer);
     mapRenderer = createMapRenderer({
       renderer,
       scene,
@@ -407,6 +569,7 @@ async function boot() {
       getLighting: () => lighting,
       bloom: bloomPass,
       overlayAfter: params.get('vm') === 'after',
+      afterComposite: () => drawSmoke(),
       // The gun, in the same target as the world (see createMapRenderer).
       overlay: () => {
         if (!viewModel.visible || !viewModel.ready) return false;
@@ -418,14 +581,35 @@ async function boot() {
     // The gun reflects the same sky the map stands under. Without it every
     // metallic surface in the viewmodel pass is black (see setEnvironment).
     vmPass.setEnvironment(scene.environment);
-    // ...and stands in the same sun. `sunTracker` only needs its direction;
-    // the collision hull it traces against arrives with onPhys.
-    sunTracker.setSun(lighting.toSun);
+    // ...and stands in the same sun. The tracker reads the map's own baked
+    // answer for the floor underfoot, so it needs the mask and the drawn world.
+    sunTracker.setWorld(pack.world);
+    // Grenades and what they leave behind ride on the world root, so the two
+    // pass render and the flat view treat them exactly like map geometry.
+    projectiles.attach(pack.world);
+    nadeEffects.attach(pack.world);
+    interactives.attach(pack.world);
+    shooting.attach(pack.world);
+    // The map's doors and breakables, alongside the tiles. Optional: a pack
+    // without interactives.json simply has none, and nothing waits on it.
+    interactives
+      .load(pack.base, pack.v)
+      .then((ok) => ok && console.log(`cs3d: ${interactives.count} interactives`))
+      .catch((e) => console.warn('cs3d: interactives failed', e));
+    loadShadowMask(pack.base, manifest.shadowMask, pack.v)
+      .then((mask) => sunTracker.setMask(mask))
+      .catch((e) => console.warn('cs3d: shadow mask unavailable, viewmodel keeps full sun', e));
     pack.lightmapIntensity = lighting.lightmapIntensity;
     // The world's sun. Lightmapped geometry adds it itself, masked by the
     // baked shadow atlas, because CS2 leaves the sun out of the irradiance
     // bake; null on a pack that predates the mask.
     pack.sun = lighting.worldSun();
+    // Smoke is half diffuse-lit (CS2's `m_flDiffuseAmount` 0.5), so the cards
+    // shade against the map's own sun rather than a made-up one.
+    nadeEffects.setLight(pack.sun ? { ...pack.sun, ambient: lighting.skyAmbient } : null);
+    // ...and each puff reads the ambient cube where it stands, the same grid
+    // the player models and the viewmodel are lit from.
+    nadeEffects.setProbeGrid(() => pack?.probeGrid || null);
     // The 3D skybox's own ambient (see MapLighting.skyAmbient). Pushed again
     // once loadSkybox has measured the real sky, since it refines the hue.
     pack.skyAmbient = lighting.skyAmbient;
@@ -472,6 +656,13 @@ async function boot() {
     // The material library exists now; any lighting knob set before this had
     // nothing to write to. Same call, same order as the timeline's 3D view.
     look.applyAll();
+    const hide = [nadeEffects.root, pack?.sky3d, lighting?.dome];
+    prewarmSmokeDepth(renderer, scene, camera, hide).catch((e) =>
+      console.warn('cs3d: smoke depth prewarm failed', e)
+    );
+    prewarmSmoke(renderer, camera, smokePass?.target).catch((e) =>
+      console.warn('cs3d: smoke pipeline prewarm failed', e)
+    );
   } catch (e) {
     console.error(e);
     hud.showError(e.message || String(e));
@@ -715,7 +906,9 @@ function updateViewModel(dt, inThird) {
   // the highlight travels down the barrel instead of riding along with you.
   // Indoors the sun is not cut, only turned down (sunlight.js INDOOR).
   if (lighting?.sun) {
-    const shade = sunTracker.update(dt, eye);
+    // Feet, not eyes: the question is which patch of floor the player is
+    // standing on, and in the air it is the floor below them.
+    const shade = sunTracker.update(dt, pov ? pov.eye : player.feet);
     _toSunView.copy(lighting.toSun).applyQuaternion(_invView.copy(camera.quaternion).invert());
     vmPass.setSun(_toSunView, lighting.sunColor, VIEWMODEL_SUN * shade);
     // The sky it reflects turns with the view for the same reason, and dims
@@ -725,10 +918,20 @@ function updateViewModel(dt, inThird) {
   }
 }
 
+function drawSmoke() {
+  if (!smokePass || !nadeEffects.hasSmoke()) return;
+  const shadow = lighting?.sun?.castShadow ? lighting.sun.shadow : null;
+  const wantShadow = shadow ? shadow.needsUpdate : false;
+  if (shadow) shadow.needsUpdate = false;
+  smokePass.render(camera, scene, [nadeEffects.root, pack?.sky3d, lighting?.dome], nadeEffects.smokeScene);
+  if (shadow) shadow.needsUpdate = wantShadow;
+}
+
 function renderFrame() {
   if (fpsView.enabled) {
     renderer.setRenderTarget(null);
     renderer.render(scene, camera);
+    drawSmoke();
     return;
   }
   // The viewmodel rides along inside this call (createMapRenderer's `overlay`),
@@ -738,6 +941,7 @@ function renderFrame() {
   else {
     renderer.render(scene, camera);
     if (viewModel.visible && viewModel.ready) vmPass.render();
+    drawSmoke();
   }
 }
 
@@ -758,6 +962,15 @@ const _invView = new THREE.Quaternion();
 /** Milliseconds between shadow-map redraws while a body is on screen. */
 const DYNAMIC_SHADOW_MS = 33;
 let _bodyShadowAt = 0;
+/**
+ * The flashbang whiteout. A DOM layer rather than a post pass: it is a flat
+ * white fill over everything including the HUD, which is what the game's is,
+ * and it costs nothing on the frames where it is off.
+ */
+const flashOverlay = document.createElement('div');
+flashOverlay.className = 'c3-flash';
+uiRoot.appendChild(flashOverlay);
+let _flashShown = 0;
 function frame(now) {
   requestAnimationFrame(frame);
   const dt = Math.min(0.1, (now - last) / 1000);
@@ -770,6 +983,25 @@ function frame(now) {
   liveBody.update(player, dt, { visible: inThird });
   if (inThird) placeThirdPersonCamera(camera, player.world);
   updateViewModel(dt, inThird);
+  // Utility. The throw state machine first (it is what spawns projectiles),
+  // then the projectiles themselves at a fixed 64 Hz, then whatever they left
+  // behind. All three are no-ops when nothing has been thrown.
+  throwControl.update(dt);
+  projectiles.update(dt);
+  nadeEffects.update(dt, now / 1000);
+  // The doors swing here, which moves both what is drawn and what the tracer
+  // sees — they are the same box (src/cs3d/interactives.js).
+  interactives.update(dt);
+  shooting.update(dt);
+  if (throwControl.active) hud.setThrow(throwControl.status());
+  if (_shotClearAt && now > _shotClearAt) {
+    _shotClearAt = 0;
+    hud.setShot(null);
+  }
+  if (nadeEffects.flash !== _flashShown) {
+    _flashShown = nadeEffects.flash;
+    flashOverlay.style.opacity = _flashShown > 0.002 ? String(_flashShown) : '0';
+  }
   // After the player: in POV the demo owns the camera, and writing second wins.
   demoView.update(now);
   if (demoView.active) hud.setDemoStatus(demoView.status());
@@ -810,6 +1042,7 @@ window.addEventListener('resize', () => {
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight, false);
   mapRenderer?.resize();
+  smokePass?.resize();
   vmPass.resize(window.innerWidth, window.innerHeight);
   lighting?.resize();
 });
@@ -820,5 +1053,5 @@ requestAnimationFrame(frame);
 if (import.meta.env.DEV) {
   // `frame` too: a hidden tab gets no rAF, so driving it by hand is the only
   // way to render (and screenshot) the real path from a headless session.
-  window.__cs3d = { THREE, scene, camera, player, get pack() { return pack; }, renderer, lighting: () => lighting, fpsView, demoView, playerModels, viewModel, vmPass, vmTuner, buyMenu, frame, renderFrame, sunTracker, get mapRenderer() { return mapRenderer; } };
+  window.__cs3d = { THREE, scene, camera, player, nadeEffects, projectiles, throwControl, get pack() { return pack; }, renderer, lighting: () => lighting, fpsView, demoView, playerModels, viewModel, vmPass, vmTuner, buyMenu, frame, renderFrame, sunTracker, get mapRenderer() { return mapRenderer; } };
 }

@@ -48,6 +48,17 @@ export function assetBase() {
 /** Collision kinds a player body collides with (grenadeclip is for nades only). */
 const WALK_SOLID = new Set(['solid', 'playerclip', 'sky', 'ladder', 'entity']);
 /**
+ * ...and what a thrown grenade collides with. The two sets differ in BOTH
+ * directions and neither difference is cosmetic: `playerclip` fences a player
+ * and lets utility sail over it (half the lineups in the game depend on that),
+ * while `grenadeclip` is the mapper's invisible wall for utility alone, which a
+ * player walks straight through. Nuke ships 13,564 playerclip triangles and
+ * 2,504 grenadeclip ones, so handing a grenade the walk hull would bounce it
+ * off thin air and handing it the drawn world would let it through the very
+ * brushes placed to stop it.
+ */
+const NADE_SOLID = new Set(['solid', 'entity', 'sky', 'grenadeclip']);
+/**
  * ...and the ones that also stop light. `playerclip` and `sky` are tool brushes
  * — a movement boundary and the lid the sky is drawn through — and neither
  * casts a shadow in the game either; `ladder` is a climb volume, not a ladder.
@@ -111,7 +122,7 @@ class ProbeGrid {
  * every one of those needs the per-texel path. Must agree with the check in
  * MaterialLibrary._build, or the tint is applied twice or not at all.
  */
-function tintIsMasked(m) {
+export function tintIsMasked(m) {
   if (!m) return false;
   // csgo_environment applies its tint itself, per texel, with the game's own
   // luminance-preserving formula — always through COLOR_0.gba, whether or not a
@@ -179,7 +190,7 @@ function mergePositionGeometries(list) {
  * range, ...). Positions are baked to world space so the instance matrix is
  * identity; normals stay 8-bit, lightmap UVs 16-bit, colours 8-bit.
  */
-function normalizeTile(mesh, wantColor, tint, wantAmb) {
+export function normalizeTile(mesh, wantColor, tint, wantAmb) {
   const src = mesh.geometry;
   const n = src.getAttribute('position').count;
   const g = new THREE.BufferGeometry();
@@ -542,35 +553,175 @@ export class MapPack {
   async _loadPhys() {
     const gltf = await this._fetchGlb(`${this.base}/${this.manifest.phys || 'phys.glb'}`);
     gltf.scene.updateMatrixWorld(true);
-    // Two lists, one BVH: what stops a player and, inside it, what stops
-    // LIGHT. They are not the same set and the difference is not small — a
-    // Source map is roofed over the whole playable area by a `sky` brush and
-    // fenced by `playerclip`, both invisible and both transparent to the sun.
-    // Tracing sun visibility against the walk hull therefore reports "indoors"
-    // everywhere below that lid, which is exactly what it did: the viewmodel lit
-    // correctly only when the camera climbed above the clip.
+    // One BVH, three audiences: what stops a PLAYER, what stops a GRENADE, and
+    // what stops LIGHT. No two of those are the same set, and none of the
+    // differences is small — a Source map is roofed over the whole playable
+    // area by a `sky` brush and fenced by `playerclip`, both invisible, both
+    // transparent to the sun, and the second of them transparent to utility.
     //
-    // The light blockers are merged FIRST so they occupy triangles [0, lightTriangles),
-    // which is all a ray needs to tell them apart — no second BVH, no second copy
-    // of the geometry.
-    const blocking = [];
-    const clipOnly = [];
+    // So the geometry is merged in BANDS, and every audience is a range (or two)
+    // of triangle indices into the merged whole:
+    //
+    //   [0,     light)  solid + entity        light, player, grenade
+    //   [light, both)   sky                          player, grenade
+    //   [both,  walk)   playerclip + ladder          player
+    //   [walk,  total)  grenadeclip                          grenade
+    //
+    // The bands only survive the BVH build with `indirect: true`. A direct
+    // MeshBVH partitions geometry.index IN PLACE — measured: 1185 of 1200
+    // entries move on a 400-triangle test — so a triangle's index after the
+    // build says nothing about which band it came from. Indirect keeps the
+    // index buffer intact and hands out the mapping through
+    // resolveTriangleIndex(), at no measurable build cost (60 ms either way at
+    // 190k triangles). The `lightTriangles` range predates this and was quietly
+    // meaningless for exactly that reason; nothing read it, and now it is real.
+    //
+    // Each source mesh also keeps its own half-open triangle range in the
+    // merged whole, which is what lets three later features address geometry
+    // rather than just trace against it:
+    //
+    //   `entities`   phys.glb carries one node per breakable entity, tagged
+    //                `kind: entity` with its classname — 17 of them on Nuke,
+    //                one per window, vent and glass brush. Knowing its range
+    //                means breaking it is `mask.fill(1, start, end)`.
+    //   `ladders`    the `ladder` volumes, so motion.js can climb them.
+    //   `surfaceOf`  the surface name per triangle (`glass`, `metalgrate`,
+    //                `concrete`, ...), which is what a bullet needs to know
+    //                whether it goes through — see shared/sim3d/penetration.js.
+    const bands = { light: [], both: [], walkOnly: [], nadeOnly: [] };
     const kinds = {};
+    const surfaces = [];
+    const surfaceId = new Map();
     gltf.scene.traverse((o) => {
       if (!o.isMesh) return;
       const kind = o.userData?.kind || 'solid';
       kinds[kind] = (kinds[kind] || 0) + 1;
-      if (!WALK_SOLID.has(kind)) return;
-      (LIGHT_SOLID.has(kind) ? blocking : clipOnly).push(worldFloatGeometry(o));
+      const walk = WALK_SOLID.has(kind);
+      const nade = NADE_SOLID.has(kind);
+      if (!walk && !nade) return;
+      const geo = worldFloatGeometry(o);
+      const surface = o.userData?.surface || 'default';
+      if (!surfaceId.has(surface)) {
+        surfaceId.set(surface, surfaces.length);
+        surfaces.push(surface);
+      }
+      // `physics_passbullets_*`: brushes the mapper marked as no obstacle to a
+// bullet at all. Nuke has three of them (chainlink, metalgrate and one
+      // unnamed set), and they are why shooting through those fences costs
+      // nothing rather than costing what the surface table would charge.
+      const passBullets = /passbullets/i.test(o.name || '');
+      const entry = { geo, kind, surface, sid: surfaceId.get(surface), node: o, passBullets, start: 0, end: 0 };
+      if (LIGHT_SOLID.has(kind)) bands.light.push(entry);
+      else if (walk && nade) bands.both.push(entry);
+      else if (walk) bands.walkOnly.push(entry);
+      else bands.nadeOnly.push(entry);
     });
-    const solid = [...blocking, ...clipOnly];
-    if (!solid.length) return;
-    const lightTriangles = blocking.reduce((n, g) => n + (g.index ? g.index.count : g.attributes.position.count) / 3, 0);
+    const order = [...bands.light, ...bands.both, ...bands.walkOnly, ...bands.nadeOnly];
+    if (!order.length) return;
+    // Walk the merge order once, stamping every entry with where it landed.
+    let at = 0;
+    for (const e of order) {
+      const n = (e.geo.index ? e.geo.index.count : e.geo.attributes.position.count) / 3;
+      e.start = at;
+      e.end = at = at + n;
+    }
+    const triCount = (list) => (list.length ? list[list.length - 1].end - list[0].start : 0);
+    const tLight = triCount(bands.light);
+    const tBoth = tLight + triCount(bands.both);
+    const tWalk = tBoth + triCount(bands.walkOnly);
+    const tAll = at;
+    const solid = order.map((e) => e.geo);
     const merged = mergePositionGeometries(solid);
-    for (const g of solid) g.dispose();
-    const bvh = new MeshBVH(merged, { targetLeafSize: 8 });
+    const bvh = new MeshBVH(merged, { targetLeafSize: 8, indirect: true });
     merged.boundsTree = bvh;
-    this.collider = { geometry: merged, bvh, kinds, lightTriangles };
+    // Surface per triangle. u8 while the map has 255 or fewer distinct surfaces
+    // — Nuke has 18 — and u16 beyond that, so this is 190 kB rather than 760.
+    const surfaceOf = surfaces.length > 255 ? new Uint16Array(tAll) : new Uint8Array(tAll);
+    const passBullets = new Uint8Array(tAll);
+    for (const e of order) {
+      surfaceOf.fill(e.sid, e.start, e.end);
+      if (e.passBullets) passBullets.fill(1, e.start, e.end);
+    }
+    const boxOf = (e) => {
+      e.geo.computeBoundingBox();
+      const b = e.geo.boundingBox;
+      // Scene → Source: (x, y, z) → (x, −z, y).
+      return { min: [b.min.x, -b.max.z, b.min.y], max: [b.max.x, -b.min.z, b.max.y] };
+    };
+    const entities = order.filter((e) => e.kind === 'entity').map((e) => ({
+      classname: e.node.userData?.classname || '',
+      surface: e.surface,
+      start: e.start,
+      end: e.end,
+      box: boxOf(e)
+    }));
+    // Ladders, per FACE rather than per mesh. The packer merges every climb
+    // volume on the map into one node — Nuke's is 16 triangles spread from
+    // x −523 to x 1130 — so its bounding box is the whole level and useless.
+    // There are only a handful of them, so each face carries its own box and
+    // its own outward normal, which is what a climbing body needs.
+    const ladders = [];
+    for (const e of order) {
+      if (e.kind !== 'ladder') continue;
+      const pos = e.geo.getAttribute('position');
+      const idx = e.geo.index;
+      const n = (idx ? idx.count : pos.count) / 3;
+      for (let t = 0; t < n; t++) {
+        const p = [];
+        for (let k = 0; k < 3; k++) {
+          const vi = idx ? idx.getX(t * 3 + k) : t * 3 + k;
+          // Scene → Source.
+          p.push([pos.getX(vi), -pos.getZ(vi), pos.getY(vi)]);
+        }
+        const ux = p[1][0] - p[0][0];
+        const uy = p[1][1] - p[0][1];
+        const uz = p[1][2] - p[0][2];
+        const vx = p[2][0] - p[0][0];
+        const vy = p[2][1] - p[0][1];
+        const vz = p[2][2] - p[0][2];
+        let nx = uy * vz - uz * vy;
+        let ny = uz * vx - ux * vz;
+        let nz = ux * vy - uy * vx;
+        const len = Math.hypot(nx, ny, nz) || 1;
+        nx /= len;
+        ny /= len;
+        nz /= len;
+        // A climb face is vertical; the floor and ceiling caps of the volume
+        // are not ladders and would let a body climb thin air above one.
+        if (Math.abs(nz) > 0.7) continue;
+        const min = [Math.min(p[0][0], p[1][0], p[2][0]), Math.min(p[0][1], p[1][1], p[2][1]), Math.min(p[0][2], p[1][2], p[2][2])];
+        const max = [Math.max(p[0][0], p[1][0], p[2][0]), Math.max(p[0][1], p[1][1], p[2][1]), Math.max(p[0][2], p[1][2], p[2][2])];
+        ladders.push({ normal: [nx, ny, nz], min, max, triangle: e.start + t });
+      }
+    }
+    for (const g of solid) g.dispose();
+    this.collider = {
+      geometry: merged,
+      bvh,
+      kinds,
+      triangles: tAll,
+      lightTriangles: tLight,
+      /**
+       * Per-triangle kill switch, honoured by every tracer through
+       * src/cs3d/hullWorld.js. Nonzero means "this triangle is not there any
+       * more": a broken window, a door leaf that swings on a mover instead.
+       */
+      mask: new Uint8Array(tAll),
+      /** Bumped whenever `mask` changes, so caches can tell. */
+      maskVersion: 0,
+      surfaces,
+      surfaceOf,
+      /** 1 where the mapper said bullets go straight through. */
+      passBullets,
+      entities,
+      ladders,
+      /** Half-open triangle ranges per audience; see the band table above. */
+      ranges: {
+        light: [[0, tLight]],
+        walk: [[0, tWalk]],
+        nade: tWalk === tAll ? [[0, tBoth]] : [[0, tBoth], [tWalk, tAll]]
+      }
+    };
     // Stand-in world: flat grey collision geometry until real surfaces arrive.
     const ph = new THREE.Mesh(merged, new THREE.MeshLambertMaterial({ color: 0x6b6b6b, flatShading: true }));
     ph.name = 'phys-placeholder';
