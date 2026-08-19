@@ -49,8 +49,7 @@ import { mix, positionGeometry, uniform, vec3, vec4 } from 'three/webgpu';
 import { sourceToScene } from '../../shared/sim3d/units.js';
 import { createHullWorld } from './hullWorld.js';
 import { SpriteCardBatch, loadFxPack } from './spriteCard.js';
-import { SmokeVolume3D, HE_SLOTS, BOX_PAD_CELLS, warmSmokeNoise } from './smokeVolume3d.js';
-import { buildSmokeLpv, nearFill, LPV_VOX } from './smokeLpv.js';
+import { SmokeCards, warmSmokeCards } from './smokeCards.js';
 import {
   buildSmokeVolume,
   stepSmokeVolume,
@@ -105,6 +104,29 @@ export const DECOY_SECONDS = 15;
  * recovery is not cut off mid-close.
  */
 const HE_MEMORY = 7;
+
+/**
+ * How many blasts a smoke tracks at once. CS2's `uHE` is five.
+ *
+ * Lived in smokeVolume3d.js until the march was deleted, and the deletion took
+ * it with it — `_he()` kept reading the name and threw on the first grenade.
+ * It belongs here: it is a property of how many blasts the EFFECT remembers,
+ * not of whatever draws the result.
+ */
+const HE_SLOTS = 5;
+
+/**
+ * How far a blast drags smoke in, units, and over how long it lets go.
+ *
+ * The displacement CS2 applies and the reason an HE reads as punching a hole
+ * rather than deleting one: the cloud visibly rushes towards the blast and
+ * then breathes back out. The old march did it per sample in the shader; a
+ * card cloud does it by moving the cards, which is the same motion and a good
+ * deal cheaper.
+ */
+const HE_PULL_RADIUS = 340;
+const HE_PULL_SECONDS = 5;
+const HE_PULL_MAX = 0.55;
 
 /**
  * Per-side tint, `uColor` in the march.
@@ -217,6 +239,11 @@ const _a = new THREE.Vector3();
 const _b = new THREE.Vector3();
 const _c = new THREE.Color();
 const _tint = new THREE.Color();
+/** Reused by `_smokeWorld().solidAt`: the fill asks it thousands of times a throw. */
+const _solidAt = { x: 0, y: 0, z: 0 };
+const _frustum = new THREE.Frustum();
+const _viewProj = new THREE.Matrix4();
+const _viewBox = new THREE.Box3();
 
 /** Deterministic jitter, so a replayed throw looks identical. */
 function hash(n) {
@@ -241,8 +268,10 @@ export class NadeEffects {
     this.root.name = 'nade-effects';
     this.smokeRoot = new THREE.Group();
     this.smokeRoot.name = 'nade-smoke';
-    this.smokeScene = new THREE.Scene();
-    this.smokeScene.add(this.smokeRoot);
+    // Under the effects root, i.e. in the SCENE — not a scene of its own, the
+    // way the raymarched volume needed. Being in the scene pass is what gets
+    // the cards depth-tested against the map and graded with it.
+    this.root.add(this.smokeRoot);
     this.live = [];
     this._world = null;
     this._collider = null;
@@ -279,7 +308,7 @@ export class NadeEffects {
     // The smoke needs none of the pack, but it does need its noise volume, and
     // baking that is a couple of hundred milliseconds. Do it here so the cost
     // lands on the map load instead of on the first grenade someone throws.
-    warmSmokeNoise();
+    warmSmokeCards();
     this.fx = await loadFxPack(base, { version });
     return this.fx;
   }
@@ -319,6 +348,35 @@ export class NadeEffects {
     return false;
   }
 
+  /**
+   * ...and true only while one is actually IN FRONT of `camera`.
+   *
+   * What the smoke pass should ask, because the pass is not free to run for
+   * nothing: it redraws the whole map into the wall-clip target (on Nuke, 393
+   * draws and 3.7M triangles) and then marches a full-screen quad, and it did
+   * both of those every frame for a cloud behind the player's back. Walking
+   * away from your own smoke cost as much as standing in it.
+   *
+   * The boxes are axis-aligned and already known, so this is the standard
+   * frustum-vs-AABB test and nothing more; the march's own culling cannot do
+   * the job because the cost is incurred before it draws.
+   */
+  smokeInView(camera) {
+    if (!camera) return this.hasSmoke();
+    camera.updateMatrixWorld();
+    _viewProj.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+    _frustum.setFromProjectionMatrix(_viewProj);
+    for (const fx of this.live) {
+      const box = fx.kind === 'smoke' && fx.smoke?.mesh ? fx.smoke.box : null;
+      if (!box) continue;
+      const h = box.s / 2;
+      _viewBox.min.set(box.cx - h, box.cy - h, box.cz - h);
+      _viewBox.max.set(box.cx + h, box.cy + h, box.cz + h);
+      if (_frustum.intersectsBox(_viewBox)) return true;
+    }
+    return false;
+  }
+
   /** The grenade collision set, for ground probes, sun traces and sight lines. */
   _tracer() {
     const c = this.getCollider();
@@ -335,10 +393,14 @@ export class NadeEffects {
     if (!world) return null;
     return {
       solidAt: (x, y, z, half) => {
-        // A zero-length hull trace reports startsolid when the box overlaps
-        // geometry, which is exactly the question.
-        const p = { x, y, z: z - half };
-        return world.traceHull(p, p, half * 0.9, half * 1.8).startSolid;
+        // `boxSolid` is the startsolid half of a zero-length trace, which is
+        // exactly the question — and it stops at the first triangle that
+        // answers it instead of ranking every one in the box for a normal
+        // nothing here reads.
+        _solidAt.x = x;
+        _solidAt.y = y;
+        _solidAt.z = z - half;
+        return world.boxSolid(_solidAt, half * 0.9, half * 1.8);
       }
     };
   }
@@ -421,21 +483,19 @@ export class NadeEffects {
         if (p[i] > hi[i]) hi[i] = p[i];
       }
     }
-    const pad = SMOKE_CELL * BOX_PAD_CELLS;
-    const cx = (lo[0] + hi[0]) / 2;
-    const cy = (lo[1] + hi[1]) / 2;
-    const cz = (lo[2] + hi[2]) / 2;
-    const size = Math.max(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]) + pad * 2;
-
-    const smoke = new SmokeVolume3D();
-    smoke.setBox(cx, cy, cz, size, size / 2 - pad);
-    // Dissolve opens from the canister, not from the fill AABB's centre (that
-    // centre is the lighting sphere, and a downhill fill walks off the nade).
-    const pop = sourceToScene(pos.x, pos.y, pos.z);
-    smoke.setPop(pop[0], pop[1], pop[2]);
-    smoke.setDensity(vol);
-    smoke.setLight(this._light, this._light?.ambient);
+    const smoke = new SmokeCards();
+    smoke.setCells(vol);
+    // On the world root, not a scene of its own: these are ordinary
+    // transparent meshes now, and being in the scene pass is exactly what
+    // gets them depth-tested against the map and run through its grade.
     this.smokeRoot.add(smoke.mesh);
+    // The fill's own bounds, for smokeInView.
+    smoke.box = {
+      cx: (lo[0] + hi[0]) / 2,
+      cy: (lo[1] + hi[1]) / 2,
+      cz: (lo[2] + hi[2]) / 2,
+      s: Math.max(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]) + SMOKE_CELL * 2
+    };
 
     const fx = {
       kind: 'smoke',
@@ -446,19 +506,7 @@ export class NadeEffects {
       life: SMOKE_SECONDS,
       pos,
       layers: [],
-      // The light volume is a few hundred traces against the map's collision.
-      // Taken in one go it is a visible hitch on the pop, so it is spread over
-      // the first frames of the cloud's life; until it lands the march runs
-      // with `uUseLpv = 0`, which is full sun and flat ambient.
-      lpv: buildSmokeLpv({
-        box: smoke.box,
-        toSun: this._light?.toSun || null,
-        world: this._tracer(),
-        probes: this.getProbeGrid?.() || null,
-        ambient: this._light?.ambient || null,
-        wanted: nearFill(vol, Math.max(SMOKE_CELL * 2.5, (size / LPV_VOX) * 1.6))
-      }),
-      /** Set once an HE has actually punched the fill, so it re-splats once. */
+      /** Set once an HE has actually punched the fill, so it re-lays once. */
       holed: false
     };
     this._poseSmoke(fx);
@@ -470,42 +518,37 @@ export class NadeEffects {
     const { smoke, vol } = fx;
     if (!smoke) return;
 
-    // The light volume, a slice at a time. A trace against the map's BVH is
-    // 10-20 microseconds, so 160 of them is a couple of milliseconds; six or
-    // seven frames and the cloud has its shadows. Taking the ~900 in one go
-    // would be a visible hitch on the pop, which is the one moment a smoke has
-    // to not stutter.
-    if (fx.lpv && fx.lpv.step(400)) {
-      smoke.setLpv(fx.lpv.data);
-      fx.lpv = null;
-    }
-
-    // The fill only changes when an HE knits a hole back in. Everything else
-    // about the cloud's life is a curve the march applies to a static field.
-    if (fx.holed) {
-      // Only the knit-back, not the whole of `cellOpacity`: the per-cell
-      // arrival is `uGrow`'s job and the end-of-life thinning is `uAlphaFade`'s,
-      // and folding either of them in here would apply it twice.
-      smoke.setDensity(vol, (i) => {
-        const cleared = vol.cleared.get(i);
-        return cleared === undefined ? 1 : Math.max(0, 1 - Math.min(1, cleared / SMOKE_KNIT));
-      });
+    // The cards only move when an HE is involved. Everything else about the
+    // cloud's life is a curve over a static set of them.
+    //
+    // Two separate things have to be over before this stops: the fill has to
+    // have knitted shut (`vol.cleared`) AND the displacement has to have let
+    // go. The pull outlasts the hole, so keying off the hole alone would snap
+    // the cloud back to its seats mid-breath.
+    const pulls = this._smokePulls();
+    if (fx.holed || pulls) {
+      // Only the knit-back: the per-cell arrival is `grow`'s job and the
+      // end-of-life thinning is the alpha curve's, and folding either in here
+      // would apply it twice.
+      smoke.setCells(
+        vol,
+        (i) => {
+          const cleared = vol.cleared.get(i);
+          return cleared === undefined ? 1 : Math.max(0, 1 - Math.min(1, cleared / SMOKE_KNIT));
+        },
+        pulls,
+        this._smokeHoles()
+      );
       if (!vol.cleared.size) fx.holed = false;
     }
 
     const c = smokeCurves(fx.age, fx.life);
     _tint.setHex(SMOKE_TINT[fx.side] ?? SMOKE_TINT.none, THREE.SRGBColorSpace);
-    smoke.setHE(this._hes);
     smoke.setFrame({
-      age: fx.age,
-      time: this._time,
       grow: c.grow,
-      fade: c.dissolve,
-      alphaFade: c.alphaFade,
-      alphaBirthDeath: c.birthDeath,
-      tintMix: c.tintMix,
-      tint: _tint,
-      camera: this.camera
+      // One curve now, not four: birth × death × the long greying.
+      alpha: c.birthDeath * c.alphaFade,
+      tint: _tint
     });
   }
 
@@ -529,6 +572,39 @@ export class NadeEffects {
       }
     }
     return hit;
+  }
+
+  /**
+   * The open holes, SCENE units, as spheres the cards must not reach into.
+   *
+   * Shrinking with the knit: the fill closes a hole from the rim inwards over
+   * SMOKE_KNIT, and the drawn boundary has to follow it or the cards would
+   * snap back across a gap the sim had already filled.
+   */
+  _smokeHoles() {
+    let out = null;
+    for (const he of this._hes) {
+      if (he.age >= SMOKE_KNIT + HE_PULL_SECONDS) continue;
+      const shut = Math.max(0, 1 - he.age / (SMOKE_KNIT + HE_PULL_SECONDS));
+      const p = sourceToScene(he.x, he.y, he.z);
+      (out ||= []).push({ x: p[0], y: p[1], z: p[2], r: SMOKE_PUSH_RADIUS * shut });
+    }
+    return out;
+  }
+
+  /**
+   * Recent blasts as the cards want them: SCENE units, with their age, and
+   * only while they are still displacing anything. `null` once they are done,
+   * which is what lets `_poseSmoke` stop re-laying every frame.
+   */
+  _smokePulls() {
+    let out = null;
+    for (const he of this._hes) {
+      if (he.age >= HE_PULL_SECONDS) continue;
+      const p = sourceToScene(he.x, he.y, he.z);
+      (out ||= []).push({ x: p[0], y: p[1], z: p[2], age: he.age });
+    }
+    return out;
   }
 
   /** Does standing smoke cover this point? For sight lines and bots. */

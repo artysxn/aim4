@@ -144,10 +144,12 @@ export function setupBloom(renderer, manifest, params = new URLSearchParams()) {
   const strength = b ? b.screenStrength || b.strength || 0 : 0;
   const fxRaw = params.get?.('fxbloom');
   const fxScale = fxRaw === null || fxRaw === undefined || fxRaw === '' ? 1 : Math.max(0, Number(fxRaw) || 0);
-  const fxStrength = FX_BLOOM.strength * fxScale;
-  // The effects bloom alone is reason enough to run the composite, so this no
-  // longer bails just because the map's own bloom is zero.
-  if ((!(strength > 0) && !(fxStrength > 0)) || params.get?.('bloom') === '0') {
+  const bloomOff = params.get?.('bloom') === '0';
+  const mapStrength = bloomOff ? 0 : strength;
+  const fxStrength = bloomOff ? 0 : FX_BLOOM.strength * fxScale;
+  // Nothing to composite with every term at zero. The smoke no longer needs
+  // this pass — it is ordinary scene geometry now (src/cs3d/smokeCards.js).
+  if ((!(mapStrength > 0) && !(fxStrength > 0))) {
     return { render: (draw) => draw(), resize() {}, enabled: false };
   }
   let sceneRT = null;
@@ -161,7 +163,7 @@ export function setupBloom(renderer, manifest, params = new URLSearchParams()) {
     });
     const src = texture(sceneRT.texture, screenUV);
     let out = src;
-    if (strength > 0) out = out.add(bloom(src, strength, b.computeRadius ?? 0, b.threshold ?? 1));
+    if (mapStrength > 0) out = out.add(bloom(src, mapStrength, b.computeRadius ?? 0, b.threshold ?? 1));
     if (fxStrength > 0) out = out.add(bloom(src, fxStrength, FX_BLOOM.radius, FX_BLOOM.threshold));
     composite = new THREE.PostProcessing(renderer, out);
     composite.update();

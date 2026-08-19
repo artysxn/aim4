@@ -42,6 +42,55 @@ import { createHullTracer } from '../../shared/sim3d/hullTrace.js';
 const _bounds = new THREE.Box3();
 
 /**
+ * Does the swept hull actually reach this BVH node?
+ *
+ * The Minkowski form of the question: grow the node by the hull's half-extents
+ * and ask whether the sweep's centre segment enters it — a slab clip, six
+ * compares and two divides a node.
+ *
+ * This replaces testing the node against the AABB of the WHOLE sweep, which is
+ * only tight for a short trace. A smoke's sun ray is 6000 units on a diagonal,
+ * and its bounding box swallows a third of the map: the box filter handed the
+ * narrow phase 3316 triangles per trace where twelve are within reach of the
+ * ray, so a cloud's ~600 sun cells cost 526 ms. Same answers either way — this
+ * only rejects nodes the sweep provably cannot touch — but it rejects them at
+ * the top of the tree instead of one triangle at a time.
+ *
+ * Conservative on purpose: a node the segment merely grazes is kept, and a
+ * zero-length sweep degenerates to a plain box overlap.
+ */
+function segmentHitsBox(seg, box) {
+  let t0 = 0;
+  let t1 = 1;
+  // x, then y, then z. Written out rather than looped: this is the hottest
+  // function in a trace and the axes come from named fields, not an array.
+  for (let axis = 0; axis < 3; axis++) {
+    const c = axis === 0 ? seg.cx : axis === 1 ? seg.cy : seg.cz;
+    const d = axis === 0 ? seg.dx : axis === 1 ? seg.dy : seg.dz;
+    const e = axis === 0 ? seg.ex : axis === 1 ? seg.ey : seg.ez;
+    const lo = (axis === 0 ? box.min.x : axis === 1 ? box.min.y : box.min.z) - e;
+    const hi = (axis === 0 ? box.max.x : axis === 1 ? box.max.y : box.max.z) + e;
+    if (d === 0) {
+      // Parallel to this slab: either the whole sweep is inside it or none is.
+      if (c < lo || c > hi) return false;
+      continue;
+    }
+    const inv = 1 / d;
+    let n = (lo - c) * inv;
+    let f = (hi - c) * inv;
+    if (n > f) {
+      const s = n;
+      n = f;
+      f = s;
+    }
+    if (n > t0) t0 = n;
+    if (f < t1) t1 = f;
+    if (t0 > t1) return false;
+  }
+  return true;
+}
+
+/**
  * @param {{ bvh: import('three-mesh-bvh').MeshBVH, ranges?: object, mask?: Uint8Array, triangles?: number }} collider
  *   from MapPack.onPhys
  * @param {'walk'|'nade'|'light'} [audience]  which collision set to trace against
@@ -107,34 +156,55 @@ export function createHullWorld(collider, audience = 'walk', movers = null) {
     !ranges ||
     (ranges.length === 1 && ranges[0][0] === 0 && ranges[0][1] >= (collider.triangles ?? Infinity));
 
-  const tracer = createHullTracer((minX, minY, minZ, maxX, maxY, maxZ, visit) => {
+  // Everything below is built ONCE, not per trace. These closures used to be
+  // allocated inside the query — four of them, plus the shapecast descriptor
+  // object — and a smoke's flood fill runs this a couple of thousand times in
+  // one frame, movement several times a tick. `_visit` and `_seg` are the live
+  // arguments, rebound on entry.
+  let _visit = null;
+  let _hitSeg = null;
+  let _stop = false;
+
+  const emit = (tri) => {
+    if (_stop) return true;
+    const a = tri.a;
+    const b = tri.b;
+    const c = tri.c;
+    // A visitor that returns true has the answer already and wants no more
+    // triangles (boxSolid). Anything else keeps the shapecast going.
+    if (_visit(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z) === true) {
+      _stop = true;
+      return true;
+    }
+    return false;
+  };
+  const inRange = (i) => {
+    for (let r = 0; r < ranges.length; r++) {
+      if (i >= ranges[r][0] && i < ranges[r][1]) return true;
+    }
+    return false;
+  };
+  const filtered = (tri, i) => {
+    if (mask && mask[i]) return false;
+    if (!whole && !inRange(i)) return false;
+    return emit(tri);
+  };
+  const boundsSeg = (box) => segmentHitsBox(_hitSeg, box);
+  const boundsBox = (box) => box.intersectsBox(_bounds);
+  const cast = {
+    intersectsBounds: boundsBox,
+    intersectsTriangle: whole && !mask ? emit : filtered
+  };
+
+  const tracer = createHullTracer((minX, minY, minZ, maxX, maxY, maxZ, visit, seg) => {
     _bounds.min.set(minX, minY, minZ);
     _bounds.max.set(maxX, maxY, maxZ);
-    const emit = (tri) => {
-      const a = tri.a;
-      const b = tri.b;
-      const c = tri.c;
-      visit(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
-      return false;
-    };
-    const inRange = (i) => {
-      for (let r = 0; r < ranges.length; r++) {
-        if (i >= ranges[r][0] && i < ranges[r][1]) return true;
-      }
-      return false;
-    };
-    bvh.shapecast({
-      intersectsBounds: (box) => box.intersectsBox(_bounds),
-      intersectsTriangle:
-        whole && !mask
-          ? emit
-          : (tri, i) => {
-              if (mask && mask[i]) return false;
-              if (!whole && !inRange(i)) return false;
-              return emit(tri);
-            }
-    });
-    if (movers) movers.emit(minX, minY, minZ, maxX, maxY, maxZ, visit);
+    _visit = visit;
+    _hitSeg = seg;
+    _stop = false;
+    cast.intersectsBounds = seg ? boundsSeg : boundsBox;
+    bvh.shapecast(cast);
+    if (movers && !_stop) movers.emit(minX, minY, minZ, maxX, maxY, maxZ, visit);
   });
   // Only a walking body climbs; a grenade is not stopped by a climb volume and
   // must not be steered by one either.

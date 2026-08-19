@@ -30,9 +30,6 @@ import { createViewModelTuner } from './vmTuner.js';
 import { SunTracker, loadShadowMask } from './sunlight.js';
 import { Projectiles } from './projectiles.js';
 import { NadeEffects, HE_RADIUS, HE_DAMAGE } from './nadeEffects.js';
-import { prewarmSmoke } from './smokeVolume3d.js';
-import { prewarmSmokeDepth } from './smokeDepth.js';
-import { createSmokePass } from './smokePass.js';
 import { ThrowControl } from './throwing.js';
 import { Interactives } from './interactives.js';
 import { Shooting } from './shooting.js';
@@ -89,8 +86,6 @@ scene.add(camera);
 const player = new Player(camera);
 let lighting = null;
 let mapRenderer = null;
-let smokePass = null;
-
 // ---- UI --------------------------------------------------------------------
 const controls = new Controls(canvas, player, {
   onLock: (locked) => {
@@ -561,7 +556,6 @@ async function boot() {
     // mapping off the scene render.
     const bloomPass = setupBloom(renderer, manifest, params);
     if (bloomPass.enabled) console.log('cs3d: bloom from the map post-processing volume');
-    smokePass = createSmokePass(renderer);
     mapRenderer = createMapRenderer({
       renderer,
       scene,
@@ -569,7 +563,6 @@ async function boot() {
       getLighting: () => lighting,
       bloom: bloomPass,
       overlayAfter: params.get('vm') === 'after',
-      afterComposite: () => drawSmoke(),
       // The gun, in the same target as the world (see createMapRenderer).
       overlay: () => {
         if (!viewModel.visible || !viewModel.ready) return false;
@@ -656,13 +649,15 @@ async function boot() {
     // The material library exists now; any lighting knob set before this had
     // nothing to write to. Same call, same order as the timeline's 3D view.
     look.applyAll();
-    const hide = [nadeEffects.root, pack?.sky3d, lighting?.dome];
-    prewarmSmokeDepth(renderer, scene, camera, hide).catch((e) =>
-      console.warn('cs3d: smoke depth prewarm failed', e)
-    );
-    prewarmSmoke(renderer, camera, smokePass?.target).catch((e) =>
-      console.warn('cs3d: smoke pipeline prewarm failed', e)
-    );
+    // The smoke's pipelines, built by running the pass once with a decoy cloud
+    // buried under the map (see SmokePass.warm). Synchronous and on the load
+    // path on purpose: this is the cost the first grenade used to pay, and the
+    // place to pay it is behind the progress bar.
+    //
+    // It replaced two `compileAsync` prewarms that each spent most of a second
+    // compiling pipelines the real pass then did not use — a hand-written copy
+    // of the pass's scene and render state that had drifted out of sync with
+    // it. Measured on Nuke: first grenade 1.3 s before, ~20 ms after.
   } catch (e) {
     console.error(e);
     hud.showError(e.message || String(e));
@@ -918,20 +913,10 @@ function updateViewModel(dt, inThird) {
   }
 }
 
-function drawSmoke() {
-  if (!smokePass || !nadeEffects.hasSmoke()) return;
-  const shadow = lighting?.sun?.castShadow ? lighting.sun.shadow : null;
-  const wantShadow = shadow ? shadow.needsUpdate : false;
-  if (shadow) shadow.needsUpdate = false;
-  smokePass.render(camera, scene, [nadeEffects.root, pack?.sky3d, lighting?.dome], nadeEffects.smokeScene);
-  if (shadow) shadow.needsUpdate = wantShadow;
-}
-
 function renderFrame() {
   if (fpsView.enabled) {
     renderer.setRenderTarget(null);
     renderer.render(scene, camera);
-    drawSmoke();
     return;
   }
   // The viewmodel rides along inside this call (createMapRenderer's `overlay`),
@@ -941,7 +926,6 @@ function renderFrame() {
   else {
     renderer.render(scene, camera);
     if (viewModel.visible && viewModel.ready) vmPass.render();
-    drawSmoke();
   }
 }
 
@@ -1042,7 +1026,6 @@ window.addEventListener('resize', () => {
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight, false);
   mapRenderer?.resize();
-  smokePass?.resize();
   vmPass.resize(window.innerWidth, window.innerHeight);
   lighting?.resize();
 });

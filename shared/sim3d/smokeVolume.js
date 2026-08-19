@@ -74,8 +74,18 @@ export const SMOKE_REFILL = 3;
  */
 export const SMOKE_KNIT = 1.2;
 
-/** [docs] How far an HE clears smoke around itself. */
-export const SMOKE_PUSH_RADIUS = 140;
+/**
+ * [docs] How far an HE clears smoke around itself.
+ *
+ * Note this is a RADIUS, not the hole you see. The renderer used to draw a
+ * markedly smaller one — a card is far wider than the lattice, so a card
+ * seated outside the cleared sphere still reached back into it and filled the
+ * hole in. That is fixed where it belongs, in src/cs3d/smokeCards.js, by
+ * clipping a surviving card so it cannot cross the boundary; raising this
+ * instead was tried and is wrong, because anything past the cloud's own ~144
+ * radius deletes a centred smoke outright rather than carving it.
+ */
+export const SMOKE_PUSH_RADIUS = 150;
 
 /**
  * How many cells a full smoke is worth: the volume of the nominal sphere, in

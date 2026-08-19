@@ -31,8 +31,29 @@ export const SOLID_DEPTH = 0.25;
 const _hit = createSweepHit();
 
 /**
- * @param {(minX, minY, minZ, maxX, maxY, maxZ, visit: (ax,ay,az,bx,by,bz,cx,cy,cz) => void) => void} query
+ * The swept path itself, handed to the broadphase alongside its bounding box.
+ *
+ * The box alone is a terrible filter for a long trace: a 6000-unit ray at the
+ * sun has a bounding box the size of a third of Nuke, and a broadphase that
+ * tests only that box hands back every triangle in it (measured: 3316, against
+ * 12 for the same ray at 250 units). Cost then scales with LENGTH rather than
+ * with what the hull actually passes near, which is what made a smoke's sun
+ * volume half a second of tracing.
+ *
+ * A broadphase that takes this can do the exact Minkowski test instead — does
+ * the segment pass within the hull's half-extents of the node — which is
+ * strictly conservative, so nothing a narrow phase would have accepted is
+ * rejected. Callers that ignore it keep the box behaviour.
+ *
+ * Scene frame, centre-origin: `c` is the hull's centre at t=0, `d` the sweep,
+ * `e` the half-extents already padded.
+ */
+const _seg = { cx: 0, cy: 0, cz: 0, dx: 0, dy: 0, dz: 0, ex: 0, ey: 0, ez: 0 };
+
+/**
+ * @param {(minX, minY, minZ, maxX, maxY, maxZ, visit: (ax,ay,az,bx,by,bz,cx,cy,cz) => void, seg: typeof _seg) => void} query
  *   Calls `visit` for every triangle (scene frame) whose bounds touch the box.
+ *   `seg` describes the same sweep exactly; see above.
  * @returns {{ traceHull(start, end, halfWide, height), traces: number, triTests: number }}
  */
 export function createHullTracer(query) {
@@ -68,6 +89,15 @@ export function createHullTracer(query) {
       let snz = 0;
 
       const pad = DIST_EPSILON + 1e-3;
+      _seg.cx = cx;
+      _seg.cy = cy;
+      _seg.cz = cz;
+      _seg.dx = dx;
+      _seg.dy = dy;
+      _seg.dz = dz;
+      _seg.ex = halfWide + pad;
+      _seg.ey = hy + pad;
+      _seg.ez = halfWide + pad;
       query(
         Math.min(cx, cx + dx) - halfWide - pad,
         Math.min(cy, cy + dy) - hy - pad,
@@ -96,7 +126,8 @@ export function createHullTracer(query) {
             bny = _hit.ny;
             bnz = _hit.nz;
           }
-        }
+        },
+        _seg
       );
 
       if (solid) {
@@ -124,6 +155,113 @@ export function createHullTracer(query) {
         normal: { x: bnx, y: -bnz, z: bny },
         startSolid: false
       };
+    },
+
+    /**
+     * Is a hull standing here inside the world? The `startSolid` half of
+     * `traceHull`, on its own and without the rest.
+     *
+     * Worth its own entry point because the question is a boolean and the
+     * general trace cannot answer it as one: a zero-length trace still has to
+     * visit every triangle in the box to find the DEEPEST overlap, since that
+     * is what supplies the push-out normal. Nothing here needs the normal, so
+     * the first triangle past SOLID_DEPTH ends the query — which in a cluttered
+     * corner is the first of dozens — and no result object is allocated.
+     *
+     * A smoke's flood fill asks this a couple of thousand times per throw
+     * (once per cell it considers), so the difference is a frame.
+     *
+     * @param {{x,y,z}} at  hull origin (feet, bottom centre), Source frame
+     * @returns {boolean}
+     */
+    boxSolid(at, halfWide, height) {
+      tracer.traces++;
+      const hy = height * 0.5;
+      const cx = at.x;
+      const cy = at.z + hy;
+      const cz = -at.y;
+      const pad = DIST_EPSILON + 1e-3;
+      let solid = false;
+      _seg.cx = cx;
+      _seg.cy = cy;
+      _seg.cz = cz;
+      _seg.dx = 0;
+      _seg.dy = 0;
+      _seg.dz = 0;
+      _seg.ex = halfWide + pad;
+      _seg.ey = hy + pad;
+      _seg.ez = halfWide + pad;
+      query(
+        cx - halfWide - pad,
+        cy - hy - pad,
+        cz - halfWide - pad,
+        cx + halfWide + pad,
+        cy + hy + pad,
+        cz + halfWide + pad,
+        (ax, ay, az, bx, by, bz, ccx, ccy, ccz) => {
+          tracer.triTests++;
+          if (!sweepBoxTriangle(cx, cy, cz, halfWide, hy, halfWide, 0, 0, 0, ax, ay, az, bx, by, bz, ccx, ccy, ccz, _hit)) {
+            return false;
+          }
+          if (_hit.depth <= SOLID_DEPTH) return false;
+          solid = true;
+          return true; // stop: one is all the answer needs
+        },
+        _seg
+      );
+      return solid;
+    },
+
+    /**
+     * Does the swept hull touch anything at all between `start` and `end`?
+     *
+     * `traceHull(...).fraction < 1 || .startSolid`, decided without finding
+     * WHERE. A visibility question — is this smoke cell in the sun, can this
+     * bot see that corner — only wants the boolean, and the first blocker
+     * settles it; the full trace has to keep going to every triangle in reach
+     * because it owes the caller the nearest one.
+     */
+    sweepBlocked(start, end, halfWide, height) {
+      tracer.traces++;
+      const hy = height * 0.5;
+      const cx = start.x;
+      const cy = start.z + hy;
+      const cz = -start.y;
+      const dx = end.x - start.x;
+      const dy = end.z - start.z;
+      const dz = -(end.y - start.y);
+      const pad = DIST_EPSILON + 1e-3;
+      let blocked = false;
+      _seg.cx = cx;
+      _seg.cy = cy;
+      _seg.cz = cz;
+      _seg.dx = dx;
+      _seg.dy = dy;
+      _seg.dz = dz;
+      _seg.ex = halfWide + pad;
+      _seg.ey = hy + pad;
+      _seg.ez = halfWide + pad;
+      query(
+        Math.min(cx, cx + dx) - halfWide - pad,
+        Math.min(cy, cy + dy) - hy - pad,
+        Math.min(cz, cz + dz) - halfWide - pad,
+        Math.max(cx, cx + dx) + halfWide + pad,
+        Math.max(cy, cy + dy) + hy + pad,
+        Math.max(cz, cz + dz) + halfWide + pad,
+        (ax, ay, az, bx, by, bz, ccx, ccy, ccz) => {
+          tracer.triTests++;
+          if (!sweepBoxTriangle(cx, cy, cz, halfWide, hy, halfWide, dx, dy, dz, ax, ay, az, bx, by, bz, ccx, ccy, ccz, _hit)) {
+            return false;
+          }
+          // Either inside it already, or reached within the sweep — the same
+          // two cases `traceHull` reports as startSolid and fraction < 1.
+          if (_hit.depth <= SOLID_DEPTH && _hit.t > 1) return false;
+          blocked = true;
+          return true;
+        },
+        _seg
+      );
+      return blocked;
     }
   };
   return tracer;

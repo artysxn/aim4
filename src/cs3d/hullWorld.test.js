@@ -93,4 +93,62 @@ const light = createHullWorld(collider, 'light');
 assert(blocked(light, 50, 150), 'light is stopped by solid');
 assert(!blocked(light, 650, 750), 'light passes through the sky brush');
 
+// ---------------------------------------------------------------------------
+// The broadphase, and the two booleans built on it, against the plain one.
+//
+// `segmentHitsBox` narrows a node test from "does it touch the AABB of the
+// whole sweep" to "does the sweep pass within the hull's half-extents of it".
+// That is meant to be a pure speed change — on a 6000-unit trace it took the
+// triangles handed to the narrow phase from 3316 to 8 — so the guarantee worth
+// testing is that it never changes an ANSWER. Same for `boxSolid` and
+// `sweepBlocked`, which early-out where `traceHull` cannot.
+//
+// Reference is a tracer over the same BVH whose broadphase is the old box test,
+// so the two differ in nothing else.
+const { createHullTracer } = await import('../../shared/sim3d/hullTrace.js');
+const _ref = new THREE.Box3();
+const reference = createHullTracer((x0, y0, z0, x1, y1, z1, visit) => {
+  _ref.min.set(x0, y0, z0);
+  _ref.max.set(x1, y1, z1);
+  bvh.shapecast({
+    intersectsBounds: (b) => b.intersectsBox(_ref),
+    intersectsTriangle: (t) => {
+      visit(t.a.x, t.a.y, t.a.z, t.b.x, t.b.y, t.b.z, t.c.x, t.c.y, t.c.z);
+      return false;
+    }
+  });
+});
+const all = createHullWorld({ ...collider, ranges: null }, 'all');
+
+let seed = 20260818;
+const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296);
+let probes = 0;
+for (let k = 0; k < 4000; k++) {
+  const from = { x: rnd() * 900 - 100, y: rnd() * 700 - 350, z: rnd() * 400 - 60 };
+  // Lengths from "barely moves" to "crosses the whole set", which is where the
+  // two broadphases disagree most in how much they hand over.
+  const len = [4, 40, 300, 1500][k % 4];
+  const to = {
+    x: from.x + (rnd() - 0.5) * 2 * len,
+    y: from.y + (rnd() - 0.5) * 2 * len,
+    z: from.z + (rnd() - 0.5) * 2 * len
+  };
+  const hw = [1, 2, 16, 30][k % 4];
+  const h = [2, 4, 32, 70][k % 4];
+  const want = reference.traceHull(from, to, hw, h);
+  const got = all.traceHull(from, to, hw, h);
+  assert(got.fraction === want.fraction, `fraction differs at probe ${k}`);
+  assert(got.startSolid === want.startSolid, `startSolid differs at probe ${k}`);
+  assert(
+    all.sweepBlocked(from, to, hw, h) === (want.startSolid || want.fraction < 1),
+    `sweepBlocked differs at probe ${k}`
+  );
+  assert(
+    all.boxSolid(from, hw, h) === reference.traceHull(from, from, hw, h).startSolid,
+    `boxSolid differs at probe ${k}`
+  );
+  probes++;
+}
+console.log(`  (broadphase: ${probes} probes agree with the plain box filter)`);
+
 console.log('hullWorld.test: ok');

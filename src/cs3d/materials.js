@@ -655,7 +655,20 @@ export class MaterialLibrary {
         sun: lightmapped || (this.probeAmbient && this.sunVis) || m.sky ? this.sun : null,
         // The miniature sits outside every light probe volume, so it keeps the
         // sky probe's diffuse instead of a baked `_amb` that does not exist.
-        probeAmbient: !lightmapped && this.probeAmbient && !m.sky,
+        //
+        // `m.lightmapped`, NOT `lightmapped`: this has to answer the same
+        // question mapLoader.js `wantAmb` answered when it built the tile, and
+        // that one only ever saw the manifest. Keying off the atlas being
+        // *loaded* disagrees with it for the window between a lightmapped
+        // material finishing its textures and _loadLightmap() resolving — the
+        // material takes the probe path and asks for a `_amb`/`_sun` the pack
+        // never baked onto charted geometry:
+        //
+        //   AttributeNode: Vertex attribute "_amb" not found on geometry.
+        //
+        // Such a material simply keeps the scene sun until the atlas lands and
+        // _rebuildLightmapped() replaces it.
+        probeAmbient: !m.lightmapped && this.probeAmbient && !m.sky,
         sky: !!m.sky,
         skyAmbient: m.sky ? this.skyAmbient : null
       });
