@@ -15,12 +15,13 @@
 // come straight from the demo, and the interpolation between rows is the same
 // shortest-path angle lerp the 2D viewer uses.
 //
-// Grenades come from GrenadeEvents: a small sphere flies the recorded path
-// (linear between the parser's waypoints), and the detonation leaves a
-// placeholder volume — grey sphere for smoke, orange disc for fire — sized
-// to CS2's nominal radii. Durations are placeholders pending the utility
-// systems (CS3D-ENGINE-PLAN E-5); the point today is that you can SEE the
-// round: who was where, which smoke was up, who peeked through it.
+// Grenades are the practice mode's own effects, driven from the playhead
+// rather than from a clock: src/cs3d/demoNades.js over src/cs3d/nadeEffects.js.
+// A replayed smoke is the same raymarched volume you get when you throw one, a
+// molotov burns with the game's flame sheets and leaves the same scorch, and a
+// flashbang blinds the eyes you are borrowing by RadiusFlash against where
+// that player was actually looking. The flight is drawn from the recorded
+// waypoints, with the trail practice mode gives a throw.
 //
 // Rendering: everything lives under one group that is attached to the pack's
 // world root, so the two-pass sky/world render and the flat view treat the
@@ -32,7 +33,6 @@ import * as THREE from 'three/webgpu';
 import { FLAG_DUCKING, FLAG_AIRBORNE, readRecord, lerpAngle } from '../replays/shared/tickFormat.js';
 import { cameraYawFromSource } from '../../shared/sim3d/units.js';
 import { HULL_STAND, HULL_DUCK, EYE_STAND, EYE_DUCK, HULL_HALF_WIDE } from '../../shared/sim3d/constants.js';
-import { SMOKE_SECONDS, SMOKE_RADIUS, FIRE_SECONDS } from './nadeEffects.js';
 import { inventoryAt, isSecondary } from '../replays/viewer/equipmentIcons.js';
 
 const DEG = Math.PI / 180;
@@ -40,31 +40,14 @@ const RAD = 180 / Math.PI;
 
 const SPEEDS = [0.25, 0.5, 1, 2, 4];
 
-/**
- * Post-detonation lifetimes and sizes come from src/cs3d/nadeEffects.js (see
- * the import above), so a smoke in a replay stands for as long as one you throw
- * yourself and the provenance of each number lives in one place.
- *
- * The volumes here stay placeholders on purpose: this view derives its whole
- * state fresh from the event list every frame, which is what makes scrubbing
- * backwards free, while NadeEffects owns a running clock. Two different jobs;
- * the numbers are the part worth sharing.
- */
-const POP_SECONDS = 0.3;
-const FIRE_RADIUS = 110;
-
 const TEAM_COLOR = { T: 0xd9a24a, CT: 0x5b87e0 };
-const NADE_COLOR = {
-  smokegrenade: 0xc8ccd0,
-  flashbang: 0xfff0a8,
-  hegrenade: 0xd8503a,
-  molotov: 0xe87a28,
-  incgrenade: 0xe87a28,
-  decoy: 0x7fc46a
-};
 
 const _a = {};
 const _b = {};
+const _c = {};
+const _euler = new THREE.Euler(0, 0, 0, 'YXZ');
+const _quat = new THREE.Quaternion();
+const _fwd = new THREE.Vector3();
 
 export class DemoView {
   /**
@@ -73,13 +56,16 @@ export class DemoView {
    * @param {() => import('./mapLoader.js').MapPack|null} o.getPack
    * @param {import('./playerModels.js').PlayerModels} [o.playerModels]  the
    *   agent models + clips; bodies fall back to placeholders until it is ready
+   * @param {import('./demoNades.js').DemoNades} [o.nades]  the round's utility,
+   *   drawn with the practice engine. Without one a demo simply has no grenades.
    * @param {(view: DemoView) => void} [o.onChange]  fired on state changes
    *   (round, play, POV) — not per frame; the HUD polls status() for the clock.
    */
-  constructor({ camera, getPack, playerModels, onChange }) {
+  constructor({ camera, getPack, playerModels, nades, onChange }) {
     this.camera = camera;
     this.getPack = getPack;
     this.playerModels = playerModels || null;
+    this.nades = nades || null;
     this.onChange = onChange || (() => {});
 
     this.demo = null;
@@ -125,11 +111,8 @@ export class DemoView {
 
     /** Source-space dots for the match HUD radar. Rewritten every update. */
     this.marks = [];
-    this._nades = new Map(); // grenade index -> { mesh, kind }
-    this._nadeGeo = new THREE.SphereGeometry(5, 10, 8);
-    this._smokeGeo = new THREE.SphereGeometry(SMOKE_RADIUS, 20, 14);
-    this._fireGeo = new THREE.CylinderGeometry(FIRE_RADIUS, FIRE_RADIUS, 6, 20);
-    this._popGeo = new THREE.SphereGeometry(30, 12, 8);
+    /** Bound once: demoNades.js holds it across frames. See _sampleView. */
+    this._povAt = (tick) => this._sampleView(tick);
   }
 
   get active() {
@@ -155,7 +138,7 @@ export class DemoView {
       if (b.model) b.model.group.visible = false;
       b.prev = null;
     }
-    this._clearNades();
+    this.nades?.clear();
     this.root.removeFromParent();
     this.onChange(this);
   }
@@ -173,7 +156,7 @@ export class DemoView {
     const live = (this.meta.freezeEndTick ?? this.ticks.header.firstTick) - this.ticks.header.firstTick;
     this.row = Math.max(0, Math.min(this.ticks.header.tickCount - 1, live));
     this.playing = true;
-    this._clearNades();
+    this.nades?.setEvents(this.meta.events?.grenades, this.ticks.header.tickRate || 64);
     this.onChange(this);
   }
 
@@ -187,7 +170,9 @@ export class DemoView {
     const live = (this.meta.freezeEndTick ?? this.ticks.header.firstTick) - this.ticks.header.firstTick;
     this.row = Math.max(0, Math.min(this.ticks.header.tickCount - 1, live));
     this.playing = true;
-    this._clearNades();
+    // A restart is a jump backwards; the effects are rebuilt from the playhead.
+    this.nades?.clear();
+    this.nades?.setEvents(this.meta.events?.grenades, this.ticks.header.tickRate || 64);
     this.onChange(this);
   }
 
@@ -501,97 +486,53 @@ export class DemoView {
 
   // ---- grenades -----------------------------------------------------------
 
-  _clearNades() {
-    for (const n of this._nades.values()) {
-      n.mesh.removeFromParent();
-      n.mesh.material.dispose();
-    }
-    this._nades.clear();
-  }
-
-  _nadeMesh(index, geo, color, opacity) {
-    let n = this._nades.get(index);
-    if (n?.geo === geo) return n.mesh;
-    if (n) {
-      n.mesh.removeFromParent();
-      n.mesh.material.dispose();
-    }
-    const mesh = new THREE.Mesh(
-      geo,
-      new THREE.MeshBasicMaterial({
-        color,
-        transparent: opacity < 1,
-        opacity,
-        depthWrite: opacity >= 1
-      })
-    );
-    this.root.add(mesh);
-    this._nades.set(index, { mesh, geo });
-    return mesh;
-  }
-
-  _dropNade(index) {
-    const n = this._nades.get(index);
-    if (!n) return;
-    n.mesh.removeFromParent();
-    n.mesh.material.dispose();
-    this._nades.delete(index);
+  /**
+   * The round's utility, from the playhead.
+   *
+   * All of the work is in src/cs3d/demoNades.js; what stays here is the demo's
+   * own clock (a tick, not a wall-clock second) and the POV sampler a flash
+   * needs. Deriving the whole thing from the playhead every frame is what it
+   * shares with the bodies above, and is why scrubbing backwards is free.
+   */
+  _updateNades() {
+    if (!this.nades) return;
+    const pack = this.getPack();
+    if (pack?.world) this.nades.attach(pack.world);
+    const h = this.ticks.header;
+    this.nades.update(h.firstTick + this.row * h.stride, {
+      povSlot: this.povSlot,
+      povAt: this._povAt
+    });
   }
 
   /**
-   * Grenade state is derived fresh from the event list every frame — a scan
-   * of at most a few dozen events — so scrubbing backwards needs no undo log.
+   * Where the POV player's eyes were, and what they were pointing at, on an
+   * arbitrary tick. Scene frame.
+   *
+   * A flashbang is decided by where a player was LOOKING when it went off, so
+   * this has to answer for the detonation tick and not for the current frame.
+   * Bound in the constructor because demoNades.js holds it as a callback.
+   *
+   * @param {number} tick
+   * @returns {{eye: {x,y,z}, forward: {x,y,z}}|null}
    */
-  _updateNades() {
-    const grenades = this.meta?.events?.grenades || [];
+  _sampleView(tick) {
+    if (!this.ticks || this.povSlot === null) return null;
     const h = this.ticks.header;
-    const tick = h.firstTick + this.row * h.stride;
-    const rate = h.tickRate || 64;
-
-    for (let i = 0; i < grenades.length; i++) {
-      const g = grenades[i];
-      const color = NADE_COLOR[g.type] ?? 0xffffff;
-      const path = Array.isArray(g.path) ? g.path : [];
-      const lastPathTick = path.length ? path[path.length - 1].tick : g.throwTick;
-      const det = g.detonateTick ?? lastPathTick;
-
-      if (tick >= g.throwTick && tick < det && path.length >= 2) {
-        // In flight: linear between the parser's waypoints.
-        let k = 0;
-        while (k + 2 < path.length && path[k + 1].tick <= tick) k++;
-        const p0 = path[k];
-        const p1 = path[Math.min(k + 1, path.length - 1)];
-        const span = Math.max(1, p1.tick - p0.tick);
-        const t = Math.max(0, Math.min(1, (tick - p0.tick) / span));
-        const x = p0.x + (p1.x - p0.x) * t;
-        const y = p0.y + (p1.y - p0.y) * t;
-        const z = p0.z + (p1.z - p0.z) * t;
-        const mesh = this._nadeMesh(i, this._nadeGeo, color, 1);
-        mesh.position.set(x, z, -y);
-        continue;
-      }
-
-      // Detonated: a placeholder volume at the recorded point, for a while.
-      const at = g.at || (path.length ? path[path.length - 1] : null);
-      const since = g.detonateTick !== null && g.detonateTick !== undefined ? (tick - g.detonateTick) / rate : -1;
-      if (at && since >= 0) {
-        if (g.type === 'smokegrenade' && since < SMOKE_SECONDS) {
-          const mesh = this._nadeMesh(i, this._smokeGeo, 0xb8bcc0, 0.72);
-          mesh.position.set(at.x, at.z + 30, -at.y);
-          continue;
-        }
-        if ((g.type === 'molotov' || g.type === 'incgrenade') && since < FIRE_SECONDS) {
-          const mesh = this._nadeMesh(i, this._fireGeo, 0xe06818, 0.5);
-          mesh.position.set(at.x, at.z + 4, -at.y);
-          continue;
-        }
-        if ((g.type === 'flashbang' || g.type === 'hegrenade') && since < POP_SECONDS) {
-          const mesh = this._nadeMesh(i, this._popGeo, color, 0.8 * (1 - since / POP_SECONDS));
-          mesh.position.set(at.x, at.z + 8, -at.y);
-          continue;
-        }
-      }
-      this._dropNade(i);
-    }
+    const row = Math.round((tick - h.firstTick) / (h.stride || 1));
+    const r = Math.max(0, Math.min(h.tickCount - 1, row));
+    const a = readRecord(this.ticks.view, r, this.povSlot, _c);
+    if (!a.alive) return null;
+    const duck = a.duckAmount > 0 ? a.duckAmount : (a.flags & FLAG_DUCKING) !== 0 ? 1 : 0;
+    const eyeH = EYE_STAND + (EYE_DUCK - EYE_STAND) * duck;
+    // The same rotation update() gives the POV camera, so the forward vector
+    // is the one the viewer is actually looking down.
+    _euler.set(-a.pitch * DEG, cameraYawFromSource(a.yaw), 0, 'YXZ');
+    _quat.setFromEuler(_euler);
+    _fwd.set(0, 0, -1).applyQuaternion(_quat);
+    return {
+      eye: { x: a.x, y: a.z + eyeH, z: -a.y },
+      forward: { x: _fwd.x, y: _fwd.y, z: _fwd.z }
+    };
   }
 }

@@ -45,6 +45,7 @@
 // ---------------------------------------------------------------------------
 
 import * as THREE from 'three/webgpu';
+import { packFetch, loadWithRetry } from './packFetch.js';
 import {
   Fn,
   attribute,
@@ -95,14 +96,14 @@ const SHEET_KEYS = ['smoke', 'smoke_mv', 'fire', 'fire_mv'];
  * @param {string} base  pack URL prefix, e.g. `${assetBase()}/fx`
  */
 export async function loadFxPack(base, { version = '' } = {}) {
-  const res = await fetch(`${base}/fx.json${version}`, { cache: 'force-cache' });
+  const res = await packFetch(`${base}/fx.json${version}`, { cache: 'force-cache' });
   if (!res.ok) throw new Error(`fx pack: fx.json ${res.status}`);
   const manifest = await res.json();
 
   const loader = new THREE.TextureLoader();
   const load = (file) =>
-    new Promise((resolve, reject) => {
-      loader.load(`${base}/${file}${version}`, resolve, undefined, () => reject(new Error(`fx pack: ${file}`)));
+    loadWithRetry(loader, `${base}/${file}${version}`).catch(() => {
+      throw new Error(`fx pack: ${file}`);
     });
 
   const sheets = {};

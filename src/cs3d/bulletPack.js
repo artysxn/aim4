@@ -14,6 +14,7 @@
 import * as THREE from 'three/webgpu';
 import { SURFACES } from '../../shared/sim3d/surfaces.js';
 import { assetBase } from './mapLoader.js';
+import { packFetch, loadWithRetry } from './packFetch.js';
 
 export const BULLETS_PACK_VERSION = 1;
 
@@ -55,7 +56,7 @@ export class BulletAssets {
     // a pack for a year as immutable and this one for a minute, so the name is
     // what makes a re-pack visible at all. The atlases then carry the
     // manifest's own stamp as a query, which is how the other packs do it.
-    const res = await fetch(`${this.base}/manifest.json`);
+    const res = await packFetch(`${this.base}/manifest.json`);
     if (!res.ok) throw new Error(`bullets manifest ${res.status}`);
     const manifest = await res.json();
     this._v = `?v=${encodeURIComponent(manifest.generated || String(manifest.version))}`;
@@ -167,7 +168,5 @@ export class BulletAssets {
 }
 
 function loadTexture(url) {
-  return new Promise((resolve, reject) => {
-    new THREE.TextureLoader().load(url, resolve, undefined, reject);
-  });
+  return loadWithRetry(new THREE.TextureLoader(), url);
 }

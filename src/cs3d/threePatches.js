@@ -82,3 +82,71 @@ export function patchWebGPUPartialAttributeUpload(renderer) {
   };
   return true;
 }
+
+/**
+ * three's WebGPU node library is registered by CONSTRUCTOR NAME and looked up
+ * by `material.type`, so a minified bundle can never match the two.
+ *
+ * `NodeLibrary.addMaterial(nodeClass, materialClass)` stores under
+ * `materialClass.name` (StandardNodeLibrary.js), while `fromMaterial(material)`
+ * reads `getMaterialNodeClass(material.type)` (NodeLibrary.js). `type` is a
+ * hard-coded string that survives minification; `name` is the class binding,
+ * which esbuild renames. In `npm run dev` the two agree and everything works.
+ * In `npm run build` the table comes out keyed `uy`, `ul`, `ly`… and every
+ * lookup misses:
+ *
+ *   NodeMaterial: Material "MeshStandardMaterial" is not compatible.
+ *
+ * That message is a `console.error` and the consequence is not cosmetic. The
+ * fallback is a bare `new NodeMaterial()`, which carries NONE of the material
+ * it replaced: no colour, no map, no opacity, no side. Anything drawn with a
+ * plain (non-node) material renders as an untextured default — which is what
+ * the black boxes on the deployed maps were. Every one of them was a surface
+ * still on `MaterialLibrary`'s interim flat-colour stand-in, because a stand-in
+ * whose colour is thrown away is not a stand-in, it is a hole.
+ *
+ * It hits everything that is not explicitly a node material: the interim
+ * material pass, the grey `phys-placeholder`, the flat view's Lambert set,
+ * the demo bodies, and every grenade trail (`LineBasicMaterial`).
+ *
+ * The fix is to register the same node classes a second time under the type
+ * strings the lookup actually uses. Nothing is overwritten — `addType` refuses
+ * a redefinition — so on a build where the names DO survive (dev, or a three
+ * release that switches to `type`) this adds nothing and reports 0.
+ *
+ * @param {THREE.WebGPURenderer} renderer   constructed; need not be init()ed
+ * @param {object} THREE                    the `three/webgpu` namespace
+ * @returns {number} how many types had to be repaired
+ */
+export function patchNodeMaterialTypeLookup(renderer, THREE) {
+  const library = renderer?.nodes?.library;
+  const table = library?.materialNodes;
+  if (!table?.set || !THREE) return 0;
+
+  // Every pair StandardNodeLibrary registers, by the `type` string the plain
+  // material reports. Kept as literals rather than read off `new Klass().type`
+  // so the patch costs nothing and cannot itself be defeated by minification.
+  const PAIRS = [
+    ['MeshStandardMaterial', THREE.MeshStandardNodeMaterial],
+    ['MeshPhysicalMaterial', THREE.MeshPhysicalNodeMaterial],
+    ['MeshBasicMaterial', THREE.MeshBasicNodeMaterial],
+    ['MeshLambertMaterial', THREE.MeshLambertNodeMaterial],
+    ['MeshPhongMaterial', THREE.MeshPhongNodeMaterial],
+    ['MeshToonMaterial', THREE.MeshToonNodeMaterial],
+    ['MeshNormalMaterial', THREE.MeshNormalNodeMaterial],
+    ['MeshMatcapMaterial', THREE.MeshMatcapNodeMaterial],
+    ['LineBasicMaterial', THREE.LineBasicNodeMaterial],
+    ['LineDashedMaterial', THREE.LineDashedNodeMaterial],
+    ['PointsMaterial', THREE.PointsNodeMaterial],
+    ['SpriteMaterial', THREE.SpriteNodeMaterial],
+    ['ShadowMaterial', THREE.ShadowNodeMaterial]
+  ];
+
+  let fixed = 0;
+  for (const [type, nodeClass] of PAIRS) {
+    if (typeof nodeClass !== 'function' || table.has(type)) continue;
+    table.set(type, nodeClass);
+    fixed++;
+  }
+  return fixed;
+}

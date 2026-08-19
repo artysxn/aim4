@@ -6,6 +6,7 @@
 // ---------------------------------------------------------------------------
 
 import * as THREE from 'three/webgpu';
+import { packFetch } from './packFetch.js';
 import { bloom, screenUV, texture } from 'three/webgpu';
 import { installGrade, makeLut } from './grade.js';
 import { mapBloomParams } from './lookBloom.js';
@@ -30,7 +31,7 @@ export const MAP_LOOK = {
 export async function loadPostLut(pack, manifest) {
   if (!manifest.post?.lut || !manifest.post.lutDim) return null;
   try {
-    const res = await fetch(`${pack.base}/${manifest.post.lut}${pack.v}`);
+    const res = await packFetch(`${pack.base}/${manifest.post.lut}${pack.v}`);
     if (!res.ok) return null;
     return { lut: makeLut(await res.arrayBuffer(), manifest.post.lutDim), dim: manifest.post.lutDim };
   } catch (e) {

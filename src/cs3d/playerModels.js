@@ -45,6 +45,7 @@ import { IrradianceNode, PhysicalLightingModel, float, texture, uniform, transfo
 import { WEAPON_SPEED, DEFAULT_WEAPON_SPEED } from '../../shared/sim/constants.js';
 import { WALK_SPEED_SCALE } from '../../shared/sim3d/constants.js';
 import { assetBase } from './mapLoader.js';
+import { packFetch } from './packFetch.js';
 import { SpecularOnlyEnvironmentNode } from './materials.js';
 
 export const PLAYERS_PACK_VERSION = 1;
@@ -395,7 +396,7 @@ export class PlayerModels {
   }
 
   async _load() {
-    const res = await fetch(`${this.base}/manifest.json`, { cache: 'no-cache' });
+    const res = await packFetch(`${this.base}/manifest.json`, { cache: 'no-cache' });
     if (!res.ok) throw new Error(`no players pack (${res.status} from ${this.base}/manifest.json)`);
     const manifest = await res.json();
     if (manifest.version !== PLAYERS_PACK_VERSION) {

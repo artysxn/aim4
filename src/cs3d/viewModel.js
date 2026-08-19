@@ -35,6 +35,7 @@ import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.j
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { AnimationMixer, LoopOnce, LoopRepeat } from 'three';
 import { assetBase } from './mapLoader.js';
+import { packFetch, loadWithRetry } from './packFetch.js';
 import { UNIT_M } from '../../shared/sim3d/units.js';
 import { VIEW_RECOIL_TRACKING } from '../../shared/sim3d/recoil.js';
 import { reloadClipAliases } from './viewModelClips.js';
@@ -292,7 +293,7 @@ export class ViewModelAssets {
   }
 
   async _load() {
-    const res = await fetch(`${this.base}/manifest.json`, { cache: 'no-cache' });
+    const res = await packFetch(`${this.base}/manifest.json`, { cache: 'no-cache' });
     if (!res.ok) throw new Error(`no weapons pack (${res.status} from ${this.base}/manifest.json)`);
     const manifest = await res.json();
     if (manifest.version !== WEAPONS_PACK_VERSION) {
@@ -338,9 +339,9 @@ export class ViewModelAssets {
   }
 
   _fetch(file) {
-    return new Promise((resolve, reject) =>
-      this._loader.load(`${this.base}/${file}${this._v}`, resolve, undefined, (e) => reject(new Error(`${file}: ${e?.message || e}`)))
-    );
+    return loadWithRetry(this._loader, `${this.base}/${file}${this._v}`).catch((e) => {
+      throw new Error(`${file}: ${e?.message || e}`);
+    });
   }
 
   /** The table row for a weapon, by bare name (`ak47`). */

@@ -214,3 +214,79 @@ npm run cs3d:build
 That is import + pack for every map found in the drop. Expect a ~17 GB
 intermediate under `server/data/cs3d/raw/`, which is gitignored and can be
 deleted afterwards — only `pack/` is served.
+
+## Serving the packs: get off `pub-*.r2.dev`
+
+The packs are served from a Cloudflare R2 bucket through its public
+development URL, `https://pub-<hash>.r2.dev`. **That domain is rate limited**,
+Cloudflare says so in as many words, and it is not a theoretical problem: it is
+what made Anubis render with nine of its seventy-four geometry tiles missing on
+a live page, and Dust 2 with holes of its own.
+
+Loading a map opens roughly fifteen requests at once — four geometry workers,
+the texture bundle, the lightmap, the shadow mask, the probe grid, plus the
+player, weapon, fx and bullet packs — and some of them come back 429 or with
+the socket dropped. The browser reports the dropped socket as a CORS failure
+with a **null status**, because an error page carries no
+`Access-Control-Allow-Origin`, which is why it reads as a configuration problem
+rather than a throttle. Measured against the live bucket on 2026-08-19: twelve
+concurrent HEADs turned ~100 objects into 429s in a row; four sequential ones a
+second apart never failed once.
+
+`src/cs3d/packFetch.js` retries through it and `MapPack._loadGroups` takes a
+second pass at anything still missing, so a map now loads whole. Keep both — a
+CDN edge drops the odd connection whatever the domain. But the rate limit
+itself only goes away with a **custom domain bound to the bucket**, which is
+five minutes of dashboard work:
+
+1. **Cloudflare dashboard → R2 → the bucket → Settings → Public access →
+   Custom domains → Connect domain.** Enter `cdn.aim4.io`. The domain has to be
+   on a zone in the same Cloudflare account; the DNS record is created for you
+   and proxied (orange cloud). Certificate issuance is a minute or two.
+2. **Settings → CORS policy** on the same bucket. The r2.dev URL comes with a
+   permissive default; a custom domain does not, and without a rule every fetch
+   fails at once instead of occasionally, which is a much louder version of the
+   same bug. Minimum:
+
+   ```json
+   [
+     {
+       "AllowedOrigins": ["https://www.aim4.io", "https://aim4.io"],
+       "AllowedMethods": ["GET", "HEAD"],
+       "AllowedHeaders": ["range"],
+       "ExposeHeaders": ["Content-Length", "Content-Range", "Accept-Ranges"],
+       "MaxAgeSeconds": 86400
+     }
+   ]
+   ```
+
+   `Range` matters: `tex.bin` is streamed. The exposed headers are the ones the
+   loader reads its progress off, and they are the same set
+   `scripts/cs3d-upload.mjs` documents.
+3. **Point the client at it.** `VITE_CS3D_ASSET_BASE=https://cdn.aim4.io` in
+   the deploy environment, then redeploy. It is read at build time
+   (`src/cs3d/mapLoader.js` `assetBase()`), so a redeploy is required — setting
+   the variable alone changes nothing. Unset, the loader falls back to the API
+   host's `/api/cs3d`, which serves the same files from the origin box.
+4. **Verify before trusting it.**
+
+   ```bash
+   npm run cs3d:audit -- --base https://cdn.aim4.io
+   ```
+
+   Every file every manifest names, checked for MISSING (404), STALE (bytes
+   differ from the local pack) and THROTTLED (429). It should print `ok` for
+   all eleven packs. `--notes` also shows the harmless ones (a manifest byte
+   count left stale by `cs3d:split`, which only skews the loading bar).
+
+Caching does not need changing: `cs3d-upload.mjs` already writes everything
+except `manifest.json` as `immutable` for a year, and the loader versions every
+URL with the manifest's timestamp.
+
+### Leave `geo.orig/` out of the bucket
+
+`npm run cs3d:split` keeps the pre-split geometry in `geo.orig/` beside `geo/`
+so `--restore` can put it back. Nothing ever fetches it — the loader only asks
+for files the manifest names — and it is about as large as the pack itself.
+`cs3d-upload.mjs` skips it (`SKIP_DIRS`); it was walking it until 2026-08-19,
+which would have put 458 MB of dead objects across six maps into the bucket.

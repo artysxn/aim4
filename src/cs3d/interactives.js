@@ -32,6 +32,7 @@
 // ---------------------------------------------------------------------------
 
 import * as THREE from 'three/webgpu';
+import { packFetch, packFetchOk } from './packFetch.js';
 import { positionGeometry, step, uniform, vec2 } from 'three/webgpu';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
@@ -112,7 +113,7 @@ export class Interactives {
   async load(base, v = '') {
     let doc = null;
     try {
-      const res = await fetch(`${base}/interactives.json${v}`);
+      const res = await packFetch(`${base}/interactives.json${v}`);
       if (!res.ok) return false;
       doc = await res.json();
     } catch {
@@ -139,8 +140,7 @@ export class Interactives {
   }
 
   async _loadGeometry(url) {
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`${url}: ${res.status}`);
+    const res = await packFetchOk(url, 'interactives geometry');
     const buf = await res.arrayBuffer();
     const gltf = await new Promise((resolve, reject) => this._gltf.parse(buf, '', resolve, reject));
     gltf.scene.updateMatrixWorld(true);

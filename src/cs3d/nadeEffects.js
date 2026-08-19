@@ -97,6 +97,13 @@ export const HE_DAMAGE = 99;
 const HE_FLAME = 0.165;
 const HE_FLASH = 0.07;
 const HE_SMOKE = 1.5;
+/**
+ * How long an HE's smoke hangs about, which is the whole effect's life: the
+ * fire and the flash are over in a tenth of a second and this is what is left.
+ * Exported because a demo has to decide whether to create the effect at all
+ * before it has one to read `fx.life` off (src/cs3d/demoNades.js).
+ */
+export const HE_SECONDS = HE_SMOKE;
 /** Ring-wave travel uses the original 0.11s beat so a longer flame does not fly further. */
 const HE_FLAME_THROW = 0.11;
 
@@ -402,6 +409,17 @@ export class NadeEffects {
   }
 
   /**
+   * Is there a map to trace against yet?
+   *
+   * A flash solved with no collision has no occlusion at all — everyone in
+   * range is blinded through every wall — so a caller that CACHES its flash
+   * solutions (demoNades.js does) has to know not to keep that answer.
+   */
+  hasCollider() {
+    return !!this.getCollider();
+  }
+
+  /**
    * Flash LOS: a ray, not a hull, over the light band. Doors come from movers
    * because their static hulls are masked out of the BVH.
    */
@@ -497,13 +515,67 @@ export class NadeEffects {
    * @param {{x,y,z}|null} [o.vel]     the velocity it arrived with
    * @param {string} [o.side]          who threw it
    */
-  spawn({ type, pos, normal = null, vel = null, side = null }) {
-    if (type === 'smokegrenade') return this._smoke(pos, side || this.getSide());
-    if (type === 'molotov' || type === 'incgrenade') return this._fire(pos, vel, type);
-    if (type === 'hegrenade') return this._he(pos);
-    if (type === 'flashbang') return this._flash(pos);
-    if (type === 'decoy') return this._decoy(pos);
-    return null;
+  spawn({ type, pos, normal = null, vel = null, side = null, driven = false }) {
+    let fx = null;
+    if (type === 'smokegrenade') fx = this._smoke(pos, side || this.getSide());
+    else if (type === 'molotov' || type === 'incgrenade') fx = this._fire(pos, vel, type);
+    else if (type === 'hegrenade') fx = this._he(pos);
+    else if (type === 'flashbang') fx = this._flash(pos);
+    else if (type === 'decoy') fx = this._decoy(pos);
+    if (fx && driven) {
+      fx.driven = true;
+      if (fx.blast) fx.blast.driven = true;
+    }
+    return fx;
+  }
+
+  /**
+   * Put an effect at an exact age, instead of letting the clock carry it there.
+   *
+   * Everything drawn here is already a pure function of `fx.age` — the fire
+   * poses from it, the blast poses from it, and a smoke cell's opacity is
+   * `cellOpacity(vol, idx)` over `vol.age`. Nothing integrates. So a caller
+   * that knows what time it is can simply say so, and that is what makes demo
+   * playback work: the utility in a replayed round is derived from the
+   * playhead every frame, so scrubbing backwards costs nothing and lands on
+   * exactly the frame it should.
+   *
+   * Only the smoke has any state that is not a function of age — the holes an
+   * HE punched in it, which decay on their own timers — so forward motion is
+   * handed to `stepSmokeVolume` as a delta and those decay with it. Going
+   * backwards, the caller is expected to have rebuilt the cloud (see
+   * demoNades.js): there is no undo for a hole.
+   *
+   * @param {object} fx  a handle from `spawn`
+   * @param {number} age seconds since detonation
+   */
+  setAge(fx, age) {
+    if (!fx) return;
+    const prev = fx.age;
+    fx.age = age;
+    if (fx.kind === 'smoke') {
+      const delta = age - prev;
+      if (delta > 0) stepSmokeVolume(fx.vol, delta);
+      else fx.vol.age = age;
+      this._poseSmoke(fx);
+    } else if (fx.kind === 'fire') this._poseFire(fx);
+    else if (fx.kind === 'he') {
+      // The blast's displacement of any smoke it went off inside ages with it.
+      if (fx.blast) fx.blast.age = age;
+      this._stepHe(fx);
+    } else if (fx.kind === 'decoy') this._stepDecoy(fx);
+  }
+
+  /** Take one effect out, without waiting for its life to run out. */
+  remove(fx) {
+    const i = this.live.indexOf(fx);
+    if (i < 0) return;
+    this.live.splice(i, 1);
+    // A driven blast is exempt from the clock's ageing, so nothing else would
+    // ever take it out of the displacement list.
+    const b = fx.blast ? this._hes.indexOf(fx.blast) : -1;
+    if (b >= 0) this._hes.splice(b, 1);
+    this._dispose(fx);
   }
 
   // ---- smoke ---------------------------------------------------------------
@@ -893,8 +965,11 @@ export class NadeEffects {
     this.live.push(fx);
     // The march's displacement wants it in scene space, with an age.
     const [x, y, z] = sourceToScene(pos.x, pos.y, pos.z);
-    this._hes.unshift({ x, y, z, age: 0 });
+    const blast = { x, y, z, age: 0, driven: false };
+    this._hes.unshift(blast);
     if (this._hes.length > HE_SLOTS) this._hes.length = HE_SLOTS;
+    // Kept on the fx so `setAge` can carry the two together.
+    fx.blast = blast;
     // ...and it opens up any smoke it went off inside, for the sim's sake.
     this.pushSmokes(pos);
     this._stepHe(fx);
@@ -1096,12 +1171,19 @@ export class NadeEffects {
     // Blasts age for the smoke march whether or not their own effect is still
     // drawing: the hole one leaves outlives the fire by several seconds.
     for (let i = this._hes.length - 1; i >= 0; i--) {
+      // Driven blasts are aged by their owner, the same as driven effects.
+      if (this._hes[i].driven) continue;
       this._hes[i].age += dt;
       if (this._hes[i].age > HE_MEMORY) this._hes.splice(i, 1);
     }
 
     for (let i = this.live.length - 1; i >= 0; i--) {
       const fx = this.live[i];
+      // A driven effect has an owner that sets its age from somewhere else
+      // (demoNades.js, from the playhead). The clock must not touch it — not
+      // its age, not its pose, and above all not its lifetime, or a replayed
+      // smoke would expire on wall-clock time while the demo was paused.
+      if (fx.driven) continue;
       fx.age += dt;
       if (fx.kind === 'smoke') {
         stepSmokeVolume(fx.vol, dt);
@@ -1136,6 +1218,10 @@ export class NadeEffects {
   }
 
   _dispose(fx) {
+    // Anything holding a handle to this (demoNades.js keeps one per event) has
+    // to be able to tell that it is gone — `clear()` on a map change or a
+    // practice reset takes effects out from under those owners.
+    fx.disposed = true;
     for (const l of fx.layers || []) l.dispose();
     fx.layers = null;
     fx.smoke?.dispose();

@@ -24,6 +24,7 @@ import * as THREE from 'three/webgpu';
 import { clamp, dot, max, mix, normalize, positionLocal, pow, uniform } from 'three/webgpu';
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
 import { MapFog } from './fog.js';
+import { loadWithRetry } from './packFetch.js';
 
 /** Half-width, in units, of the region the sun's shadow map covers. */
 const SHADOW_EXTENT = 2200;
@@ -65,28 +66,53 @@ const ENV_MAX = 3.0;
  */
 const SKY_PROBE_SCALE = 0.1;
 /**
- * Where the visible sky's mean should land in linear output after exposure,
- * before tonemapping. The world's exposure is set from the baked atlas, which
- * says nothing about how bright the sky above it was authored: Inferno's sky
- * came out at 0.15 that way, a dark teal lid over a normally lit map. So the
- * sky is calibrated separately, against its own measured brightness.
- */
-const SKY_TARGET = 1.0;
-/**
- * Per-map override, keyed by slug.
+ * Where the visible sky's upper quartile should land in linear output after
+ * exposure, before tonemapping. The world's exposure is set from the baked
+ * atlas, which says nothing about how bright the sky above it was authored:
+ * Inferno's sky came out at 0.15 that way, a dark teal lid over a normally lit
+ * map. So the sky is calibrated separately, against its own measured brightness.
  *
- * Skies with real structure (layered cloud, a hot sun disc) cannot have their
- * mean driven to 1.0: that puts the average pixel at white and clips the
- * highlights into one flat glare. Half the target leaves the disc room above
- * the mean. Smooth-gradient skies stay at 1.0 — lowering those only bands them.
+ * The statistic is a PERCENTILE and not a mean, and that is the whole fix for
+ * what these maps used to look like. A mean is dragged by whatever is brightest
+ * in the frame, and every one of these skies has something: Anubis a band of
+ * desert haze four times its own median, Cache a sun disc that peaks at 5.1
+ * against a sky of 0.19. Driving the mean of Anubis' sky to 1.0 put its top
+ * decile at 1.75 and its horizon band at 2.9 — solid white, and the fog takes
+ * its colour from that band, so the entire map was hazed in white paint.
+ * Anchoring the p75 instead leaves the bright structure room above it.
+ *
+ * 0.65 is where the seven packed maps' own authored brightness already sits
+ * (measured 2026-08-19: 0.41, 0.41, 0.51, 0.64, 0.66, 0.81, 1.02), so the
+ * calibration now nudges what the map author wrote instead of overriding it.
  */
-const MAP_SKY_TARGET = {
-  ancient: 0.5,
-  inferno: 0.5
-};
+const SKY_TARGET = 0.65;
 /** How far the calibration is allowed to move the authored sky brightness. */
 const SKY_GAIN_MIN = 0.5;
 const SKY_GAIN_MAX = 6;
+/**
+ * The sky texture is a full sphere, but only the top half of it is ever on
+ * screen — the map's own geometry and its 3D skybox cover the rest — and the
+ * bottom half of a CS2 sky cube is not sky at all. Anubis' lower hemisphere is
+ * a flat 3.88 and Inferno's a flat 5.1, the bottom cube face the game never
+ * shows. Measuring into it is what made both maps nuclear.
+ *
+ * So nothing is sampled at or below the horizon row, and a 2% guard above it
+ * keeps the resample's bleed from the bottom face out too.
+ */
+const SKY_VISIBLE_END = 0.48;
+/**
+ * The band the haze takes its colour from: roughly 7° to 36° above the
+ * horizon. That is the sky a first-person view sees BEHIND distant geometry,
+ * which is what a cubemap fog is approximating.
+ *
+ * It used to be 0.4–0.6 of the image — deliberately straddling the horizon,
+ * on the reasoning that this is the band that fills most of a first-person
+ * view. It is, but more than half of those rows are below the horizon, so on
+ * Anubis the fog colour was 60% bottom-cube-face and came out at 2.9× white,
+ * on a map whose fog strength is also multiplied by four (fog.js MAP_FOG).
+ * Every distant surface was painted over in milk.
+ */
+const SKY_HORIZON_BAND = [0.3, 0.46];
 
 /**
  * The procedural sky, as a node material: a power curve from horizon to
@@ -176,12 +202,21 @@ function rotateEquirectYaw(tex, rad) {
 }
 
 /**
- * What the sky looks like, from the RGBELoader's float/half data: the mean of
- * the upper hemisphere (what an upward-facing surface sees, which calibrates
- * the probe) plus the zenith and horizon bands, which are the two colours the
- * fog reads. All linear.
+ * What the sky looks like, from the RGBELoader's float/half data. All linear.
+ *
+ *   mean     solid-angle-weighted average of the visible sky — what an
+ *            upward-facing surface sees, which is what calibrates the probe.
+ *   p75      upper quartile of the same pixels, unweighted. What SKY_TARGET
+ *            anchors the background brightness on.
+ *   zenith   overhead, and
+ *   horizon  the band above the skyline: the two colours the fog reads.
+ *
+ * Nothing below `SKY_VISIBLE_END` is sampled by any of them. That row is the
+ * horizon, and a CS2 sky cube's bottom face is a flat bright fill the game
+ * never shows — 3.88 on Anubis, 5.1 on Inferno. Every number here used to be
+ * pulled up by it and the fog colour was mostly made of it.
  */
-function measureSky(tex) {
+export function measureSky(tex) {
   const img = tex.image;
   const data = img?.data;
   if (!data) return null;
@@ -209,15 +244,29 @@ function measureSky(tex) {
     }
     return sw ? new THREE.Color(sr / sw, sg / sw, sb / sw) : null;
   };
-  // Row 0 is up (tools/cs3d-tex writes the cube out that way).
-  const mean = band(0, h / 2);
+  // Row 0 is up (tools/cs3d-tex writes the cube out that way), and nothing
+  // below SKY_VISIBLE_END is ever measured: see the constant.
+  const end = h * SKY_VISIBLE_END;
+  const mean = band(0, end);
   if (!mean) return null;
+  // Luminance percentile over the same visible sky, unweighted — this one is
+  // "how bright does it look", not an irradiance, so every visible pixel counts
+  // once. Robust to a sun disc or a hot haze band in a way a mean is not.
+  const lums = [];
+  for (let y = 0; y < end; y += step) {
+    for (let x = 0; x < w; x += step) {
+      const o = (y * w + x) * stride;
+      lums.push(lum(at(o), at(o + 1), at(o + 2)));
+    }
+  }
+  lums.sort((a, b) => a - b);
+  const quantile = (q) => (lums.length ? lums[Math.min(lums.length - 1, Math.floor(q * lums.length))] : 0);
   return {
     mean: [mean.r, mean.g, mean.b],
+    /** Upper quartile of the visible sky's luminance. What SKY_TARGET anchors. */
+    p75: quantile(0.75),
     zenith: band(0, h * 0.2) || mean.clone(),
-    // Straddling the horizon on purpose: it is the band that fills most of a
-    // first-person view and the one distance haze takes its colour from.
-    horizon: band(h * 0.4, h * 0.6) || mean.clone()
+    horizon: band(h * SKY_HORIZON_BAND[0], h * SKY_HORIZON_BAND[1]) || mean.clone()
   };
 }
 
@@ -432,9 +481,7 @@ export class MapLighting {
   async loadSkybox(base, sky, versionQuery = '') {
     const url = sky?.equirect;
     if (!url || !this.renderer) return false;
-    const tex = await new Promise((resolve, reject) => {
-      new RGBELoader().load(`${base}/${url}${versionQuery}`, resolve, undefined, reject);
-    }).catch((e) => {
+    const tex = await loadWithRetry(new RGBELoader(), `${base}/${url}${versionQuery}`).catch((e) => {
       console.warn('cs3d: skybox load failed, keeping procedural sky', e);
       return null;
     });
@@ -455,9 +502,13 @@ export class MapLighting {
       // What the authored brightness would actually put on screen, and how far
       // off SKY_TARGET that is. Bounded, so a map that means to have a dim sky
       // keeps a dim one — it just stops being black.
-      const onScreen = Math.max(1e-4, this.exposure * this.bgIntensity * skyLum);
-      const target = MAP_SKY_TARGET[this.manifest.map?.slug] ?? SKY_TARGET;
-      const gain = Math.min(SKY_GAIN_MAX, Math.max(SKY_GAIN_MIN, target / onScreen));
+      //
+      // Anchored on the upper quartile of the VISIBLE sky, not on its mean:
+      // see SKY_TARGET for why the mean cannot be used and what it did to
+      // Anubis.
+      const visible = Math.max(1e-3, measured.p75 || skyLum);
+      const onScreen = Math.max(1e-4, this.exposure * this.bgIntensity * visible);
+      const gain = Math.min(SKY_GAIN_MAX, Math.max(SKY_GAIN_MIN, SKY_TARGET / onScreen));
       this.bgIntensity *= gain;
       // Only when there is no bake to take it from: the sky alone misses the
       // ground bounce (see skyAmbient in the constructor), so it is the

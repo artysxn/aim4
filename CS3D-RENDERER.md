@@ -1,5 +1,144 @@
 # CS3D renderer notes
 
+## Status after the fifth pass (2026-08-19): delivery, the sky, and real utility in replays
+
+Three unrelated-looking symptoms, two shared causes.
+
+**Maps were rendering with holes in them, on every map.** Anubis lost nine of
+its seventy-four geometry tiles on a live page; Dust 2 and the rest lost
+different ones on different loads. It was not visleaves, not mesh LOD, and not
+the packs: every object is present on the host and every byte matches. It is
+the DELIVERY. `pub-*.r2.dev` is rate limited — Cloudflare documents it as
+unsuitable for production — and a map load opens a burst against it that is
+enough to earn a 429 or a dropped socket: four geometry workers, the texture
+bundle, the lightmap, the shadow mask, the probe grid, and the player, weapon,
+fx and bullet packs. Twelve concurrent HEADs against the bucket turned ~100
+objects into 429s in a row; four a second apart never failed. The browser
+reports the dropped socket as a CORS failure with a null status, because an
+error page carries no `Access-Control-Allow-Origin`, which is what made it look
+like a config problem.
+
+`MapPack._loadGroups` then swallowed it — one `console.warn` per lost tile, and
+that slab of the map did not exist for the rest of the session. Now:
+
+- `src/cs3d/packFetch.js` is the single fetch every pack file goes through. It
+  retries a network error / 429 / 408 / 5xx with backoff, holds **every** pack
+  request off after a 429 (the limit is per-origin, so backing one worker off
+  while three others hammer only moves which request fails), honours
+  `Retry-After` up to a cap, and caps total in-flight pack requests at 6.
+  A 404 is not retried. `loadWithRetry` gives the same policy to the loaders
+  that do their own networking (sky HDR, sprite sheets, weapon glbs).
+- `_loadGroups` takes a **second pass** over anything still missing once the
+  rest of the map is in, and a tile that is lost after that is a
+  `console.error` naming the files, not a warning. `pack.missingGroups` says
+  which.
+- `npm run cs3d:audit` (`scripts/cs3d-audit.mjs`) proves the other half: every
+  file every manifest names, checked against the host for MISSING (404),
+  STALE (bytes differ from the local pack) and THROTTLED (429, i.e. the audit's
+  own fault). It found `bullets/` never uploaded at all — which is the whole
+  reason the site had no bullet holes and no tracers — and 15 `geo/*.glb`
+  across six maps left stale by `cs3d:split` runs after the last upload.
+
+The real fix for the rate limit is a custom domain in front of the bucket. The
+retry is worth keeping either way; a CDN edge drops connections occasionally
+whatever the domain.
+
+**The black boxes were a three.js bug that only exists in a minified build.**
+`NodeLibrary.addMaterial(nodeClass, materialClass)` registers under
+`materialClass.name`; `fromMaterial(material)` looks up `material.type`. Those
+are the same string in `npm run dev` and cannot be in `npm run build`, where
+esbuild renames the class bindings and the table comes out keyed `uy`, `ul`,
+`ly`. Every lookup misses, and the deployed console fills with
+
+    NodeMaterial: Material "MeshStandardMaterial" is not compatible.
+
+That is a `console.error`, and it is not cosmetic: the fallback is a bare
+`new NodeMaterial()` carrying none of the material it replaced — no colour, no
+map, no opacity, no side. So everything not explicitly a node material drew as
+an untextured default: `MaterialLibrary`'s interim flat-colour stand-ins (the
+78 in the log), the grey `phys-placeholder`, the flat view's Lambert set, the
+demo bodies and every grenade trail. A stand-in whose colour is thrown away is
+not a stand-in, it is a black box.
+
+`patchNodeMaterialTypeLookup` in `src/cs3d/threePatches.js` registers the same
+node classes a second time under the type strings the lookup actually uses.
+`addType` refuses a redefinition, so on a build where the names survive the
+patch adds nothing and reports 0. It runs beside the r169 attribute-upload
+patch, right after `renderer.init()`.
+
+**The sky was nuclear, and it was the fog.** A CS2 sky cube's BOTTOM face is
+not sky — the map and its 3D skybox cover the lower hemisphere in game, so the
+face is a flat bright fill nobody sees: 3.88 on Anubis, 5.1 on Inferno, against
+skies whose median is around 0.4. `measureSky` sampled the fog's horizon colour
+from rows 0.4–0.6 of the equirect, deliberately straddling the horizon, so more
+than half of it came out of that fill. `fog.js` paints every distant surface
+with that colour, and Anubis also multiplies its fog strength by four
+(`MAP_FOG`), so the map was hazed in white paint. Measured, pre-tonemap:
+
+| map | fog haze before | after |
+|---|---|---|
+| ancient | 0.38 | 0.58 |
+| anubis | **2.94** | 1.07 |
+| cache | 0.70 | 0.90 |
+| dust2 | **1.22** | 0.70 |
+| inferno | **1.19** | 0.73 |
+| mirage | **1.44** | 0.68 |
+| nuke | **1.71** | 0.73 |
+
+Anything over 1.0 is haze brighter than white. Two changes: `measureSky` now
+samples nothing at or below the horizon (with a 2% guard for the resample's
+bleed) and takes its horizon band from 0.30–0.46, roughly 7°–36° above the
+skyline; and the background brightness is anchored on the **p75** of the
+visible sky rather than its mean. A mean is dragged by whatever is brightest —
+Anubis' desert haze runs 4× its own median, Cache's sun disc peaks at 5.1
+against a sky of 0.19 — and driving Anubis' mean to 1.0 is what put its top
+decile at 1.75. A percentile leaves the bright structure room above it, and it
+made the per-map `MAP_SKY_TARGET` override table unnecessary: `SKY_TARGET` is
+now 0.65 for every map, which is where all seven maps' own authored brightness
+already sat. `src/cs3d/sky.test.js` asserts both, against the packs.
+
+**Replayed grenades are the practice engine now.** `src/cs3d/demoNades.js`
+drives `NadeEffects` from the demo's playhead, so a replayed smoke is the same
+raymarched volume you get when you throw one, a molotov burns with the game's
+flame sheets and leaves the same scorch, and an HE is the same ring-wave blast.
+The old placeholders (a grey sphere, an orange disc) are gone.
+
+The problem was the CLOCK: `NadeEffects` ages effects by `dt`, and a playhead
+pauses, runs at ¼× and 4×, steps a tick and jumps backwards. The reconciliation
+is that `NadeEffects` never needed a clock — every effect in it is already a
+pure function of `fx.age` — so `setAge(fx, age)` was added and demo effects are
+marked `driven`, which exempts them from the clock's ageing and disposal
+entirely. Scrubbing lands on exactly the right frame at no cost.
+
+The one piece of state that is *not* a function of age is the holes an HE
+punches in a smoke, which heal on their own timers and cannot be un-punched. A
+cloud created part-way through its life has its age walked FORWARD through
+every blast that went off inside it, punching at each stop, so the hole state
+is reproduced rather than approximated. Events are kept in DETONATION order,
+not the parser's throw order, so a blast always finds the cloud it opened.
+
+Also in that file:
+
+- **Trajectory.** The recorded waypoints, drawn as the grenade model flying the
+  path plus the line it took, with practice mode's colours and 2.5 s linger.
+  Recorded and not re-simulated: the demo has the positions the projectile
+  actually reported, and a re-sim from a guessed release would disagree at
+  every bounce.
+- **Flash.** RadiusFlash against the POV player's eye and view angle **at the
+  detonation tick** — where they were looking when it popped is what decides
+  it — then read off the blind curve as a function of elapsed demo time. The
+  overlay is the worse of that and the local player's own. The solution is
+  cached per (flash, viewer), and not cached at all before the map's collision
+  has arrived, since a flash with nothing to trace against blinds through
+  walls.
+
+`src/cs3d/demoNades.test.js` covers the scheduling (a stub for the effects,
+which are TSL and only compile at draw time): what stands at a given tick, at
+what age, pause, 4×, forward jump, backward scrub, detonation ordering, hole
+replay, the molotov's downrange direction off the path, the flash curve, the
+trail's draw range and fade, and a handle pulled out from under the driver by
+`NadeEffects.clear()`.
+
 ## Status after the fourth pass (2026-08-17): player models, clips, the movement sim in the explorer
 
 The first slice of CS3D-ENGINE-PLAN Group C (E-10 player models, E-8

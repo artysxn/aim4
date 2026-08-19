@@ -26,6 +26,7 @@ import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.j
 import { MeshBVH } from 'three-mesh-bvh';
 import { MaterialLibrary } from './materials.js';
 import { decodeRgbeAdd, RGBE_BYTES } from '../../shared/cs3d/rgbe.js';
+import { packFetch, packFetchOk, packFetchStats } from './packFetch.js';
 
 export const PACK_VERSION = 2;
 const GEO_CONCURRENCY = 4;
@@ -587,6 +588,14 @@ export class MapPack {
     this.bytesLoaded = 0;
     this.bytesTotal = 0;
     this.tileCount = 0;
+    /**
+     * Geometry tiles that never arrived, after the retries in packFetch.js and
+     * the second pass in _loadGroups. Non-empty means the map on screen has
+     * holes in it and nothing else in the app should trust its geometry.
+     */
+    this.missingGroups = [];
+    /** @type {((files: string[]) => void)|null} called once, if any tile is lost. */
+    this.onGroupsMissing = null;
     this.aborted = false;
     this.gltf = new GLTFLoader();
     this.gltf.setMeshoptDecoder(MeshoptDecoder);
@@ -610,7 +619,7 @@ export class MapPack {
 
   /** Fetch + parse the manifest only (callers that need sun/spawns before geometry). */
   async fetchManifest() {
-    const res = await fetch(`${this.base}/manifest.json`, { cache: 'no-cache' });
+    const res = await packFetch(`${this.base}/manifest.json`, { cache: 'no-cache' });
     if (!res.ok) throw new Error(`No pack for "${this.slug}" (${res.status} from ${this.base}/manifest.json)`);
     return res.json();
   }
@@ -645,7 +654,7 @@ export class MapPack {
     // Small, and everything that moves waits on it: fetched before the tiles.
     if (manifest.probeGrid) {
       try {
-        const res = await fetch(`${this.base}/${manifest.probeGrid.file}${this.v}`);
+        const res = await packFetch(`${this.base}/${manifest.probeGrid.file}${this.v}`);
         if (res.ok) this.probeGrid = new ProbeGrid(manifest.probeGrid, await res.arrayBuffer());
       } catch (e) {
         console.warn('cs3d: probe grid unavailable, dynamic bodies fall back to the sky probe', e);
@@ -680,8 +689,7 @@ export class MapPack {
   }
 
   async _fetchGlb(url) {
-    const res = await fetch(url + this.v);
-    if (!res.ok) throw new Error(`${url}: ${res.status}`);
+    const res = await packFetchOk(url + this.v, 'geometry');
     const buf = await res.arrayBuffer();
     return new Promise((resolve, reject) => this.gltf.parse(buf, '', resolve, reject));
   }
@@ -868,9 +876,25 @@ export class MapPack {
     this.onPhys(this.collider, ph);
   }
 
+  /**
+   * Every geometry tile, then a second pass over whatever did not arrive.
+   *
+   * A dropped group is not a cosmetic loss: each one is a slab of the map, and
+   * the tile that fails is a wall someone walks through or a roof that is not
+   * there. Before packFetch.js the loader logged a warning and moved on, which
+   * is how Anubis came to be missing nine of its seventy-four tiles on a live
+   * page — the CDN rate-limited the opening burst and nothing ever asked again.
+   *
+   * So there are two backstops. `packFetch` retries each request against a
+   * shared cooldown, and anything that still failed is retried once more HERE,
+   * after the rest of the map is in and the burst that caused it is over. Only
+   * then is a group given up on, and giving up is an error, not a warning.
+   */
   async _loadGroups(jobs) {
     let next = 0;
     let firstDone = false;
+    /** Jobs whose fetch or parse threw, for the second pass. */
+    const failed = [];
     const worker = async () => {
       while (next < jobs.length && !this.aborted) {
         const job = jobs[next++];
@@ -878,7 +902,7 @@ export class MapPack {
           const gltf = await this._fetchGlb(`${this.base}/${job.g.file}`);
           this._addGroup(gltf, job);
         } catch (e) {
-          console.warn(`cs3d: group ${job.g.file} failed`, e);
+          failed.push({ job, error: e });
         }
         this.groupsLoaded++;
         this.bytesLoaded += job.g.bytes || 0;
@@ -891,6 +915,30 @@ export class MapPack {
       }
     };
     await Promise.all(Array.from({ length: GEO_CONCURRENCY }, worker));
+
+    // Second pass: one at a time, with the rest of the load finished. Whatever
+    // squeezed the first attempt out is no longer competing with it.
+    const stillMissing = [];
+    for (const { job, error } of failed) {
+      if (this.aborted) break;
+      try {
+        const gltf = await this._fetchGlb(`${this.base}/${job.g.file}`);
+        this._addGroup(gltf, job);
+        console.warn(`cs3d: group ${job.g.file} recovered on the second pass (${error?.message || error})`);
+      } catch (e) {
+        stillMissing.push(job.g.file);
+        console.error(`cs3d: group ${job.g.file} LOST — this map is missing geometry`, e);
+      }
+    }
+    this.missingGroups = stillMissing;
+    if (stillMissing.length) {
+      console.error(
+        `cs3d: ${stillMissing.length}/${jobs.length} geometry tiles never loaded for "${this.slug}" ` +
+          `(${stillMissing.join(', ')}). The map is incomplete: walls and floors are missing. ` +
+          `${packFetchStats.rateLimited} request(s) were rate-limited by the asset host.`
+      );
+      this.onGroupsMissing?.(stillMissing);
+    }
   }
 
   /** The batch for a material id, created on first use from the manifest's totals. */

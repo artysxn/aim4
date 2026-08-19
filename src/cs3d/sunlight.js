@@ -24,6 +24,7 @@
 // ---------------------------------------------------------------------------
 
 import * as THREE from 'three/webgpu';
+import { packFetchOk } from './packFetch.js';
 
 /** The share of the sun a surface the mask calls shadowed still gets. */
 export const INDOOR = 0.2;
@@ -157,8 +158,7 @@ export class SunTracker {
  */
 export async function loadShadowMask(base, sm, versionQuery = '') {
   if (!sm?.file) return null;
-  const res = await fetch(`${base}/${sm.file}${versionQuery}`);
-  if (!res.ok) throw new Error(`shadowmask ${res.status}`);
+  const res = await packFetchOk(`${base}/${sm.file}${versionQuery}`, 'shadowmask');
   const bitmap = await createImageBitmap(await res.blob(), { premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
   const { width, height } = bitmap;
   const canvas = new OffscreenCanvas(width, height);

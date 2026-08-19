@@ -14,7 +14,7 @@ import { MapPack, assetBase } from './mapLoader.js';
 import { MapLighting } from './sky.js';
 import { installGrade } from './grade.js';
 import { createLook, createMapRenderer, loadPostLut, LIGHT_KEYS, LOOK_DEFAULTS, MAP_LOOK, setupBloom } from './look.js';
-import { patchWebGPUPartialAttributeUpload } from './threePatches.js';
+import { patchWebGPUPartialAttributeUpload, patchNodeMaterialTypeLookup } from './threePatches.js';
 import { Player } from './player.js';
 import { Controls } from './controls.js';
 import { Hud } from './hud.js';
@@ -22,6 +22,7 @@ import { createPracticeMatch } from './practiceMatch.js';
 import { createMatchHud } from './matchHud.js';
 import { FpsView } from './fpsView.js';
 import { DemoView } from './demoView.js';
+import { DemoNades } from './demoNades.js';
 import { sharedPlayerModels, liveBodies } from './playerModels.js';
 import { LiveBody } from './liveBody.js';
 import { createBuyMenu } from './buyMenu.js';
@@ -903,10 +904,31 @@ function playerAccuracyState() {
   };
 }
 
+/**
+ * The round's utility, drawn with the practice engine rather than with
+ * placeholders. It borrows `nadeEffects` outright — same smoke volume, same
+ * flame sheets, same RadiusFlash — and only supplies the clock, which for a
+ * demo is the playhead. See src/cs3d/demoNades.js.
+ */
+const demoNades = new DemoNades({
+  effects: nadeEffects,
+  // The grenade models the flights fly, from the weapons pack.
+  assets: vmAssets,
+  // A smoke takes its thrower's side, and a side is per ROUND (teams swap at
+  // half), so it is resolved against the round being watched.
+  sideOf: (playerId) => {
+    const meta = demoView?.meta;
+    const p = meta?.players?.find((q) => q.id === playerId);
+    if (!p) return '';
+    return (p.team === 1 ? meta.team1Side : meta.team2Side) || '';
+  }
+});
+
 const demoView = new DemoView({
   camera,
   getPack: () => pack,
   playerModels,
+  nades: demoNades,
   onChange: (dv) => {
     hud.setRoster(dv.active ? dv.roster() : null);
     hud.setDemoStatus(dv.status());
@@ -1189,6 +1211,7 @@ async function boot() {
       projectiles.attach(pack?.world || null);
       dropped.attach(pack?.world || null);
       nadeEffects.attach(pack?.world || null);
+      demoNades.attach(pack?.world || null);
       interactives.attach(pack?.world || null);
       shooting.attach(pack?.world || null);
       decals.attach(pack?.world || null);
@@ -1201,6 +1224,12 @@ async function boot() {
     // r169 cannot upload part of an attribute on WebGPU, which is exactly what
     // streaming tiles into a BatchedMesh does. See threePatches.js.
     patchWebGPUPartialAttributeUpload(renderer);
+    // ...and three's node-material lookup, which is keyed by constructor name
+    // and queried by `material.type`. Those agree in dev and cannot agree in a
+    // minified build, so on the deployed site every plain material fell back to
+    // an empty NodeMaterial and drew as an untextured box. See threePatches.js.
+    const repaired = patchNodeMaterialTypeLookup(renderer, THREE);
+    if (repaired) console.log(`cs3d: node material lookup repaired for ${repaired} material types (minified build)`);
     hud.setBackend(renderer.backend?.isWebGPUBackend ? 'webgpu' : 'webgl');
     // Manifest first: the sun, exposure and spawns come from it, and the
     // lighting has to exist before the first tile arrives.
@@ -1246,6 +1275,7 @@ async function boot() {
     projectiles.attach(pack.world);
     dropped.attach(pack.world);
     nadeEffects.attach(pack.world);
+    demoNades.attach(pack.world);
     interactives.attach(pack.world);
     shooting.attach(pack.world);
     // Bullet holes ride on the world root like everything else, so the two
@@ -1776,12 +1806,16 @@ function frame(now) {
     _shotClearAt = 0;
     hud.setShot(null);
   }
-  if (nadeEffects.flash !== _flashShown) {
-    _flashShown = nadeEffects.flash;
-    flashOverlay.style.opacity = _flashShown > 0.002 ? String(_flashShown) : '0';
-  }
   // After the player: in POV the demo owns the camera, and writing second wins.
   demoView.update(now);
+  // The overlay is the worse of the two blinds: one you walked into yourself,
+  // and one the player whose eyes you are borrowing walked into. Read AFTER
+  // demoView.update, which is what recomputes the demo's.
+  const flashNow = Math.max(nadeEffects.flash, demoNades.flash);
+  if (flashNow !== _flashShown) {
+    _flashShown = flashNow;
+    flashOverlay.style.opacity = _flashShown > 0.002 ? String(_flashShown) : '0';
+  }
   if (demoView.active) hud.setDemoStatus(demoView.status());
   // A body on screen is a shadow caster that walks and animates, so the sun's
   // cached shadow map (sky.js: static map, static sun, redraw only when the
@@ -1863,5 +1897,5 @@ requestAnimationFrame(frame);
 if (import.meta.env.DEV) {
   // `frame` too: a hidden tab gets no rAF, so driving it by hand is the only
   // way to render (and screenshot) the real path from a headless session.
-  window.__cs3d = { THREE, scene, camera, player, nadeEffects, projectiles, dropped, throwControl, get pack() { return pack; }, renderer, lighting: () => lighting, fpsView, demoView, playerModels, practiceBots, viewModel, vmPass, vmTuner, buyMenu, pauseMenu, match, matchHud, frame, renderFrame, sunTracker, get mapRenderer() { return mapRenderer; }, get perf() { return perf; } };
+  window.__cs3d = { THREE, scene, camera, player, nadeEffects, demoNades, projectiles, dropped, throwControl, get pack() { return pack; }, renderer, lighting: () => lighting, fpsView, demoView, playerModels, practiceBots, viewModel, vmPass, vmTuner, buyMenu, pauseMenu, match, matchHud, frame, renderFrame, sunTracker, get mapRenderer() { return mapRenderer; }, get perf() { return perf; } };
 }

@@ -63,6 +63,7 @@ import {
   vec4,
   vertexColor
 } from 'three/webgpu';
+import { packFetchOk } from './packFetch.js';
 
 /**
  * Baked irradiance → three irradiance units. The atlas stores outgoing light
@@ -547,8 +548,7 @@ export class MaterialLibrary {
   async _loadShadowMask() {
     const sm = this.manifest.shadowMask;
     if (!sm?.file) return;
-    const res = await fetch(`${this.base}/${sm.file}${this.versionQuery}`);
-    if (!res.ok) throw new Error(`shadowmask ${res.status}`);
+    const res = await packFetchOk(`${this.base}/${sm.file}${this.versionQuery}`, 'shadowmask');
     const bitmap = await createImageBitmap(await res.blob(), {
       premultiplyAlpha: 'none',
       colorSpaceConversion: 'none'
@@ -590,8 +590,7 @@ export class MaterialLibrary {
   async _loadLightmap() {
     const lm = this.manifest.lightmap;
     if (!lm?.file) return;
-    const res = await fetch(`${this.base}/${lm.file}${this.versionQuery}`);
-    if (!res.ok) throw new Error(`lightmap ${res.status}`);
+    const res = await packFetchOk(`${this.base}/${lm.file}${this.versionQuery}`, 'lightmap');
     const blob = await res.blob();
     const bitmap = await createImageBitmap(blob, { premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
     if (this.aborted) return;
@@ -617,8 +616,8 @@ export class MaterialLibrary {
         s.add(m.id);
       }
     }
-    const res = await fetch(`${this.base}/${this.manifest.tex.file}${this.versionQuery}`);
-    if (!res.ok || !res.body) throw new Error(`tex.bin ${res.status}`);
+    const res = await packFetchOk(`${this.base}/${this.manifest.tex.file}${this.versionQuery}`, 'tex.bin');
+    if (!res.body) throw new Error(`tex.bin ${res.status}: no body`);
     const total = Number(res.headers.get('content-length')) || this.bytesTotal;
     this.bytesTotal = total;
     const reader = res.body.getReader();

@@ -113,13 +113,27 @@ function fail(msg) {
   process.exit(1);
 }
 
+/**
+ * Directories inside a pack that are LOCAL ONLY and must never be uploaded.
+ *
+ * `geo.orig/` is `npm run cs3d:split`'s undo copy: the pre-split geometry, kept
+ * beside `geo/` so `--restore` can put it back. Nothing fetches it — the loader
+ * only ever asks for the files the manifest names — and it is byte-for-byte
+ * about as large as the pack itself. Left in the walk it added 458 MB of dead
+ * objects across six maps to the bucket, which is both the storage bill and,
+ * on a rate-limited origin, a much longer sync for no reason.
+ */
+const SKIP_DIRS = new Set(['geo.orig']);
+
 /** Every file under dir, as posix-style keys relative to it. */
 async function walk(dir, base = dir) {
   const out = [];
   for (const e of await fsp.readdir(dir, { withFileTypes: true })) {
     const full = path.join(dir, e.name);
-    if (e.isDirectory()) out.push(...(await walk(full, base)));
-    else if (e.isFile()) out.push({ full, key: path.relative(base, full).split(path.sep).join('/') });
+    if (e.isDirectory()) {
+      if (SKIP_DIRS.has(e.name)) continue;
+      out.push(...(await walk(full, base)));
+    } else if (e.isFile()) out.push({ full, key: path.relative(base, full).split(path.sep).join('/') });
   }
   return out;
 }
