@@ -318,6 +318,47 @@ screen shake — all matching.
   targets the way they can in game.
 - Depends on: E1 (fire timing is subtick), E2 (movement inaccuracy).
 
+**DONE (2026-08-19), and the guess above was right twice over.** The pattern is
+not in the files — but the GENERATOR's inputs are. `scripts/weapons.vdata`
+carries `m_nRecoilSeed` per weapon (223 for the AK-47, 38965 for the M4A4, 4100
+for the AWP) beside the angle and magnitude bounds, and CS2 builds the table at
+load from a seeded `ran1` stream exactly as CS:GO did. So the pattern is
+reproducible from the files after all, without measuring a single spray in game.
+
+Shipped:
+
+| file | what |
+|---|---|
+| `shared/sim3d/recoil.js` | the stream, the 64-entry table, the punch state machine, the recoil index |
+| `shared/sim3d/inaccuracy.js` | the two cones and the accuracy penalty |
+| `scripts/cs3d-spray-truth.mjs` | the measurement that proved it |
+
+The oracle turned out to be better than "measured in-game". **CS2 networks the
+recoil**: a GOTV demo carries `CCSPlayerPawn.m_aimPunchAngle` and
+`m_aimPunchAngleVel` per tick for every player, so six demos are 758 AK-47 and
+135 M4A4 sprays of ground truth for free. What that settled, none of it assumed:
+
+- the first table angle for seed 223 is 27.33°, and the first shot's measured
+  punch velocity is at 27.330° — the generator is confirmed, not inferred, and
+  the M4A4 and the Galil agree on their own seeds
+- the first shot's kick is exactly 0.75 of the weapon's magnitude
+- `vel[k] = D·vel[k-1] + M·û` solves to D = 0.63763 at *every* shot index of an
+  AK spray, and `exp(-4.5 × 0.1)` is 0.637628 — so `weapon_recoil_vel_decay`
+  is 4.5, measured rather than quoted
+
+A held AK spray now reproduces CS2's own punch to **0.029° RMS over 20 shots**
+on a pattern 5° tall, and `shared/sim3d/recoil.test.js` fails if that drifts.
+
+The three-way split held up and is where the feel lives: bullets take 100% of
+the aim punch, the CAMERA takes 45% (`VIEW_RECOIL_TRACKING`), and the viewmodel
+takes `viewmodel_recoil` — so the gun climbs out of frame by the difference
+while the crosshair lags the bullets by the rest. A build that moves the camera
+by the full punch teaches the wrong compensation and looks fine doing it.
+
+Still open: `RECOIL_SUPPRESSION` is a measured table rather than a closed form
+(the ramp is smoothed and the smoother's initial state is not something a demo
+can show); spray transfer has had no human test yet.
+
 ### Group C — presentation
 
 Asset-pipeline work. Parallelisable with A and B, and the same local-only rule

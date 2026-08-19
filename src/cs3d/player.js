@@ -13,21 +13,15 @@
 // differs from the game, the fix belongs in motion.js and its oracle, not in
 // a special case in this file.
 //
-// Two things ARE local to the explorer:
-//   - jump latching. Source's CheckJumpButton refuses a jump while IN_JUMP was
-//     already down on the previous tick, and marks it down for as long as it
-//     is held in the air, so holding space does not bunny-hop on landing
-//     (sv_autobunnyhopping 0). motion.js takes a per-tick `jump` boolean;
-//     this file supplies the latch.
-//   - the eye height easing. constants.js DUCK is [guessed] and the sim's duck
-//     is an instant hull swap; the camera eases so the view does not snap 18u.
+// Jump latching (sv_autobunnyhopping 0) and duck amount live in motion.js.
+// The camera eye follows sim duckAmount.
 // ---------------------------------------------------------------------------
 
 import * as THREE from 'three/webgpu';
 import { clamp, degToRad } from '../utils/MathUtils.js';
 import { HULL, sourceYawFromCamera } from '../../shared/sim3d/units.js';
 import { createPlayerState, createInput, stepPlayer, flatWorld } from '../../shared/sim3d/motion.js';
-import { TICK_DT } from '../../shared/sim3d/constants.js';
+import { TICK_DT, EYE_STAND, EYE_DUCK } from '../../shared/sim3d/constants.js';
 import { WEAPON_SPEED, DEFAULT_WEAPON_SPEED } from '../../shared/sim/constants.js';
 import { createHullWorld } from './hullWorld.js';
 
@@ -64,7 +58,12 @@ export class Player {
     this.eyeSmooth = HULL.standEye;
     this.sim = createPlayerState();
     this.simInput = createInput();
-    this.jumpLatched = false;
+    /** Seconds since the last CheckJumpButton takeoff. Infinity on ground / walk-off. */
+    this.jumpAge = Infinity;
+    /** Source-frame velocity at takeoff. Horizontal is the run; z is the impulse after gravity. */
+    this.jumpVel = { x: 0, y: 0, z: 0 };
+    /** Source-frame eye at takeoff: perfect jumpthrows latch 6 ticks past this. */
+    this.jumpEye = { x: 0, y: 0, z: 64 };
     this.weaponName = EXPLORER_WEAPONS[0];
     this._flat = flatWorld(0);
   }
@@ -134,6 +133,7 @@ export class Player {
     s.vel.x = s.vel.y = s.vel.z = 0;
     s.onGround = false;
     this.acc = 0;
+    this.jumpAge = Infinity;
   }
 
   get eyeHeight() {
@@ -188,9 +188,8 @@ export class Player {
         this._walkTick();
         this.acc -= TICK;
       }
-      // Eye height eases toward the crouch/stand target like the game's duck.
-      const target = this.eyeHeight;
-      this.eyeSmooth += (target - this.eyeSmooth) * Math.min(1, dt * 18);
+      const amount = this.sim.duckAmount || 0;
+      this.eyeSmooth = EYE_STAND + (EYE_DUCK - EYE_STAND) * amount;
     }
     this.syncCamera();
   }
@@ -221,17 +220,26 @@ export class Player {
     inp.duck = keys.crouch;
     inp.walk = keys.walk;
     inp.maxSpeed = this.maxSpeed;
-    // Source's IN_JUMP latch: no jump while it was already down last tick;
-    // held in the air, it stays down until released.
-    inp.jump = keys.jump && !this.jumpLatched;
+    inp.jump = !!keys.jump;
     const wasGround = this.sim.onGround;
+    const preJumpEye = {
+      x: this.sim.pos.x,
+      y: this.sim.pos.y,
+      z: this.sim.pos.z + this.eyeSmooth
+    };
 
     stepPlayer(this.sim, inp, this.world || this._flat);
 
-    if (keys.jump && (wasGround || !this.sim.onGround)) this.jumpLatched = true;
-    if (!keys.jump) this.jumpLatched = false;
-
     const s = this.sim;
+    if (wasGround && !s.onGround && inp.jump && s.vel.z > 140) {
+      this.jumpAge = 0;
+      this.jumpVel = { x: s.vel.x, y: s.vel.y, z: s.vel.z };
+      this.jumpEye = preJumpEye;
+    } else if (s.onGround) {
+      this.jumpAge = Infinity;
+    } else if (this.jumpAge < Infinity) {
+      this.jumpAge += TICK_DT;
+    }
     if (s.pos.z < -20000) {
       // Fell out of the world (missing collision); put them back on top.
       s.pos.z = 0;

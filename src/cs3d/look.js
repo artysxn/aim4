@@ -8,6 +8,9 @@
 import * as THREE from 'three/webgpu';
 import { bloom, screenUV, texture } from 'three/webgpu';
 import { installGrade, makeLut } from './grade.js';
+import { mapBloomParams } from './lookBloom.js';
+
+export { mapBloomParams };
 
 export const LOOK_DEFAULTS = {
   sun: 5,
@@ -138,22 +141,24 @@ const FX_BLOOM = { strength: 0.85, radius: 0.8, threshold: 3 };
 /**
  * The map's bloom, without giving up the two-pass depth clear.
  * Same contract as the explorer: HDR target, then composite.
+ * Strength/threshold mapping lives in lookBloom.js (CS2 LDR add vs compute).
  */
 export function setupBloom(renderer, manifest, params = new URLSearchParams()) {
   const b = manifest.post?.bloom;
-  const strength = b ? b.screenStrength || b.strength || 0 : 0;
+  const { strength, radius, threshold } = mapBloomParams(b);
   const fxRaw = params.get?.('fxbloom');
   const fxScale = fxRaw === null || fxRaw === undefined || fxRaw === '' ? 1 : Math.max(0, Number(fxRaw) || 0);
   const bloomOff = params.get?.('bloom') === '0';
-  const mapStrength = bloomOff ? 0 : strength;
-  const fxStrength = bloomOff ? 0 : FX_BLOOM.strength * fxScale;
+  const mapStrength = strength;
+  const fxStrength = FX_BLOOM.strength * fxScale;
   // Nothing to composite with every term at zero. The smoke no longer needs
   // this pass — it is ordinary scene geometry now (src/cs3d/smokeCards.js).
-  if ((!(mapStrength > 0) && !(fxStrength > 0))) {
-    return { render: (draw) => draw(), resize() {}, enabled: false };
-  }
+  const noop = { render: (draw) => draw(), resize() {}, enabled: false, setActive() {}, get active() { return false; } };
+  if (!(mapStrength > 0) && !(fxStrength > 0)) return noop;
   let sceneRT = null;
   let composite = null;
+  let bloomOut = null;
+  let copyOut = null;
   try {
     const size = renderer.getDrawingBufferSize(new THREE.Vector2());
     sceneRT = new THREE.RenderTarget(Math.max(1, size.x), Math.max(1, size.y), {
@@ -162,42 +167,75 @@ export function setupBloom(renderer, manifest, params = new URLSearchParams()) {
       samples: renderer.samples
     });
     const src = texture(sceneRT.texture, screenUV);
-    let out = src;
-    if (mapStrength > 0) out = out.add(bloom(src, mapStrength, b.computeRadius ?? 0, b.threshold ?? 1));
-    if (fxStrength > 0) out = out.add(bloom(src, fxStrength, FX_BLOOM.radius, FX_BLOOM.threshold));
-    composite = new THREE.PostProcessing(renderer, out);
+    copyOut = src;
+    bloomOut = src;
+    if (mapStrength > 0) bloomOut = bloomOut.add(bloom(src, mapStrength, radius, threshold));
+    if (fxStrength > 0) bloomOut = bloomOut.add(bloom(src, fxStrength, FX_BLOOM.radius, FX_BLOOM.threshold));
+    composite = new THREE.PostProcessing(renderer, bloomOff ? copyOut : bloomOut);
     composite.update();
     renderer.toneMapping = THREE.NoToneMapping;
   } catch (e) {
     console.warn('cs3d: bloom unavailable, rendering direct', e);
     sceneRT?.dispose?.();
-    return { render: (draw) => draw(), resize() {}, enabled: false };
+    return { render: (draw) => draw(), resize() {}, enabled: false, setActive() {}, get active() { return false; } };
   }
-  return {
+  let active = !bloomOff;
+  const pass = {
     enabled: true,
-    render(draw) {
+    get active() {
+      return active;
+    },
+    setActive(on) {
+      on = !!on;
+      if (on === active) return;
+      active = on;
+      // Same HDR target and the same NoToneMapping the world materials were
+      // built with. Switching renderer.toneMapping recompiles every map
+      // material and on WebGPU that invalidates the pass (black screen).
+      composite.outputNode = active ? bloomOut : copyOut;
+      composite.needsUpdate = true;
+    },
+    render(draw, stamp) {
       renderer.setRenderTarget(sceneRT);
       draw();
+      const t = stamp ? performance.now() : 0;
       renderer.setRenderTarget(null);
       composite.render();
+      if (stamp) stamp.bloom = active ? performance.now() - t : 0;
     },
     resize() {
       const s = renderer.getDrawingBufferSize(new THREE.Vector2());
       sceneRT.setSize(Math.max(1, s.x), Math.max(1, s.y));
     }
   };
+  return pass;
 }
 
 /**
  * Two passes: 3D skybox, depth clear, then the map.
  * Source draws the sky first and clears depth so the world wins wherever it
  * exists. A single render lets the skybox ground punch through the floor.
+ *
+ * `twoPass: false` hides the 3D skybox for this frame and draws once, so the
+ * equirect / dome is the sky. That is `r_skypass 0`.
  */
-export function drawSkyWorld(renderer, scene, camera, pack, lighting) {
+export function drawSkyWorld(renderer, scene, camera, pack, lighting, opts = {}) {
   const sky = pack?.sky3d;
   const world = pack?.world;
-  if (!sky || !world) {
-    renderer.render(scene, camera);
+  const twoPass = opts.twoPass !== false;
+  const stamp = opts.stamp;
+  const mark = (name, fn) => {
+    if (!stamp) return fn();
+    const t = performance.now();
+    fn();
+    stamp[name] = performance.now() - t;
+  };
+  if (!sky || !world || !twoPass) {
+    const skyWas = sky ? sky.visible : null;
+    if (sky && !twoPass) sky.visible = false;
+    mark('world', () => renderer.render(scene, camera));
+    if (stamp) stamp.sky = 0;
+    if (sky && skyWas !== null) sky.visible = skyWas;
     return;
   }
   const dome = lighting?.dome || null;
@@ -211,8 +249,10 @@ export function drawSkyWorld(renderer, scene, camera, pack, lighting) {
 
   world.visible = false;
   scene.fogNode = skyFog;
-  renderer.render(scene, camera);
-  renderer.clearDepth();
+  mark('sky', () => {
+    renderer.render(scene, camera);
+    renderer.clearDepth();
+  });
   scene.fogNode = worldFog;
 
   world.visible = true;
@@ -222,7 +262,7 @@ export function drawSkyWorld(renderer, scene, camera, pack, lighting) {
   const background = scene.background;
   scene.background = null;
   renderer.autoClear = false;
-  renderer.render(scene, camera);
+  mark('world', () => renderer.render(scene, camera));
   renderer.autoClear = true;
   scene.background = background;
   sky.visible = skyWas;
@@ -252,13 +292,17 @@ export function createMapRenderer({
   bloom,
   overlay,
   overlayAfter = false,
-  afterComposite
+  afterComposite,
+  getTwoPass,
+  stamp
 }) {
-  const pass = bloom || { render: (draw) => draw(), resize() {} };
+  const fallback = { render: (draw) => draw(), resize() {} };
   let told = false;
   const drawOverlay = () => {
     if (!overlay) return;
+    const t = stamp ? performance.now() : 0;
     const drew = overlay();
+    if (stamp) stamp.vm = performance.now() - t;
     if (!told) {
       told = true;
       console.log(`cs3d: overlay pass ran ${overlayAfter ? 'AFTER the composite (?vm=after)' : 'inside the scene pass'}${drew === false ? ' — nothing to draw' : ''}`);
@@ -266,10 +310,14 @@ export function createMapRenderer({
   };
   return {
     render(camera) {
+      const pass = (typeof bloom === 'function' ? bloom() : bloom) || fallback;
       pass.render(() => {
-        drawSkyWorld(renderer, scene, camera, getPack(), getLighting());
+        drawSkyWorld(renderer, scene, camera, getPack(), getLighting(), {
+          twoPass: getTwoPass ? getTwoPass() : true,
+          stamp
+        });
         if (!overlayAfter) drawOverlay();
-      });
+      }, stamp);
       // `?vm=after` puts it back where it was before the bloom fix: on the
       // canvas, after the composite. That path draws the viewmodel and wipes
       // the map, so it is a diagnostic and not a mode — if the gun appears
@@ -279,6 +327,7 @@ export function createMapRenderer({
       afterComposite?.(camera);
     },
     resize() {
+      const pass = (typeof bloom === 'function' ? bloom() : bloom) || fallback;
       pass.resize();
     }
   };

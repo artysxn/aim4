@@ -4,25 +4,15 @@
 // page-level keys (mode toggle, spawn, help) fire callbacks so main.js owns
 // what they mean.
 //
-// Sensitivity is the trainer's, not a second number: this page reads and
-// writes `aimtrainer:settings`.sensitivity on the unified scale, so a turn
-// here is the same turn as a turn in a gamemode. The explorer used to keep
-// its own `cs3d_sens` on the CS 0.022°/count convention, which meant two
-// settings that looked alike, read alike and moved the camera differently.
+// Look is InputManager's path, not a second one: mousemove counts, the
+// trainer's radians-per-count, and Pointer Lock with unadjustedMovement when
+// raw input is on. pointerrawupdate was tried here to beat coalescing on a
+// heavy WebGPU frame and made the view jitter while moving; the trainer
+// stays on mousemove, so this page does too.
 // ---------------------------------------------------------------------------
 
-import * as Storage from '../utils/Storage.js';
 import { SettingsManager } from '../core/SettingsManager.js';
-import { SENSITIVITY_DEFAULT, radiansPerCountFromSensitivity } from '../utils/MathUtils.js';
-
-/** Same migrated sensitivity / raw-input flags the trainer's InputManager uses. */
-function trainerMouse() {
-  const s = new SettingsManager();
-  return {
-    sens: s.data.sensitivity,
-    rawInput: s.data.rawInput !== false
-  };
-}
+import { SENSITIVITY_DEFAULT } from '../utils/MathUtils.js';
 
 export class Controls {
   constructor(canvas, player, hooks = {}) {
@@ -33,9 +23,8 @@ export class Controls {
     this.enabled = true;
     // Timeline 3D viewer owns F/G/V; Map Practice keeps the page keys.
     this.pageKeys = hooks.pageKeys !== false;
-    const mouse = trainerMouse();
-    this.sens = mouse.sens;
-    this.rawInput = mouse.rawInput;
+    // Same store InputManager reads: sensitivity, rawInput, the v2 migration.
+    this.settings = new SettingsManager();
     this.keys = new Set();
     this._onMouseMove = this._onMouseMove.bind(this);
     this._onKey = this._onKey.bind(this);
@@ -43,10 +32,6 @@ export class Controls {
     this._onCanvasClick = () => {
       if (this.enabled && !this.locked) this.requestLock();
     };
-    // pointerrawupdate is the un-coalesced path. mousemove merges deltas across
-    // a long WebGPU frame into one jump; the trainer stays smooth because its
-    // frames are cheap. Same handler, different event.
-    this._lookEvent = 'onpointerrawupdate' in document ? 'pointerrawupdate' : 'mousemove';
 
     if (hooks.lockOnClick !== false) {
       canvas.addEventListener('click', this._onCanvasClick);
@@ -73,10 +58,15 @@ export class Controls {
     canvas.addEventListener('contextmenu', this._onContextMenu);
     document.addEventListener('pointerlockchange', this._onLockChange);
     document.addEventListener('pointerlockerror', this._onLockChange);
-    document.addEventListener(this._lookEvent, this._onMouseMove);
+    document.addEventListener('mousemove', this._onMouseMove);
     window.addEventListener('keydown', this._onKey);
     window.addEventListener('keyup', this._onKey);
     window.addEventListener('blur', () => this._releaseAll());
+  }
+
+  /** Unified sensitivity the HUD shows and the trainer stores. */
+  get sens() {
+    return this.settings.data.sensitivity;
   }
 
   setEnabled(on) {
@@ -98,32 +88,27 @@ export class Controls {
   }
 
   /**
-   * Lock with unadjusted movement when the trainer asks for it.
-   *
-   * Without it the browser hands over pointer-accelerated deltas, and a fast
-   * flick arrives as a few enormous jumps rather than a smooth sweep — the
-   * "skipping and spinning" the gamemodes fixed the same way. The option can
-   * reject on its own (older Chrome, some platforms), so the plain form is the
-   * fallback rather than the primary.
+   * Pointer lock, copied from InputManager.requestLock: raw unadjusted
+   * movement when the trainer setting is on, plain lock if that option rejects.
    */
   _requestLock() {
     if (!this.enabled) return;
     const el = this.canvas;
     if (!el.requestPointerLock) return;
-    // requestPointerLock rejects, loudly, when the document is not focused.
     if (!document.hasFocus()) return;
+    const useRaw = this.settings.data.rawInput;
     let res;
     try {
-      res = this.rawInput ? el.requestPointerLock({ unadjustedMovement: true }) : el.requestPointerLock();
+      res = useRaw ? el.requestPointerLock({ unadjustedMovement: true }) : el.requestPointerLock();
     } catch {
-      return; // older browsers throw synchronously on the options form
+      return;
     }
     if (res && typeof res.catch === 'function') {
       res.catch(() => {
-        if (!this.rawInput || !document.hasFocus()) return;
+        if (!useRaw || !document.hasFocus()) return;
         try {
-          const plain = el.requestPointerLock();
-          if (plain && typeof plain.catch === 'function') plain.catch(() => {});
+          const r2 = el.requestPointerLock();
+          if (r2 && typeof r2.catch === 'function') r2.catch(() => {});
         } catch {
           /* ignore */
         }
@@ -133,11 +118,8 @@ export class Controls {
 
   setSensitivity(v) {
     const n = Number(v);
-    this.sens = Number.isFinite(n) && n > 0 ? n : SENSITIVITY_DEFAULT;
-    // Merged, not replaced: this page owns one field of the trainer's settings.
-    const data = Storage.read('settings', {}) || {};
-    data.sensitivity = this.sens;
-    Storage.write('settings', data);
+    this.settings.data.sensitivity = Number.isFinite(n) && n > 0 ? n : SENSITIVITY_DEFAULT;
+    this.settings.save();
     this.hooks.onSensitivity?.(this.sens);
   }
 
@@ -149,7 +131,8 @@ export class Controls {
 
   _onMouseMove(e) {
     if (!this.enabled || !this.locked) return;
-    this.player.look(e.movementX, e.movementY, radiansPerCountFromSensitivity(this.sens));
+    // InputManager._onMouseMove, same counts and the same radians-per-count.
+    this.player.look(e.movementX, e.movementY, this.settings.radiansPerCount);
   }
 
   _releaseAll() {
@@ -173,40 +156,31 @@ export class Controls {
         this._applyKeys();
         return;
       }
-      // Digits are context-dependent: main.js routes them to demo POV when a
-      // demo is loaded, or to T/CT spawns in the plain explorer.
+      // Digits: demo POV when a demo is loaded, otherwise weapon slots 1-4.
       const digit = /^Digit(\d)$/.exec(code);
       if (digit) this.hooks.onDigit?.(Number(digit[1]));
       switch (code) {
-        case 'KeyF':
+        case 'CapsLock':
+          e.preventDefault();
           this.hooks.onToggleMode?.();
           break;
-        case 'KeyR':
+        case 'KeyN':
           this.hooks.onSpawn?.(null);
-          break;
-        case 'KeyH':
-          this.hooks.onHelp?.();
-          break;
-        case 'KeyI':
-          this.hooks.onInspect?.();
-          break;
-        case 'KeyG':
-          this.hooks.onGrade?.();
-          break;
-        case 'KeyV':
-          this.hooks.onFpsView?.();
           break;
         case 'KeyQ':
           this.hooks.onWeapon?.();
-          break;
-        case 'KeyT':
-          this.hooks.onThirdPerson?.();
           break;
         case 'KeyB':
           this.hooks.onBuy?.();
           break;
         case 'KeyE':
           this.hooks.onUse?.();
+          break;
+        case 'KeyG':
+          this.hooks.onDropWeapon?.();
+          break;
+        case 'KeyR':
+          this.hooks.onReload?.();
           break;
         case 'Escape':
           // Pointer lock exits on Escape by itself; this is for the panels that
@@ -232,12 +206,17 @@ export class Controls {
         case 'KeyM':
           this.hooks.onSpeed?.();
           break;
-        // The viewmodel placement sliders (src/cs3d/vmTuner.js). U because it
-        // is one of the few letters nothing else in here claims; Backslash
-        // rides along for keyboards that have it.
-        case 'KeyU':
-        case 'Backslash':
-          this.hooks.onVmTune?.();
+        case 'KeyJ':
+          this.hooks.onPlaceBot?.();
+          break;
+        case 'KeyH':
+          this.hooks.onBoostBot?.();
+          break;
+        case 'KeyK':
+          this.hooks.onDeleteBot?.();
+          break;
+        case 'KeyO':
+          this.hooks.onSkipNades?.();
           break;
         case 'KeyX':
           this.hooks.onPovExit?.();
@@ -252,7 +231,7 @@ export class Controls {
         default:
           break;
       }
-      if (this.locked && /^(Space|Key[WASDCFQTB]|Digit[1-4]|ShiftLeft|ControlLeft)$/.test(code)) e.preventDefault();
+      if (this.locked && /^(Space|Key[WASDCQBNEGJHKOR]|Digit[1-4]|ShiftLeft|ControlLeft|CapsLock)$/.test(code)) e.preventDefault();
     } else if (code === 'Space') {
       this.player.input.jump = false;
     }
@@ -280,7 +259,7 @@ export class Controls {
     this.canvas.removeEventListener('contextmenu', this._onContextMenu);
     document.removeEventListener('pointerlockchange', this._onLockChange);
     document.removeEventListener('pointerlockerror', this._onLockChange);
-    document.removeEventListener(this._lookEvent, this._onMouseMove);
+    document.removeEventListener('mousemove', this._onMouseMove);
     window.removeEventListener('keydown', this._onKey);
     window.removeEventListener('keyup', this._onKey);
   }

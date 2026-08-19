@@ -386,6 +386,9 @@ export class Interactives {
     // quietly fill in a door's hole. Put it back when that happens.
     for (const body of this.bodies.values()) {
       if (!body.hole) continue;
+      // A previous carve that threw mid-clone left `hole` with no meshes, so
+      // later shots never patched a material. Retry until one sticks.
+      if (!body.hole.meshes.length && body.o) this._applyHole(body.o);
       for (const mesh of body.hole.meshes) {
         if (mesh.material && !mesh.material.name?.endsWith(':hole')) this._reapplyHole(body, mesh);
       }
@@ -539,19 +542,13 @@ export class Interactives {
     if (!body?.group) return;
     const r = holeRadius(o);
     if (!body.hole) {
-      const centre = uniform(new THREE.Vector2(0, 0));
-      const radius = uniform(0);
-      body.hole = { centre, radius, meshes: [] };
+      body.hole = { centre: uniform(new THREE.Vector2(0, 0)), radius: uniform(0), meshes: [] };
+    }
+    if (!body.hole.meshes.length) {
+      const { centre, radius } = body.hole;
       for (const mesh of body.group.children) {
         if (!mesh.isMesh || !mesh.material) continue;
-        const mat = mesh.material.clone();
-        mat.name = `${mesh.material.name || 'm'}:hole`;
-        // 1 outside the hole, 0 inside it.
-        mat.opacityNode = step(radius, positionGeometry.xy.sub(centre).length());
-        mat.alphaTest = 0.5;
-        mat.transparent = false;
-        mat.side = THREE.DoubleSide; // the far face of the leaf is visible now
-        mesh.material = mat;
+        mesh.material = this._holeMaterial(mesh.material, centre, radius);
         body.hole.meshes.push(mesh);
       }
     }
@@ -561,13 +558,25 @@ export class Interactives {
 
   /** Re-cut a hole into a material the library just replaced. */
   _reapplyHole(body, mesh) {
-    const mat = mesh.material.clone();
-    mat.name = `${mesh.material.name || 'm'}:hole`;
-    mat.opacityNode = step(body.hole.radius, positionGeometry.xy.sub(body.hole.centre).length());
+    mesh.material = this._holeMaterial(mesh.material, body.hole.centre, body.hole.radius);
+  }
+
+  /**
+   * A private copy of `src` with the hole cut in. The library material is
+   * shared across every surface on that vmat, so the hole has to live on a
+   * clone. Cloned `Cs3dMaterial`s keep their `cs3d` lighting config
+   * (materials.js `copy`); without that, `clone()` threw and the leaf stayed
+   * intact.
+   */
+  _holeMaterial(src, centre, radius) {
+    const mat = src.clone();
+    mat.name = `${src.name || 'm'}:hole`;
+    // 1 outside the hole, 0 inside it.
+    mat.opacityNode = step(radius, positionGeometry.xy.sub(centre).length());
     mat.alphaTest = 0.5;
     mat.transparent = false;
-    mat.side = THREE.DoubleSide;
-    mesh.material = mat;
+    mat.side = THREE.DoubleSide; // the far face of the leaf is visible now
+    return mat;
   }
 
   /**

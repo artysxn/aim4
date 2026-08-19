@@ -31,9 +31,16 @@ function outlineThickness(xh) {
 }
 
 export class Crosshair {
-  constructor(settings) {
+  /**
+   * @param {import('../core/SettingsManager.js').SettingsManager} settings
+   * @param {HTMLCanvasElement} [canvas]
+   * @param {{ fillParent?: boolean, scaleToResolution?: boolean }} [opts]
+   *        fillParent: size to the parent box (map overlay) instead of the window.
+   *        scaleToResolution: stretch arms the way the trainer does on 4:3 / custom.
+   */
+  constructor(settings, canvas = document.getElementById('crosshair-canvas'), opts = {}) {
     this.settings = settings;
-    this.canvas = document.getElementById('crosshair-canvas');
+    this.canvas = canvas;
     this.ctx = this.canvas.getContext('2d');
     this.visible = false;
     this._hitFlashUntil = 0;
@@ -41,8 +48,14 @@ export class Crosshair {
     this._dynGapPx = 0;
     this._scopeLevel = 0; // sniper: >0 replaces the crosshair with the scope overlay
     this._scopeBlur = 0; // px of hairline blur (inaccurate: just-scoped / moving)
+    this._fillParent = !!opts.fillParent;
+    this._scaleToResolution = opts.scaleToResolution !== false;
 
     window.addEventListener('resize', () => this.draw());
+    if (this._fillParent && typeof ResizeObserver !== 'undefined') {
+      this._ro = new ResizeObserver(() => this.draw());
+      this._ro.observe(this.canvas.parentElement || this.canvas);
+    }
     settings.onChange(() => {
       this.draw();
       this.drawPreview();
@@ -168,20 +181,30 @@ export class Crosshair {
   }
 
   draw() {
+    if (!this.canvas) return;
     const dpr = window.devicePixelRatio || 1;
-    const w = window.innerWidth;
-    const h = window.innerHeight;
+    const parent = this.canvas.parentElement;
+    const w = this._fillParent
+      ? (parent?.clientWidth || window.innerWidth)
+      : window.innerWidth;
+    const h = this._fillParent
+      ? (parent?.clientHeight || window.innerHeight)
+      : window.innerHeight;
     this.canvas.width = w * dpr;
     this.canvas.height = h * dpr;
-    this.canvas.style.width = w + 'px';
-    this.canvas.style.height = h + 'px';
+    if (!this._fillParent) {
+      this.canvas.style.width = w + 'px';
+      this.canvas.style.height = h + 'px';
+    }
 
     const ctx = this.ctx;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
     if (!this.visible) return;
 
-    const res = getResolutionSpec(this.settings.activeSettings());
+    const res = this._scaleToResolution
+      ? getResolutionSpec(this.settings.activeSettings())
+      : null;
     let scaleX = 1;
     let scaleY = 1;
     let lw = w;

@@ -48,6 +48,7 @@ import { Player } from '../../cs3d/player.js';
 import { Controls } from '../../cs3d/controls.js';
 import { placeThirdPersonCamera, THIRD_PERSON_BACK } from '../../cs3d/thirdPerson.js';
 import { mountCrosshair } from '../../cs3d/crosshairOverlay.js';
+import { DEATH_FOLLOW_SECONDS, deathFollowShouldSnap, nextFollowSlot } from './view3dFollow.js';
 
 const DEG = Math.PI / 180;
 const RAD = 180 / Math.PI;
@@ -115,6 +116,8 @@ export function createView3d({ slug, onModeChange }) {
   // never by wall time, so scrubbing and speed changes stay tick-exact).
   let frame = null;
   let lastTick = null;
+  /** Demo tick at which a death-hold switches to the killer; null when idle. */
+  let deathFollowUntilTick = null;
 
   // The agents: CS2's own models, animated from the tick record
   // (src/cs3d/playerModels.js). Shared with the explorer; one download per
@@ -368,16 +371,46 @@ export function createView3d({ slug, onModeChange }) {
     vmPass.setAmbient(_vmColor, 1.6);
   }
 
+  function cancelDeathFollow() {
+    deathFollowUntilTick = null;
+  }
+
+  function followAfterDeath(deadSlot, live, tick) {
+    const next = nextFollowSlot(deadSlot, live, {
+      players: frame.players,
+      kills: frame.events?.kills,
+      tick
+    });
+    if (next === povSlot) return;
+    povSlot = next;
+    onModeChange?.(mode);
+  }
+
   function applyFrame() {
     if (!ready || !frame) return;
     const live = liveSlots();
     const follow = mode === 'pov' || mode === 'third';
-    // A POV whose player died falls to the next live one rather than freezing.
-    if (follow && live.length && !live.includes(povSlot)) {
-      povSlot = live.find((s) => s > povSlot) ?? live[0];
-    }
     const tick = frame.tick;
     const rate = frame.tickRate || 64;
+    // A POV whose player died used to snap to the next live slot on this
+    // frame. Playback now holds the death eye for half a second of demo
+    // time, then follows the killer (or that same next-live fallback).
+    // Seeks, round jumps, and the first sample still snap, so scrubbing
+    // cannot land late.
+    if (follow && live.length && !live.includes(povSlot)) {
+      if (deathFollowShouldSnap(lastTick, tick, rate)) {
+        cancelDeathFollow();
+        followAfterDeath(povSlot, live, tick);
+      } else if (deathFollowUntilTick == null) {
+        deathFollowUntilTick = tick + DEATH_FOLLOW_SECONDS * rate;
+      } else if (tick >= deathFollowUntilTick) {
+        cancelDeathFollow();
+        followAfterDeath(povSlot, live, tick);
+      }
+    } else {
+      cancelDeathFollow();
+    }
+    const holdingDeath = follow && deathFollowUntilTick != null && !live.includes(povSlot);
     // Demo seconds since the last drawn frame: forward only (a scrub back
     // holds the pose at its new tick), and a jump of more than a quarter
     // second is a seek, not motion.
@@ -394,6 +427,17 @@ export function createView3d({ slug, onModeChange }) {
         b.group.visible = false;
         if (b.model) b.model.group.visible = false;
         b.prev = null;
+        if (holdingDeath && slot === povSlot && s) {
+          const duck = s.duckAmount > 0 ? s.duckAmount : (s.flags & FLAG_DUCKING) !== 0 ? 1 : 0;
+          const eye = EYE_STAND + (EYE_DUCK - EYE_STAND) * duck;
+          orbit.target.set(s.x, s.z + eye, -s.y);
+          if (mode === 'pov') {
+            camera.position.copy(orbit.target);
+            camera.rotation.set(-(s.pitch || 0) * DEG, cameraYawFromSource(s.yaw || 0), 0, 'YXZ');
+          } else {
+            applyThirdOrbit();
+          }
+        }
         continue;
       }
       // Hide the body you are looking through, or you see the inside of it.
@@ -571,6 +615,7 @@ export function createView3d({ slug, onModeChange }) {
 
   function setCamMode(next) {
     if (next === mode) return;
+    if (next === 'fly' || next === 'walk') cancelDeathFollow();
     mode = next;
     if (next === 'third') orbit.seeded = false;
     if (!player || !controls) {
@@ -632,12 +677,13 @@ export function createView3d({ slug, onModeChange }) {
       const p = (frame.players || []).find((x) => x.slot === povSlot);
       return p?.name || null;
     },
+    cancelDeathFollow,
 
     /** Create the scene. Safe to call once; later calls are no-ops. */
     async start(container) {
       if (renderer || failed) return;
       container.appendChild(canvas);
-      crosshair = mountCrosshair(container);
+      crosshair = mountCrosshair(container, { scaleToResolution: false }).canvas;
       try {
         await bootScene(container);
         applyFrame();
@@ -679,6 +725,7 @@ export function createView3d({ slug, onModeChange }) {
      * click (previous). Does not change fly/walk vs follow.
      */
     cyclePov(dir = 1) {
+      cancelDeathFollow();
       const live = liveSlots();
       if (!live.length) return null;
       if (!live.includes(povSlot)) povSlot = live[0];
@@ -741,6 +788,7 @@ export function createView3d({ slug, onModeChange }) {
     },
 
     dispose() {
+      cancelDeathFollow();
       cancelAnimationFrame(raf);
       controls?.dispose();
       crosshair?.remove();

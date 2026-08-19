@@ -4,22 +4,13 @@
 // coordinates (z-up, units), against a pluggable collision world.
 //
 // The order of operations IS the physics here. FullWalkMove applies gravity in
-// two half-tick pieces around the move (leapfrog), zeroes vertical velocity on
-// ground BEFORE friction, and jumping applies the impulse and then immediately
-// eats its own half-gravity — so a jump's first tick rises by
-// (J − g·dt/2)·dt = 4.62098u, not J·dt = 4.71865u. That 0.098u difference is
-// measurable in the demo corpus across thousands of jumps, which is how
-// scripts/cs3d-oracle.mjs verifies not just the constants but this exact
-// integrator order. Reorder anything in stepPlayer and the oracle drifts.
+// two half-tick pieces around the move (leapfrog). CheckJumpButton then adds
+// (standing) or sets (ducking) sv_jump_impulse, scales by stamina, and calls
+// FinishGravity; FullWalkMove's FinishGravity still runs on the jump tick.
 //
-// What this file deliberately is NOT yet:
-//   - the real duck state machine (constants.js DUCK explains why; duck here
-//     is an instant hull/speed change, honest about being provisional — the
-//     one rule it does keep is FinishUnDuck's headroom trace: no standing up
-//     into a ceiling),
-//   - subtick input timing (inputs land on tick boundaries; a no-input tick
-//     is bit-identical either way, which is what the oracle exercises),
-//   - stamina (present but disabled until measured — STAMINA.ENABLED).
+// Duck, stamina, jump, walk-cap and ground accel follow CCSGameMovement
+// (cstrike15 leak). AirMove/WalkMove collision still call the base Source
+// pipeline in this file. Water jump and bot auto-crouch-jump are out of scope.
 //
 // The collision world is an interface so the same brain runs everywhere:
 //   world.traceHull(start, end, halfWide, height) →
@@ -45,6 +36,14 @@ import {
   AIR_SPEED_CAP,
   DUCK_SPEED_SCALE,
   WALK_SPEED_SCALE,
+  CLIMB_MODIFIER,
+  ACCEL_SPEED_REF,
+  ACCELERATE_USE_WEAPON_SPEED,
+  WALK_DELAY_CAP_SLACK,
+  BUNNYJUMP_MAX_SPEED_FACTOR,
+  VELOCITY_MODIFIER_RECOVERY,
+  DUCK,
+  STAMINA,
   HULL_HALF_WIDE,
   HULL_STAND,
   HULL_DUCK,
@@ -86,7 +85,28 @@ export function createPlayerState(x = 0, y = 0, z = 0) {
     pos: v3(x, y, z),
     vel: v3(),
     onGround: false,
+    /** FL_DUCKING: fully ducked (hull swap is `ducked`; jump SET vs ADD). */
     ducking: false,
+    /** m_bDucked: collision uses the duck hull. */
+    ducked: false,
+    /** m_flDuckAmount in [0, 1]. */
+    duckAmount: 0,
+    /** m_flDuckSpeed, starts at CS_PLAYER_DUCK_SPEED_IDEAL. */
+    duckSpeed: DUCK.SPEED_IDEAL,
+    /** m_bDucking: in the duck/unduck animation. */
+    inDuckTransition: false,
+    /** gpGlobals-style sim time, seconds. */
+    time: 0,
+    /** m_flLastDuckTime. */
+    lastDuckTime: fr(-1e9),
+    lastFullCrouchX: fr(x),
+    lastFullCrouchY: fr(y),
+    duckHeld: false,
+    jumpHeld: false,
+    stamina: 0,
+    fallVelocity: 0,
+    velocityModifier: fr(1),
+    walking: false,
     /** Set by CategorizePosition when standing on a walkable plane. */
     groundNormal: v3(0, 0, 1),
     /** On a climb volume: no gravity, steered by the view (see ladderMove). */
@@ -107,7 +127,7 @@ export function createInput() {
   // `pitch` is Source's: degrees, POSITIVE looking down. Only ladders read it —
   // everything else moves in the ground plane — and a world with no ladder
   // probe never touches it, which is why adding it changes no oracle result.
-  return { forward: 0, side: 0, yaw: 0, pitch: 0, jump: false, duck: false, walk: false, maxSpeed: 250 };
+  return { forward: 0, side: 0, yaw: 0, pitch: 0, jump: false, duck: false, walk: false, maxSpeed: 250, scoped: false };
 }
 
 // Scratch vectors: stepPlayer allocates nothing per tick.
@@ -119,64 +139,251 @@ const _end = v3();
 const _origVel = v3();
 const _clipped = v3();
 
+function fclamp(x, lo, hi) {
+  if (x < lo) return lo;
+  if (x > hi) return hi;
+  return x;
+}
+
+function approach(target, value, speed) {
+  const delta = fr(target - value);
+  if (delta > speed) return fr(value + speed);
+  if (delta < -speed) return fr(value - speed);
+  return fr(target);
+}
+
+function staminaSpeedScale(stamina) {
+  if (!(stamina > 0)) return fr(1);
+  let s = fclamp(fr(1 - fdiv(stamina, STAMINA.RANGE)), 0, 1);
+  return fmul(s, s);
+}
+
+function duckSpeedModifier(amount) {
+  return fr(fmul(DUCK_SPEED_SCALE, amount) + fr(1 - amount));
+}
+
+function duckingEnabled(state) {
+  if (state.duckSpeed < DUCK.ENABLED_MIN_SPEED) return false;
+  if (!state.ducking && state.time < fr(state.lastDuckTime + DUCK.TIME_BETWEEN)) return false;
+  return true;
+}
+
+function canUnduck(state, world) {
+  const pos = state.pos;
+  let dx = 0;
+  let dy = 0;
+  let dz = 0;
+  if (state.onGround) {
+    // VEC_DUCK_HULL_MIN - VEC_HULL_MIN is 0 with origin-at-feet hulls.
+  } else {
+    const half = fmul(fr(0.5), fr(HULL_STAND - HULL_DUCK));
+    dz = fr(-half);
+  }
+  const dest = v3set(_end, fr(pos.x + dx), fr(pos.y + dy), fr(pos.z + dz));
+  const t = world.traceHull(pos, dest, HULL_HALF_WIDE, HULL_STAND);
+  if (t.startSolid || t.fraction !== 1) return false;
+  return true;
+}
+
+function finishDuck(state) {
+  const pos = state.pos;
+  if (!state.onGround) {
+    const half = fmul(fr(0.5), fr(HULL_STAND - HULL_DUCK));
+    pos.z = fr(pos.z + half);
+  }
+  state.inDuckTransition = false;
+  state.ducked = true;
+  state.ducking = true;
+  state.lastDuckTime = state.time;
+  state.duckAmount = fr(1);
+}
+
+function finishUnDuck(state) {
+  const pos = state.pos;
+  if (!state.onGround) {
+    const half = fmul(fr(0.5), fr(HULL_STAND - HULL_DUCK));
+    pos.z = fr(pos.z - half);
+  }
+  state.ducking = false;
+  state.ducked = false;
+  state.inDuckTransition = false;
+  state.duckAmount = 0;
+}
+
+function applyDuck(state, duckButton, world, dt) {
+  const onGround = state.onGround;
+  if (state.duckSpeed == null) state.duckSpeed = DUCK.SPEED_IDEAL;
+  if (state.duckAmount == null) state.duckAmount = 0;
+  if (state.lastDuckTime == null) state.lastDuckTime = fr(-1e9);
+
+  state.duckSpeed = approach(DUCK.SPEED_IDEAL, state.duckSpeed, fmul(dt, DUCK.RECOVERY_PER_SEC));
+  if (state.duckSpeed >= DUCK.SPEED_IDEAL) {
+    state.lastFullCrouchX = state.pos.x;
+    state.lastFullCrouchY = state.pos.y;
+  } else if (state.duckAmount <= 0 || state.duckAmount >= 1) {
+    const dx = fr(state.pos.x - state.lastFullCrouchX);
+    const dy = fr(state.pos.y - state.lastFullCrouchY);
+    const dist2 = fr(fmul(dx, dx) + fmul(dy, dy));
+    const need = fmul(DUCK.EXTRA_RECOVERY_DIST, DUCK.EXTRA_RECOVERY_DIST);
+    if (dist2 > need) {
+      state.duckSpeed = approach(DUCK.SPEED_IDEAL, state.duckSpeed, fmul(dt, DUCK.EXTRA_RECOVERY_PER_SEC));
+    }
+  }
+
+  if (!duckButton && state.duckAmount > 0) state.inDuckTransition = true;
+  else if (duckButton && state.duckAmount < 1) state.inDuckTransition = true;
+
+  if (duckButton && state.inDuckTransition) {
+    const duckSpeed = fmul(state.duckSpeed, DUCK.IN_SCALE);
+    state.duckAmount = approach(fr(1), state.duckAmount, fmul(dt, duckSpeed));
+    if (state.duckAmount >= 1 || !onGround) finishDuck(state);
+  }
+
+  if (!duckButton && state.inDuckTransition) {
+    if (canUnduck(state, world)) {
+      const duckSpeed = state.duckSpeed < DUCK.UNDUCK_MIN_SPEED ? DUCK.UNDUCK_MIN_SPEED : state.duckSpeed;
+      state.duckAmount = approach(0, state.duckAmount, fmul(dt, duckSpeed));
+      state.ducked = false;
+      if (state.duckAmount <= 0 || !onGround) finishUnDuck(state);
+      else if (state.duckAmount <= fr(0.75) && state.ducking) state.ducking = false;
+    } else {
+      state.duckAmount = fr(1);
+      state.ducked = true;
+      state.inDuckTransition = false;
+      state.ducking = true;
+    }
+  }
+}
+
+function preventBunnyJumping(vel, weaponMax) {
+  const maxScaled = fmul(BUNNYJUMP_MAX_SPEED_FACTOR, weaponMax);
+  if (!(maxScaled > 0)) return;
+  const spd = v3len(vel);
+  if (spd <= maxScaled) return;
+  const fraction = fdiv(maxScaled, spd);
+  vel.x = fmul(vel.x, fraction);
+  vel.y = fmul(vel.y, fraction);
+  vel.z = fmul(vel.z, fraction);
+}
+
+function finishGravity(vel, dt) {
+  vel.z = fr(vel.z - fmul(GRAVITY, fmul(0.5, dt)));
+}
+
+function checkJumpButton(state, jump, dt, weaponMax) {
+  const vel = state.vel;
+  if (!jump) {
+    state.jumpHeld = false;
+    return false;
+  }
+  if (!state.onGround) {
+    state.jumpHeld = true;
+    return false;
+  }
+  if (state.jumpHeld) return false;
+
+  preventBunnyJumping(vel, weaponMax);
+  const startz = vel.z;
+  state.onGround = false;
+
+  const duckJump = state.inDuckTransition || state.ducking;
+  if (duckJump) vel.z = JUMP_IMPULSE;
+  else vel.z = fr(vel.z + JUMP_IMPULSE);
+
+  if (state.stamina > 0) {
+    vel.z = fmul(vel.z, fclamp(fr(1 - fdiv(state.stamina, STAMINA.RANGE)), 0, 1));
+  }
+
+  finishGravity(vel, dt);
+  const impulse = fr(vel.z - startz);
+  state.stamina = fclamp(fr(state.stamina + fmul(STAMINA.JUMP_COST, impulse)), 0, STAMINA.MAX);
+  state.jumpHeld = true;
+  return true;
+}
+
+function onLand(state, fallVel) {
+  state.stamina = fclamp(fr(state.stamina + fmul(STAMINA.LAND_COST, fallVel)), 0, STAMINA.MAX);
+}
+
 /**
- * Advance one player one tick. Mutates `state`. FullWalkMove, in its order.
+ * Advance one player one tick. Mutates `state`.
+ * PlayerMove order: CheckParameters, ReduceTimers, Duck, Ladder, FullWalkMove.
  */
 export function stepPlayer(state, input, world, dt = TICK_DT) {
   const vel = state.vel;
+  if (state.duckSpeed == null) state.duckSpeed = DUCK.SPEED_IDEAL;
+  if (state.velocityModifier == null) state.velocityModifier = fr(1);
+  if (state.stamina == null) state.stamina = 0;
+  if (state.time == null) state.time = 0;
+  state.time = fr(state.time + dt);
 
-  // Duck, provisional (see header): instant cap + hull swap — but never stand
-  // up into a ceiling. Source's FinishUnDuck traces the standing hull first
-  // and keeps the player ducked while it does not fit; without that rule a
-  // player releasing crouch under a vent would start the tick inside the
-  // world and every trace would report startsolid.
-  let ducking = !!input.duck;
-  if (!ducking && state.ducking) {
-    const room = world.traceHull(state.pos, state.pos, HULL_HALF_WIDE, HULL_STAND);
-    if (room.startSolid) ducking = true;
+  const weaponMax = fr(input.maxSpeed);
+  let duckButton = !!input.duck;
+  if (!!duckButton !== !!state.duckHeld) {
+    const next = fr(state.duckSpeed - DUCK.SPAM_PENALTY);
+    state.duckSpeed = next > 0 ? next : 0;
   }
-  state.ducking = ducking;
-  const hull = state.ducking ? HULL_DUCK : HULL_STAND;
+  state.duckHeld = duckButton;
+  if (!duckingEnabled(state)) duckButton = false;
 
-  // Ladders, before anything else: a body on one has no gravity and no
-  // friction, and is steered by where it looks. `ladderAt` is optional — a
-  // world without it (the oracle's flat plane, any Node test, a pack from
-  // before the climb volumes were read) never enters this branch, which is why
-  // this changes nothing that was already measured.
+  let maxSpeed = weaponMax;
+  const duckingNow = duckButton || state.inDuckTransition || state.ducking;
+  let walkButton = !!input.walk;
+  if (duckingNow) walkButton = false;
+  if (walkButton) {
+    const current = v3len(vel);
+    const walkCap = fmul(maxSpeed, WALK_SPEED_SCALE);
+    if (current < fr(walkCap + WALK_DELAY_CAP_SLACK)) {
+      maxSpeed = walkCap;
+      state.walking = true;
+    } else {
+      state.walking = false;
+    }
+  } else {
+    state.walking = false;
+  }
+
+  if (state.onGround) maxSpeed = fmul(maxSpeed, state.velocityModifier);
+  maxSpeed = fmul(maxSpeed, staminaSpeedScale(state.stamina));
+
+  if (state.stamina > 0) {
+    state.stamina = fr(state.stamina - fmul(dt, STAMINA.RECOVERY_RATE));
+    if (state.stamina < 0) state.stamina = 0;
+  }
+
+  applyDuck(state, duckButton, world, dt);
+  if (duckButton || state.inDuckTransition || state.ducking) {
+    maxSpeed = fmul(maxSpeed, duckSpeedModifier(state.duckAmount));
+  }
+
+  const hull = state.ducked ? HULL_DUCK : HULL_STAND;
+
   if (state.ladderRegrab > 0) state.ladderRegrab--;
-  const ladder =
+  let ladder =
     world.ladderAt && state.ladderRegrab <= 0 ? world.ladderAt(state.pos, HULL_HALF_WIDE, hull) : null;
+  if (ladder && ladder.normal && ladder.normal.z === 1) ladder = null;
   if (ladder) {
-    ladderMove(state, input, world, hull, ladder, dt);
+    ladderMove(state, input, world, hull, ladder, dt, duckButton, walkButton);
     checkVelocity(vel);
     return state;
   }
   state.onLadder = false;
 
-  // StartGravity: first half-tick. Applied on ground too — the ground branch
-  // zeroes vel.z right after, which is exactly why the order is visible only
-  // on the jump tick, where CheckJumpButton overwrites vel.z in between.
+  if (!state.onGround) state.fallVelocity = fr(-vel.z);
+
   vel.z = fr(vel.z - fmul(GRAVITY, fmul(0.5, dt)));
 
-  // CheckJumpButton: only from the ground; sets the impulse absolutely, then
-  // pre-pays the second gravity half so the airborne branch this same tick
-  // integrates the already-decayed velocity.
-  if (input.jump && state.onGround) {
-    vel.z = fr(JUMP_IMPULSE - fmul(GRAVITY, fmul(0.5, dt)));
-    state.onGround = false;
-  }
+  if (input.jump) checkJumpButton(state, true, dt, weaponMax);
+  else state.jumpHeld = false;
 
   if (state.onGround) {
     vel.z = 0;
+    state.fallVelocity = 0;
     friction(vel, dt);
   }
   checkVelocity(vel);
 
-  // Wish velocity from view yaw + move fractions, ground-plane only.
   yawBasis(input.yaw, _fwd, _right);
-  let maxSpeed = fr(input.maxSpeed);
-  if (state.ducking) maxSpeed = fmul(maxSpeed, DUCK_SPEED_SCALE);
-  else if (input.walk) maxSpeed = fmul(maxSpeed, WALK_SPEED_SCALE);
   const fmove = fmul(input.forward, maxSpeed);
   const smove = fmul(input.side, maxSpeed);
   v3set(
@@ -189,8 +396,16 @@ export function stepPlayer(state, input, world, dt = TICK_DT) {
   let wishSpeed = v3normalize(_wishDir);
   if (wishSpeed > maxSpeed) wishSpeed = maxSpeed;
 
+  const accelCtx = {
+    ducking: duckButton || state.inDuckTransition || state.ducking,
+    walking: !!input.walk && !(duckButton || state.inDuckTransition || state.ducking),
+    weaponMax,
+    scoped: !!input.scoped,
+    maxSpeed
+  };
+
   if (state.onGround) {
-    walkMove(state, _wishDir, wishSpeed, world, hull, dt);
+    walkMove(state, _wishDir, wishSpeed, world, hull, dt, accelCtx);
   } else {
     airMove(state, _wishDir, wishSpeed, world, hull, dt);
   }
@@ -198,9 +413,21 @@ export function stepPlayer(state, input, world, dt = TICK_DT) {
   categorizePosition(state, world, hull);
   checkVelocity(vel);
 
-  // FinishGravity: second half-tick.
-  vel.z = fr(vel.z - fmul(GRAVITY, fmul(0.5, dt)));
+  finishGravity(vel, dt);
   if (state.onGround) vel.z = 0;
+
+  if (state.onGround && state.fallVelocity > 0) {
+    onLand(state, state.fallVelocity);
+    state.fallVelocity = 0;
+  }
+
+  if (state.onGround && state.velocityModifier < 1) {
+    state.velocityModifier = fclamp(
+      fr(state.velocityModifier + fmul(dt, VELOCITY_MODIFIER_RECOVERY)),
+      0,
+      fr(1)
+    );
+  }
 
   return state;
 }
@@ -229,7 +456,7 @@ const _ladderTmp = v3();
  * Jump pushes off along the ladder's outward normal and locks the grab out for
  * a few ticks, or the same volume catches the body again on the next one.
  */
-function ladderMove(state, input, world, hull, ladder, dt) {
+function ladderMove(state, input, world, hull, ladder, dt, duckButton = false, walkButton = false) {
   const vel = state.vel;
   state.onLadder = true;
   state.onGround = false;
@@ -247,11 +474,13 @@ function ladderMove(state, input, world, hull, ladder, dt) {
     return;
   }
 
-  const climb = fmul(CLIMB_SPEED, LADDER_SPEED_SCALE);
+  let climb = fmul(CLIMB_SPEED, LADDER_SPEED_SCALE);
+  if (duckButton || walkButton) climb = fmul(climb, CLIMB_MODIFIER);
+  const lateral = duckButton ? fr(1) : fr(0.5);
   viewForward(input.yaw, input.pitch || 0, _fwd);
   yawBasis(input.yaw, _ladderTmp, _right);
   const fmove = fmul(input.forward, climb);
-  const smove = fmul(input.side, fmul(climb, LADDER_DAMPEN));
+  const smove = fmul(input.side, fmul(climb, lateral));
   v3set(
     _ladderWish,
     fr(fmul(_fwd.x, fmove) + fmul(_right.x, smove)),
@@ -290,12 +519,47 @@ function friction(vel, dt) {
   }
 }
 
-/** Source Accelerate: grow projected speed toward wishSpeed at sv_accelerate. */
-function accelerate(vel, wishDir, wishSpeed, accel, dt) {
+/** CCSGameMovement::Accelerate (sv_accelerate_use_weapon_speed path, exponent time 0). */
+function accelerate(vel, wishDir, wishSpeed, dt, ctx) {
   const currentspeed = v3dot(vel, wishDir);
   const addspeed = fr(wishSpeed - currentspeed);
   if (addspeed <= 0) return;
-  let accelspeed = fmul(accel, fmul(dt, wishSpeed));
+
+  const bIsDucking = !!ctx.ducking;
+  const bIsWalking = !!ctx.walking && !bIsDucking;
+  let fAccelerationScale = wishSpeed > ACCEL_SPEED_REF ? wishSpeed : ACCEL_SPEED_REF;
+  let flGoalSpeed = fAccelerationScale;
+  const weaponMax = ctx.weaponMax;
+  const bIsSlowSniperScoped =
+    !!ctx.scoped && fmul(weaponMax, WALK_SPEED_SCALE) < fr(110);
+
+  if (ACCELERATE_USE_WEAPON_SPEED) {
+    const wscale = weaponMax < ACCEL_SPEED_REF ? fdiv(weaponMax, ACCEL_SPEED_REF) : fr(1);
+    flGoalSpeed = fmul(flGoalSpeed, wscale);
+    if ((!bIsDucking && !bIsWalking) || ((bIsWalking || bIsDucking) && bIsSlowSniperScoped)) {
+      fAccelerationScale = fmul(fAccelerationScale, wscale);
+    }
+  }
+
+  if (bIsDucking) {
+    if (!bIsSlowSniperScoped) fAccelerationScale = fmul(fAccelerationScale, DUCK_SPEED_SCALE);
+    flGoalSpeed = fmul(flGoalSpeed, DUCK_SPEED_SCALE);
+  }
+  if (bIsWalking) {
+    if (!bIsSlowSniperScoped) fAccelerationScale = fmul(fAccelerationScale, WALK_SPEED_SCALE);
+    flGoalSpeed = fmul(flGoalSpeed, WALK_SPEED_SCALE);
+  }
+
+  let storedAccel = ACCEL;
+  const goalMinus5 = fr(flGoalSpeed - 5);
+  if (bIsWalking && currentspeed > goalMinus5) {
+    const numer = currentspeed - goalMinus5 > 0 ? fr(currentspeed - goalMinus5) : 0;
+    const denom = flGoalSpeed - goalMinus5 > 0 ? fr(flGoalSpeed - goalMinus5) : 0;
+    const t = denom > 0 ? fclamp(fr(1 - fdiv(numer, denom)), 0, 1) : 0;
+    storedAccel = fmul(storedAccel, t);
+  }
+
+  let accelspeed = fmul(storedAccel, fmul(dt, fAccelerationScale));
   if (accelspeed > addspeed) accelspeed = addspeed;
   vel.x = fr(vel.x + fmul(accelspeed, wishDir.x));
   vel.y = fr(vel.y + fmul(accelspeed, wishDir.y));
@@ -318,10 +582,19 @@ function airAccelerate(vel, wishDir, wishSpeed, dt) {
   vel.z = fr(vel.z + fmul(accelspeed, wishDir.z));
 }
 
-function walkMove(state, wishDir, wishSpeed, world, hull, dt) {
+function walkMove(state, wishDir, wishSpeed, world, hull, dt, ctx) {
   const vel = state.vel;
-  accelerate(vel, wishDir, wishSpeed, ACCEL, dt);
   vel.z = 0;
+  accelerate(vel, wishDir, wishSpeed, dt, ctx);
+  vel.z = 0;
+  const spd = v3len(vel);
+  const cap = ctx.maxSpeed;
+  if (spd > cap && cap > 0) {
+    const ratio = fdiv(cap, spd);
+    vel.x = fmul(vel.x, ratio);
+    vel.y = fmul(vel.y, ratio);
+    vel.z = fmul(vel.z, ratio);
+  }
   if (v3len(vel) < SPEED_EPSILON) {
     v3set(vel, 0, 0, 0);
     return;

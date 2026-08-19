@@ -3,8 +3,9 @@
 // What a grenade leaves behind, drawn.
 //
 // The BEHAVIOUR is in shared/sim3d — the smoke's flood fill
-// (shared/sim3d/smokeVolume.js) and the fire's outward walk
-// (shared/sim3d/fireSpread.js), both headless and both testable. This file is
+// (shared/sim3d/smokeVolume.js), the fire's outward walk
+// (shared/sim3d/fireSpread.js), and the flashbang
+// (shared/sim3d/flash.js), all headless and all testable. This file is
 // the body around them: it turns cells and seats into something on screen, and
 // owns the look.
 //
@@ -46,8 +47,14 @@
 
 import * as THREE from 'three/webgpu';
 import { mix, positionGeometry, uniform, vec3, vec4 } from 'three/webgpu';
-import { sourceToScene } from '../../shared/sim3d/units.js';
+import { sourceToScene, sceneToSource } from '../../shared/sim3d/units.js';
 import { createHullWorld } from './hullWorld.js';
+import { createRayWorld } from './rayWorld.js';
+import {
+  radiusFlashForPlayer,
+  applyBlind,
+  flashOverlayAlpha
+} from '../../shared/sim3d/flash.js';
 import { SpriteCardBatch, loadFxPack } from './spriteCard.js';
 import { SmokeCards, warmSmokeCards } from './smokeCards.js';
 import {
@@ -59,6 +66,7 @@ import {
   SMOKE_SECONDS,
   SMOKE_CELL,
   SMOKE_KNIT,
+  SMOKE_HOLD,
   SMOKE_PUSH_RADIUS
 } from '../../shared/sim3d/smokeVolume.js';
 import {
@@ -69,6 +77,7 @@ import {
   FLAME_SPACING
 } from '../../shared/sim3d/fireSpread.js';
 
+export { FLASH_MAX_SECONDS, SV_FLASHBANG_STRENGTH, FLASH_RADIUS } from '../../shared/sim3d/flash.js';
 export { SMOKE_RADIUS, SMOKE_SECONDS };
 /** Kept for callers that used the old name. */
 export const FIRE_RADIUS = FIRE_RANGE;
@@ -85,13 +94,11 @@ export const HE_DAMAGE = 99;
  * fire and the flash are one event that is over before you have registered it,
  * and the smoke is already fading when it arrives. Nothing here eases in.
  */
-const HE_FLAME = 0.11;
+const HE_FLAME = 0.165;
 const HE_FLASH = 0.07;
 const HE_SMOKE = 1.5;
-
-/** [guessed] Longest blindness a flashbang can inflict, seconds. */
-export const FLASH_MAX_SECONDS = 5;
-const FLASH_RANGE = 1500;
+/** Ring-wave travel uses the original 0.11s beat so a longer flame does not fly further. */
+const HE_FLAME_THROW = 0.11;
 
 /** [guessed] Decoy lifetime, seconds. */
 export const DECOY_SECONDS = 15;
@@ -101,9 +108,10 @@ export const DECOY_SECONDS = 15;
  *
  * CS2 holds five and drops them after seven, which is longer than the hole
  * takes to knit (`HE_SHADOW_AGE_RAMP` tops out at five) so the last of the
- * recovery is not cut off mid-close.
+ * recovery is not cut off mid-close. +1s vs that reading so the drawn hole
+ * outlives the extra second of refill.
  */
-const HE_MEMORY = 7;
+const HE_MEMORY = 10;
 
 /**
  * How many blasts a smoke tracks at once. CS2's `uHE` is five.
@@ -125,7 +133,7 @@ const HE_SLOTS = 5;
  * deal cheaper.
  */
 const HE_PULL_RADIUS = 340;
-const HE_PULL_SECONDS = 5;
+const HE_PULL_SECONDS = 6;
 const HE_PULL_MAX = 0.55;
 
 /**
@@ -157,10 +165,10 @@ const LOOK = Object.freeze({
   // molotov_groundfire_main_fancy.vpcf, first renderer
   fire: { color: [255, 255, 255], alphaScale: 2, selfIllum: 1, diffuse: 0, feather: 12, overbright: 2.4 },
   // molotov_groundfire_outline.vpcf, the additive second pass — the glow
-  fireGlow: { color: [255, 255, 255], alphaScale: 1.1, selfIllum: 1, diffuse: 0, feather: 3, overbright: 9, additive: true, bloomOnly: true },
+  fireGlow: { color: [255, 255, 255], alphaScale: 1.1, selfIllum: 1, diffuse: 0, feather: 3, overbright: 4.5, additive: true, bloomOnly: true },
   // explosion_hegrenade_b.vpcf: `_g` carries colour scale 0,0,0, so the blast
   // smoke is nearly black and lit rather than emissive.
-  heSmoke: { color: [54, 54, 57], alphaScale: 1.7, selfIllum: 0.12, diffuse: 0.9, feather: 20, overbright: 1, alphaOnly: true },
+  heSmoke: { color: [54, 54, 57], alphaScale: 0.7, selfIllum: 0.12, diffuse: 0.9, feather: 20, overbright: 1, alphaOnly: true },
   heFire: { color: [255, 255, 255], alphaScale: 1.4, selfIllum: 1, diffuse: 0, feather: 8, overbright: 16, additive: true, bloomOnly: true }
 });
 
@@ -235,8 +243,6 @@ const HE_BALLS = 30;
  */
 const HE_RING_SPEED = [900, 3400];
 
-const _a = new THREE.Vector3();
-const _b = new THREE.Vector3();
 const _c = new THREE.Color();
 const _tint = new THREE.Color();
 /** Reused by `_smokeWorld().solidAt`: the fill asks it thousands of times a throw. */
@@ -257,11 +263,13 @@ export class NadeEffects {
    * @param {() => object|null} o.getCollider  the map's collision, for the
    *   smoke's flood fill and its sun traces, the fire's ground probe and the
    *   flash's sight line
+   * @param {() => object|null} [o.getMovers]  swinging doors, for flash LOS
    * @param {() => string} [o.getSide]  'T' | 'CT', for the smoke tint
    * @param {THREE.Camera} [o.camera]  the sprite layers sort against it
    */
-  constructor({ getCollider, getSide, camera = null } = {}) {
+  constructor({ getCollider, getMovers, getSide, camera = null } = {}) {
     this.getCollider = getCollider || (() => null);
+    this.getMovers = getMovers || (() => null);
     this.getSide = getSide || (() => 'T');
     this.camera = camera;
     this.root = new THREE.Group();
@@ -275,10 +283,16 @@ export class NadeEffects {
     this.live = [];
     this._world = null;
     this._collider = null;
+    this._flashWorld = null;
+    this._flashCollider = null;
+    this._flashMovers = null;
     /** 0..1, how blinded the camera is right now. main.js draws the overlay. */
     this.flash = 0;
-    this._flashUntil = 0;
-    this._flashPeak = 0;
+    /** 0..1, leak Deafen DSP amount. No audio duck is wired yet. */
+    this.deafen = 0;
+    this._flashState = null;
+    this._deafenUntil = 0;
+    this._deafenAmount = 0;
     /** The sheets. Null until `loadFx` resolves; effects still simulate. */
     this.fx = null;
     this._light = null;
@@ -385,6 +399,33 @@ export class NadeEffects {
       this._world = c ? createHullWorld(c, 'nade') : null;
     }
     return this._world;
+  }
+
+  /**
+   * Flash LOS: a ray, not a hull, over the light band. Doors come from movers
+   * because their static hulls are masked out of the BVH.
+   */
+  _flashRay() {
+    const c = this.getCollider();
+    const m = this.getMovers() || null;
+    if (c !== this._flashCollider || m !== this._flashMovers) {
+      this._flashCollider = c;
+      this._flashMovers = m;
+      this._flashWorld = c ? createRayWorld(c, m, { flash: true }) : null;
+    }
+    return this._flashWorld;
+  }
+
+  _flashTrace() {
+    const world = this._flashRay();
+    if (!world) return null;
+    return (from, to) => {
+      const hit = world.trace(from, to);
+      if (!hit) return { fraction: 1, endpos: { x: to.x, y: to.y, z: to.z } };
+      const far = Math.hypot(to.x - from.x, to.y - from.y, to.z - from.z);
+      const fraction = far > 0 ? Math.min(1, hit.distance / far) : 1;
+      return { fraction, endpos: hit.point };
+    };
   }
 
   /** The world as shared/sim3d/smokeVolume.js wants it. */
@@ -557,7 +598,7 @@ export class NadeEffects {
    *
    * TWO things happen and they are not the same thing. The march does the hole
    * you can SEE — `uHE` drags the sample point in towards the blast and then
-   * heals it over about five seconds, which is CS2's own displacement and is
+   * heals it over about six seconds, which is CS2's own displacement and is
    * why the smoke visibly rushes inward and then closes. This call does the
    * hole the GAME can see: it clears the fill, so `smokedAt` stops reporting
    * cover through the gap and a bot cannot hide in a hole that is not there.
@@ -577,15 +618,17 @@ export class NadeEffects {
   /**
    * The open holes, SCENE units, as spheres the cards must not reach into.
    *
-   * Shrinking with the knit: the fill closes a hole from the rim inwards over
-   * SMOKE_KNIT, and the drawn boundary has to follow it or the cards would
-   * snap back across a gap the sim had already filled.
+   * Shrinking with the knit: the fill stays fully open for SMOKE_HOLD, then
+   * closes from the rim inwards over SMOKE_KNIT. The drawn boundary has to
+   * follow that or the cards would snap back across a gap the sim still owns.
    */
   _smokeHoles() {
     let out = null;
+    const closeFor = SMOKE_KNIT + HE_PULL_SECONDS;
     for (const he of this._hes) {
-      if (he.age >= SMOKE_KNIT + HE_PULL_SECONDS) continue;
-      const shut = Math.max(0, 1 - he.age / (SMOKE_KNIT + HE_PULL_SECONDS));
+      if (he.age >= SMOKE_HOLD + closeFor) continue;
+      const knitAge = Math.max(0, he.age - SMOKE_HOLD);
+      const shut = Math.max(0, 1 - knitAge / closeFor);
       const p = sourceToScene(he.x, he.y, he.z);
       (out ||= []).push({ x: p[0], y: p[1], z: p[2], r: SMOKE_PUSH_RADIUS * shut });
     }
@@ -909,8 +952,10 @@ export class NadeEffects {
         const dx = Math.cos(a) * (1 - Math.abs(dy) * 0.4);
         const dz = Math.sin(a) * (1 - Math.abs(dy) * 0.4);
         const speed = HE_RING_SPEED[0] + hash(i + 31) * (HE_RING_SPEED[1] - HE_RING_SPEED[0]);
-        const reach = speed * HE_FLAME * (0.55 + 0.45 * (1 - life));
-        const w = HE_RADIUS * (0.2 + hash(i + 41) * 0.2);
+        // First-frame throw only. Growing with (1 - life) made the fire walk
+        // outward as it faded; it should sit still while the alpha drops.
+        const reach = speed * HE_FLAME_THROW * 0.55;
+        const w = HE_RADIUS * (0.1 + hash(i + 41) * 0.1);
         ball.set(
           i,
           ox + dx * reach,
@@ -947,22 +992,22 @@ export class NadeEffects {
           continue;
         }
         const dx = (hash(i) - 0.5) * 2;
-        const dy = 0.35 + hash(i + 11) * 0.7;
+        const dy = 0.2 + hash(i + 11) * 0.35;
         const dz = (hash(i + 21) - 0.5) * 2;
-        const reach = HE_RADIUS * (0.4 + 0.22 * drift);
-        const w = (110 + hash(i + 31) * 110) * (1 + 0.45 * drift);
+        const reach = 32 + 10 * drift;
+        const w = (40 + hash(i + 31) * 36) * (1 + 0.1 * drift);
         smoke.set(
           i,
           ox + dx * reach,
-          oy + dy * reach + drift * 46,
+          oy + dy * reach + drift * 14,
           oz + dz * reach,
           w,
           w,
           hash(i + 41) * 6.283 + t * (hash(i + 51) - 0.5) * 0.5,
           hash(i + 61) * 64 + t * SMOKE_FPS,
-          // ^1.6 so it is dense immediately and then goes quickly, rather than
-          // hanging around at half strength the way a linear fade does.
-          Math.min(1, Math.pow(life, 1.6) * 1.4),
+          // Dim on spawn and thinning from there. Full alpha read as a second
+          // smoke, not blast soot.
+          life * 0.22,
           null
         );
       }
@@ -982,41 +1027,43 @@ export class NadeEffects {
 
   /**
    * How blind a viewer at `eye` looking along `dir` (scene frame) is left by a
-   * flash at `pos` (Source frame), in seconds.
-   *
-   * `[guessed]` — the real curve is derivable from the `flash` byte in every
-   * recorded tick and this is not that. The SHAPE is right: it needs line of
-   * sight, it falls off with distance, and it falls off hard as the flash moves
-   * out of view, with a floor for one behind you.
+   * flash at `pos` (Source frame). Overlay duration, seconds — leak Blind
+   * stores fadeTime/1.4, not hold+fade.
    */
   flashSeconds(pos, eye, dir) {
-    const world = this._tracer();
-    const [fx, fy, fz] = sourceToScene(pos.x, pos.y, pos.z);
-    _a.set(fx, fy, fz);
-    const dist = _a.distanceTo(eye);
-    if (dist > FLASH_RANGE) return 0;
-    if (world) {
-      const e = { x: eye.x, y: -eye.z, z: eye.y };
-      const t = world.traceHull(pos, e, 2, 2);
-      if (t.fraction < 0.97) return 0;
-    }
-    // ...and a smoke between the two eats it, which is what a smoke is for.
-    if (this.smokedAt((pos.x + eye.x) / 2, (pos.y - eye.z) / 2, (pos.z + eye.y) / 2)) return 0;
-    _b.copy(_a).sub(eye).normalize();
-    const facing = _b.dot(dir);
-    const angle = Math.max(0, (facing + 0.35) / 1.35);
-    const near = 1 - Math.min(1, dist / FLASH_RANGE);
-    return FLASH_MAX_SECONDS * Math.pow(angle, 1.6) * (0.25 + 0.75 * near * near);
+    return this.flashAt(pos, eye, dir)?.overlayDuration || 0;
   }
 
-  /** Blind the camera for `seconds`, taking the worse of this and any current. */
+  /**
+   * Leak RadiusFlash for one viewer. `eye` and `dir` are scene-frame.
+   */
+  flashAt(pos, eye, dir) {
+    const [ex, ey, ez] = sceneToSource(eye.x, eye.y, eye.z);
+    const [fx, fy, fz] = sceneToSource(dir.x, dir.y, dir.z);
+    return radiusFlashForPlayer({
+      origin: pos,
+      eye: { x: ex, y: ey, z: ez },
+      forward: { x: fx, y: fy, z: fz },
+      trace: this._flashTrace()
+    });
+  }
+
+  /** Apply a RadiusFlash hit to the camera overlay. */
+  applyFlash(pos, eye, dir, now) {
+    const hit = this.flashAt(pos, eye, dir);
+    if (!hit) return 0;
+    this._flashState = applyBlind(this._flashState, hit, now);
+    if (hit.deafen > 0) {
+      this._deafenAmount = Math.max(this._deafenAmount, hit.deafen);
+      this._deafenUntil = Math.max(this._deafenUntil, this._flashState.flashBangTime);
+    }
+    return hit.overlayDuration;
+  }
+
+  /** Blind the camera for `seconds` of overlay, taking the worse of this and any current. */
   blind(seconds, now) {
     if (!(seconds > 0)) return;
-    const until = now + seconds;
-    if (until > this._flashUntil) {
-      this._flashUntil = until;
-      this._flashPeak = seconds;
-    }
+    this._flashState = applyBlind(this._flashState, { fadeHold: seconds * 0.5, fadeTime: seconds * 1.4 }, now);
   }
 
   // ---- decoy ---------------------------------------------------------------
@@ -1047,7 +1094,7 @@ export class NadeEffects {
     this._time += dt;
 
     // Blasts age for the smoke march whether or not their own effect is still
-    // drawing: the hole one leaves outlives the fire by five seconds.
+    // drawing: the hole one leaves outlives the fire by several seconds.
     for (let i = this._hes.length - 1; i >= 0; i--) {
       this._hes[i].age += dt;
       if (this._hes[i].age > HE_MEMORY) this._hes.splice(i, 1);
@@ -1067,12 +1114,17 @@ export class NadeEffects {
         this.live.splice(i, 1);
       }
     }
-    if (this._flashUntil > now) {
-      const left = this._flashUntil - now;
-      this.flash = Math.min(1, Math.pow(left / Math.max(0.001, this._flashPeak), 0.6));
+    if (this._flashState) {
+      this.flash = flashOverlayAlpha(this._flashState, now);
+      if (!(this.flash > 0)) this._flashState = null;
     } else {
       this.flash = 0;
-      this._flashUntil = 0;
+    }
+    if (this._deafenUntil > now) this.deafen = this._deafenAmount;
+    else {
+      this.deafen = 0;
+      this._deafenUntil = 0;
+      this._deafenAmount = 0;
     }
   }
 
@@ -1107,7 +1159,10 @@ export class NadeEffects {
     this.live.length = 0;
     this._hes.length = 0;
     this.flash = 0;
-    this._flashUntil = 0;
+    this.deafen = 0;
+    this._flashState = null;
+    this._deafenUntil = 0;
+    this._deafenAmount = 0;
   }
 
   dispose() {

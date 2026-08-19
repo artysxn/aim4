@@ -25,19 +25,52 @@ import { DemoView } from './demoView.js';
 import { sharedPlayerModels, liveBodies } from './playerModels.js';
 import { LiveBody } from './liveBody.js';
 import { createBuyMenu } from './buyMenu.js';
+import { createPauseMenu } from './pauseMenu.js';
 import { placeThirdPersonCamera } from './thirdPerson.js';
 import { mountCrosshair } from './crosshairOverlay.js';
 import { ViewModelAssets, ViewModel, createViewModelPass, VIEWMODEL_ENV_INTENSITY, VIEWMODEL_SUN } from './viewModel.js';
 import { createViewModelTuner } from './vmTuner.js';
 import { SunTracker, loadShadowMask } from './sunlight.js';
 import { Projectiles } from './projectiles.js';
+import { DroppedWeapons, dropRelease } from './droppedWeapons.js';
 import { NadeEffects, HE_RADIUS, HE_DAMAGE } from './nadeEffects.js';
 import { ThrowControl } from './throwing.js';
+import { perfectJumpThrowState } from '../../shared/sim3d/grenade.js';
 import { Interactives } from './interactives.js';
 import { Shooting } from './shooting.js';
+import { BulletAssets } from './bulletPack.js';
+import { Decals } from './decals.js';
+import { Tracers } from './tracers.js';
+import {
+  createRecoilState,
+  fireRecoil,
+  updateRecoil,
+  updateRecoilIndex,
+  aimPunch,
+  cameraPunch,
+  resetRecoil
+} from '../../shared/sim3d/recoil.js';
+import {
+  createAccuracyState,
+  updateAccuracy,
+  addFireInaccuracy,
+  getInaccuracy,
+  getSpread,
+  getSpreadSeed,
+  sampleCone,
+  bulletDirection,
+  resetAccuracy
+} from '../../shared/sim3d/inaccuracy.js';
 import { SettingsManager, VIEWMODEL_FOV_MIN, VIEWMODEL_FOV_MAX } from '../core/SettingsManager.js';
+import { practiceBackbuffer } from './practiceDisplay.js';
+import { createPerfFlags, displayHzHint } from './perfToggles.js';
+import { cycleSpawnIndex, formatSpawnChat } from './practiceSpawn.js';
 import { sourceVFovFromHFov } from '../utils/MathUtils.js';
 import { loadDemoBytes, loadDemoFile } from './demoData.js';
+import { PracticeBots } from './practiceBots.js';
+import { bindImportRound } from './practiceImport.js';
+import { nextCamMode, cycleLive, spectateTargetId, parseSpectateTarget } from './practiceCam.js';
+import { fetchDemos, apiBase } from '../replays/api.js';
 
 const params = new URLSearchParams(location.search);
 const map = cs3dMapForPath(location.pathname) || cs3dMap(params.get('map')) || null;
@@ -50,6 +83,11 @@ if (!map) {
 }
 document.title = `${map.name} - AIM4.io`;
 
+const importUis = [];
+let camMode = 'T';
+let spectateKey = null;
+let skipNadeHurt = false;
+
 // ---- renderer / scene ------------------------------------------------------
 // WebGPU, with three's built-in WebGL2 fallback when the browser has no
 // adapter (`forceWebGL` also forces it for A/B testing via ?webgl=1). The
@@ -57,9 +95,10 @@ document.title = `${map.name} - AIM4.io`;
 // copy of the core: mixing it with plain 'three' would give two different
 // Mesh/Vector3 classes and nothing would line up.
 const forceWebGL = params.get('webgl') === '1';
+const msaaBoot = params.get('msaa') !== '0' && localStorage.getItem('cs3d_msaa') !== '0';
 const renderer = new THREE.WebGPURenderer({
   canvas,
-  antialias: true,
+  antialias: msaaBoot,
   powerPreference: 'high-performance',
   forceWebGL
 });
@@ -95,13 +134,56 @@ camera.rotation.order = 'YXZ';
 scene.add(camera);
 
 const player = new Player(camera);
+
+// ---- recoil ------------------------------------------------------------------
+// The spray pattern, the aim punch and the cone, all out of shared/sim3d — the
+// same generator CS2 runs, seeded from the same per-weapon numbers the pack
+// carries. Nothing about where a bullet goes is decided in this file; it only
+// asks, and hands the answers to the camera and the tracer.
+const recoilState = createRecoilState();
+const accuracyState = createAccuracyState();
+/**
+ * The shot counter that seeds the cone.
+ *
+ * CS2 derives it from the command number so the client and the server draw the
+ * same bullet; there is no server here, so it is just a count. Only its low
+ * byte is used either way (shared/sim3d/inaccuracy.js).
+ */
+let shotSeed = 0;
+/** Degrees, [pitch, yaw]: what the bullets take, and what the camera takes. */
+const _aim = [0, 0];
+const _cam = [0, 0];
+
+// What a bullet leaves behind: the game's own impact decals and its tracer
+// streak, one pack for both (scripts/cs3d-decals.mjs).
+const bulletAssets = new BulletAssets();
+bulletAssets.load();
+const decals = new Decals({ assets: bulletAssets, getPack: () => pack });
+const tracers = new Tracers({ assets: bulletAssets, camera });
+
 let lighting = null;
 let mapRenderer = null;
+let bloomPass = { render: (d) => d(), resize() {}, enabled: false, setActive() {} };
+let pauseMenu = null;
+let perf = null;
+const passStamp = { sky: 0, world: 0, bloom: 0, vm: 0, shadowDirty: 0 };
 // ---- UI --------------------------------------------------------------------
 const controls = new Controls(canvas, player, {
   onLock: (locked) => {
+    if (
+      !locked &&
+      !buyMenu.open &&
+      !matchHud?.chatOpen &&
+      !vmTuner?.open &&
+      !pauseMenu?.open
+    ) {
+      pauseMenu?.openMenu();
+    }
     hud.setLocked(locked);
-    if (locked) matchHud?.closeChat();
+    if (locked) {
+      pauseMenu?.close();
+      matchHud?.closeChat();
+    }
     // Losing the mouse mid-hold must not leave a pin pulled: the button-up
     // that would have thrown it never arrives.
     if (!locked) throwControl.cancel();
@@ -110,17 +192,15 @@ const controls = new Controls(canvas, player, {
     player.setMode(player.mode === 'fly' ? 'walk' : 'fly');
     hud.setMode(player.mode, thirdPerson);
   },
-  onSpawn: (side) => spawnAt(side),
-  // Digits belong to the demo when one is loaded (1-0 → slots 0-9), and to
-  // the T/CT spawns in the plain explorer.
+  onSpawn: () => spawnAt(null, { cycle: true }),
+  // Digits: demo POV when a demo is loaded, otherwise weapon slots 1-4.
   onDigit: (n) => {
-    if (demoView.active) demoView.setPov((n + 9) % 10);
-    // Walking: 1/2/3 are the weapon slots the way the game has them, and the
-    // draw animation plays. Flying, there is no body to arm, so 1 and 2 stay
-    // the T and CT spawns.
-    else if (player.mode === 'walk' && n >= 1 && n <= 4) equipSlot(n);
-    else if (n === 1) spawnAt('T');
-    else if (n === 2) spawnAt('CT');
+    if (camMode === 'spectate' && demoView.active) {
+      const slot = (n + 9) % 10;
+      if (demoView.liveSlots().includes(slot)) spectateKey = spectateTargetId('demo', slot);
+      return;
+    }
+    if (n >= 1 && n <= 4) equipSlot(n);
   },
   // Mouse. Holding a gun: fire while held for an automatic weapon, once per
   // click otherwise. Holding a grenade: the buttons mean something else
@@ -128,6 +208,10 @@ const controls = new Controls(canvas, player, {
   // throw is on the way UP (src/cs3d/throwing.js).
   onAttack: (button, down) => {
     attackHeld[button] = down;
+    if (camMode === 'spectate') {
+      if (down && controls.locked) cycleSpectate(button === 'secondary' ? -1 : 1);
+      return;
+    }
     if (controls.locked && player.mode === 'walk' && !thirdPerson && throwControl.active) {
       throwControl.button(button, down);
       return;
@@ -137,51 +221,54 @@ const controls = new Controls(canvas, player, {
   onPlayPause: () => demoView.togglePlay(),
   onStep: (d) => demoView.step(d),
   onRound: (d) => demoView.shiftRound(d),
-  onSpeed: () => demoView.cycleSpeed(),
+  onSpeed: () => setCamMode(nextCamMode(camMode)),
+  onPlaceBot: () => placePracticeBot(false),
+  onBoostBot: () => placePracticeBot(true),
+  onDeleteBot: () => deleteAimedBot(),
+  onSkipNades: () => skipThrownNades(),
   onPovExit: () => demoView.active && demoView.povSlot !== null && demoView.setPov(demoView.povSlot),
-  onHelp: () => hud.toggleHelp(),
-  onInspect: () => {
-    inspectOn = !inspectOn;
-    if (!inspectOn) hud.setInspect(null);
-    inspectAt = 0;
-  },
-  onGrade: () => hud.toggleGrade(),
-  onFpsView: () => fpsView.toggle(),
   // Q: the next weapon in the explorer's pocket — the run-speed cap and the
   // hands both follow it.
   onWeapon: () => {
     const next = match.cycleHeld();
     if (next) equipWeapon(next);
   },
-  // T: third person — the camera behind the walking body's own agent model,
-  // animated live from the movement sim (the same body the demos drive).
-  onThirdPerson: () => {
-    thirdPerson = !thirdPerson;
-    hud.setMode(player.mode, thirdPerson);
-  },
   // B: the buy menu. It needs the mouse, so opening it gives the pointer back
   // and closing it takes the lock again.
   onBuy: () => buyMenu.toggle(),
+  // R: magazine swap. Empty mag also starts this after the last round.
+  onReload: () => tryReload(),
   // E: the game's `+use`. Opens and shuts the doors the map actually has.
+  // A dropped gun under the look ray is the same key, after a miss on doors.
   onUse: () => {
     camera.getWorldDirection(_useDir);
     const eye = player.mode === 'walk' ? player.eye(_useEye) : _useEye.copy(camera.position);
-    const used = interactives.use(
-      { x: eye.x, y: -eye.z, z: eye.y },
-      { x: _useDir.x, y: -_useDir.z, z: _useDir.y }
-    );
-    if (used) hud.setThrow(null);
+    const srcEye = { x: eye.x, y: -eye.z, z: eye.y };
+    const srcDir = { x: _useDir.x, y: -_useDir.z, z: _useDir.y };
+    const used = interactives.use(srcEye, srcDir);
+    if (used) {
+      hud.setThrow(null);
+      return;
+    }
+    const drop = dropped.tryUse(srcEye, srcDir);
+    if (drop) takeDropped(drop, { replace: true });
   },
-  // Backslash: the viewmodel placement sliders. Same deal as the buy menu —
+  onDropWeapon: () => dropHeldWeapon(),
   // it needs the cursor, so it drops the pointer lock while it is up.
-  onVmTune: () => vmTuner.toggle(),
   onCancel: () => {
     if (matchHud?.chatOpen) {
       matchHud.closeChat();
       return;
     }
-    buyMenu.close();
-    vmTuner.close();
+    if (buyMenu.open) {
+      buyMenu.close();
+      return;
+    }
+    if (vmTuner.open) {
+      vmTuner.close();
+      return;
+    }
+    pauseMenu?.handleEsc();
   },
   onChat: () => {
     buyMenu.close();
@@ -193,10 +280,12 @@ let thirdPerson = false;
 const match = createPracticeMatch({ side: 'T' });
 let _chatRelock = false;
 let _respawnAt = 0;
+let _deathDropped = false;
 const hud = new Hud(uiRoot, {
   map,
   sens: controls.sens,
-  onSensitivity: (v) => controls.setSensitivity(v)
+  onSensitivity: (v) => controls.setSensitivity(v),
+  onImportMount: mountImport
 });
 const buyMenu = createBuyMenu({
   root: uiRoot,
@@ -205,8 +294,8 @@ const buyMenu = createBuyMenu({
   // 1 / 2 are weapon slots then, not spawns. It changes the hands and the agent
   // model with the list, because being a CT is what it means.
   onSide: (s) => {
-    lastSide = s;
-    match.setSide(s);
+    setCamMode(s);
+    match.givePracticeKit();
     if (match.held) equipWeapon(match.held, { draw: false });
   },
   getHeld: () => player.weapon,
@@ -224,9 +313,9 @@ const buyMenu = createBuyMenu({
   },
   onToggle: (open) => {
     if (open) matchHud.closeChat();
-    hud.setPanelOpen(open || matchHud.chatOpen);
+    hud.setPanelOpen(open || matchHud.chatOpen || pauseMenu?.open);
     if (open) controls.exitLock();
-    else if (!matchHud.chatOpen) controls.requestLock();
+    else if (!matchHud.chatOpen && !pauseMenu?.open) controls.requestLock();
   }
 });
 const matchHud = createMatchHud({
@@ -235,21 +324,23 @@ const matchHud = createMatchHud({
   match,
   hooks: {
     onChatToggle: (open) => {
-      hud.setPanelOpen(open || buyMenu.open);
+      hud.setPanelOpen(open || buyMenu.open || pauseMenu?.open);
       if (open) {
         _chatRelock = controls.locked;
         controls.exitLock();
-      } else if (_chatRelock) {
+      } else if (_chatRelock && !pauseMenu?.open) {
         _chatRelock = false;
         controls.requestLock();
       }
     },
     onEquip: (name) => equipWeapon(name),
+    onReload: () => playReloadAnim(),
     onSide: (side) => {
-      lastSide = side;
-      match.setSide(side);
-      spawnAt(side);
+      spawnCursor = -1;
+      setCamMode(side);
     },
+    onCamMode: (mode) => setCamMode(mode),
+    onPlayback: (act) => onPlayback(act),
     onNoclip: () => {
       player.setMode(player.mode === 'fly' ? 'walk' : 'fly');
       hud.setMode(player.mode, thirdPerson);
@@ -276,34 +367,46 @@ const matchHud = createMatchHud({
     },
     onRespawn: () => {
       _respawnAt = 0;
+      _deathDropped = false;
       match.respawn();
       spawnAt();
     },
-    onDied: () => {
-      _respawnAt = performance.now() + 2000;
-    },
+    onDied: () => onLocalDeath(),
     onRestart: () => {
       _respawnAt = 0;
+      _deathDropped = false;
       lastSide = match.side;
       if (match.held) equipWeapon(match.held, { draw: false });
       spawnAt(match.side);
     },
-    onShowPos: (on) => uiRoot.classList.toggle('is-showpos', !!on)
+    onShowPos: (on) => uiRoot.classList.toggle('is-showpos', !!on),
+    onDebugSun: () => hud.toggleGrade(),
+    onDebugViewmodel: () => vmTuner.toggle(),
+    onDebugInspect: () => {
+      inspectOn = !inspectOn;
+      if (!inspectOn) hud.setInspect(null);
+      inspectAt = 0;
+    },
+    onDebugTooltips: () => hud.toggleHelp(),
+    onCommand: (cmd, args) => perf?.command(cmd, args) ?? null
   }
 });
 hud.setLocked(false);
 hud.setMode(player.mode);
 hud.setWeapon(player.weapon, player.maxSpeed);
-mountCrosshair(uiRoot);
 
-// The flat view (V). Reads `pack` and `lighting` through getters because both
-// are filled in by boot(), long after the key is bound.
+// The flat view. Reads `pack` and `lighting` through getters because both
+// are filled in by boot(), long after the key is bound. Esc menu toggles it.
 const fpsView = new FpsView({
   scene,
   renderer,
   getPack: () => pack,
   getLighting: () => lighting,
-  onChange: (on) => hud.setFpsView(on)
+  onChange: (on) => {
+    hud.setFpsView(on);
+    pauseMenu?.syncTools?.();
+    if (!on) applyPerf();
+  }
 });
 
 // ---- demo playback ---------------------------------------------------------
@@ -317,6 +420,11 @@ const fpsView = new FpsView({
 // manifest is in, so it never competes with the first tiles; a body created
 // before it lands is a placeholder until the next frame after it does.
 const playerModels = sharedPlayerModels();
+const practiceBots = new PracticeBots({
+  playerModels,
+  getRoot: () => pack?.world || null,
+  onDied: (bot) => dropBotGear(bot)
+});
 
 // ---- viewmodel -------------------------------------------------------------
 // The hands and the weapon in them (src/cs3d/viewModel.js), over the pack
@@ -339,15 +447,112 @@ const applyVmSettings = () => {
   viewModel.applySettings(vm);
   vmPass.setFov(Math.min(VIEWMODEL_FOV_MAX, Math.max(VIEWMODEL_FOV_MIN, Number(vm.fov) || VIEWMODEL_FOV_MAX)));
 };
+/**
+ * Trainer backbuffer: native window, or the stored size (4:3 / custom)
+ * stretched to the viewport the way Engine.applyResolution does.
+ */
+function applyPracticeDisplay() {
+  const s = vmSettings.activeSettings();
+  const displayW = window.innerWidth;
+  const displayH = window.innerHeight;
+  const { width: w, height: h, pixelRatio } = practiceBackbuffer(
+    s,
+    displayW,
+    displayH,
+    window.devicePixelRatio || 1
+  );
+  renderer.setPixelRatio(perf?.flags.dpr ?? pixelRatio);
+  renderer.setSize(w, h, false);
+  canvas.style.width = `${displayW}px`;
+  canvas.style.height = `${displayH}px`;
+  camera.aspect = w / Math.max(1, h);
+  camera.fov = sourceVFovFromHFov(s.hFov ?? 90);
+  camera.updateProjectionMatrix();
+  mapRenderer?.resize();
+  vmPass.resize(w, h);
+  lighting?.resize();
+}
+
+/**
+ * Push the Y-console `r_*` flags into the live renderer.
+ *
+ * The flat view owns materials, tone mapping and shadows while it is on, so
+ * those three stay out of this path until it is toggled off.
+ */
+function applyPerf() {
+  if (!perf) return;
+  const f = perf.flags;
+  if (!f.profile) hud.setProfile(null);
+  try {
+    localStorage.setItem('cs3d_msaa', f.msaa ? '1' : '0');
+  } catch {
+    /* private mode */
+  }
+  applyPracticeDisplay();
+  if (fpsView.enabled) return;
+  bloomPass.setActive?.(f.bloom);
+  lighting?.setShadowUpdates?.(f.shadows);
+  if (f.shadows) lighting?.markShadowDirty();
+  pack?.setShadowKeep?.(f.shadows);
+  pack?.materials?.setSimple(f.simple);
+}
+const bootBuf = practiceBackbuffer(
+  vmSettings.activeSettings(),
+  window.innerWidth,
+  window.innerHeight,
+  window.devicePixelRatio || 1
+);
+perf = createPerfFlags(
+  {
+    msaa: msaaBoot,
+    dpr: bootBuf.pixelRatio,
+    bloom: params.get('bloom') !== '0',
+    shadows,
+    shadowBodies: true,
+    simple: false,
+    skyPass: true,
+    profile: params.get('r_profile') === '1' || params.get('profile') === '1'
+  },
+  () => applyPerf()
+);
 applyVmSettings();
-vmSettings.onChange(applyVmSettings);
-// The vm camera is constructed at aspect 1 and was only ever corrected by the
-// resize listener, so the first frames of every session drew the viewmodel
-// stretched across the width of the window until something resized it (F11,
-// a drag, anything). Set it up front from the size we already have.
-vmPass.resize(window.innerWidth, window.innerHeight);
+applyPracticeDisplay();
+vmSettings.onChange(() => {
+  applyVmSettings();
+  applyPracticeDisplay();
+});
+const xhair = mountCrosshair(uiRoot, { settings: vmSettings, scaleToResolution: true });
 // U opens the same settings as live sliders (src/cs3d/vmTuner.js).
 const vmTuner = createViewModelTuner({ viewModel, vmPass, settings: vmSettings, apply: applyVmSettings });
+pauseMenu = createPauseMenu({
+  root: uiRoot,
+  settings: vmSettings,
+  crosshair: xhair.crosshair,
+  getFlatView: () => fpsView.enabled,
+  getThirdPerson: () => thirdPerson,
+  onFlatView: () => fpsView.toggle(),
+  onThirdPerson: () => {
+    thirdPerson = !thirdPerson;
+    hud.setMode(player.mode, thirdPerson);
+  },
+  onToggle: (open) => {
+    if (open) {
+      buyMenu.close();
+      vmTuner.close();
+      matchHud.closeChat();
+      controls.exitLock();
+    }
+    hud.setPanelOpen(open || buyMenu.open || matchHud.chatOpen);
+  },
+  onResume: () => controls.requestLock(),
+  onImportMount: mountImport,
+  onLookSync: () => {
+    controls.settings.data.sensitivity = vmSettings.data.sensitivity;
+    controls.settings.data.rawInput = vmSettings.data.rawInput;
+    const input = uiRoot.querySelector('.c3-sens input');
+    if (input) input.value = vmSettings.data.sensitivity;
+  }
+});
 
 /**
  * 1 / 2 / 3, the game's slots, and 4 for utility. The draw animation and its
@@ -366,6 +571,7 @@ let held = match.held;
 // mouse buttons mean and why.
 const nadeEffects = new NadeEffects({
   getCollider: () => pack?.collider || null,
+  getMovers: () => interactives.movers,
   // A CS2 smoke takes the thrower's side: sandy for T, pale blue for CT.
   getSide: () => lastSide,
   // The fire and blast sprites are camera-facing and alpha-blended, so their
@@ -391,11 +597,21 @@ let _shotClearAt = 0;
 const shooting = new Shooting({
   getWeapon: () => vmAssets.stats?.(held) || null,
   interactives,
+  // The wallbang inspector — entry-to-exit lines through the geometry — is a
+  // diagnostic, not part of the picture, and it does not belong on screen
+  // beside a real tracer. `?traces=1` puts it back.
+  traces: params.get('traces') === '1',
+  hitTargets: (from, to) => practiceBots.hitTargets(from, to),
+  // Every surface the round touched, in order, so the wall gets a hole and the
+  // streak knows where it ended.
+  onImpact: ({ point, normal, surface, dir }) => decals.add({ point, normal, surface, dir }),
   onShot: (shot) => {
     hud.setShot(shot);
     _shotClearAt = performance.now() + 2500;
+    for (const h of shot.hits || []) practiceBots.hurt(h.id, h.damage);
   }
 });
+
 const projectiles = new Projectiles({
   assets: vmAssets,
   // A grenade that hits a window, a vent or a pane of glass smashes it and
@@ -406,39 +622,50 @@ const projectiles = new Projectiles({
     // An HE breaks the vents and glass in its radius and shoves the doors —
     // the same detonation, two behaviours, because a door has no prop_data to
     // damage. A molotov deliberately does neither (shared/sim3d/interactives.js).
-    if (type === 'hegrenade') {
+    if (type === 'hegrenade' && !skipNadeHurt) {
       const stats = vmAssets.stats?.('hegrenade');
       const radius = stats?.range || HE_RADIUS;
       const maxDmg = stats?.damage || HE_DAMAGE;
       interactives.blast(pos, radius, maxDmg);
+      practiceBots.blast(pos, radius, maxDmg);
       const eye = player.mode === 'walk' ? player.eye(_heEye) : _heEye.copy(camera.position);
       const src = sceneToSource(eye.x, eye.y, eye.z);
       const dist = Math.hypot(pos.x - src[0], pos.y - src[1], pos.z - src[2]);
       if (dist < radius && match.hurt(maxDmg * (1 - dist / radius)) <= 0) {
-        _respawnAt = performance.now() + 2000;
+        onLocalDeath();
       }
     }
     // A flashbang you can see blinds you. The eye and the look direction are
     // the camera's, so this is honest in third person and in fly mode too.
     if (type === 'flashbang') {
       camera.getWorldDirection(_flashDir);
-      nadeEffects.blind(nadeEffects.flashSeconds(pos, camera.position, _flashDir), performance.now() / 1000);
+      nadeEffects.applyFlash(pos, camera.position, _flashDir, performance.now() / 1000);
     }
   }
 });
+const dropped = new DroppedWeapons({ assets: vmAssets });
 const _flashDir = new THREE.Vector3();
 const _useDir = new THREE.Vector3();
 const _useEye = new THREE.Vector3();
 const throwControl = new ThrowControl({
-  onThrow: ({ type, strength }) => {
+  jumpState: () => ({
+    secondsSinceJump: player.jumpAge,
+    jumpHeldOnGround: player.onGround && player.input.jump
+  }),
+  onThrow: ({ type, strength, perfectJumpThrow }) => {
     const eye = player.eye(_throwEye);
+    const live = { x: player.vel.x, y: -player.vel.z, z: player.vel.y };
+    const perfect = !!(perfectJumpThrow && player.jumpAge < Infinity);
+    const latch = perfect ? perfectJumpThrowState({ eye: player.jumpEye, vel: player.jumpVel }) : null;
     projectiles.spawn({
       type,
-      // The sim counts in Source; the explorer's body is in scene coordinates.
-      eye: { x: eye.x, y: -eye.z, z: eye.y },
+      // Perfect jumpthrow: fly from the jump+throw-together spawn (6 ticks
+      // into the jump), not the ground eye and not wherever a late-in-window
+      // release has risen to.
+      eye: latch ? latch.eye : { x: eye.x, y: -eye.z, z: eye.y },
       yaw: sourceYawFromCamera(player.yaw),
       pitch: -player.pitch * (180 / Math.PI),
-      velocity: { x: player.vel.x, y: -player.vel.z, z: player.vel.y },
+      velocity: latch ? latch.velocity : live,
       strength
     });
     // It has left the hand. The next one is drawn a moment later.
@@ -468,6 +695,13 @@ function equipWeapon(name, { draw = true } = {}) {
   if (!name) return;
   held = name;
   match.hold(name);
+  // Deploying a weapon clears the spray and the accuracy penalty, exactly as
+  // the game's `Deploy()` does — swapping to a knife and back is a legitimate
+  // way to reset a spray, and always has been. The PUNCH is not cleared: it
+  // lives on the player, not the weapon, and has to decay on its own.
+  recoilState.index = 0;
+  recoilState.shotsFired = 0;
+  resetAccuracy(accuracyState);
   if (vmAssets.ready) viewModel.setWeapon(name, { draw });
   // The body's speed cap follows what it is holding, as it does in the game.
   player.setWeapon(name);
@@ -483,27 +717,191 @@ function equipSlot(n) {
   if (name) equipWeapon(name);
 }
 
+function practiceCanDrop() {
+  return (
+    controls.locked &&
+    player.mode === 'walk' &&
+    !match.dead &&
+    camMode !== 'spectate' &&
+    demoView.povSlot === null
+  );
+}
+
+function dropOrigin() {
+  const eye = player.eye(_throwEye);
+  const src = { x: eye.x, y: -eye.z, z: eye.y };
+  const feetZ = player.mode === 'walk' && player.sim ? player.sim.pos.z : src.z - 64;
+  const yaw = sourceYawFromCamera(player.yaw);
+  const pitch = -player.pitch * (180 / Math.PI);
+  const velocity = player.mode === 'walk' ? { x: player.vel.x, y: -player.vel.z, z: player.vel.y } : null;
+  const toss = dropRelease({ eye: src, yaw, pitch, velocity });
+  toss.pos.z = Math.max(toss.pos.z, feetZ + 12);
+  toss.eye = src;
+  toss.pitch = pitch;
+  toss.velocity = velocity;
+  toss.feetZ = feetZ;
+  return toss;
+}
+
+function dropHeldWeapon() {
+  if (!practiceCanDrop()) return;
+  const r = match.dropHeld();
+  if (!r.ok) return;
+  dropped.spawn(r.item, dropOrigin());
+  if (r.next) equipWeapon(r.next);
+}
+
+function takeDropped(d, { replace }) {
+  const r = match.takePickup(d.item.name, d.item.ammo, { replace });
+  if (!r.ok) return false;
+  dropped.remove(d.id);
+  if (r.displaced) {
+    dropped.spawn(r.displaced, { pos: { ...d.pos }, vel: { x: 0, y: 0, z: 90 }, yaw: d.yaw });
+  }
+  if (r.name) equipWeapon(r.name);
+  return true;
+}
+
+function onLocalDeath() {
+  if (_deathDropped) return;
+  _deathDropped = true;
+  const { items } = match.dropDeath();
+  if (items.length) dropped.spawnMany(items, dropOrigin());
+  if (match.held) equipWeapon(match.held, { draw: false });
+  _respawnAt = performance.now() + 2000;
+}
+
+function dropBotGear(bot) {
+  if (!bot?.weapon) return;
+  dropped.spawn(
+    { name: bot.weapon, slot: 'primary', ammo: null },
+    dropRelease({
+      eye: { x: bot.origin.x, y: bot.origin.y, z: bot.origin.z + 48 },
+      yaw: bot.yaw || 0,
+      pitch: 8
+    })
+  );
+}
+
 /**
  * Pull the trigger once. The viewmodel owns the timing (deploy lockout, then
  * the weapon's own cycle time out of weapons.vdata), so this only has to ask.
+ *
+ * Where the bullet goes is three things added together, in this order:
+ *
+ *   the AIM        the player's own angles, WITHOUT the punch the camera is
+ *                  showing. The camera follows 45% of the recoil and the
+ *                  bullets follow all of it, so reading the direction off the
+ *                  camera would silently throw the other 55% away and hand
+ *                  the player a spray that does not need controlling.
+ *   the PUNCH      the deterministic pattern, in full (shared/sim3d/recoil.js)
+ *   the CONE       the random draw the stance and the last few shots earned
+ *                  (shared/sim3d/inaccuracy.js)
+ *
+ * The kick is applied AFTER the bullet leaves, which is what makes the first
+ * round of every spray land exactly on the crosshair.
  */
 function tryAttack(button) {
   if (!controls.locked || player.mode !== 'walk' || thirdPerson || match.dead) return;
   if (button === 'primary' && !match.canFire(held)) return;
-  const fired = viewModel.attack(button, performance.now() / 1000);
+  const now = performance.now() / 1000;
+  const fired = viewModel.attack(button, now);
   // The viewmodel owns the timing, so a shot only leaves the barrel when it
   // says one did — a click during the deploy lockout traces nothing.
   if (fired === false || button !== 'primary') return;
   match.consumeAmmo(held);
+  const weapon = vmAssets.stats?.(held) || null;
   const eye = player.eye(_shotEye);
-  camera.getWorldDirection(_shotDir);
-  shooting.fire(
-    { x: eye.x, y: -eye.z, z: eye.y },
-    { x: _shotDir.x, y: -_shotDir.z, z: _shotDir.y }
-  );
+  const src = { x: eye.x, y: -eye.z, z: eye.y };
+
+  // Source view angles, plus the whole aim punch.
+  aimPunch(recoilState, _aim);
+  const pitch = -player.pitch * (180 / Math.PI) + _aim[0];
+  const yaw = sourceYawFromCamera(player.yaw) + _aim[1];
+
+  const bullets = Math.max(1, weapon?.bullets || 1);
+  const cone = weapon
+    ? sampleCone({
+        seed: shotSeed++,
+        inaccuracy: getInaccuracy(accuracyState, weapon, playerAccuracyState()),
+        spread: getSpread(weapon),
+        // The shotguns carry a fixed pellet seed; everything else is 0 and the
+        // pellets ride the shot's own stream (shared/sim3d/inaccuracy.js).
+        spreadSeed: getSpreadSeed(weapon),
+        bullets
+      })
+    : [{ x: 0, y: 0 }];
+
+  let last = null;
+  for (const c of cone) {
+    last = shooting.fire(src, bulletDirection(pitch, yaw, c.x, c.y)) || last;
+  }
+
+  if (weapon) {
+    // The order the game uses: the bullet has already gone, so this shot's
+    // penalty and this shot's kick both belong to the NEXT one.
+    addFireInaccuracy(accuracyState, weapon);
+    fireRecoil(recoilState, weapon, { now });
+    // The streak, from about where the muzzle is to wherever the round
+    // stopped. Every third bullet on a rifle, every one on a pistol — the
+    // weapon's own `m_nTracerFrequency` (src/cs3d/tracers.js).
+    if (last?.end) {
+      tracers.fire({ from: muzzleOf(src, pitch, yaw), to: last.end, weapon });
+    }
+  }
+  if (!match.canFire(held)) tryReload();
+}
+
+function playReloadAnim() {
+  if (!vmAssets.ready) return;
+  viewModel.reload({ empty: match.ammoOf(held).clip === 0 });
+}
+
+function tryReload() {
+  if (!controls.locked || player.mode !== 'walk' || thirdPerson || match.dead) return;
+  if (throwControl.active) return;
+  if (!match.beginReload(held)) return;
+  playReloadAnim();
 }
 const _shotEye = new THREE.Vector3();
-const _shotDir = new THREE.Vector3();
+
+/**
+ * Roughly where the barrel is, in the SOURCE frame.
+ *
+ * The real muzzle is a bone on a model that lives in VIEW space at its own
+ * FOV, so its world position is not a thing this scene has. A tracer that
+ * starts at the eye reads as coming out of the player's face; this offsets
+ * down and to the right by about the distance the gun sits from the eye, which
+ * is what sells it — and at 20500 units a second nobody is measuring.
+ */
+function muzzleOf(eye, pitchDeg, yawDeg) {
+  const p = (pitchDeg * Math.PI) / 180;
+  const y = (yawDeg * Math.PI) / 180;
+  const f = [Math.cos(p) * Math.cos(y), Math.cos(p) * Math.sin(y), -Math.sin(p)];
+  const r = [Math.sin(y), -Math.cos(y), 0];
+  const FORWARD = 20;
+  const RIGHT = 5;
+  const DOWN = 4;
+  return {
+    x: eye.x + f[0] * FORWARD + r[0] * RIGHT,
+    y: eye.y + f[1] * FORWARD + r[1] * RIGHT,
+    z: eye.z + f[2] * FORWARD - DOWN
+  };
+}
+
+/** The player, as the accuracy model needs to see them. */
+function playerAccuracyState() {
+  return {
+    speed: Math.hypot(player.vel.x, player.vel.z),
+    velocityZ: player.vel.y,
+    onGround: player.onGround,
+    ducking: player.crouched,
+    onLadder: !!player.onLadder,
+    walking: !!player.input.walk,
+    reloading: match.reloading,
+    recoilIndex: recoilState.index
+  };
+}
 
 const demoView = new DemoView({
   camera,
@@ -519,6 +917,8 @@ const demoView = new DemoView({
       player.pitch = camera.rotation.x;
       player.flyVel.set(0, 0, 0);
     }
+    syncPlaybackUi();
+    if (camMode === 'spectate') syncSpectateHud();
   }
 });
 
@@ -563,8 +963,7 @@ if (params.get('demo')) {
   // resolved against the site, where the SPA catch-all rewrite answers 200
   // with train.html — so the 2D viewer's "watch in 3D" link handed the demo
   // loader a page of HTML instead of a package on aim4.io.
-  const apiBase = String(import.meta.env?.VITE_API_URL || '').replace(/\/$/, '');
-  const src = isId ? `${apiBase}/api/replays/demos/${ref}/package` : ref;
+  const src = isId ? `${apiBase()}/api/replays/demos/${ref}/package` : ref;
   fetch(src, isId ? { credentials: 'include' } : undefined)
     .then(async (res) => {
       if (!res.ok) {
@@ -583,38 +982,183 @@ if (params.get('demo')) {
 // ---- pack ------------------------------------------------------------------
 let pack = null;
 let lastSide = 'T';
-let spawnIndex = 0;
+let spawnCursor = -1;
 
-function spawnAt(side) {
+function combinedMovers() {
+  return {
+    emit: (minX, minY, minZ, maxX, maxY, maxZ, visit) => {
+      interactives.movers.emit(minX, minY, minZ, maxX, maxY, maxZ, visit);
+      practiceBots.emitWalk(minX, minY, minZ, maxX, maxY, maxZ, visit);
+    },
+    rayHit: (from, to) => interactives.movers.rayHit(from, to)
+  };
+}
+
+function aimSegment() {
+  const eye = player.mode === 'walk' ? player.eye(_useEye) : _useEye.copy(camera.position);
+  camera.getWorldDirection(_useDir);
+  const from = { x: eye.x, y: -eye.z, z: eye.y };
+  const dir = { x: _useDir.x, y: -_useDir.z, z: _useDir.y };
+  const to = { x: from.x + dir.x * 8192, y: from.y + dir.y * 8192, z: from.z + dir.z * 8192 };
+  return { from, to };
+}
+
+function placePracticeBot(boost) {
+  const placed = practiceBots.place(player, lastSide, { boost });
+  if (boost && placed.feet) {
+    if (player.mode !== 'walk') {
+      player.setMode('walk');
+      hud.setMode(player.mode, thirdPerson);
+    }
+    player.teleport(placed.feet, placed.yaw, placed.pitch);
+  }
+}
+
+function deleteAimedBot() {
+  const { from, to } = aimSegment();
+  practiceBots.deleteAimed(from, to);
+}
+
+function skipThrownNades() {
+  skipNadeHurt = true;
+  projectiles.fastForward();
+  skipNadeHurt = false;
+  projectiles.clear();
+  nadeEffects.clear();
+  throwControl.cancel();
+}
+
+function spectateIds() {
+  const ids = demoView.liveSlots().map((s) => spectateTargetId('demo', s));
+  for (const b of practiceBots.alive()) ids.push(spectateTargetId('bot', b.id));
+  return ids;
+}
+
+function cycleSpectate(dir) {
+  spectateKey = cycleLive(spectateIds(), spectateKey, dir);
+  syncSpectateHud();
+}
+
+function spectateOverlay() {
+  const t = parseSpectateTarget(spectateKey);
+  if (!t) return null;
+  if (t.kind === 'demo') return demoView.hudOverlay(t.id);
+  return practiceBots.overlay(t.id);
+}
+
+function syncSpectateHud() {
+  const ids = spectateIds();
+  if (camMode === 'spectate' && ids.length && !ids.includes(spectateKey)) spectateKey = ids[0];
+  const over = camMode === 'spectate' ? spectateOverlay() : null;
+  matchHud.setCamMode(camMode);
+  matchHud.setSpectateName(over?.name || (camMode === 'spectate' ? 'Bot' : ''));
+}
+
+function setCamMode(mode) {
+  if (mode !== 'T' && mode !== 'CT' && mode !== 'spectate') return;
+  const prev = camMode;
+  camMode = mode;
+  if (mode === 'spectate') {
+    player.setMode('fly');
+    hud.setMode('fly', thirdPerson);
+    const ids = spectateIds();
+    if (!ids.includes(spectateKey)) spectateKey = ids[0] || null;
+    demoView.povSlot = null;
+  } else if (prev === 'spectate' || lastSide !== mode) {
+    spawnCursor = -1;
+    spawnAt(mode);
+  } else {
+    lastSide = mode;
+    match.setSide(mode);
+  }
+  matchHud.setCamMode(mode);
+  syncSpectateHud();
+}
+
+function syncPlaybackUi() {
+  const on = demoView.active;
+  const playing = !!demoView.playing;
+  matchHud.setPlayback(on, playing);
+  for (const ui of importUis) ui.setPlayback(on, playing);
+}
+
+function onPlayback(act) {
+  if (act === 'pause') demoView.togglePlay();
+  else if (act === 'restart') demoView.restart();
+  else if (act === 'exit') {
+    demoView.clear();
+    if (camMode === 'spectate') setCamMode(lastSide);
+  }
+  syncPlaybackUi();
+}
+
+async function loadLibraryDemo(id) {
+  const res = await fetch(`${apiBase()}/api/replays/demos/${encodeURIComponent(id)}/package`, {
+    credentials: 'include'
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => null);
+    throw new Error(detail?.error || `HTTP ${res.status}`);
+  }
+  return loadDemoBytes(await res.arrayBuffer(), id);
+}
+
+function importRound(demo, roundIndex) {
+  acceptDemo(demo);
+  demoView.setRound(roundIndex);
+  demoView.povSlot = null;
+  syncPlaybackUi();
+}
+
+function mountImport(el) {
+  if (!el) return;
+  const ui = bindImportRound(el, {
+    mapCode: map.code,
+    fetchDemos,
+    loadDemo: loadLibraryDemo,
+    onImport: importRound
+  });
+  ui.onAction(onPlayback);
+  importUis.push(ui);
+}
+
+function switchTeam() {
+  spawnCursor = -1;
+  spawnAt(lastSide === 'CT' ? 'T' : 'CT');
+}
+
+function spawnAt(side, { cycle = false } = {}) {
   if (!pack?.manifest) return;
   if (match.dead) match.respawn();
   _respawnAt = 0;
+  _deathDropped = false;
+  // A fresh body: no punch left over from the last one, and no holes in the
+  // walls from the last practice run.
+  resetRecoil(recoilState);
+  resetAccuracy(accuracyState);
+  decals.clear();
+  tracers.clear();
   if (side) {
     lastSide = side;
     match.setSide(side);
-    spawnIndex = 0;
-    // Half the guns are one side's only; a respawn on the other side changes
-    // what the list should be showing.
-    buyMenu.refresh();
-    if (match.held) equipWeapon(match.held, { draw: false });
-  } else {
-    spawnIndex++;
   }
+  match.givePracticeKit();
+  buyMenu.refresh();
+  if (match.held) equipWeapon(match.held, { draw: false });
   const list = pack.spawns(lastSide);
   if (!list.length) return;
-  const s = list[spawnIndex % list.length];
-  // Spawn origins are at the feet; the fly camera wants eye height above them.
+  spawnCursor = cycle
+    ? cycleSpawnIndex(spawnCursor, list.length)
+    : Math.floor(Math.random() * list.length);
+  const s = list[spawnCursor];
   const feet = new THREE.Vector3(s.pos[0], s.pos[1] + 0.5, s.pos[2]);
   const yaw = cameraYawFromSource(s.yaw || 0);
-  if (player.mode === 'walk') {
-    player.teleport(feet, yaw, 0);
-  } else {
-    player.yaw = yaw;
-    player.pitch = 0;
-    player.flyVel.set(0, 0, 0);
-    camera.position.copy(feet).setY(feet.y + 64);
-    player.syncCamera();
+  if (player.mode !== 'walk') {
+    player.setMode('walk');
+    hud.setMode(player.mode, thirdPerson);
   }
+  player.teleport(feet, yaw, 0);
+  if (cycle) matchHud.echo(formatSpawnChat(lastSide, spawnCursor, list.length));
 }
 
 async function boot() {
@@ -627,11 +1171,12 @@ async function boot() {
       // The doors first: binding them masks their static leaf hulls out of the
       // BVH, and every tracer built after this has to see that already done.
       interactives.setCollider(collider);
-      player.setCollider(collider, interactives.movers);
+      player.setCollider(collider, combinedMovers());
       // Not the same collision set: a grenade passes through `playerclip` and
       // is stopped by `grenadeclip`, so it gets its own tracer over the same
       // BVH (src/cs3d/hullWorld.js).
       projectiles.setCollider(collider, interactives.movers);
+      dropped.setCollider(collider, interactives.movers);
       // ...and a bullet a third set again: through the clips, stopped by the
       // drawn world, free through `passbullets` brushes (src/cs3d/rayWorld.js).
       shooting.setCollider(collider, interactives.movers);
@@ -642,9 +1187,12 @@ async function boot() {
       // anything the sun tracker cached about it is stale.
       sunTracker.setWorld(pack?.world || null);
       projectiles.attach(pack?.world || null);
+      dropped.attach(pack?.world || null);
       nadeEffects.attach(pack?.world || null);
       interactives.attach(pack?.world || null);
       shooting.attach(pack?.world || null);
+      decals.attach(pack?.world || null);
+      tracers.attach(pack?.world || null);
     }
   });
   try {
@@ -666,15 +1214,19 @@ async function boot() {
     if (knobs) setupGradePanel(knobs, manifest.map?.slug);
     // After the grade: the composite bakes that curve in, then takes tone
     // mapping off the scene render.
-    const bloomPass = setupBloom(renderer, manifest, params);
+    const bloom = setupBloom(renderer, manifest, params);
+    bloomPass = bloom;
     if (bloomPass.enabled) console.log('cs3d: bloom from the map post-processing volume');
+    bloomPass.setActive?.(perf.flags.bloom);
     mapRenderer = createMapRenderer({
       renderer,
       scene,
       getPack: () => pack,
       getLighting: () => lighting,
-      bloom: bloomPass,
+      bloom: () => bloomPass,
       overlayAfter: params.get('vm') === 'after',
+      getTwoPass: () => perf.flags.skyPass,
+      stamp: passStamp,
       // The gun, in the same target as the world (see createMapRenderer).
       overlay: () => {
         if (!viewModel.visible || !viewModel.ready) return false;
@@ -682,7 +1234,7 @@ async function boot() {
         return true;
       }
     });
-    lighting = new MapLighting(scene, camera, manifest, { shadows, renderer });
+    lighting = new MapLighting(scene, camera, manifest, { shadows: perf.flags.shadows, renderer });
     // The gun reflects the same sky the map stands under. Without it every
     // metallic surface in the viewmodel pass is black (see setEnvironment).
     vmPass.setEnvironment(scene.environment);
@@ -692,9 +1244,14 @@ async function boot() {
     // Grenades and what they leave behind ride on the world root, so the two
     // pass render and the flat view treat them exactly like map geometry.
     projectiles.attach(pack.world);
+    dropped.attach(pack.world);
     nadeEffects.attach(pack.world);
     interactives.attach(pack.world);
     shooting.attach(pack.world);
+    // Bullet holes ride on the world root like everything else, so the two
+    // pass render and the flat view treat them as map geometry.
+    decals.attach(pack.world);
+    tracers.attach(pack.world);
     // The map's doors and breakables, alongside the tiles. Optional: a pack
     // without interactives.json simply has none, and nothing waits on it.
     interactives
@@ -735,7 +1292,7 @@ async function boot() {
         })
         .catch(() => {});
     }
-    // Place the camera before anything renders: T spawn, eye height, looking along the spawn yaw.
+    // Camera at a T spawn for the load view. Walk + kit land after phys is in.
     const s = (manifest.spawns?.T?.[0] || manifest.spawns?.CT?.[0]) || null;
     if (s) {
       player.yaw = cameraYawFromSource(s.yaw || 0);
@@ -758,9 +1315,11 @@ async function boot() {
       console.log('cs3d: viewmodel ready');
     });
     await pack.load(manifest);
+    spawnAt('T');
     // The material library exists now; any lighting knob set before this had
     // nothing to write to. Same call, same order as the timeline's 3D view.
     look.applyAll();
+    applyPerf();
     // The smoke's pipelines, built by running the pass once with a decoy cloud
     // buried under the map (see SmokePass.warm). Synchronous and on the load
     // path on purpose: this is the cost the first grenade used to pay, and the
@@ -967,14 +1526,14 @@ function setupGradePanel(knobs, slug) {
  * The viewmodel, every frame.
  *
  * It is shown when there is a body to hold it: walking in first person, or
- * inside a demo POV, where it takes that player's weapon and their speed. In
- * fly mode, third person, or the flat view there is nothing to hold a gun and
- * it is hidden — which also skips its pass entirely.
+ * inside a demo POV, where it takes that player's weapon and their speed. The
+ * flat view (V) still holds the gun. In fly mode or third person there is
+ * nothing to hold it and it is hidden — which also skips its pass entirely.
  */
 function updateViewModel(dt, inThird) {
   if (!viewModel.ready) return;
   const pov = demoView.active && demoView.povSlot !== null ? demoView.povState() : null;
-  const show = !fpsView.enabled && (pov ? true : player.mode === 'walk' && !inThird);
+  const show = pov ? true : player.mode === 'walk' && !inThird;
   viewModel.visible = show;
   if (!show) return;
   if (pov) {
@@ -982,17 +1541,28 @@ function updateViewModel(dt, inThird) {
     // the gun kicks on the ticks the demo says that player pulled the trigger.
     if (pov.side) viewModel.setSide(pov.side);
     if (pov.weapon) viewModel.setWeapon(pov.weapon, { draw: false });
-    for (let i = 0; i < pov.shots; i++) viewModel.attack('primary', 0);
+    // A real clock, not 0: `attack` is a rate gate that stores `now + cycle`,
+    // so a literal 0 makes the first shot set nextAttack to the cycle time and
+    // every later one fail `0 < cycle`. The gun then kicks once per weapon and
+    // never again for the rest of the demo. The demo already says which ticks
+    // that player fired on, so the gate is not wanted here at all — hand it a
+    // time it cannot refuse.
+    for (let i = 0; i < pov.shots; i++) viewModel.attack('primary', performance.now() / 1000 + i * 1e-4);
     viewModel.update(dt, { speed: pov.speed, onGround: !pov.airborne, viewYaw: pov.yaw, viewPitch: pov.pitch });
   } else {
-    // Holding an automatic weapon's trigger keeps firing at its cycle time.
-    if (attackHeld.primary && viewModel.isAuto) tryAttack('primary');
     viewModel.setSide(lastSide);
+    // The punch goes to the gun as well as to the camera, and the two take
+    // different fractions of it — that difference is the gun climbing out of
+    // frame during a spray (src/cs3d/viewModel.js VIEWMODEL_RECOIL).
+    aimPunch(recoilState, _aim);
     viewModel.update(dt, {
       speed: Math.hypot(player.vel.x, player.vel.z),
       onGround: player.onGround,
       viewYaw: sourceYawFromCamera(player.yaw),
-      viewPitch: -player.pitch * (180 / Math.PI)
+      viewPitch: -player.pitch * (180 / Math.PI),
+      punch: _aim,
+      viewPunch: recoilState.viewPunch,
+      now: performance.now() / 1000
     });
   }
   // The gun stands in the map's own light, like every other moving thing.
@@ -1026,9 +1596,20 @@ function updateViewModel(dt, inThird) {
 }
 
 function renderFrame() {
+  passStamp.sky = 0;
+  passStamp.world = 0;
+  passStamp.bloom = 0;
+  passStamp.vm = 0;
   if (fpsView.enabled) {
+    const t = performance.now();
     renderer.setRenderTarget(null);
     renderer.render(scene, camera);
+    passStamp.world = performance.now() - t;
+    if (viewModel.visible && viewModel.ready) {
+      const t2 = performance.now();
+      vmPass.render();
+      passStamp.vm = performance.now() - t2;
+    }
     return;
   }
   // The viewmodel rides along inside this call (createMapRenderer's `overlay`),
@@ -1036,8 +1617,14 @@ function renderFrame() {
   // player is standing against — and never drawn after the bloom composite.
   if (mapRenderer) mapRenderer.render(camera);
   else {
+    const t = performance.now();
     renderer.render(scene, camera);
-    if (viewModel.visible && viewModel.ready) vmPass.render();
+    passStamp.world = performance.now() - t;
+    if (viewModel.visible && viewModel.ready) {
+      const t2 = performance.now();
+      vmPass.render();
+      passStamp.vm = performance.now() - t2;
+    }
   }
 }
 
@@ -1050,6 +1637,16 @@ const liveBody = new LiveBody(playerModels, () => pack?.world || null);
 
 // ---- loop ------------------------------------------------------------------
 let last = performance.now();
+let lastPresent = 0;
+let presentMs = 16.67;
+
+function shouldPresent(now) {
+  const cap = perf?.flags.fpsMax ?? 0;
+  if (cap && now - lastPresent < 1000 / cap - 0.25) return false;
+  presentMs = lastPresent > 0 ? now - lastPresent : 16.67;
+  lastPresent = now;
+  return true;
+}
 const _src = [0, 0, 0];
 const _vmCube = new Float32Array(18);
 const _vmColor = new THREE.Color();
@@ -1067,16 +1664,90 @@ const flashOverlay = document.createElement('div');
 flashOverlay.className = 'c3-flash';
 uiRoot.appendChild(flashOverlay);
 let _flashShown = 0;
+const FRAME_RING = 200;
+const frameMs = new Float64Array(FRAME_RING);
+let frameI = 0;
+let frameN = 0;
+let profileAt = 0;
+
+function updateProfile(now, dtMs) {
+  frameMs[frameI] = dtMs;
+  frameI = (frameI + 1) % FRAME_RING;
+  if (frameN < FRAME_RING) frameN++;
+  if (now - profileAt < 250) return;
+  profileAt = now;
+  const n = frameN;
+  const copy = Array.from(frameMs.subarray(0, n)).sort((a, b) => a - b);
+  const at = (p) => copy[Math.min(n - 1, Math.floor(p * (n - 1)))];
+  const avg = copy.reduce((s, x) => s + x, 0) / n;
+  const p10 = at(0.9);
+  const p99 = at(0.99);
+  const fps = (ms) => (ms > 0.05 ? Math.round(1000 / ms) : 0);
+  const f = perf.flags;
+  const info = renderer.info?.render;
+  const draws = info?.calls != null ? `  draw ${info.calls}` : '';
+  const med = copy[Math.floor((n - 1) / 2)];
+  const lock = displayHzHint(med);
+  hud.setProfile(
+    `${fps(avg)} fps  avg ${avg.toFixed(1)}ms${lock ? `  ${lock}` : ''}\n` +
+      `1% ${fps(p99)} (${p99.toFixed(1)}ms)  10% ${fps(p10)} (${p10.toFixed(1)}ms)\n` +
+      `sky ${passStamp.sky.toFixed(1)}  world ${passStamp.world.toFixed(1)}  bloom ${passStamp.bloom.toFixed(1)}  vm ${passStamp.vm.toFixed(1)}\n` +
+      `shadow ${passStamp.shadowDirty ? 'dirty' : 'cached'}${draws}\n` +
+      `msaa ${f.msaa ? 1 : 0}  dpr ${f.dpr}  bloom ${f.bloom ? 1 : 0}  shadows ${f.shadows ? 1 : 0}\n` +
+      `bodies ${f.shadowBodies ? 1 : 0}  simple ${f.simple ? 1 : 0}  skypass ${f.skyPass ? 1 : 0}\n` +
+      `fps_max ${f.fpsMax}`
+  );
+}
+
 function frame(now) {
   requestAnimationFrame(frame);
   const dt = Math.min(0.1, (now - last) / 1000);
   last = now;
   player.update(dt);
+  // Recoil, after the body and before anything reads the camera.
+  //
+  // The punch is NOT fed back into the player's own yaw and pitch: it is a
+  // layer over them, so it decays away on its own and the aim underneath is
+  // exactly where the mouse left it. That is the game's model and it is the
+  // reason a spray recovers to the same spot rather than drifting.
+  {
+    const weapon = vmAssets.stats?.(held) || null;
+    const cycle = weapon ? (Array.isArray(weapon.cycleTime) ? weapon.cycleTime[0] : weapon.cycleTime) || 0.1 : 0.1;
+    updateRecoil(recoilState, dt);
+    updateRecoilIndex(recoilState, dt, cycle, now / 1000);
+    if (weapon) updateAccuracy(accuracyState, weapon, playerAccuracyState(), dt);
+    // Holding an automatic weapon's trigger keeps firing at its cycle time, and
+    // it has to happen HERE — before the camera and the viewmodel read the
+    // punch, and after the decay. A shot moves the view punch instantly (it is
+    // a position kick, not a velocity), so a shot fired between the camera's
+    // read and the viewmodel's leaves the gun counter-rotating by a degree
+    // against a camera that has not moved, once per shot, at ten a second.
+    if (
+      viewModel.ready &&
+      attackHeld.primary &&
+      viewModel.isAuto &&
+      !(demoView.active && demoView.povSlot !== null)
+    ) {
+      tryAttack('primary');
+    }
+    // The camera takes its share of the punch. `povSlot`, not `active`: a demo
+    // is `active` from the moment it is dropped, but it only OWNS the camera
+    // while a POV is selected — and with one loaded and no POV chosen the
+    // player is still walking around shooting, and would otherwise be doing it
+    // with a frozen crosshair.
+    if (player.mode === 'walk' && !thirdPerson && demoView.povSlot === null) {
+      cameraPunch(recoilState, _cam);
+      // Source QAngle into three's camera: pitch is positive DOWN there and up
+      // here, and yaw is positive LEFT in both.
+      camera.rotation.set(player.pitch - _cam[0] * (Math.PI / 180), player.yaw + _cam[1] * (Math.PI / 180), 0, 'YXZ');
+    }
+  }
   // The walking body's own agent model, posed from the sim every frame; shown
   // in third person, kept in step (hidden) in first.
   const inThird = thirdPerson && player.mode === 'walk';
   liveBody.setSide(lastSide);
-  liveBody.update(player, dt, { visible: inThird });
+  liveBody.update(player, dt, { visible: inThird && camMode !== 'spectate' });
+  practiceBots.update(dt);
   if (inThird) placeThirdPersonCamera(camera, player.world);
   updateViewModel(dt, inThird);
   // Utility. The throw state machine first (it is what spawns projectiles),
@@ -1084,11 +1755,22 @@ function frame(now) {
   // behind. All three are no-ops when nothing has been thrown.
   throwControl.update(dt);
   projectiles.update(dt);
+  dropped.update(
+    dt,
+    player.mode === 'walk' && !match.dead && camMode !== 'spectate'
+      ? { x: player.sim.pos.x, y: player.sim.pos.y, z: player.sim.pos.z }
+      : null,
+    (d) => takeDropped(d, { replace: false })
+  );
   nadeEffects.update(dt, now / 1000);
   // The doors swing here, which moves both what is drawn and what the tracer
   // sees — they are the same box (src/cs3d/interactives.js).
   interactives.update(dt);
   shooting.update(dt);
+  // The holes and the streaks. Both are no-ops until the bullet pack lands and
+  // until something has actually been shot.
+  decals.update(dt);
+  tracers.update(dt);
   if (throwControl.active) hud.setThrow(throwControl.status());
   if (_shotClearAt && now > _shotClearAt) {
     _shotClearAt = 0;
@@ -1108,7 +1790,11 @@ function frame(now) {
   // draws the whole map, which measured about a third again on top of a frame,
   // and a walking player's shadow being one 30th of a second stale is not
   // something anyone can see.
-  if (lighting?.sun?.castShadow && now - _bodyShadowAt >= DYNAMIC_SHADOW_MS) {
+  if (
+    perf?.flags.shadowBodies &&
+    lighting?.sun?.castShadow &&
+    now - _bodyShadowAt >= DYNAMIC_SHADOW_MS
+  ) {
     for (const b of liveBodies) {
       if (!b.group.visible || !b.group.parent) continue;
       _bodyShadowAt = now;
@@ -1117,9 +1803,12 @@ function frame(now) {
     }
   }
   lighting?.update();
-  pack.materials?.setTime(now / 1000);
-  if (renderer.backend) renderFrame();
+  passStamp.shadowDirty = lighting?.sun?.shadow?.needsUpdate ? 1 : 0;
+  pack?.materials?.setTime(now / 1000);
+  const presented = !renderer.backend || shouldPresent(now);
+  if (renderer.backend && presented) renderFrame();
   updateInspector(now);
+  if (perf?.flags.profile && presented) updateProfile(now, presentMs);
   // HUD read-outs are cheap; positions shown in Source coordinates.
   // The walking body reports its feet (the camera may be behind it in third
   // person); the fly camera reports the ground under its eyes.
@@ -1130,8 +1819,8 @@ function frame(now) {
   _src[2] = s[2];
   const speed = player.mode === 'walk' ? Math.hypot(player.vel.x, player.vel.z) : player.flyVel.length();
   hud.setStatus(_src, speed);
-  hud.tickFps();
-  if (_respawnAt && now >= _respawnAt) {
+  if (presented) hud.tickFps();
+  if (_respawnAt && now >= _respawnAt && camMode !== 'spectate') {
     _respawnAt = 0;
     match.respawn();
     spawnAt();
@@ -1139,8 +1828,12 @@ function frame(now) {
   match.tick(dt);
   const demo = demoView.active ? demoView.status() : null;
   const marks = demoView.active ? demoView.marks.slice() : [];
-  if (!demoView.active || demoView.povSlot === null) {
+  const overlay = camMode === 'spectate' ? spectateOverlay() : null;
+  if (camMode !== 'spectate' && (!demoView.active || demoView.povSlot === null)) {
     marks.push({ x: _src[0], y: _src[1], z: _src[2], yaw: sourceYawFromCamera(player.yaw), self: true, side: lastSide });
+  }
+  for (const b of practiceBots.alive()) {
+    marks.push({ x: b.origin.x, y: b.origin.y, z: b.origin.z, yaw: b.yaw, side: b.side });
   }
   let ctAlive;
   let tAlive;
@@ -1148,24 +1841,21 @@ function frame(now) {
     ctAlive = demoView.marks.filter((p) => p.side === 'CT').length;
     tAlive = demoView.marks.filter((p) => p.side === 'T').length;
   }
+  const hudSrc = overlay && Number.isFinite(overlay.x) ? [overlay.x, overlay.y, overlay.z] : _src;
+  const hudYaw = overlay && overlay.yaw != null ? overlay.yaw : sourceYawFromCamera(player.yaw);
+  if (camMode === 'spectate') syncSpectateHud();
   matchHud.update({
-    src: _src,
-    yaw: sourceYawFromCamera(player.yaw),
+    src: hudSrc,
+    yaw: hudYaw,
     marks,
     clock: demo ? demo.clock : undefined,
     ctAlive,
-    tAlive
+    tAlive,
+    overlay: overlay || undefined
   });
 }
 
-window.addEventListener('resize', () => {
-  camera.aspect = window.innerWidth / window.innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight, false);
-  mapRenderer?.resize();
-  vmPass.resize(window.innerWidth, window.innerHeight);
-  lighting?.resize();
-});
+window.addEventListener('resize', () => applyPracticeDisplay());
 
 boot();
 requestAnimationFrame(frame);
@@ -1173,5 +1863,5 @@ requestAnimationFrame(frame);
 if (import.meta.env.DEV) {
   // `frame` too: a hidden tab gets no rAF, so driving it by hand is the only
   // way to render (and screenshot) the real path from a headless session.
-  window.__cs3d = { THREE, scene, camera, player, nadeEffects, projectiles, throwControl, get pack() { return pack; }, renderer, lighting: () => lighting, fpsView, demoView, playerModels, viewModel, vmPass, vmTuner, buyMenu, match, matchHud, frame, renderFrame, sunTracker, get mapRenderer() { return mapRenderer; } };
+  window.__cs3d = { THREE, scene, camera, player, nadeEffects, projectiles, dropped, throwControl, get pack() { return pack; }, renderer, lighting: () => lighting, fpsView, demoView, playerModels, practiceBots, viewModel, vmPass, vmTuner, buyMenu, pauseMenu, match, matchHud, frame, renderFrame, sunTracker, get mapRenderer() { return mapRenderer; }, get perf() { return perf; } };
 }

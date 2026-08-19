@@ -75,17 +75,14 @@ const SKY_TARGET = 1.0;
 /**
  * Per-map override, keyed by slug.
  *
- * Ancient is the only map whose sky texture carries real structure — layered
- * cloud, mist banks and a mountain silhouette, 4× dynamic range. Driving its
- * mean to 1.0 put the average pixel at white and clipped all of that into one
- * flat glare. Half the target gives the highlights room to sit above the mean,
- * which is where that structure lives.
- *
- * The other six read as smooth gradients, have nothing above the mean to
- * protect, and were already right at 1.0 — lowering it there only banded them.
+ * Skies with real structure (layered cloud, a hot sun disc) cannot have their
+ * mean driven to 1.0: that puts the average pixel at white and clips the
+ * highlights into one flat glare. Half the target leaves the disc room above
+ * the mean. Smooth-gradient skies stay at 1.0 — lowering those only bands them.
  */
 const MAP_SKY_TARGET = {
-  ancient: 0.5
+  ancient: 0.5,
+  inferno: 0.5
 };
 /** How far the calibration is allowed to move the authored sky brightness. */
 const SKY_GAIN_MIN = 0.5;
@@ -384,6 +381,7 @@ export class MapLighting {
       s.autoUpdate = false;
       s.needsUpdate = true;
     }
+    this.shadowUpdates = opts.shadows !== false;
     this._shadowAt = new THREE.Vector3(Infinity, Infinity, Infinity);
     this._shadowDirty = true;
 
@@ -514,6 +512,17 @@ export class MapLighting {
     this._shadowDirty = true;
   }
 
+  /**
+   * Whether the 4096² sun map is allowed to redraw.
+   *
+   * Do not flip `renderer.shadowMap.enabled` or `sun.castShadow` at runtime:
+   * every material that samples the map was compiled against that bind, and
+   * WebGPU drops the whole pass if it goes missing (black screen).
+   */
+  setShadowUpdates(on) {
+    this.shadowUpdates = !!on;
+  }
+
   update() {
     // Dome follows the camera so its horizon never drifts.
     this.dome.position.copy(this.camera.position);
@@ -534,7 +543,7 @@ export class MapLighting {
         this.sun.position.copy(target).addScaledVector(this.sunDir, -(SHADOW_EXTENT + 3000));
         this.sun.target.updateMatrixWorld();
         this.sun.updateMatrixWorld();
-        if (this.sun.castShadow) this.sun.shadow.needsUpdate = true;
+        if (this.shadowUpdates && this.sun.castShadow) this.sun.shadow.needsUpdate = true;
       }
     }
   }

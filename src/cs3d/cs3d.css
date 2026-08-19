@@ -1,7 +1,7 @@
 /* ---------------------------------------------------------------------------
    cs3d.css
    The map explorer page: a full-window canvas with a thin overlay. Same dark
-   palette and PP Mori as the rest of the site; only the weights it uses.
+   palette and PP Mori as the rest of the site; the match HUD uses Stratum No2.
 --------------------------------------------------------------------------- */
 
 @font-face {
@@ -15,6 +15,27 @@
   font-family: 'PP Mori';
   src: url('/fonts/pp/PPMori-SemiBold.otf') format('opentype');
   font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Stratum No2';
+  src: url('../fonts/stratumno2_regular.otf') format('opentype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Stratum No2';
+  src: url('../fonts/stratumno2_bold.otf') format('opentype');
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Stratum No2';
+  src: url('../fonts/stratumno2_bold.otf') format('opentype');
+  font-weight: 700;
   font-style: normal;
   font-display: swap;
 }
@@ -53,18 +74,16 @@ body {
   height: 100%;
   display: block;
   cursor: none;
+  object-fit: fill;
 }
 
-.c3-crosshair {
+.c3-crosshair-canvas {
   position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 40px;
-  height: 40px;
-  transform: translate(-50%, -50%);
+  inset: 0;
+  width: 100%;
+  height: 100%;
   pointer-events: none;
   z-index: 7;
-  user-select: none;
 }
 
 #c3-ui {
@@ -102,6 +121,21 @@ body {
 }
 .c3-stat:empty {
   display: none;
+}
+
+.c3-profile {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  padding: 8px 10px;
+  background: #050505;
+  border-radius: var(--radius-sm);
+  color: #5c5c62;
+  font: 400 12px/1.45 ui-monospace, Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+  white-space: pre;
+  pointer-events: none;
+  z-index: 8;
 }
 
 /* Inspector: what the crosshair is on, under the status strip. */
@@ -436,6 +470,7 @@ body {
 .c3-center {
   position: absolute;
   inset: 0;
+  z-index: 46;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -443,6 +478,9 @@ body {
 }
 .c3-center[hidden] {
   display: none;
+}
+#c3-ui > .c3-center {
+  pointer-events: auto;
 }
 .c3-panel {
   pointer-events: auto;
@@ -509,6 +547,124 @@ body {
   border-color: var(--accent);
 }
 
+.c3-import {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.c3-import-open,
+.c3-import-play button,
+.c3-mh-play button {
+  height: 32px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--muted);
+  font: 600 13px inherit;
+  cursor: pointer;
+}
+.c3-import-open:hover,
+.c3-import-play button:hover,
+.c3-mh-play button:hover {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+}
+.c3-import-search,
+.c3-import-round {
+  height: 32px;
+  width: 100%;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: #050505;
+  color: #5c5c62;
+  font: 400 14px inherit;
+  padding: 0 10px;
+  outline: none;
+  appearance: none;
+}
+.c3-import-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 180px;
+  overflow: auto;
+  background: #050505;
+  border-radius: var(--radius-sm);
+}
+.c3-import-game {
+  height: 32px;
+  border: 0;
+  background: transparent;
+  color: #5c5c62;
+  font: 400 14px inherit;
+  text-align: left;
+  padding: 0 10px;
+  cursor: pointer;
+}
+.c3-import-game:hover {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+}
+.c3-import-play,
+.c3-mh-play {
+  display: flex;
+  gap: 6px;
+}
+.c3-import-play button,
+.c3-mh-play button {
+  flex: 1;
+}
+
+.c3-mh-cam {
+  position: absolute;
+  left: 50%;
+  bottom: 78px;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  pointer-events: auto;
+  z-index: 5;
+  font-family: var(--font-body);
+  font-weight: 600;
+  text-shadow: none;
+}
+.c3-mh-spec {
+  color: var(--text);
+  font-size: 13px;
+}
+.c3-mh-seg {
+  display: flex;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03);
+}
+.c3-mh-seg-btn {
+  min-width: 72px;
+  height: 32px;
+  padding: 0 10px;
+  border: 0;
+  border-right: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  font: 600 13px var(--font-body);
+  cursor: pointer;
+}
+.c3-mh-seg-btn:last-child {
+  border-right: 0;
+}
+.c3-mh-seg-btn:hover {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+}
+.c3-mh-seg-btn.is-on {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+
 .c3-err {
   position: absolute;
   left: 50%;
@@ -525,20 +681,198 @@ body {
   display: none;
 }
 
-.c3-cross {
-  position: fixed;
-  left: 50%;
-  top: 50%;
-  width: 4px;
-  height: 4px;
-  margin: -2px 0 0 -2px;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.85);
-  pointer-events: none;
+/* Esc pause: resume, settings, or leave to Map Practice. */
+.c3-pause {
+  position: absolute;
+  inset: 0;
+  z-index: 45;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.55);
+}
+.c3-pause[hidden] {
   display: none;
 }
-#c3-ui.is-locked ~ .c3-cross {
+#c3-ui > .c3-pause {
+  pointer-events: auto;
+}
+.c3-pause-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+.c3-pause-panel {
+  width: min(380px, 92vw);
+  max-height: 86vh;
+  overflow: auto;
+  padding: 22px 22px 18px;
+  background: var(--surface);
+  border-radius: var(--radius);
+}
+.c3-pause-title {
+  font-weight: 600;
+  font-size: 22px;
+  text-transform: uppercase;
+  margin-bottom: 16px;
+}
+.c3-pause-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.c3-pause-btn {
   display: block;
+  width: 100%;
+  height: 32px;
+  box-sizing: border-box;
+  text-align: center;
+  line-height: 32px;
+  font: 600 13px/32px var(--font-body);
+  color: var(--muted);
+  text-decoration: none;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  padding: 0 12px;
+}
+.c3-pause-btn:hover {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+}
+.c3-pause-btn.is-primary {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.1);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+.c3-pause-tools {
+  display: flex;
+  gap: 8px;
+}
+.c3-pause-tools[hidden] {
+  display: none;
+}
+.c3-pause-icon {
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  padding: 0;
+}
+.c3-pause-icon:hover {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+}
+.c3-pause-icon.is-on {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.1);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+.c3-pause-settings .c3-pause-btn {
+  margin-top: 14px;
+}
+.c3-pause-seg {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03);
+  margin-bottom: 14px;
+}
+.c3-pause-seg button {
+  flex: 1;
+  height: 32px;
+  font: 600 13px/32px var(--font-body);
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-right: 1px solid var(--border);
+  cursor: pointer;
+}
+.c3-pause-seg button:last-child {
+  border-right: 0;
+}
+.c3-pause-seg button:hover {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+}
+.c3-pause-seg button.is-on {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+.c3-pause-row {
+  display: grid;
+  grid-template-columns: 110px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+.c3-pause-row select,
+.c3-pause-row input[type='number'],
+.c3-pause-row input[type='color'] {
+  height: 32px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: #050505;
+  color: #5c5c62;
+  font: 400 13px var(--font-body);
+  padding: 0 10px;
+  outline: none;
+}
+.c3-pause-row select,
+.c3-pause-row input[type='number'] {
+  grid-column: 2 / -1;
+}
+.c3-pause-row select {
+  appearance: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6'><path fill='%235c5c62' d='M0 0l5 6 5-6z'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 28px;
+}
+.c3-pause-row input[type='range'] {
+  width: 100%;
+  accent-color: var(--text);
+}
+.c3-pause-row input[type='color'] {
+  width: 42px;
+  padding: 4px;
+  justify-self: end;
+}
+.c3-pause-row b {
+  min-width: 32px;
+  text-align: right;
+  color: var(--text);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.c3-pause-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 4px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.c3-pause-xh {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 8px;
+}
+.c3-pause-xh canvas {
+  width: 160px;
+  height: 160px;
+  background: #050505;
+  border-radius: var(--radius-sm);
 }
 
 /* ---- demo playback ------------------------------------------------------- */
@@ -643,8 +977,7 @@ body {
 .cs3d-vmtune-hand button.on { background: #2f6df6; border-color: #2f6df6; }
 
 /* The flashbang whiteout. Over everything, including the HUD, because that is
-   what being flashed is. Opacity is written per frame from nadeEffects.flash;
-   the transition only smooths the last hop to zero. */
+   what being flashed is. Opacity is the leak overlay alpha, written per frame. */
 .c3-flash {
   position: absolute;
   inset: 0;
@@ -652,7 +985,6 @@ body {
   opacity: 0;
   pointer-events: none;
   z-index: 60;
-  transition: opacity 60ms linear;
 }
 
 /* ---- CS2 match HUD ------------------------------------------------------- */
@@ -676,6 +1008,8 @@ body {
   inset: 0;
   z-index: 4;
   pointer-events: none;
+  font-family: 'Stratum No2', var(--font-body);
+  font-weight: 700;
   font-variant-numeric: tabular-nums;
   text-shadow: 0 1px 4px rgba(0, 0, 0, 0.75);
 }
@@ -689,7 +1023,7 @@ body {
   border-radius: 50%;
   overflow: hidden;
   background: rgba(0, 0, 0, 0.55);
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.1);
+  box-shadow: 0 0 0 1.5px #c4a43a;
 }
 .c3-mh-radar canvas {
   width: 100%;
@@ -769,9 +1103,13 @@ body {
   background: rgba(8, 8, 8, 0.82);
   border-radius: 3px;
   box-shadow: inset 0 0 0 1px rgba(200, 40, 40, 0.55);
+  font-family: 'Stratum No2', var(--font-body);
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 400;
   white-space: nowrap;
+}
+.c3-mh-kill b {
+  font-weight: 400;
 }
 .c3-mh-kill b.is-t {
   color: #e0b15a;

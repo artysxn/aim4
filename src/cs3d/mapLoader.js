@@ -56,8 +56,13 @@ const WALK_SOLID = new Set(['solid', 'playerclip', 'sky', 'ladder', 'entity']);
  * 2,504 grenadeclip ones, so handing a grenade the walk hull would bounce it
  * off thin air and handing it the drawn world would let it through the very
  * brushes placed to stop it.
+ *
+ * `sky` is the other invisible lid: `tools/toolsskybox`, the box that roofs
+ * the playable area. Players walk into it; grenades pass through. CS2's nade
+ * mask does not include CONTENTS_SKY, which is why a jumpthrow into open sky
+ * does not bounce off the atmosphere.
  */
-const NADE_SOLID = new Set(['solid', 'entity', 'sky', 'grenadeclip']);
+const NADE_SOLID = new Set(['solid', 'entity', 'grenadeclip']);
 /**
  * ...and the ones that also stop light. `playerclip` and `sky` are tool brushes
  * — a movement boundary and the lid the sky is drawn through — and neither
@@ -343,15 +348,112 @@ class TileBatch extends THREE.BatchedMesh {
     this._mat = new THREE.Matrix4();
     this._frustum = new THREE.Frustum();
     this._proj = new THREE.Matrix4();
+    this._tileSpheres = new Float32Array(Math.max(1, maxInstances) * 4);
+    // World AABB per instance (minxyz/maxxyz). Sphere tests on long tiles
+    // (chainlink, ducts) overlap walls metres away; the box does not.
+    this._tileBoxes = new Float32Array(Math.max(1, maxInstances) * 6);
+    this._aabb = new THREE.Box3();
+    this._pt = new THREE.Vector3();
+    this._viewFp = new Float32Array(32);
+    this._viewFpPrev = new Float32Array(32);
+    this._lastIndirect = new Uint32Array(0);
+    this._lastCullCount = -1;
+    this._cullDirty = true;
     // Front-to-back sorting is a per-frame sort of every tile for a modest
     // overdraw win; the culling is what matters here.
     this.sortObjects = false;
   }
 
+  setTileVisible(iid, vis) {
+    const di = this._drawInfo[iid];
+    if (!di || di.visible === vis) return;
+    di.visible = vis;
+    this._cullDirty = true;
+  }
+
+  cacheTileSphere(iid, gid) {
+    this.getBoundingSphereAt(gid, this._sph);
+    this.getMatrixAt(iid, this._mat);
+    if (!this._mat.equals(_IDENTITY)) this._sph.applyMatrix4(this._mat);
+    const need = (iid + 1) * 4;
+    if (this._tileSpheres.length < need) {
+      const next = new Float32Array(need * 2);
+      next.set(this._tileSpheres);
+      this._tileSpheres = next;
+    }
+    const o = iid * 4;
+    this._tileSpheres[o] = this._sph.center.x;
+    this._tileSpheres[o + 1] = this._sph.center.y;
+    this._tileSpheres[o + 2] = this._sph.center.z;
+    this._tileSpheres[o + 3] = this._sph.radius;
+
+    const box = this._aabb;
+    let local = false;
+    if (typeof this.getBoundingBoxAt === 'function') {
+      this.getBoundingBoxAt(gid, box);
+      local = Number.isFinite(box.min.x) && !box.isEmpty();
+    }
+    if (!local) {
+      box.makeEmpty();
+      const range = this._drawRanges?.[gid];
+      const pos = this.geometry?.getAttribute('position');
+      if (range && pos && range.count > 0) {
+        const arr = pos.array;
+        const stride = pos.itemSize;
+        const ia = this.geometry.index?.array;
+        const end = range.start + range.count;
+        for (let i = range.start; i < end; i++) {
+          const vi = ia ? ia[i] : i;
+          const p = vi * stride;
+          box.expandByPoint(this._pt.set(arr[p], arr[p + 1], arr[p + 2]));
+        }
+      }
+      local = !box.isEmpty();
+    }
+    if (!local) {
+      const r = this._sph.radius;
+      box.min.set(this._sph.center.x - r, this._sph.center.y - r, this._sph.center.z - r);
+      box.max.set(this._sph.center.x + r, this._sph.center.y + r, this._sph.center.z + r);
+    } else if (!this._mat.equals(_IDENTITY)) {
+      box.applyMatrix4(this._mat);
+    }
+    const bNeed = (iid + 1) * 6;
+    if (this._tileBoxes.length < bNeed) {
+      const next = new Float32Array(bNeed * 2);
+      next.set(this._tileBoxes);
+      this._tileBoxes = next;
+    }
+    const bo = iid * 6;
+    this._tileBoxes[bo] = box.min.x;
+    this._tileBoxes[bo + 1] = box.min.y;
+    this._tileBoxes[bo + 2] = box.min.z;
+    this._tileBoxes[bo + 3] = box.max.x;
+    this._tileBoxes[bo + 4] = box.max.y;
+    this._tileBoxes[bo + 5] = box.max.z;
+    this._cullDirty = true;
+  }
+
   onBeforeRender(renderer, scene, camera, geometry, material) {
-    if (!this.perObjectFrustumCulled || !this.castShadow) {
+    if (!this.perObjectFrustumCulled) {
       return super.onBeforeRender(renderer, scene, camera, geometry, material);
     }
+    const e = camera.matrixWorldInverse.elements;
+    const p = camera.projectionMatrix.elements;
+    this._viewFp.set(e, 0);
+    this._viewFp.set(p, 16);
+    let viewSame = !this._cullDirty;
+    if (viewSame) {
+      const a = this._viewFp;
+      const b = this._viewFpPrev;
+      for (let i = 0; i < 32; i++) {
+        if (Math.abs(a[i] - b[i]) > 1e-6) {
+          viewSame = false;
+          break;
+        }
+      }
+    }
+    if (viewSame) return;
+
     const index = geometry.getIndex();
     const bytesPerElement = index === null ? 1 : index.array.BYTES_PER_ELEMENT;
     const drawInfo = this._drawInfo;
@@ -362,31 +464,65 @@ class TileBatch extends THREE.BatchedMesh {
     this._proj.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse).multiply(this.matrixWorld);
     this._frustum.setFromProjectionMatrix(this._proj, renderer.coordinateSystem);
     this._camPos.setFromMatrixPosition(camera.matrixWorld);
-    const r2 = this.keepRadius * this.keepRadius;
+    const planes = this._frustum.planes;
+    const sph = this._tileSpheres;
+    const keepR = this.keepRadius;
+    const r2 = keepR * keepR;
+    const cx = this._camPos.x;
+    const cy = this._camPos.y;
+    const cz = this._camPos.z;
     let count = 0;
     for (let i = 0, l = drawInfo.length; i < l; i++) {
       const di = drawInfo[i];
       if (!di.visible || !di.active) continue;
-      const gid = di.geometryIndex;
-      this.getMatrixAt(i, this._mat);
-      this.getBoundingSphereAt(gid, this._sph).applyMatrix4(this._mat);
-      let keep = this._frustum.intersectsSphere(this._sph);
-      if (!keep) {
-        const d = this._sph.center.distanceToSquared(this._camPos);
-        const reach = this.keepRadius + this._sph.radius;
+      const o = i * 4;
+      const x = sph[o];
+      const y = sph[o + 1];
+      const z = sph[o + 2];
+      const r = sph[o + 3];
+      let keep = true;
+      for (let pi = 0; pi < 6; pi++) {
+        const pl = planes[pi];
+        if (pl.normal.x * x + pl.normal.y * y + pl.normal.z * z + pl.constant < -r) {
+          keep = false;
+          break;
+        }
+      }
+      if (!keep && keepR > 0) {
+        const dx = x - cx;
+        const dy = y - cy;
+        const dz = z - cz;
+        const d = dx * dx + dy * dy + dz * dz;
+        const reach = keepR + r;
         keep = d < reach * reach && d < r2 * 4;
       }
-      if (keep) {
-        const range = ranges[gid];
-        starts[count] = range.start * bytesPerElement;
-        counts[count] = range.count;
-        indirect[count] = i;
-        count++;
+      if (!keep) continue;
+      const gid = di.geometryIndex;
+      const range = ranges[gid];
+      starts[count] = range.start * bytesPerElement;
+      counts[count] = range.count;
+      indirect[count] = i;
+      count++;
+    }
+    let same = count === this._lastCullCount && this._lastIndirect.length >= count;
+    if (same) {
+      for (let i = 0; i < count; i++) {
+        if (indirect[i] !== this._lastIndirect[i]) {
+          same = false;
+          break;
+        }
       }
     }
-    this._indirectTexture.needsUpdate = true;
+    if (!same) {
+      if (this._lastIndirect.length < count) this._lastIndirect = new Uint32Array(Math.max(count, 8));
+      this._lastIndirect.set(indirect.subarray(0, count));
+      this._lastCullCount = count;
+      this._indirectTexture.needsUpdate = true;
+    }
     this._multiDrawCount = count;
     this._visibilityChanged = false;
+    this._cullDirty = false;
+    this._viewFpPrev.set(this._viewFp);
   }
 }
 
@@ -557,15 +693,16 @@ export class MapPack {
     // what stops LIGHT. No two of those are the same set, and none of the
     // differences is small — a Source map is roofed over the whole playable
     // area by a `sky` brush and fenced by `playerclip`, both invisible, both
-    // transparent to the sun, and the second of them transparent to utility.
+    // transparent to the sun, and both transparent to utility (the sky lid
+    // is CONTENTS_SKY; the fence is CONTENTS_PLAYERCLIP).
     //
     // So the geometry is merged in BANDS, and every audience is a range (or two)
     // of triangle indices into the merged whole:
     //
-    //   [0,     light)  solid + entity        light, player, grenade
-    //   [light, both)   sky                          player, grenade
-    //   [both,  walk)   playerclip + ladder          player
-    //   [walk,  total)  grenadeclip                          grenade
+    //   [0,     light)  solid + entity               light, player, grenade
+    //   [light, both)   walk ∩ nade (empty today)
+    //   [both,  walk)   sky + playerclip + ladder    player
+    //   [walk,  total)  grenadeclip                  grenade
     //
     // The bands only survive the BVH build with `indirect: true`. A direct
     // MeshBVH partitions geometry.index IN PLACE — measured: 1185 of 1200
@@ -794,6 +931,20 @@ export class MapPack {
     return b;
   }
 
+  /**
+   * Keep off-screen tiles around the camera so they still cast into the
+   * shadow map. Off when the live map is not being redrawn: the extra tiles
+   * are then just more vertex work in the colour pass.
+   */
+  setShadowKeep(on) {
+    const r = on ? SHADOW_KEEP_RADIUS : 0;
+    for (const [key, b] of this.batches) {
+      if (typeof key === 'string' && key.charAt(0) === 's') continue;
+      b.keepRadius = r;
+      b._cullDirty = true;
+    }
+  }
+
   _addGroup(gltf, job) {
     if (this.aborted) return;
     const root = job.root || this.world;
@@ -826,6 +977,7 @@ export class MapPack {
         const gid = batch.addGeometry(geom, need, needIdx);
         const iid = batch.addInstance(gid);
         batch.setMatrixAt(iid, _IDENTITY);
+        batch.cacheTileSphere(iid, gid);
         // The tile's own tint: VRF put each prop instance's rendercolor on
         // its glTF material's baseColorFactor, which GLTFLoader hands us as
         // material.color (linear). The pack merged those variants into one

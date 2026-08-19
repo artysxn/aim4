@@ -15,7 +15,13 @@ import {
   ACCEL,
   FRICTION,
   STOP_SPEED,
-  AIR_SPEED_CAP
+  AIR_SPEED_CAP,
+  STAMINA,
+  DUCK,
+  WALK_SPEED_SCALE,
+  DUCK_SPEED_SCALE,
+  BUNNYJUMP_MAX_SPEED_FACTOR,
+  ACCEL_SPEED_REF
 } from './constants.js';
 import {
   createPlayerState,
@@ -33,20 +39,26 @@ function assert(cond, msg) {
 }
 const close = (a, b, tol, msg) => assert(Math.abs(a - b) <= tol, `${msg}: ${a} vs ${b} (tol ${tol})`);
 
-// ---- jump: leapfrog samples lie exactly on the continuous parabola --------
+// ---- jump: CheckJumpButton add + FinishGravity, then FullWalk FinishGravity --
 {
+  close(JUMP_IMPULSE, 301.993377, 1e-4, 'sv_jump_impulse leak default');
+
   const world = flatWorld(0);
   const st = createPlayerState(0, 0, 0);
   const input = createInput();
-  stepPlayer(st, input, world); // settle onto the ground
+  stepPlayer(st, input, world);
   assert(st.onGround, 'starts grounded on the flat world');
 
   input.jump = true;
   stepPlayer(st, input, world);
   input.jump = false;
 
-  // z after the jump tick: (J − g·dt/2)·dt, the order the oracle verified.
-  close(st.pos.z, (JUMP_IMPULSE - (GRAVITY * TICK_DT) / 2) * TICK_DT, 1e-3, 'first-tick rise');
+  // Standing: StartGravity, ADD impulse, CheckJump FinishGravity, AirMove, FullWalk FinishGravity.
+  // AirMove sees vz = J − g·dt, so first-tick rise is (J − g·dt)·dt.
+  const gHalf = (GRAVITY * TICK_DT) / 2;
+  close(st.pos.z, (JUMP_IMPULSE - GRAVITY * TICK_DT) * TICK_DT, 1e-2, 'standing first-tick rise');
+  close(st.vel.z, JUMP_IMPULSE - 3 * gHalf, 0.05, 'vz after jump tick is J − 1.5 g dt');
+  assert(!st.onGround, 'left the ground');
 
   let apex = 0;
   let ticks = 1;
@@ -54,15 +66,9 @@ const close = (a, b, tol, msg) => assert(Math.abs(a - b) <= tol, `${msg}: ${a} v
     stepPlayer(st, input, world);
     apex = Math.max(apex, st.pos.z);
     ticks++;
-    // Leapfrog identity: every airborne sample sits on z = J·t − g·t²/2.
-    if (!st.onGround) {
-      const t = ticks * TICK_DT;
-      close(st.pos.z, JUMP_IMPULSE * t - (GRAVITY / 2) * t * t, 0.01, `parabola at tick ${ticks}`);
-    }
   }
   assert(st.onGround, 'lands');
-  close(apex, (JUMP_IMPULSE * JUMP_IMPULSE) / (2 * GRAVITY), 0.15, 'apex ≈ J²/2g');
-  close(ticks * TICK_DT, (2 * JUMP_IMPULSE) / GRAVITY, 2.5 * TICK_DT, 'hang time ≈ 2J/g');
+  assert(apex > 50 && apex < 58, `apex in leak jump band (got ${apex})`);
   close(st.pos.z, 0, 1e-3, 'back on the floor');
 }
 
@@ -249,6 +255,165 @@ const close = (a, b, tol, msg) => assert(Math.abs(a - b) <= tol, `${msg}: ${a} v
   pinp.pitch = -80;
   for (let k = 0; k < 8; k++) stepPlayer(plain, pinp, emptyWorld());
   assert(!plain.onLadder && plain.vel.z < 0, 'no ladderAt means no ladder, and gravity as usual');
+}
+
+// ---- leak formulas: stamina, duck-in-air, bunnyhop crop, walk cap, accel ----
+{
+  const world = flatWorld(0);
+  const gHalf = (GRAVITY * TICK_DT) / 2;
+
+  // Ducking SETS vz; standing ADDS. Air duck is instant (FinishDuck if !onGround).
+  {
+    const stand = createPlayerState(0, 0, 0);
+    const duck = createPlayerState(0, 0, 0);
+    const a = createInput();
+    const b = createInput();
+    stepPlayer(stand, a, world);
+    stepPlayer(duck, b, world);
+    a.jump = b.jump = true;
+    stepPlayer(stand, a, world);
+    stepPlayer(duck, b, world);
+    a.jump = b.jump = false;
+    b.duck = true;
+    stepPlayer(stand, a, world);
+    stepPlayer(duck, b, world);
+    assert(duck.duckAmount === 1 && duck.ducked, 'air duck finishes immediately');
+    close(duck.pos.z - stand.pos.z, 0.5 * (72 - 54), 0.15, 'air duck origin +0.5*(stand-duck hull)');
+  }
+
+  {
+    const st = createPlayerState(0, 0, 0);
+    const input = createInput();
+    stepPlayer(st, input, world);
+    input.duck = true;
+    for (let i = 0; i < 32; i++) stepPlayer(st, input, world);
+    assert(st.ducking && st.ducked && st.duckAmount === 1, 'ground duck completes');
+    input.jump = true;
+    stepPlayer(st, input, world);
+    close(st.pos.z, (JUMP_IMPULSE - gHalf) * TICK_DT, 0.05, 'duck jump SET first-tick rise');
+  }
+
+  // Stamina on jump: 0.080 * fImpulse, clamped to 80. Jump vz scaled by (1 - stam/100).
+  {
+    const st = createPlayerState(0, 0, 0);
+    const input = createInput();
+    stepPlayer(st, input, world);
+    input.jump = true;
+    stepPlayer(st, input, world);
+    const startz = -gHalf;
+    const afterCheckJump = JUMP_IMPULSE + startz - gHalf; // add then CheckJump FinishGravity
+    const impulse = afterCheckJump - startz;
+    close(st.stamina, Math.min(STAMINA.MAX, STAMINA.JUMP_COST * impulse), 0.05, 'OnJump stamina');
+    assert(st.stamina > 20 && st.stamina < STAMINA.MAX, 'jump costs a chunk of stamina');
+  }
+
+  // Stamina on land: 0.050 * fallVelocity, plus recovery each tick.
+  {
+    const st = createPlayerState(0, 0, 0);
+    const input = createInput();
+    stepPlayer(st, input, world);
+    input.jump = true;
+    stepPlayer(st, input, world);
+    input.jump = false;
+    const stamTakeoff = st.stamina;
+    let preLand = stamTakeoff;
+    while (!st.onGround) {
+      preLand = st.stamina;
+      stepPlayer(st, input, world);
+    }
+    assert(st.stamina > preLand, 'OnLand adds stamina from fall velocity');
+    assert(st.stamina <= STAMINA.MAX, 'stamina clamped to sv_staminamax');
+  }
+
+  // sv_autobunnyhopping 0: must release jump.
+  {
+    const st = createPlayerState(0, 0, 0);
+    const input = createInput();
+    stepPlayer(st, input, world);
+    input.jump = true;
+    let jumps = 0;
+    for (let i = 0; i < 200; i++) {
+      const g = st.onGround;
+      stepPlayer(st, input, world);
+      if (g && !st.onGround) jumps++;
+    }
+    assert(jumps === 1, `holding jump does not bhop (jumps=${jumps})`);
+  }
+
+  // sv_enablebunnyhopping 0: crop speed to 1.1 * maxspeed before jump.
+  {
+    const st = createPlayerState(0, 0, 0);
+    const input = createInput();
+    input.maxSpeed = 250;
+    stepPlayer(st, input, world);
+    st.vel.x = 400;
+    input.jump = true;
+    stepPlayer(st, input, world);
+    const h = Math.hypot(st.vel.x, st.vel.y);
+    const cap = BUNNYJUMP_MAX_SPEED_FACTOR * 250;
+    assert(h <= cap + 1, `bhop crop horizontal ${h} vs ${cap}`);
+    close(h, cap, 2, 'horizontal speed cropped to 1.1 maxspeed');
+  }
+
+  // Walk: only cap maxSpeed * 0.52 when current speed < walkCap+25.
+  {
+    const st = createPlayerState(0, 0, 0);
+    const input = createInput();
+    input.maxSpeed = 250;
+    stepPlayer(st, input, world);
+    input.forward = 1;
+    for (let i = 0; i < 96; i++) stepPlayer(st, input, world);
+    close(Math.hypot(st.vel.x, st.vel.y), 250, 1, 'run speed before walk');
+    input.walk = true;
+    stepPlayer(st, input, world);
+    const afterTap = Math.hypot(st.vel.x, st.vel.y);
+    assert(afterTap > 200, `walk does not instantly cap from run (got ${afterTap})`);
+    for (let i = 0; i < 160; i++) stepPlayer(st, input, world);
+    close(Math.hypot(st.vel.x, st.vel.y), 250 * WALK_SPEED_SCALE, 1, 'walk cap once slowed');
+  }
+
+  // Accel weapon scale: running a 215 gun first-tick uses 215, not 250.
+  {
+    const st = createPlayerState(0, 0, 0);
+    const input = createInput();
+    input.maxSpeed = 215;
+    stepPlayer(st, input, world);
+    input.forward = 1;
+    stepPlayer(st, input, world);
+    close(Math.hypot(st.vel.x, st.vel.y), ACCEL * TICK_DT * 215, 1e-2, 'weapon-scaled first-tick accel');
+  }
+
+  // Walking from rest: Accelerate uses MAX(250, wish)*walk modifier = 130.
+  {
+    const st = createPlayerState(0, 0, 0);
+    const input = createInput();
+    input.maxSpeed = 250;
+    input.walk = true;
+    stepPlayer(st, input, world);
+    input.forward = 1;
+    stepPlayer(st, input, world);
+    const first = Math.hypot(st.vel.x, st.vel.y);
+    close(first, ACCEL * TICK_DT * ACCEL_SPEED_REF * WALK_SPEED_SCALE, 0.05, 'walk accel scale 250*0.52');
+  }
+
+  // Crouch spam: press/release drops duckSpeed by 2; DuckingEnabled false below 1.5.
+  {
+    const st = createPlayerState(0, 0, 0);
+    const input = createInput();
+    stepPlayer(st, input, world);
+    const speeds = [];
+    for (let k = 0; k < 6; k++) {
+      input.duck = true;
+      stepPlayer(st, input, world);
+      speeds.push(st.duckSpeed);
+      input.duck = false;
+      stepPlayer(st, input, world);
+    }
+    assert(speeds[0] < DUCK.SPEED_IDEAL, 'first press applies spam penalty');
+    assert(st.duckSpeed < DUCK.ENABLED_MIN_SPEED + 3, 'repeated crouch drains duckSpeed');
+  }
+
+  assert(DUCK_SPEED_SCALE === Math.fround(0.34), 'CS_PLAYER_SPEED_DUCK_MODIFIER');
 }
 
 console.log('motion.test: ok');

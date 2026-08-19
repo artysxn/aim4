@@ -120,6 +120,50 @@ Two traps, both of which silently produce something that looks nearly right:
 
 Both are handled; `--report` prints what each sheet contains without writing.
 
+## 4c. Bullet decals and the tracer — automated, `npm run cs3d:decals`
+
+**Automated (2026-08-19):** nothing to export by hand. `scripts/cs3d-decals.mjs`
+pulls CS2's own impact decals and the streak its tracers are drawn with out of
+`pak01_dir.vpk` and writes `server/data/cs3d/pack/bullets/` (~1.3 MB), which
+`src/cs3d/decals.js` and `src/cs3d/tracers.js` stream once per page:
+
+| file | from | what |
+|---|---|---|
+| `manifest.json` | `scripts/decalgroups.vdata` + each decal `.vmat` | 31 impact groups, the game's own per-material probabilities, world sizes and projection depths |
+| `decals.webp` | 98 `materials/decals/**` colour maps | 10x10 atlas of 128px cells, alpha is the hole's shape |
+| `decals_n.webp` | their normal maps | the same cells, so a hole has relief |
+| `tracer.webp` | `materials/effects/spark` | the 32x64 streak itself |
+
+Two traps, both of which silently produce something that looks nearly right:
+
+1. **The decal `.vmat` files do not decompile.** `-d` on one throws inside VRF's
+   material writer (the CS2 shader build is past what this VRF parses). The DATA
+   block prints fine, so the script reads `-b DATA` and takes the texture
+   references and the size attributes out of the KV3. One CLI call covers all of
+   `materials/decals/` in under a second.
+2. **The surface-to-group map is in no file.** Neither the `.vsurf` nor
+   `surfaceproperties_game.txt` names a decal group; the game picks one from the
+   one-letter `gamematerial`. `SURFACE_DECAL` in the script is therefore a
+   table, marked `[guessed]`, and it is the only guessed thing in the pipeline.
+
+What the vmats DO carry, and what the runtime uses rather than choosing:
+`DecalWorldWidth`/`Height` (5x5 for a concrete hole, 2x2 for a vent, 10x10 for
+tile), `DecalSizeVariance`, `DecalDepth` 12, and `g_flCutoffAngle` 60 with 5
+degrees of softness — the angle past which the projection stops writing, which
+is what keeps a hole from smearing around a corner.
+
+## 4d. The spray pattern — no extraction needed
+
+`scripts/weapons.vdata` already carries `m_nRecoilSeed` per weapon, and CS2
+generates the pattern from it at load. So there is nothing to export: the
+weapons pack (§3) carries the seed and the bounds, and `shared/sim3d/recoil.js`
+rebuilds the table. See CS3D-ENGINE-PLAN E6.
+
+The VALIDATION is worth knowing about, because it needs demos rather than the
+install: CS2 networks `CCSPlayerPawn.m_aimPunchAngle` per tick for every player,
+so `npm run cs3d:spray-truth -- <demo.dem>` reads the real pattern straight out
+of a GOTV demo. Six demos give ~750 AK sprays.
+
 ## 5. The reference replica
 
 - [ ] The repo checkout into `replica/` (or a path note if it lives
@@ -154,7 +198,9 @@ because they are large, re-acquirable, or Valve's to distribute:
 
 The players pack (`server/data/cs3d/pack/players/`, 8.7 MB) is likewise not
 in git: `npm run cs3d:models` rebuilds it from the install in ~15 s. Without
-it the 3D demo viewer draws placeholder cylinders.
+it the 3D demo viewer draws placeholder cylinders. Same for the bullets pack
+(`pack/bullets/`, 1.3 MB, `npm run cs3d:decals`, ~40 s) — without it bullets
+leave no holes and no streaks, and nothing else changes.
 
 **de_nuke ships packed** (`server/data/cs3d/pack/nuke/`, ~91 MB) so the
 renderer has something to draw on a fresh clone without any of the above.

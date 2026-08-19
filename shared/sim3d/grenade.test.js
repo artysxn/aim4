@@ -9,7 +9,7 @@
 // written as literals rather than derived from the constants — a constant
 // edited by hand should FAIL this file, not silently redefine what CS2 does.
 
-import { TICK_DT, GRAVITY } from './constants.js';
+import { TICK_DT, GRAVITY, JUMP_IMPULSE } from './constants.js';
 import { flatWorld, emptyWorld } from './motion.js';
 import { triangleSoupTracer, boxTriangles } from './hullTrace.js';
 import {
@@ -20,10 +20,21 @@ import {
   throwSpeed,
   GRENADE_GRAVITY_SCALE,
   GRENADE_ELASTICITY,
+  GRENADE_FRICTION,
   GRENADE_SPEC,
+  GRENADE_SECONDARY_LOWER,
+  GRENADE_SECONDARY_TRANSITION,
   THROW_STRENGTH,
   VELOCITY_INHERIT,
-  RELEASE_FORWARD
+  RELEASE_FORWARD,
+  RELEASE_TRACE,
+  RELEASE_PULLBACK,
+  PERFECT_JUMPTHROW_WINDOW,
+  PERFECT_JUMPTHROW_INHERIT_Z,
+  THROW_RELEASE_TICKS,
+  isPerfectJumpThrow,
+  throwerVelocity,
+  perfectJumpThrowState
 } from './grenade.js';
 
 function assert(cond, msg) {
@@ -31,11 +42,13 @@ function assert(cond, msg) {
 }
 const close = (a, b, tol, msg) => assert(Math.abs(a - b) <= tol, `${msg}: ${a} vs ${b} (tol ${tol})`);
 
-// ---- the pitch remap, against measured throws -----------------------------
-// throwPitch = -10 + viewPitch * (up ? 80/90 : 100/90). Median error against
-// 24 standing throws was 0.000 degrees, so these are exact, not approximate.
+// ---- the pitch remap (ThrowGrenade leak + measured throws) ----------------
+// angThrow[PITCH] -= 10 * (90 - |pitch|) / 90. Equivalent to
+// throwPitch = -10 + viewPitch * (up ? 80/90 : 100/90).
 {
-  close(throwPitch(0), -10, 1e-4, 'level aim leaves 10 degrees high');
+  close(throwPitch(0), -10, 1e-4, '+10° boost at horizon');
+  close(throwPitch(90), 90, 1e-4, 'no pitch boost looking straight down');
+  close(throwPitch(-90), -90, 1e-4, 'no pitch boost looking straight up');
   // Looking up 6 degrees: the demo's throw pitch was -15.33.
   close(throwPitch(-6), -15.3333, 1e-3, 'up branch at -6');
   // Looking up 45.3: the demo's throw pitch was -50.30.
@@ -49,15 +62,17 @@ const close = (a, b, tol, msg) => assert(Math.abs(a - b) <= tol, `${msg}: ${a} v
   );
 }
 
-// ---- release speed per strength -------------------------------------------
+// ---- release speed: clamp(750*0.9, 15, 750) * Lerp(strength, 0.3, 1) ------
 {
-  close(throwSpeed(THROW_STRENGTH.full), 675, 1e-3, 'full throw is 675 u/s');
+  close(throwSpeed(THROW_STRENGTH.full), 675, 1e-3, 'full throw is clamp(750*0.9, 15, 750) = 675');
   close(throwSpeed(THROW_STRENGTH.medium), 438.75, 1e-3, 'both buttons is 438.75 u/s');
   close(throwSpeed(THROW_STRENGTH.short), 202.5, 1e-3, 'right click is 202.5 u/s');
-  // A strength seen mid-hold in the corpus, with the speed it produced.
   close(throwSpeed(0.6953), 531.03, 0.05, 'mid-hold strength 0.6953');
   close(throwSpeed(2), 675, 1e-3, 'strength clamps at 1');
   close(throwSpeed(-1), 202.5, 1e-3, 'strength clamps at 0');
+  close(throwSpeed(1, 10), 15, 1e-3, 'flVel floor is 15');
+  close(throwSpeed(1, 900), 750, 1e-3, 'flVel cap is 750');
+  close(GRENADE_SECONDARY_TRANSITION, 1.3, 1e-6, 'strength Approach rate is 1.3/s');
 }
 
 // ---- the release itself ---------------------------------------------------
@@ -73,19 +88,101 @@ const close = (a, b, tol, msg) => assert(Math.abs(a - b) <= tol, `${msg}: ${a} v
   close(Math.hypot(r.pos.x, r.pos.y, r.pos.z - 64), RELEASE_FORWARD, 0.01, 'release is 16 units out');
 
   // Velocity inheritance: strafing right at 250 puts 1.25 * 250 sideways on it,
-  // and nothing else changes. This is the whole of "jump throw".
+  // and nothing else changes. Live airborne throws work the same way — there is
+  // no extra jump term, only 1.25 of whatever velocity the thrower still has.
   const moving = releaseState({ eye, yaw: 0, pitch: 0, strength: 1, velocity: { x: 0, y: -250, z: 0 } });
   close(moving.vel.y, -250 * VELOCITY_INHERIT, 0.01, 'inherits 1.25 of sideways motion');
   close(moving.vel.x, r.vel.x, 0.01, 'forward component is unchanged by strafing');
   const jump = releaseState({ eye, yaw: 0, pitch: 0, strength: 1, velocity: { x: 0, y: 0, z: 298 } });
-  close(jump.vel.z - r.vel.z, 298 * VELOCITY_INHERIT, 0.01, 'a jump adds 1.25 of its rise');
+  close(jump.vel.z - r.vel.z, 298 * VELOCITY_INHERIT, 0.01, 'a live jump adds 1.25 of its remaining rise');
+  // vecThrow = vForward * flVel + vel * 1.25, all three axes at once.
+  const inherit = releaseState({ eye, yaw: 0, pitch: 0, strength: 1, velocity: { x: 40, y: -80, z: 120 } });
+  close(inherit.vel.x, r.vel.x + 40 * VELOCITY_INHERIT, 0.02, 'vecThrow x = forward*flVel + vel*1.25');
+  close(inherit.vel.y, r.vel.y - 80 * VELOCITY_INHERIT, 0.02, 'vecThrow y = forward*flVel + vel*1.25');
+  close(inherit.vel.z, r.vel.z + 120 * VELOCITY_INHERIT, 0.02, 'vecThrow z = forward*flVel + vel*1.25');
+
+  close(THROW_RELEASE_TICKS, 6, 0, 'spawn delay is 6 ticks');
+  close(THROW_RELEASE_TICKS * TICK_DT, 0.1, 0.01, '6 ticks ≈ m_fThrowTime + 0.1');
+  close(RELEASE_TRACE - RELEASE_PULLBACK, RELEASE_FORWARD, 1e-6, 'unobstructed spawn is 22 then -6');
+
+  // Underhand: origin z += Lerp(strength, -12, 0) before the 16-unit offset.
+  const under = releaseState({ eye, yaw: 0, pitch: 0, strength: 0 });
+  close(under.pos.z, r.pos.z - GRENADE_SECONDARY_LOWER, 0.05, 'right-click drops spawn 12 units');
+  close(under.speed, 202.5, 1e-3, 'underhand still 0.3 of 675');
+
+  // Hull trace: a wall closer than 22 pulls the spawn back 6 from contact.
+  const wallTris = [];
+  boxTriangles([8, -80, 0], [10, 80, 200], wallTris);
+  const wall = triangleSoupTracer(wallTris);
+  const clipped = releaseState({ eye, yaw: 0, pitch: 0, strength: 1, world: wall });
+  const open = releaseState({ eye, yaw: 0, pitch: 0, strength: 1, world: emptyWorld() });
+  close(open.pos.x, r.pos.x, 0.05, 'empty hull world still 16 out');
+  assert(clipped.pos.x < r.pos.x - 4, `wall spawn pulls back from 16 (x=${clipped.pos.x})`);
+}
+
+// ---- perfect jumpthrow: latch to jump+throw-together spawn (6 ticks) ------
+// CS2 ThrowGrenade uses GetAbsVelocity at projectile spawn. A jump+release
+// on the same tick spawns THROW_RELEASE_TICKS later, so extra vz is
+// 1.25 × (JUMP_IMPULSE − g·6/64) ≈ 278.7 and the eye is ~24u above takeoff.
+// Releases inside the 199 ms window reuse that latch so lineups do not
+// depend on exact timing. The 268 leftover from sparse demo chords was the
+// first-segment average, not v0, and spawning at the ground eye with it
+// landed short and low.
+{
+  assert(isPerfectJumpThrow(0), 'jump+release on the same tick is perfect');
+  assert(isPerfectJumpThrow(0.199), '199 ms is still in the window');
+  assert(!isPerfectJumpThrow(0.2), '200 ms is out');
+  assert(!isPerfectJumpThrow(-0.01), 'release before takeoff is not a jumpthrow');
+
+  const takeoffEye = { x: 0, y: 0, z: 64 };
+  const standing = releaseState({ eye: takeoffEye, yaw: 0, pitch: 0, strength: 1 });
+  const lateLive = { x: 0, y: 0, z: 120 };
+  const takeoff = { x: 0, y: 0, z: JUMP_IMPULSE - GRAVITY * TICK_DT };
+  const latch = perfectJumpThrowState({ eye: takeoffEye, vel: takeoff });
+  const tLatch = THROW_RELEASE_TICKS * TICK_DT;
+  close(latch.eye.z - 64, JUMP_IMPULSE * tLatch - 0.5 * GRAVITY * tLatch * tLatch, 0.05, 'latch eye is 6 ticks of jump rise');
+  close(latch.velocity.z, JUMP_IMPULSE - GRAVITY * tLatch, 0.05, 'latch vz is J − g t');
+
+  const perfectVel = throwerVelocity({
+    live: lateLive,
+    jump: takeoff,
+    secondsSinceJump: 0.1
+  });
+  const perfect = releaseState({ eye: latch.eye, yaw: 0, pitch: 0, strength: 1, velocity: perfectVel });
+  close(perfect.vel.z - standing.vel.z, PERFECT_JUMPTHROW_INHERIT_Z, 0.05, 'perfect jumpthrow extra vz is 1.25 × latched rise');
+  close(perfect.vel.x, standing.vel.x, 0.01, 'standing jumpthrow adds no extra forward');
+  close(perfectVel.z * VELOCITY_INHERIT, PERFECT_JUMPTHROW_INHERIT_Z, 0.05, 'throwerVelocity z is the latch / 1.25');
+  assert(perfect.pos.z > standing.pos.z + 16, 'perfect spawn is above the ground eye');
+
+  const outside = throwerVelocity({ live: lateLive, jump: takeoff, secondsSinceJump: 0.25 });
+  assert(outside === lateLive, 'outside the window the live velocity is used as-is');
+  const late = releaseState({ eye: takeoffEye, yaw: 0, pitch: 0, strength: 1, velocity: outside });
+  close(late.vel.z - standing.vel.z, 120 * VELOCITY_INHERIT, 0.01, 'a late release inherits the decaying rise');
+
+  const sameTick = throwerVelocity({
+    live: { x: 0, y: 0, z: 0 },
+    jump: null,
+    secondsSinceJump: Infinity,
+    jumpHeldOnGround: true
+  });
+  close(sameTick.z * VELOCITY_INHERIT, PERFECT_JUMPTHROW_INHERIT_Z, 0.05, 'same-tick jump+release is perfect');
+
+  const runJump = throwerVelocity({
+    live: { x: 80, y: -40, z: 150 },
+    jump: { x: 250, y: 0, z: JUMP_IMPULSE - GRAVITY * TICK_DT },
+    secondsSinceJump: 0.05
+  });
+  close(runJump.x, 250, 0.01, 'perfect window snapshots takeoff xy, not airstrafe');
+  close(runJump.y, 0, 0.01, 'perfect window snapshots takeoff xy, not airstrafe');
+  close(PERFECT_JUMPTHROW_WINDOW, 0.199, 1e-6, 'window is 199 ms');
 }
 
 // ---- flight: gravity is 0.4 of the world's -------------------------------
 {
   const world = emptyWorld();
   const grav = GRAVITY * GRENADE_GRAVITY_SCALE;
-  close(grav, 320, 1e-4, 'grenade gravity is 320 u/s^2');
+  close(GRENADE_GRAVITY_SCALE, 0.4, 1e-7, 'GetGrenadeGravity is 0.4');
+  close(grav, 320, 1e-4, 'grenade gravity is 0.4 * 800 = 320');
   const g = createGrenade({ x: 0, y: 0, z: 100 }, { x: 250, y: 0, z: 100 });
   for (let k = 1; k <= 64; k++) {
     stepGrenade(g, world);
@@ -97,6 +194,8 @@ const close = (a, b, tol, msg) => assert(Math.abs(a - b) <= tol, `${msg}: ${a} v
 
 // ---- the bounce: reflect fully, THEN damp the whole vector ----------------
 {
+  close(GRENADE_ELASTICITY, 0.4375, 0, 'CS2 m_flElasticity (not CS:GO 0.45)');
+  close(GRENADE_FRICTION, 0.2, 1e-7, 'GetGrenadeFriction; unused by ResolveFlyCollisionCustom');
   const floor = flatWorld(0);
   // Straight down at 200 onto flat ground: the rebound is 200 * 0.4375, and the
   // grenade is above REST_SPEED so it does not stick.

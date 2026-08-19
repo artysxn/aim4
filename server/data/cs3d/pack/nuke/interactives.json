@@ -1,7 +1,7 @@
 {
  "version": 1,
  "map": "nuke",
- "generated": "2026-08-18T02:32:53.349Z",
+ "generated": "2026-08-19T06:16:01.112Z",
  "damageTypes": [
   "bullets",
   "club",
@@ -654,14 +654,14 @@
    },
    "bounds": {
     "min": [
-     -33,
-     -6.185,
-     -6.254
+     -31.797,
+     -1.552,
+     3.311
     ],
     "max": [
-     33,
+     31.796,
      3.551,
-     83
+     77.794
     ]
    },
    "phys": {
@@ -678,7 +678,7 @@
     "surface": "metal_ventslat",
     "triangles": 20
    },
-   "triangles": 2500
+   "triangles": 980
   },
   {
    "id": "nuke:breakable:9",
@@ -1423,7 +1423,7 @@
  ],
  "geometry": {
   "file": "interactives.glb",
-  "bytes": 253012,
-  "triangles": 6064
+  "bytes": 198384,
+  "triangles": 4544
  }
 }

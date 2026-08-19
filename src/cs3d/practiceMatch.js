@@ -80,6 +80,18 @@ export function defaultPistol(side) {
   return side === 'CT' ? 'usp_silencer' : 'glock';
 }
 
+/** Practice spawn kit: rifle, side pistol, smoke, fire nade, flash, HE. */
+export function practiceKit(side) {
+  const ct = side === 'CT';
+  return {
+    primary: ct ? 'm4a1' : 'ak47',
+    pistol: defaultPistol(ct ? 'CT' : 'T'),
+    nades: ct
+      ? ['smokegrenade', 'incgrenade', 'flashbang', 'hegrenade']
+      : ['smokegrenade', 'molotov', 'flashbang', 'hegrenade']
+  };
+}
+
 export function itemPrice(name) {
   const nade = nadeStem(name);
   if (nade) return NADE_PRICE[nade] ?? 0;
@@ -123,6 +135,7 @@ export function createPracticeMatch({ side = 'T' } = {}) {
     knife: 'knife',
     nades: [],
     held: defaultPistol(side === 'CT' ? 'CT' : 'T'),
+    lastGun: defaultPistol(side === 'CT' ? 'CT' : 'T'),
     ammo: {},
     kills: [],
     showPos: false,
@@ -172,9 +185,83 @@ export function createPracticeMatch({ side = 'T' } = {}) {
   function hold(name) {
     const bare = bareWeapon(name);
     if (!bare || !owns(bare)) return m.held;
-    m.held = nadeStem(bare) || bare;
+    const next = nadeStem(bare) || bare;
+    if (next === m.held) return m.held;
+    if (isDroppableGun(m.held)) m.lastGun = m.held;
+    m._reload = 0;
+    m.held = next;
     touch();
     return m.held;
+  }
+
+  function isDroppableGun(name) {
+    const slot = ownSlot(name);
+    return slot === 'primary' || slot === 'pistol';
+  }
+
+  function snapshotItem(name) {
+    const nade = nadeStem(name);
+    const bare = nade || bareWeapon(name);
+    if (!bare) return null;
+    const slot = ownSlot(bare);
+    if (slot === 'knife') return null;
+    const ammo =
+      slot === 'nade' ? null : { clip: ammoOf(bare).clip, reserve: ammoOf(bare).reserve };
+    return { name: bare, slot, ammo };
+  }
+
+  function removeCarried(name) {
+    const nade = nadeStem(name);
+    const bare = nade || bareWeapon(name);
+    if (!bare) return false;
+    const slot = ownSlot(bare);
+    if (slot === 'nade') {
+      const i = m.nades.indexOf(bare);
+      if (i < 0) return false;
+      m.nades.splice(i, 1);
+    } else if (slot === 'primary') {
+      if (m.primary !== bare) return false;
+      m.primary = '';
+      delete m.ammo[bare];
+    } else if (slot === 'pistol') {
+      if (m.pistol !== bare) return false;
+      m.pistol = '';
+      delete m.ammo[bare];
+    } else {
+      return false;
+    }
+    if (m.lastGun === bare) m.lastGun = m.primary || m.pistol || '';
+    touch();
+    return true;
+  }
+
+  function nextAfterDrop(dropped) {
+    if (m.lastGun && m.lastGun !== dropped && owns(m.lastGun)) return m.lastGun;
+    if (m.primary) return m.primary;
+    if (m.pistol) return m.pistol;
+    if (m.nades.length) return m.nades[0];
+    return m.knife;
+  }
+
+  function applyDroppedAmmo(bare, ammo) {
+    if (!ammo || nadeStem(bare)) return;
+    const a = stateAmmo(m, bare);
+    a.clip = Math.max(0, ammo.clip | 0);
+    a.reserve = Math.max(0, ammo.reserve | 0);
+  }
+
+  function applyPracticeKit() {
+    const kit = practiceKit(m.side);
+    m.primary = kit.primary;
+    m.pistol = kit.pistol;
+    m.knife = 'knife';
+    m.nades = [...kit.nades];
+    m.held = kit.primary;
+    m.lastGun = kit.pistol;
+    m._reload = 0;
+    fillAmmo(m, kit.primary);
+    fillAmmo(m, kit.pistol);
+    touch();
   }
 
   function give(name, { spend = false } = {}) {
@@ -183,6 +270,7 @@ export function createPracticeMatch({ side = 'T' } = {}) {
     if (!bare) return { ok: false, reason: 'unknown_weapon' };
     if (isKnife(bare)) {
       m.knife = 'knife';
+      m._reload = 0;
       m.held = 'knife';
       touch();
       return { ok: true, name: 'knife', price: 0 };
@@ -207,6 +295,7 @@ export function createPracticeMatch({ side = 'T' } = {}) {
       fillAmmo(m, bare);
     }
     if (spend) m.money = Math.max(0, m.money - price);
+    m._reload = 0;
     m.held = bare;
     touch();
     return { ok: true, name: bare, price };
@@ -282,12 +371,96 @@ export function createPracticeMatch({ side = 'T' } = {}) {
       return give(name, { spend: false });
     },
 
+    /** Slot is empty (or nade pocket has room). Walk-over pickup uses this. */
+    canPickup(name) {
+      const nade = nadeStem(name);
+      const bare = nade || bareWeapon(name);
+      if (!bare || isKnife(bare)) return false;
+      const slot = ownSlot(bare);
+      if (slot === 'nade') {
+        if (m.nades.length >= 4) return false;
+        if (bare === 'flashbang') return m.nades.filter((g) => g === 'flashbang').length < 2;
+        return !m.nades.includes(bare);
+      }
+      if (slot === 'primary') return !m.primary;
+      if (slot === 'pistol') return !m.pistol;
+      return false;
+    },
+
+    /**
+     * G: drop the thing in hand. Knife stays. Next gun, then remaining nades,
+     * knife last.
+     */
+    dropHeld() {
+      if (m.dead) return { ok: false, reason: 'dead' };
+      const item = snapshotItem(m.held);
+      if (!item) return { ok: false, reason: 'cannot_drop' };
+      if (!removeCarried(item.name)) return { ok: false, reason: 'cannot_drop' };
+      const next = nextAfterDrop(item.name);
+      m._reload = 0;
+      m.held = next;
+      touch();
+      return { ok: true, item, next };
+    },
+
+    /**
+     * Death: the active gun (held, else primary, else pistol) and every nade.
+     * Knife stays. Caller spawns the returned items; respawn kits the body.
+     */
+    dropDeath() {
+      const items = [];
+      const heldSlot = ownSlot(m.held);
+      const gunName = heldSlot === 'primary' || heldSlot === 'pistol' ? m.held : m.primary || m.pistol;
+      if (gunName) {
+        const item = snapshotItem(gunName);
+        if (item && removeCarried(item.name)) items.push(item);
+      }
+      for (const n of m.nades.slice()) {
+        const item = snapshotItem(n);
+        if (item && removeCarried(item.name)) items.push(item);
+      }
+      m._reload = 0;
+      m.held = m.knife;
+      touch();
+      return { items };
+    },
+
+    /**
+     * Restore a floor pickup. `replace` is E: a gun in that slot is displaced
+     * (returned so the caller can drop it). Walk-over passes replace false.
+     */
+    takePickup(name, ammo, { replace = false } = {}) {
+      const nade = nadeStem(name);
+      const bare = nade || bareWeapon(name);
+      if (!bare || isKnife(bare)) return { ok: false, reason: 'invalid' };
+      const slot = ownSlot(bare);
+      let displaced = null;
+      if (slot === 'primary' || slot === 'pistol') {
+        const current = slot === 'primary' ? m.primary : m.pistol;
+        if (current && current === bare) return { ok: false, reason: 'already_have' };
+        if (current && current !== bare) {
+          if (!replace) return { ok: false, reason: 'slot_full' };
+          displaced = snapshotItem(current);
+          removeCarried(current);
+        }
+      }
+      const r = give(bare, { spend: false });
+      if (!r.ok) return r;
+      applyDroppedAmmo(bare, ammo);
+      touch();
+      return { ok: true, name: bare, displaced };
+    },
+
     canFire(name = m.held) {
-      if (m.dead) return false;
+      if (m.dead || m._reload > 0) return false;
       const nade = nadeStem(name);
       if (nade || isKnife(name)) return true;
       const a = ammoOf(name);
       return a.clip > 0;
+    },
+
+    get reloading() {
+      return m._reload > 0;
     },
 
     consumeAmmo(name = m.held) {
@@ -297,22 +470,29 @@ export function createPracticeMatch({ side = 'T' } = {}) {
       const a = stateAmmo(m, bare);
       if (a.clip <= 0) return a;
       a.clip--;
-      if (a.clip === 0 && a.reserve > 0) m._reload = weaponInfo(bare).reloadSeconds || 2.2;
       touch();
       return a;
     },
 
-    consumeNade(name) {
-      const nade = nadeStem(name);
-      if (!nade) return '';
-      const i = m.nades.indexOf(nade);
-      if (i < 0) return m.held;
-      m.nades.splice(i, 1);
-      if (nadeStem(m.held) === nade && !m.nades.includes(nade)) {
-        m.held = m.nades[0] || m.pistol || m.knife;
-      }
+    /**
+     * Start a magazine swap. Mag fills when the timer elapses (`tick`).
+     * Returns false when already reloading, full, empty reserve, or not a gun.
+     */
+    beginReload(name = m.held) {
+      if (m._reload > 0 || m.dead) return false;
+      const bare = bareWeapon(name);
+      if (!bare || isKnife(bare) || nadeStem(bare)) return false;
+      const a = stateAmmo(m, bare);
+      const mag = weaponInfo(bare).magSize || 0;
+      if (needReloadBlocked(a, mag)) return false;
+      m._reload = weaponInfo(bare).reloadSeconds || 2.2;
       touch();
-      return m.held;
+      return true;
+    },
+
+    consumeNade(name) {
+      // Practice kit: nades never leave the pocket.
+      return nadeStem(name) || m.held;
     },
 
     reload(name = m.held) {
@@ -337,17 +517,15 @@ export function createPracticeMatch({ side = 'T' } = {}) {
       touch();
     },
 
+    givePracticeKit() {
+      applyPracticeKit();
+    },
+
     setSide(side) {
       const next = side === 'CT' ? 'CT' : 'T';
       if (next === m.side) return;
-      const oldDefault = defaultPistol(m.side);
       m.side = next;
-      if (!m.pistol || m.pistol === oldDefault) {
-        m.pistol = defaultPistol(next);
-        fillAmmo(m, m.pistol);
-        if (!m.primary && (m.held === oldDefault || !m.held)) m.held = m.pistol;
-      }
-      touch();
+      applyPracticeKit();
     },
 
     setMoney(n) {
@@ -397,6 +575,7 @@ export function createPracticeMatch({ side = 'T' } = {}) {
       m.pistol = defaultPistol(m.side);
       m.knife = 'knife';
       m.held = m.pistol;
+      m.lastGun = m.pistol;
       m.ammo = {};
       fillAmmo(m, m.pistol);
       m.kills = [];
@@ -483,4 +662,8 @@ function stateAmmo(m, bare) {
   if (!bare) return emptyAmmo();
   if (!m.ammo[bare]) m.ammo[bare] = emptyAmmo();
   return m.ammo[bare];
+}
+
+function needReloadBlocked(a, mag) {
+  return mag <= 0 || a.clip >= mag || a.reserve <= 0;
 }

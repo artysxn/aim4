@@ -844,6 +844,11 @@ export function createTimelineViewer({
   });
 
   const playback = new Playback((pos) => onPosition(pos));
+  const pausePlayback = playback.pause.bind(playback);
+  playback.pause = () => {
+    pausePlayback();
+    view3d?.cancelDeathFollow?.();
+  };
 
   async function metaFor(file) {
     if (metaCache.has(file)) return metaCache.get(file);

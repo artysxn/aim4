@@ -24,8 +24,8 @@
 // `scripts/cs3d-oracle.mjs` is where they get re-checked against new corpora.
 // ---------------------------------------------------------------------------
 
-import { fr, fmul, v3, v3set, v3copy, v3dot, v3mulAdd, v3len } from './fp.js';
-import { GRAVITY, TICK_DT } from './constants.js';
+import { fr, fmul, fdiv, v3, v3set, v3copy, v3dot, v3mulAdd, v3len } from './fp.js';
+import { GRAVITY, JUMP_IMPULSE, TICK_DT } from './constants.js';
 
 // ---- flight ---------------------------------------------------------------
 
@@ -38,10 +38,18 @@ export const GRENADE_GRAVITY_SCALE = fr(0.4);
 
 /**
  * [measured] Bounce damping, from the projectile's own `m_flElasticity`.
- * Exactly 0.4375 (7/16) on every type — NOT the 0.45 of CSGO lore, and not
- * per-type as decoys' reputation suggests.
+ * Exactly 0.4375 (7/16) on every type. CS:GO `GetGrenadeElasticity()` is 0.45;
+ * CS2 networks 0.4375 and the nade oracle's bounce ratios land on that, not 0.45.
  */
 export const GRENADE_ELASTICITY = fr(0.4375);
+
+/**
+ * [docs] CS:GO `GetGrenadeFriction()` = 0.2. `ResolveFlyCollisionCustom` never
+ * multiplies by it (that is `ResolveFlyCollisionSlide`). Bounce is reflect then
+ * scale the whole vector by elasticity; applying this here would skid nades
+ * shorter than CS2 recordings.
+ */
+export const GRENADE_FRICTION = fr(0.2);
 
 /**
  * [docs] Source's grenade bounce, from `ResolveFlyCollisionCustom`: reflect the
@@ -75,28 +83,26 @@ const REST_NORMAL_Z = fr(0.7);
 export const THROW_VELOCITY = fr(750);
 
 /**
- * [measured] What the game actually releases at full strength is 0.9 of that:
- * 675.0 u/s, exactly, on all 19 standing full-strength throws in the sample and
- * on all 215 full-strength throws once the thrower's motion is removed. Flat
- * across view pitch from -15 to +10 degrees, so there is no pitch term in the
- * speed the way CSGO's `(90 - pitch) * 6` had one.
+ * [docs] `ThrowGrenade`: `flVel = clamp(kBaseVelocity * 0.9, 15, 750)`.
+ * 750 × 0.9 is 675. Pitch no longer scales speed (the old CSS `(90-pitch)*6`).
  */
 export const THROW_SPEED_SCALE = fr(0.9);
+const THROW_SPEED_MIN = fr(15);
+const THROW_SPEED_MAX = fr(750);
 
 /**
- * [measured] How release speed follows the throw strength:
+ * [docs] `GRENADE_SECONDARY_DAMPENING`. `flVel *= Lerp(strength, 0.3, 1.0)`,
+ * so a full throw stays 675 and a right-click underhand is 202.5.
  *
- *   speed = THROW_VELOCITY * THROW_SPEED_SCALE * (0.3 + 0.7 * strength)
- *
- * Checked against the projectile's release speed at the strength the thrower
- * actually released at (`m_flThrowStrength`, readable per tick):
- *
- *   strength 1.000 -> predicted 675.00, observed 675.00   (n=215)
- *   strength 0.695 -> predicted 531.03, observed 531.04
- *   strength 0.500 -> predicted 438.75, observed 438.75   (n=14)
- *   strength 0.203 -> predicted 298.46, observed 299.13
+ *   strength 1.000 -> 675.00   (n=215 CS2 throws)
+ *   strength 0.500 -> 438.75
+ *   strength 0.000 -> 202.50
  */
-export const THROW_STRENGTH_FLOOR = fr(0.3);
+export const GRENADE_SECONDARY_DAMPENING = fr(0.3);
+export const THROW_STRENGTH_FLOOR = GRENADE_SECONDARY_DAMPENING;
+
+/** [docs] `GRENADE_SECONDARY_LOWER`: underhand drops the spawn origin this many units. */
+export const GRENADE_SECONDARY_LOWER = fr(12);
 
 /**
  * [measured] The three strengths the mouse produces. `m_flThrowStrength` is a
@@ -112,13 +118,11 @@ export const THROW_STRENGTH_FLOOR = fr(0.3);
 export const THROW_STRENGTH = Object.freeze({ full: fr(1), medium: fr(0.5), short: fr(0) });
 
 /**
- * [measured] How fast a held strength travels toward its target, per second.
- * Holding a button does not switch the strength instantly: it steps about 0.02
- * a tick (1.28/s) from wherever it was. Only visible if a player changes which
- * buttons are down mid-hold, which is why the number is loose — the three
- * targets above are the part that matters.
+ * [docs] `GRENADE_SECONDARY_TRANSITION`: `Approach(ideal, strength, dt * 1.3)`.
+ * CS2 demos step about 0.02 a tick (1.28/s); the leak is 1.3.
  */
-export const THROW_STRENGTH_RATE = fr(1.28);
+export const GRENADE_SECONDARY_TRANSITION = fr(1.3);
+export const THROW_STRENGTH_RATE = GRENADE_SECONDARY_TRANSITION;
 
 /**
  * [measured] How much of the thrower's own velocity the grenade inherits.
@@ -130,76 +134,203 @@ export const THROW_STRENGTH_RATE = fr(1.28);
  *
  * is one exact estimate per throw. Over the throws where the thrower had real
  * sideways motion: median 1.250, p25 1.197, p75 1.251, and 11 of 17 within 0.05
- * of 1.25. This is the whole of "jump throw": there is no separate jump case,
- * only a thrower who happens to be carrying 250-plus units a second when they
- * let go.
+ * of 1.25. Ordinary airborne throws inherit this of the thrower's *live*
+ * velocity. A jumpthrow inside the perfect window does not (see below).
  */
 export const VELOCITY_INHERIT = fr(1.25);
 
 /**
- * [measured] How far in front of the eye the projectile appears, units.
- *
- * Median 15.4 with the first tick of flight undone, and the SIDEWAYS offset is
- * 0.00 to within a hundredth of a unit across the sample — so the release sits
- * dead on the view axis and 16 is the round number behind it.
- *
- * One detail the corpus cannot settle: whether the 16 runs along the view or
- * along the remapped throw direction, which differ by 10 degrees and so by 2.8
- * units of height. The measured vertical offset (median +0.6) sits between the
- * two predictions (0.0 and +2.8) and the spread is dominated by eye-height
- * error on mid-duck throwers, so it does not choose. This uses the remapped
- * direction, which is what Source's own ThrowGrenade does.
+ * [measured] Seconds between the button coming up and the projectile existing.
+ * weapon_fire to the projectile's first tick: median 6 ticks over 37 throws.
+ * A jump+release on the same tick therefore spawns 6 ticks into the jump,
+ * which is the latch a perfect jumpthrow is frozen to (eye and velocity).
  */
+export const THROW_RELEASE_TICKS = 6;
+
+/**
+ * [measured] CS2's jumpthrow window. Jump, then release within this many
+ * seconds, and the grenade is a perfect jumpthrow: eye and velocity latch to
+ * the jump+throw-together spawn (THROW_RELEASE_TICKS into the jump), not the
+ * live decaying rise at the later projectile spawn. The user-facing rule is
+ * 199 ms from jump to button-up. 200 ms is the next tick and is *not* in
+ * the window.
+ */
+export const PERFECT_JUMPTHROW_WINDOW = fr(0.199);
+
+/**
+ * Extra world-z a perfect jumpthrow inherits: 1.25 × player vz at the latch.
+ * That vz is JUMP_IMPULSE minus gravity over THROW_RELEASE_TICKS, matching
+ * ThrowGrenade(GetAbsVelocity()) for a jump+release on the same tick.
+ */
+export const PERFECT_JUMPTHROW_INHERIT_Z = fr(
+  VELOCITY_INHERIT * (JUMP_IMPULSE - GRAVITY * THROW_RELEASE_TICKS * TICK_DT)
+);
+
+/** True when a button-up this many seconds after takeoff is a perfect jumpthrow. */
+export function isPerfectJumpThrow(secondsSinceJump) {
+  return secondsSinceJump >= 0 && secondsSinceJump <= PERFECT_JUMPTHROW_WINDOW;
+}
+
+/**
+ * Player velocity THROW_RELEASE_TICKS after takeoff. `jump` is the snapshot
+ * after the jump tick (FinishGravity already applied once); remaining ticks
+ * only lose gravity. No jump snapshot: the same number from JUMP_IMPULSE.
+ */
+export function latchedJumpVelocity(jump = null, ticks = THROW_RELEASE_TICKS) {
+  const n = ticks < 1 ? 1 : ticks;
+  const vx = jump ? fr(jump.x) : 0;
+  const vy = jump ? fr(jump.y) : 0;
+  const z0 = jump && Number.isFinite(jump.z) ? fr(jump.z) : fr(JUMP_IMPULSE - fmul(GRAVITY, TICK_DT));
+  return { x: vx, y: vy, z: fr(z0 - fmul(GRAVITY, fmul(fr(n - 1), TICK_DT))) };
+}
+
+/**
+ * Eye and thrower velocity a perfect jumpthrow flies from: the ballistic
+ * state THROW_RELEASE_TICKS after takeoff. Spawning at the ground eye with
+ * a leftover vz read off sparse demo chords made lineups land short and low.
+ *
+ * @param {object} o
+ * @param {{x,y,z}} o.eye   Source-frame eye at takeoff (before the jump tick)
+ * @param {{x,y,z}|null} [o.vel]  Source-frame velocity after the jump tick
+ */
+export function perfectJumpThrowState({ eye, vel = null, ticks = THROW_RELEASE_TICKS }) {
+  const n = ticks < 1 ? 1 : ticks;
+  const dt = fmul(fr(n), TICK_DT);
+  const velocity = latchedJumpVelocity(vel, n);
+  const rise = fr(fmul(JUMP_IMPULSE, dt) - fmul(fmul(fr(0.5), GRAVITY), fmul(dt, dt)));
+  return {
+    eye: {
+      x: fr((eye?.x || 0) + fmul(velocity.x, dt)),
+      y: fr((eye?.y || 0) + fmul(velocity.y, dt)),
+      z: fr((eye?.z || 0) + rise)
+    },
+    velocity
+  };
+}
+
+/**
+ * Thrower velocity to feed `releaseState`. Inside the perfect window the
+ * horizontal part is the takeoff snapshot (standing: ~0, a W-jump: the run)
+ * and z is the latch (6 ticks of jump gravity), so 1.25 × z equals
+ * PERFECT_JUMPTHROW_INHERIT_Z. Outside the window the live velocity is used
+ * unchanged — gravity has been eating the jump.
+ *
+ * @param {object} o
+ * @param {{x,y,z}} o.live              Source-frame velocity at projectile spawn
+ * @param {{x,y,z}|null} [o.jump]       Source-frame velocity at takeoff
+ * @param {number} o.secondsSinceJump   at button-up, not at spawn
+ * @param {boolean} [o.jumpHeldOnGround] same-tick jumpthrow: still grounded,
+ *   jump will fire this movement tick
+ */
+export function throwerVelocity({ live, jump = null, secondsSinceJump, jumpHeldOnGround = false }) {
+  if (!(jumpHeldOnGround || isPerfectJumpThrow(secondsSinceJump))) return live;
+  return latchedJumpVelocity(jump);
+}
+
+/**
+ * [docs] Unobstructed spawn: hull traces 22 along throw forward, then pulls
+ * back 6, so the default is 16 out. A wall closer than 22 clips it.
+ */
+export const RELEASE_TRACE = fr(22);
+export const RELEASE_PULLBACK = fr(6);
 export const RELEASE_FORWARD = fr(16);
 
 /**
- * [measured] Source's throw-angle remap, and CS2 still runs it exactly.
+ * [docs] `ThrowGrenade`: 10° up at the horizon, fading to 0 at ±90.
  *
- *   throwPitch = -10 + viewPitch * (looking up ? 80/90 : 100/90)
+ *   angThrow[PITCH] -= 10 * (90 - |pitch|) / 90
  *
- * A grenade therefore leaves 10 degrees above where you are aiming when you
- * aim level, and the two branches are not symmetric. Median error against 24
- * standing throws: 0.000 degrees, p10 -0.000, p90 0.000. The yaw is not
- * remapped at all — the throw is along the view to within 0.36 degrees at p90.
+ * Equivalent to `-10 + pitch * (up ? 80/90 : 100/90)`. Yaw is not remapped.
  */
+export const THROW_PITCH_BOOST = fr(10);
 export const THROW_PITCH_OFFSET = fr(-10);
-const PITCH_SCALE_UP = fr(80 / 90);
-const PITCH_SCALE_DOWN = fr(100 / 90);
 
 /**
  * The pitch a grenade actually leaves at, degrees, Source convention
- * (negative is up).
+ * (negative is up, +90 is look down).
  */
 export function throwPitch(viewPitch) {
   const p = fr(viewPitch);
-  return fr(THROW_PITCH_OFFSET + fmul(p, p < 0 ? PITCH_SCALE_UP : PITCH_SCALE_DOWN));
+  const mag = p < 0 ? fr(-p) : p;
+  return fr(p - fmul(THROW_PITCH_BOOST, fdiv(fr(90 - mag), 90)));
 }
 
 /**
  * Release speed for a throw strength, units/second.
+ * `clamp(throwVelocity * 0.9, 15, 750) * Lerp(strength, 0.3, 1)`.
  * @param {number} strength 0..1 (`m_flThrowStrength`)
  * @param {number} [throwVelocity] the weapon's `m_flThrowVelocity`
  */
 export function throwSpeed(strength, throwVelocity = THROW_VELOCITY) {
   const s = strength < 0 ? 0 : strength > 1 ? 1 : strength;
-  return fmul(fmul(throwVelocity, THROW_SPEED_SCALE), fr(THROW_STRENGTH_FLOOR + fmul(fr(1 - THROW_STRENGTH_FLOOR), s)));
+  let flVel = fmul(throwVelocity, THROW_SPEED_SCALE);
+  if (flVel < THROW_SPEED_MIN) flVel = THROW_SPEED_MIN;
+  else if (flVel > THROW_SPEED_MAX) flVel = THROW_SPEED_MAX;
+  return fmul(flVel, fr(THROW_STRENGTH_FLOOR + fmul(fr(1 - THROW_STRENGTH_FLOOR), s)));
 }
 
 const DEG = Math.PI / 180;
 
+function clamp01(strength) {
+  return strength < 0 ? 0 : strength > 1 ? 1 : strength;
+}
+
+/**
+ * Spawn origin: eye, plus `Lerp(strength, -12, 0)` on z, then hull-trace 22
+ * along throw forward and pull back 6. No world: the unobstructed 16.
+ */
+function releasePos(eye, fx, fy, fz, strength, world) {
+  const zOff = fmul(GRENADE_SECONDARY_LOWER, fr(clamp01(strength) - 1));
+  const sx = fr(eye.x);
+  const sy = fr(eye.y);
+  const sz = fr(eye.z + zOff);
+  if (world && typeof world.traceHull === 'function') {
+    const t = world.traceHull(
+      { x: sx, y: sy, z: sz },
+      { x: fr(sx + fmul(fx, RELEASE_TRACE)), y: fr(sy + fmul(fy, RELEASE_TRACE)), z: fr(sz + fmul(fz, RELEASE_TRACE)) },
+      GRENADE_RADIUS,
+      GRENADE_RADIUS
+    );
+    const end = t.endpos;
+    return {
+      x: fr(end.x - fmul(fx, RELEASE_PULLBACK)),
+      y: fr(end.y - fmul(fy, RELEASE_PULLBACK)),
+      z: fr(end.z - fmul(fz, RELEASE_PULLBACK))
+    };
+  }
+  return {
+    x: fr(sx + fmul(fx, RELEASE_FORWARD)),
+    y: fr(sy + fmul(fy, RELEASE_FORWARD)),
+    z: fr(sz + fmul(fz, RELEASE_FORWARD))
+  };
+}
+
 /**
  * Where a grenade starts and how fast, from the state at the moment of release.
+ *
+ * `vecThrow = vForward * flVel + playerAbsVelocity * 1.25`
  *
  * @param {object} o
  * @param {{x,y,z}} o.eye        the thrower's eye, Source frame
  * @param {number} o.yaw         view yaw, degrees
  * @param {number} o.pitch       view pitch, degrees (negative is up)
- * @param {{x,y,z}} [o.velocity] the thrower's velocity at release
+ * @param {{x,y,z}} [o.velocity] the thrower's velocity at release.
+ *   For a perfect jumpthrow this is the 6-tick latch (throwerVelocity /
+ *   perfectJumpThrowState), not the live decaying rise.
  * @param {number} [o.strength]  0..1
  * @param {number} [o.throwVelocity]
+ * @param {{traceHull: Function}|null} [o.world]  nade hull; clips the 22-unit spawn
  * @returns {{pos: {x,y,z}, vel: {x,y,z}, pitch: number, speed: number}}
  */
-export function releaseState({ eye, yaw, pitch, velocity = null, strength = 1, throwVelocity = THROW_VELOCITY }) {
+export function releaseState({
+  eye,
+  yaw,
+  pitch,
+  velocity = null,
+  strength = 1,
+  throwVelocity = THROW_VELOCITY,
+  world = null
+}) {
   const tp = throwPitch(pitch);
   const speed = throwSpeed(strength, throwVelocity);
   const cp = Math.cos(tp * DEG);
@@ -212,11 +343,7 @@ export function releaseState({ eye, yaw, pitch, velocity = null, strength = 1, t
   const fz = fr(-sp);
   const k = velocity ? VELOCITY_INHERIT : 0;
   return {
-    pos: {
-      x: fr(eye.x + fmul(fx, RELEASE_FORWARD)),
-      y: fr(eye.y + fmul(fy, RELEASE_FORWARD)),
-      z: fr(eye.z + fmul(fz, RELEASE_FORWARD))
-    },
+    pos: releasePos(eye, fx, fy, fz, strength, world),
     vel: {
       x: fr(fmul(fx, speed) + (velocity ? fmul(fr(velocity.x), k) : 0)),
       y: fr(fmul(fy, speed) + (velocity ? fmul(fr(velocity.y), k) : 0)),
@@ -320,7 +447,7 @@ const _end = v3();
  *
  * @param {object} g            from createGrenade
  * @param {{traceHull: Function}} world  the GRENADE collision set: solid,
- *   entity, sky and grenadeclip, but NOT playerclip (see src/cs3d/hullWorld.js)
+ *   entity and grenadeclip, but NOT playerclip or sky (see src/cs3d/hullWorld.js)
  * @param {number} [dt]
  * @returns {object} the same grenade, advanced
  */

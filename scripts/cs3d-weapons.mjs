@@ -71,7 +71,7 @@ import { dropAlpha, normalIsBlank, roughnessIsEmpty, ROUGHNESS_DEFAULT } from '.
 const TAG = 'cs3d-weapons';
 const fail = (msg) => failWith(TAG, msg);
 
-export const PACK_VERSION = 3;
+export const PACK_VERSION = 4;
 const RAW_DIR = path.join(ROOT, 'server', 'data', 'cs3d', 'raw', 'weapons');
 const PACK_DIR = path.join(ROOT, 'server', 'data', 'cs3d', 'pack', 'weapons');
 const PLAYERS_RAW = path.join(ROOT, 'server', 'data', 'cs3d', 'raw', 'players', 'models');
@@ -198,6 +198,79 @@ const fmtMB = (b) => `${(b / 1048576).toFixed(1)} MB`;
 // ---- the weapon table -------------------------------------------------------
 
 /**
+ * The four numbers a spray pattern is made of, plus the seed that fixes it.
+ *
+ * CS2 does not ship spray patterns. It ships a per-weapon random SEED and the
+ * bounds of a random walk, and generates the pattern at load: 64 shots, each a
+ * (angle, magnitude) drawn from `angle ± angleVariance` and
+ * `magnitude ± magnitudeVariance` off one seeded stream. Same seed, same table,
+ * every machine, every match — which is what makes a spray learnable at all.
+ * `m_nRecoilSeed` is therefore the single most load-bearing number in this file
+ * (223 for the AK-47, 38965 for the M4A4, 4100 for the AWP).
+ *
+ * Everything is a PAIR because everything is per fire mode, and the two columns
+ * are genuinely different on the weapons where the mode means something: the
+ * AWP kicks 78 unscoped and 25 scoped, the AUG 24 and 16, the Glock 18 and 30
+ * (its second mode is the burst). shared/sim3d/recoil.js indexes them by mode.
+ */
+function recoilBlock(r, pair, num) {
+  return {
+    seed: num(r.m_nRecoilSeed, 0),
+    angle: pair(r.m_flRecoilAngle, 0),
+    angleVariance: pair(r.m_flRecoilAngleVariance, 0),
+    magnitude: pair(r.m_flRecoilMagnitude, 0),
+    magnitudeVariance: pair(r.m_flRecoilMagnitudeVariance, 0),
+    /**
+     * How fast the recoil index falls back after the trigger is released, and
+     * the ramp between the two rates. Standing recovers slower than crouching
+     * (0.368 vs 0.305 on the AK), and the FINAL pair is what a long spray
+     * decays at — the transition bullets say where one becomes the other
+     * (2 → 5 on the AK, so shots 0-1 recover at the first rate, 5+ at the
+     * final, and 2-4 are interpolated).
+     */
+    recoveryTimeStand: num(r.m_flRecoveryTimeStand, 0),
+    recoveryTimeCrouch: num(r.m_flRecoveryTimeCrouch, 0),
+    recoveryTimeStandFinal: num(r.m_flRecoveryTimeStandFinal, 0),
+    recoveryTimeCrouchFinal: num(r.m_flRecoveryTimeCrouchFinal, 0),
+    recoveryTransitionStartBullet: num(r.m_nRecoveryTransitionStartBullet, 0),
+    recoveryTransitionEndBullet: num(r.m_nRecoveryTransitionEndBullet, 0)
+  };
+}
+
+/**
+ * The other half of where a bullet goes: the random cone around the aim.
+ *
+ * The recoil table above is deterministic and the same for everyone. This is
+ * not — it is a per-shot random draw whose RADIUS is what the player's stance
+ * and their recent shooting have earned. `spread` is the weapon's irreducible
+ * cone (0.0006 rad on the AK, ~0.03° — a laser), and the `inaccuracy*` fields
+ * are penalties that are added to it and then decayed away.
+ *
+ * All pairs, for the same fire-mode reason as the recoil block: scoping an AWP
+ * takes its standing inaccuracy from 0.2 to 0.0 and that is the whole point of
+ * the scope.
+ */
+function accuracyBlock(r, pair, num) {
+  return {
+    spread: pair(r.m_flSpread, 0),
+    stand: pair(r.m_flInaccuracyStand, 0),
+    crouch: pair(r.m_flInaccuracyCrouch, 0),
+    move: pair(r.m_flInaccuracyMove, 0),
+    jump: pair(r.m_flInaccuracyJump, 0),
+    land: pair(r.m_flInaccuracyLand, 0),
+    ladder: pair(r.m_flInaccuracyLadder, 0),
+    /** What one shot adds to the penalty. The reason the 5th bullet misses. */
+    fire: pair(r.m_flInaccuracyFire, 0),
+    jumpInitial: num(r.m_flInaccuracyJumpInitial, 0),
+    jumpApex: num(r.m_flInaccuracyJumpApex, 0),
+    reload: num(r.m_flInaccuracyReload, 0),
+    pitchShift: num(r.m_flInaccuracyPitchShift, 0),
+    /** Almost always 0. A non-zero value fixes the cone's random stream. */
+    spreadSeed: num(r.m_nSpreadSeed, 0)
+  };
+}
+
+/**
  * Every weapon in `scripts/weapons.vdata_c`, `_base` chains resolved, keyed by
  * the bare name the rest of the repo uses (`ak47`, not `weapon_ak47`).
  */
@@ -252,6 +325,34 @@ function readWeaponTable(dumpText) {
       recoilAngle: num(r.m_flRecoilAngle, 0),
       recoilSeed: num(r.m_nRecoilSeed, 0),
       recoveryStand: num(r.m_flRecoveryTimeStand, 0),
+      // The recoil and inaccuracy blocks, whole. Everything above is the
+      // PRIMARY mode flattened to a scalar, which is what the viewmodel and
+      // the buy menu have always read; these two carry both fire modes and
+      // every field shared/sim3d/recoil.js needs to rebuild the game's own
+      // spray table. See the note on `pair` below for why the pair matters.
+      recoil: recoilBlock(r, pair, num),
+      accuracy: accuracyBlock(r, pair, num),
+      // Which bullets leave a visible streak (src/cs3d/tracers.js). 0 means
+      // none at all — the silenced pistols and the taser.
+      tracerFrequency: num(r.m_nTracerFrequency, 0),
+      tracerParticle: r.m_szTracerParticle ? String(r.m_szTracerParticle) : null,
+      // A scope changes the fire MODE, and the mode picks which column of
+      // every pair above applies: an AUG's recoil magnitude is 24 hip and 16
+      // scoped, and the AWP's is 78 and 25.
+      zoomLevels: num(r.m_nZoomLevels, 0),
+      zoomFov: [num(r.m_nZoomFOV1, 90), num(r.m_nZoomFOV2, 90)],
+      zoomTime: [num(r.m_flZoomTime0, 0), num(r.m_flZoomTime1, 0), num(r.m_flZoomTime2, 0)],
+      unzoomAfterShot: !!r.m_bUnzoomsAfterShot,
+      hideViewModelWhenZoomed: !!r.m_bHideViewModelWhenZoomed,
+      burst: r.m_bHasBurstMode
+        ? { cycleTime: num(r.m_flCycleTimeWhenInBurstMode, 0), between: num(r.m_flTimeBetweenBurstShots, 0) }
+        : null,
+      revolver: !!r.m_bIsRevolver,
+      silencer: r.m_eSilencerType || 'WEAPONSILENCER_NONE',
+      // The crosshair's dynamic gap, for a HUD that wants to grow with the
+      // accuracy penalty the way the game's does.
+      crosshair: [num(r.m_nCrosshairMinDistance, 4), num(r.m_nCrosshairDeltaDistance, 3)],
+      attackMovespeedFactor: num(r.m_flAttackMovespeedFactor, 1),
       muzzle: Array.isArray(r.m_vecMuzzlePos0) ? r.m_vecMuzzlePos0.map(Number) : null,
       price: num(r.m_nPrice, 0)
     };

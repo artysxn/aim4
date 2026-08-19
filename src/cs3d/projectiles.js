@@ -140,7 +140,8 @@ export class Projectiles {
       // The weapon's own m_flThrowVelocity when the pack carries it; 750 is the
       // value every grenade in the game's table has, so this only matters if
       // that ever stops being true.
-      throwVelocity: stats?.throwVelocity || undefined
+      throwVelocity: stats?.throwVelocity || undefined,
+      world: this.world
     });
     const p = new Projectile(type, release, null);
     this.live.push(p);
@@ -280,6 +281,17 @@ export class Projectiles {
       p.line.geometry.dispose();
       p.line.material.dispose();
     }
+  }
+
+  /**
+   * Run the sim until every flight has detonated, or `maxTicks` (10 s at 64 Hz)
+   * so a stuck nade cannot hang the frame. Callers that then want no leftover
+   * smoke/fire still `clear()`.
+   */
+  fastForward(maxTicks = 640) {
+    let n = 0;
+    this._acc = 0;
+    while (this.live.some((p) => !p.done) && n++ < maxTicks) this.update(TICK_DT);
   }
 
   /** Drop everything in flight — a respawn, a map change, a demo load. */

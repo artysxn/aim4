@@ -61,10 +61,19 @@ export const SMOKE_FADE = 1.6;
  * [guessed] Seconds a cell an HE blew out takes to fill back in.
  *
  * A well-placed HE opens a hole in a smoke and the smoke closes it again — the
- * one-way-out trick. The hole is real and so is the refill; the three seconds
- * is a reading of how long that gap is usable.
+ * one-way-out trick. The hole is real and so is the refill; four seconds is a
+ * reading of how long that gap is usable.
  */
-export const SMOKE_REFILL = 3;
+export const SMOKE_REFILL = 4;
+
+/**
+ * Seconds a blown-out cell stays fully gone before the knit starts.
+ *
+ * Without this the rim of the blast starts filling on the same frame the HE
+ * detonates (`hold` was just SMOKE_KNIT there), so the hole visibly shrinks
+ * immediately. One second of empty, even at the rim.
+ */
+export const SMOKE_HOLD = 1;
 
 /**
  * [guessed] How long a blown-out cell takes to knit back once its hold runs
@@ -243,11 +252,9 @@ export function pushSmoke(vol, at, radius = SMOKE_PUSH_RADIUS) {
     const d = Math.hypot(c.x - at.x, c.y - at.y, c.z - at.z);
     if (d > radius) continue;
     // Everything inside the radius goes; what varies with distance is how long
-    // it STAYS gone. The knit window is added on top rather than eaten out of
-    // the hold, so a cell at the rim still clears completely and simply starts
-    // knitting back at once — leave it out and the rim never fully opens, which
-    // is how this ended up as a soft cone with a hole only at dead centre.
-    const hold = SMOKE_KNIT + SMOKE_REFILL * (1 - d / radius);
+    // it STAYS gone after the shared hold. SMOKE_HOLD is the floor so the rim
+    // does not start knitting on the detonation frame.
+    const hold = SMOKE_KNIT + SMOKE_HOLD + SMOKE_REFILL * (1 - d / radius);
     if ((vol.cleared.get(idx) || 0) < hold) vol.cleared.set(idx, hold);
     n++;
   }

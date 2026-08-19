@@ -61,7 +61,7 @@ if (!demos.length) {
 // ---- the map's collision, as a grenade sees it ----------------------------
 
 /** Kinds a grenade collides with. Must match src/cs3d/mapLoader.js NADE_SOLID. */
-const NADE_SOLID = new Set(['solid', 'entity', 'sky', 'grenadeclip']);
+const NADE_SOLID = new Set(['solid', 'entity', 'grenadeclip']);
 
 async function loadNadeWorld(slug) {
   const file = path.join(ROOT, 'server', 'data', 'cs3d', 'pack', slug, 'phys.glb');

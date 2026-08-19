@@ -155,9 +155,12 @@ const close = (a, b, tol, msg) => assert(Math.abs(a - b) <= tol, `${msg}: ${a} v
   const tracer = triangleSoupTracer(soup);
   const st = createPlayerState(0, 0, 0);
   const input = createInput();
+  for (let i = 0; i < 4; i++) stepPlayer(st, input, tracer);
+  assert(st.onGround, 'settled on the floor');
   input.duck = true;
-  for (let i = 0; i < 5; i++) stepPlayer(st, input, tracer);
+  for (let i = 0; i < 24; i++) stepPlayer(st, input, tracer);
   assert(st.ducking && st.onGround, 'ducked under the gap');
+  close(st.pos.z, 0, 0.05, 'ground duck does not offset origin');
   input.duck = false;
   input.forward = 1;
   input.yaw = 0;
@@ -166,7 +169,9 @@ const close = (a, b, tol, msg) => assert(Math.abs(a - b) <= tol, `${msg}: ${a} v
   for (let i = 0; i < 400 && stoodAt === null; i++) {
     stepPlayer(st, input, tracer);
     if (!st.ducking) stoodAt = st.pos.x;
-    else assert(st.pos.x < 200 + HULL_HALF_WIDE + 1, `still ducked only while under the gap (x=${st.pos.x})`);
+    else if (st.duckAmount >= 1) {
+      assert(st.pos.x < 200 + HULL_HALF_WIDE + 1, `still fully ducked only while under the gap (x=${st.pos.x})`);
+    }
   }
   assert(stoodAt !== null, 'stands once clear');
   assert(stoodAt > 200 - HULL_HALF_WIDE - 1, `stood up right after the gap (x=${stoodAt})`);

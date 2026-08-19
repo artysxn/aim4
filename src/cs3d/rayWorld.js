@@ -22,6 +22,13 @@
 //   key into the game's own penetration table, and it is also how a shot finds
 //   the window it just broke (src/cs3d/interactives.js `ownerOf`).
 //
+//   A flashbang is a fourth audience. Leak FLASH_MASK is MASK_OPAQUE_AND_NPCS
+//   | CONTENTS_DEBRIS, with CONTENTS_OPAQUE cleared (block-light brushes do
+//   not block flash). That is the `light` band: solid + entity, not sky, not
+//   playerclip, not grenadeclip. `passbullets` chainlink is still solid, so a
+//   flash hits it. The pack drops tools/toolsblocklight at import, so there is
+//   no CONTENTS_OPAQUE flag left to pass through at runtime.
+//
 // Frames: the sim speaks Source (z up), the BVH is in the scene frame. Both
 // ends convert here and shared/sim3d/units.js owns the mapping.
 // ---------------------------------------------------------------------------
@@ -37,8 +44,11 @@ const _dir = new THREE.Vector3();
  * @param {object} collider  from MapPack.onPhys
  * @param {object} [movers]  an object with `rayHit(from, to)` in the SOURCE
  *   frame for geometry outside the BVH (a swinging door)
+ * @param {{flash?:boolean}} [opts]  `flash: true` uses the light band and does
+ *   not skip passbullets (leak FLASH_MASK).
  */
-export function createRayWorld(collider, movers = null) {
+export function createRayWorld(collider, movers = null, opts = {}) {
+  const flash = !!opts.flash;
   const bvh = collider.bvh;
   const mask = collider.mask || null;
   const pass = collider.passBullets || null;
@@ -48,7 +58,13 @@ export function createRayWorld(collider, movers = null) {
   // adds sky before the clips, so the bullet set is [0, the end of sky).
   const light = collider.ranges?.light?.[0]?.[1] ?? collider.triangles ?? 0;
   const nade = collider.ranges?.nade?.[0]?.[1] ?? light;
-  const limit = Math.max(light, nade);
+  const limit = flash ? light : Math.max(light, nade);
+  const counts = (i) => {
+    if (i >= limit) return false;
+    if (mask && mask[i]) return false;
+    if (!flash && pass && pass[i]) return false;
+    return true;
+  };
 
   return {
     /**
@@ -72,7 +88,7 @@ export function createRayWorld(collider, movers = null) {
       // makes the mask and the surface lookup below mean anything. See the
       // header of src/cs3d/hullWorld.js for why that is not free.
       const hit = bvh.raycastFirst(_ray, THREE.DoubleSide, 0, far);
-      if (hit && hit.faceIndex < limit && !(mask && mask[hit.faceIndex]) && !(pass && pass[hit.faceIndex])) {
+      if (hit && counts(hit.faceIndex)) {
         best = hit;
       } else if (hit) {
         // The nearest triangle is one this bullet ignores, so walk forward past
@@ -84,7 +100,7 @@ export function createRayWorld(collider, movers = null) {
           const next = bvh.raycastFirst(_ray, THREE.DoubleSide, 0, far - t);
           if (!next) break;
           t += next.distance + 1 / 32;
-          if (next.faceIndex < limit && !(mask && mask[next.faceIndex]) && !(pass && pass[next.faceIndex])) {
+          if (counts(next.faceIndex)) {
             next.distance = t;
             best = next;
             break;

@@ -36,8 +36,10 @@ import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js
 import { AnimationMixer, LoopOnce, LoopRepeat } from 'three';
 import { assetBase } from './mapLoader.js';
 import { UNIT_M } from '../../shared/sim3d/units.js';
+import { VIEW_RECOIL_TRACKING } from '../../shared/sim3d/recoil.js';
+import { reloadClipAliases } from './viewModelClips.js';
 
-export const WEAPONS_PACK_VERSION = 3;
+export const WEAPONS_PACK_VERSION = 4;
 
 const DEG = Math.PI / 180;
 
@@ -119,42 +121,118 @@ const M_TO_UNIT = 1 / UNIT_M;
  */
 const RIG_YAW = Math.PI / 2;
 
-/** Bob and sway, the Source shapes. All `[verify]`. */
+/**
+ * Bob, the game's own — `CBaseViewModel::CalcViewModelBob`, cvar defaults.
+ *
+ * Not a sine on a fixed frequency: the PERIOD comes from the weapon's max
+ * speed, so a knife bobs faster than an AWP and the two look different at the
+ * same running speed. That single line is most of why CS's walk reads the way
+ * it does, and no amount of tuning a fixed frequency gets there.
+ *
+ * The lateral bob runs at HALF the vertical's frequency (double the period),
+ * which is the opposite of the usual footfall model and is what gives the
+ * figure-of-eight rather than an up-down bounce.
+ */
 const BOB = {
-  /** Cycle speed at full run, rad/s. */
-  frequency: 9.2,
-  /** Side-to-side and vertical travel at full run, units. */
-  lateral: 0.5,
-  vertical: 0.42,
-  /** Speed (u/s) at which the bob is at full amplitude. */
-  fullSpeed: 250,
-  /** How fast the bob amplitude follows a change in speed. */
-  ease: 0.12
-};
-
-const SWAY = {
-  /** Units of lag per degree/second of view rotation. */
-  perDegree: 0.0065,
-  /** Clamp, units — a fast flick must not throw the gun off screen. */
-  limit: 2.6,
-  /** Seconds for the lag to catch up. */
-  ease: 0.09
+  /** `cl_bobcycle`, `cl_bobup`: the period scale, and where the peak sits. */
+  cycle: 0.98,
+  up: 0.5,
+  /** `cl_bobamt_vert` / `cl_bobamt_lat`. */
+  vert: 0.25,
+  lat: 0.4,
+  /** `cl_bob_lower_amt`: how far the gun drops as the player speeds up. */
+  lowerAmount: 21,
+  /** Speed is clamped here and slewed at 640 u/s² so a stop does not snap. */
+  maxSpeed: 320,
+  slew: 640,
+  /** Amplitude scale on the ground and in the air. */
+  groundMul: 0.00625,
+  airMul: 0.00125
 };
 
 /**
- * Recoil kick of the VIEWMODEL — the gun jumping in frame. This is the
- * cosmetic half of CS3D-ENGINE-PLAN E-6's three-way split (aim punch, view
- * punch, viewmodel kick) and is deliberately independent of where the bullets
- * go. Scaled by the weapon's own `m_flRecoilMagnitude`. `[verify]`
+ * Sway, the game's own — `CBaseViewModel::CalcViewModelLag`, the CS override.
+ *
+ * The shape that matters: the gun does not lag by the CURRENT turn rate, it
+ * lags toward where the view was `interp` seconds ago. So a flick and a slow
+ * pan of the same total angle produce completely different motion, and a turn
+ * that stops leaves the gun still catching up — which a rate-based spring
+ * cannot do at all.
  */
-const KICK = {
-  back: 0.85,
-  up: 0.35,
-  roll: 1.6 * DEG,
-  /** Seconds to reach the kick, and to settle back. */
-  attack: 0.02,
-  decay: 0.14
+const SWAY = {
+  /** `cl_wpn_sway_interp`: seconds of history to look back over. */
+  interp: 0.1,
+  /** `cl_wpn_sway_scale`. */
+  scale: 1.6
 };
+
+/**
+ * How much of the aim punch the VIEWMODEL takes — `viewmodel_recoil`, 1 by
+ * default.
+ *
+ * The camera takes 0.45 of it (shared/sim3d/recoil.js VIEW_RECOIL_TRACKING),
+ * so what actually moves on screen is the DIFFERENCE: the gun climbs out of
+ * frame by `punch × (1 − 0.45)` over a spray while the crosshair climbs by the
+ * rest. Setting this to 0.45 welds the gun to the crosshair, which is what a
+ * viewmodel that adds the same punch the camera already has looks like, and is
+ * the usual way this gets built wrong.
+ */
+const VIEWMODEL_RECOIL = 1.0;
+
+/** [docs] `cl_gunlowerangle` / `cl_gunlowerspeed`: the gun drops in the air. */
+const GUN_LOWER_ANGLE = 2;
+const GUN_LOWER_SPEED = 0.1;
+
+/**
+ * The bob's phase shape: a triangle in TIME run through a sine, with the peak
+ * at `cl_bobup` through the cycle rather than the middle.
+ *
+ * A plain sine gets the rhythm but not the gait — the asymmetry is the weight
+ * coming down faster than it goes up, and it is what makes the walk read as
+ * footfalls instead of a float.
+ */
+function bobShape(t, period) {
+  if (!(period > 0)) return 0;
+  let c = t - Math.floor(t / period) * period;
+  c /= period;
+  return c < BOB.up ? (Math.PI * c) / BOB.up : Math.PI + (Math.PI * (c - BOB.up)) / (1 - BOB.up);
+}
+
+/** Shortest signed difference between two angles, degrees. */
+function wrapDeg(d) {
+  let x = d % 360;
+  if (x > 180) x -= 360;
+  else if (x < -180) x += 360;
+  return x;
+}
+
+/**
+ * The view angles at `when`, out of a flat [t, pitch, yaw, ...] ring.
+ * Linear between the two samples that straddle it; the newest pair if `when`
+ * is past the end, which is what happens for the first tenth of a second.
+ */
+function sampleAngles(log, when, pitch, yaw) {
+  if (log.length < 6) return { pitch, yaw };
+  if (when <= log[0]) return { pitch: log[1], yaw: log[2] };
+  for (let i = log.length - 3; i >= 3; i -= 3) {
+    if (log[i - 3] <= when && when <= log[i]) {
+      const span = log[i] - log[i - 3];
+      const f = span > 1e-6 ? (when - log[i - 3]) / span : 0;
+      return {
+        pitch: log[i - 2] + wrapDeg(log[i + 1] - log[i - 2]) * f,
+        yaw: log[i - 1] + wrapDeg(log[i + 2] - log[i - 1]) * f
+      };
+    }
+  }
+  return { pitch, yaw };
+}
+
+/** Source `AngleVectors(...).forward`, roll 0, degrees in. */
+function forwardOf(pitchDeg, yawDeg) {
+  const p = pitchDeg * DEG;
+  const y = yawDeg * DEG;
+  return [Math.cos(p) * Math.cos(y), Math.cos(p) * Math.sin(y), -Math.sin(p)];
+}
 
 /** Clip names the runtime looks for, in preference order, per action. */
 const CLIP_ALIASES = {
@@ -362,8 +440,8 @@ export class ViewModelAssets {
  * One viewmodel: a pair of hands, whatever they are holding, and its motion.
  *
  * Drive it with `setWeapon()` when the held weapon changes, `attack()` when
- * the trigger goes, and `update(dt, state)` every frame. `group` renders in
- * view space — see `render()` for the pass that draws it.
+ * the trigger goes, `reload()` on R / empty mag, and `update(dt, state)` every
+ * frame. `group` renders in view space — see `render()` for the pass that draws it.
  */
 export class ViewModel {
   constructor(assets) {
@@ -373,7 +451,9 @@ export class ViewModel {
     // The rig is authored looking down Source +x; three's camera looks down
     // −z. One rotation puts the whole thing in front of the eye.
     this.rig = new THREE.Group();
-    this.rig.rotation.set(0, RIG_YAW, 0);
+    // 'YXZ' from the start, so the rest pose and the per-frame bob agree about
+    // which axis is which — see the note where `update` writes this.
+    this.rig.rotation.set(0, RIG_YAW, 0, 'YXZ');
     this.rig.position.copy(RIG_OFFSET);
     this.group.add(this.rig);
 
@@ -408,14 +488,22 @@ export class ViewModel {
     this._swingIndex = 0;
 
     // Motion state.
-    this._bobPhase = 0;
-    this._bobAmp = 0;
-    this._sway = new THREE.Vector2();
-    this._swayTarget = new THREE.Vector2();
-    this._kick = 0;
-    this._kickVel = 0;
-    this._lastYaw = null;
-    this._lastPitch = null;
+    /** Slewed, clamped speed the bob is actually driven by. */
+    this._bobSpeed = 0;
+    /** The bob's own clock. It only advances while the player is moving. */
+    this._bobTime = 0;
+    this._verticalBob = 0;
+    this._lateralBob = 0;
+    /**
+     * The view angles of the last 0.1 s, for the lag.
+     *
+     * A ring of samples rather than a rate, because the game's sway is
+     * `where were you looking a tenth of a second ago` and a rate cannot say
+     * that — see SWAY. Twelve entries covers 0.1 s at any frame rate that
+     * matters and the oldest are dropped as they age out.
+     */
+    this._angleLog = [];
+    this._loweredX = 0;
     this._offset = new THREE.Vector3();
     this.visible = true;
   }
@@ -603,7 +691,11 @@ export class ViewModel {
       (this.wpnMount || this.rig).add(this.weaponModel);
       this._applyCull(); // a freshly cloned gun starts on the default side
     }
-    this.nextAttack = draw ? stats.deploy || 0 : 0;
+    // An absolute time on the same clock `attack()` compares against, not a
+    // duration. Storing the duration made the lockout expire the moment
+    // `performance.now()/1000` passed it — about one second after the page
+    // loaded — so every draw after that was interruptible on the first click.
+    this.nextAttack = draw ? performance.now() / 1000 + (stats.deploy || 0) : 0;
     if (draw) this._play('draw', { loop: false });
     else this._play('idle', { loop: true });
   }
@@ -670,10 +762,35 @@ export class ViewModel {
         this._play('light', { loop: false, fade: 0.02, clip });
       }
     } else {
+      // The gun's jump is the game's own `shoot1` clip plus the aim punch the
+      // caller feeds in (`update`'s `punch`), which is where CS2's comes from
+      // too. There is no spring here any more: one was, it was invented, and
+      // it moved the gun on shots the punch says should barely move it.
       this._play('fire', { loop: false, fade: 0.01 });
-      // The gun jumps by its own recoil magnitude, normalised about a rifle's.
-      this._kickVel += 1 + (this.weapon.recoilMagnitude || 30) / 30;
     }
+    return true;
+  }
+
+  /**
+   * Play the packed reload clip. Locks the trigger until the clip ends so a
+   * click cannot cut it off. Mag fill is the match timer's job.
+   *
+   * @param {{ empty?: boolean, now?: number }} [opts]
+   */
+  reload({ empty = false, now = performance.now() / 1000 } = {}) {
+    if (!this.weapon || this.weapon.melee || this.weapon.grenade || !this.mixer) return false;
+    let clip = null;
+    for (const set of [this.weaponSet, this.assets.clips[this.clipSet]]) {
+      if (!set) continue;
+      for (const name of reloadClipAliases(empty)) {
+        clip = set.get(name);
+        if (clip) break;
+      }
+      if (clip) break;
+    }
+    if (!clip) return false;
+    this._play('reload', { loop: false, fade: 0.06, clip });
+    this.nextAttack = now + clip.duration;
     return true;
   }
 
@@ -729,59 +846,127 @@ export class ViewModel {
   /**
    * Advance the viewmodel.
    *
+   * Three motions, and all three are the game's rather than a shape that
+   * looked about right: `CalcViewModelBob`, `CalcViewModelLag`, and the aim
+   * punch the caller hands in. See BOB, SWAY and VIEWMODEL_RECOIL.
+   *
    * @param {number} dt      seconds
    * @param {object} state
    * @param {number} state.speed     horizontal speed, u/s
    * @param {boolean} state.onGround
-   * @param {number} state.viewYaw   degrees
-   * @param {number} state.viewPitch degrees
+   * @param {number} state.viewYaw   degrees, Source (positive LEFT)
+   * @param {number} state.viewPitch degrees, Source (positive DOWN)
+   * @param {number[]} [state.punch] the aim punch the BULLETS take, degrees
+   *   [pitch, yaw] — already scaled by `weapon_recoil_scale`
+   * @param {number[]} [state.viewPunch] the cosmetic shake the CAMERA has
+   * @param {number} [state.now]     seconds, for the sway history
    */
   update(dt, state = {}) {
     if (!this.arms) return;
-    const { speed = 0, onGround = true, viewYaw = 0, viewPitch = 0 } = state;
+    const {
+      speed = 0,
+      onGround = true,
+      viewYaw = 0,
+      viewPitch = 0,
+      punch = null,
+      viewPunch = null,
+      now = performance.now() / 1000
+    } = state;
 
-    // ---- bob: a walk cycle whose amplitude follows speed -------------------
-    const target = onGround && this.bob ? Math.min(1, speed / BOB.fullSpeed) : 0;
-    this._bobAmp += (target - this._bobAmp) * (1 - Math.exp(-dt / BOB.ease));
-    this._bobPhase += dt * BOB.frequency * (0.4 + 0.6 * this._bobAmp);
-    const bobX = Math.sin(this._bobPhase) * BOB.lateral * this._bobAmp;
-    // Twice the frequency vertically: the body rises on each footfall, not
-    // once per stride.
-    const bobY = Math.abs(Math.cos(this._bobPhase)) * BOB.vertical * this._bobAmp - BOB.vertical * 0.5 * this._bobAmp;
-
-    // ---- sway: the gun lags a turn ----------------------------------------
-    if (this._lastYaw !== null && dt > 0) {
-      let dYaw = viewYaw - this._lastYaw;
-      if (dYaw > 180) dYaw -= 360;
-      else if (dYaw < -180) dYaw += 360;
-      const dPitch = viewPitch - this._lastPitch;
-      this._swayTarget.set(
-        THREE.MathUtils.clamp(-dYaw * SWAY.perDegree / dt * 0.016, -SWAY.limit, SWAY.limit),
-        THREE.MathUtils.clamp(dPitch * SWAY.perDegree / dt * 0.016, -SWAY.limit, SWAY.limit)
-      );
+    // ---- bob ---------------------------------------------------------------
+    // Speed is slewed before anything reads it, so letting go of W does not
+    // stop the bob in one frame, and clamped at 320 whatever the weapon.
+    if (this.bob) {
+      const maxDelta = Math.max(0, dt * BOB.slew);
+      const want = Math.min(BOB.maxSpeed, speed);
+      this._bobSpeed = Math.min(this._bobSpeed + maxDelta, Math.max(this._bobSpeed - maxDelta, want));
+    } else {
+      this._bobSpeed = 0;
     }
-    this._lastYaw = viewYaw;
-    this._lastPitch = viewPitch;
-    const k = 1 - Math.exp(-dt / SWAY.ease);
-    this._sway.x += (this._swayTarget.x - this._sway.x) * k;
-    this._sway.y += (this._swayTarget.y - this._sway.y) * k;
+    const bobSpeed = this._bobSpeed;
+    // The clock only runs while moving, which is why the gun settles where it
+    // is instead of continuing to swing on the spot.
+    this._bobTime += dt * Math.min(1, bobSpeed / BOB.maxSpeed);
+    // The period is the WEAPON's: (1000 − maxSpeed) / 3.5, in milliseconds.
+    // An AK (215 u/s) cycles every 0.220 s and a knife (250) every 0.210.
+    const period = (((1000 - (this.weapon?.maxSpeed || 250)) / 3.5) * 0.001) * BOB.cycle;
+    // The gun rides lower the faster the player is going.
+    const runAdd = BOB.lowerAmount * 0.2 * (bobSpeed * 0.006);
+    const mul = onGround ? BOB.groundMul : BOB.airMul;
 
-    // ---- recoil: a spring that is kicked, then settles ----------------------
-    if (this._kickVel > 0) {
-      const rise = Math.min(1, dt / KICK.attack);
-      this._kick += this._kickVel * rise;
-      this._kickVel *= 1 - rise;
-    }
-    this._kick *= Math.exp(-dt / KICK.decay);
+    let v = bobSpeed * mul * BOB.vert;
+    v = v * 0.3 + v * 0.7 * Math.sin(bobShape(this._bobTime, period));
+    this._verticalBob = THREE.MathUtils.clamp(v - runAdd, -7, 4);
+    let l = bobSpeed * mul * BOB.lat;
+    // Double the period sideways: the figure-of-eight, not a bounce.
+    l = l * 0.3 + l * 0.7 * Math.sin(bobShape(this._bobTime, period * 2));
+    this._lateralBob = THREE.MathUtils.clamp(l, -8, 8);
+
+    // ---- sway: the gun lags where the view WAS -----------------------------
+    this._angleLog.push(now, viewPitch, viewYaw);
+    while (this._angleLog.length > 3 && this._angleLog[3] <= now - SWAY.interp - 0.05) this._angleLog.splice(0, 3);
+    const lag = sampleAngles(this._angleLog, now - SWAY.interp, viewPitch, viewYaw);
+    // The difference, as a direction: how far off the current forward the old
+    // forward sits. Small angles make it nearly linear, a flick does not.
+    const dPitch = wrapDeg(lag.pitch - viewPitch);
+    const dYaw = wrapDeg(lag.yaw - viewYaw);
+    const f = forwardOf(-dPitch, -dYaw);
+    const lagX = (1 - f[0]) * SWAY.scale;
+    const lagY = -f[1] * SWAY.scale;
+    const lagZ = -f[2] * SWAY.scale;
+
+    // ---- the gun drops in the air ------------------------------------------
+    const wantLower = onGround ? 0 : GUN_LOWER_ANGLE;
+    this._loweredX += (wantLower - this._loweredX) * Math.min(1, dt / GUN_LOWER_SPEED);
 
     // ---- compose -----------------------------------------------------------
-    // The rig looks down −z after its own rotation, so in the group's frame x
-    // is right, y is up and z is back toward the eye.
-    this._offset.set(bobX + this._sway.x, bobY + this._sway.y, this._kick * KICK.back);
-    // View space here is x right, y up, z BACK, so the setting's "forward" is
-    // negated into it.
+    // View space: x right, y up, z BACK toward the eye. Source's own basis for
+    // these terms is forward/right/up, which maps to (0,0,−1), (1,0,0), (0,1,0).
+    this._offset.set(
+      // lateral bob rides the right vector; the lag's own y term is its right
+      this._lateralBob * 0.2 - lagY,
+      this._verticalBob * 0.1 + lagZ,
+      -this._verticalBob * 0.4 - lagX - this._loweredX * 0.4
+    );
     this.rig.position.copy(RIG_OFFSET).add(this._offset).add(this.tune.rig).add(this._settingOffset);
-    this.rig.rotation.set(this._kick * KICK.up * DEG * 10, RIG_YAW, this._kick * KICK.roll);
+
+    // The punch, as an on-screen rotation about the eye.
+    //
+    // The camera already carries `viewPunch + punch × 0.45`; the viewmodel is
+    // drawn in its own space and carries none of it. So the group takes the
+    // DIFFERENCE, which is what actually separates the gun from the crosshair
+    // during a spray — the gun climbs out of frame and the crosshair does not
+    // follow it all the way.
+    let risePitch = 0;
+    let riseYaw = 0;
+    if (punch) {
+      risePitch = punch[0] * (VIEWMODEL_RECOIL - VIEW_RECOIL_TRACKING) - (viewPunch ? viewPunch[0] : 0);
+      riseYaw = punch[1] * (VIEWMODEL_RECOIL - VIEW_RECOIL_TRACKING) - (viewPunch ? viewPunch[1] : 0);
+    }
+    // Source pitch is positive DOWN, three's rotation.x positive is up.
+    this.group.rotation.set(-risePitch * DEG, riseYaw * DEG, 0, 'YXZ');
+
+    // Bob tilts the gun as well as moving it: roll with the vertical, pitch
+    // against it, yaw against the lateral.
+    //
+    // 'YXZ' rather than three's default, and the three terms are in an order
+    // that looks wrong until you follow the axes. R = Ry·Rx·Rz, so the
+    // INNERMOST z turns about the model's own +z — which the bind pose says is
+    // the gun's RIGHT (hand_R sits at z +18), so that one is the pitch. The x
+    // term then turns the model about its forward axis, which is the roll. And
+    // y stays the outermost view-space yaw, where RIG_YAW already lives.
+    //
+    // Under the default 'XYZ' the x term is applied AFTER the yaw has carried
+    // the model into view space, so it lands on the same axis the z term does
+    // and the two simply add: the gun nods twice as hard and never rolls at
+    // all. That is what this looked like before, and it is a quiet failure —
+    // the motion is still there, it is just the wrong motion.
+    this.rig.rotation.set(
+      this._verticalBob * 0.5 * DEG,
+      RIG_YAW - this._lateralBob * 0.3 * DEG,
+      this._verticalBob * 0.4 * DEG - this._loweredX * 0.2 * DEG,
+      'YXZ'
+    );
 
     this.mixer.update(dt);
     // A one-shot that has run out returns to idle rather than freezing on its

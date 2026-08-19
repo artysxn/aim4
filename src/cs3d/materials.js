@@ -80,18 +80,29 @@ const LM_TO_IRRADIANCE = Math.PI;
  *     both dropped for these; adding either would light the map twice.
  *   - `cs3d.blend` → colour/normal from two layers mixed by COLOR_0.r
  */
-class Cs3dMaterial extends THREE.MeshStandardNodeMaterial {
+export class Cs3dMaterial extends THREE.MeshStandardNodeMaterial {
   constructor(cs3d) {
     super();
-    this.cs3d = cs3d;
+    this.cs3d = cs3d || {};
     // Scene lights off for anything whose sun is baked. Charted geometry has
     // always done this; a prop joins it once the pack ships `_sun`, and that is
     // what takes the leaky runtime shadow map out of the picture. Without the
     // baked term a prop still needs the real light, or it loses the sun
     // entirely — hence the `sun` check rather than `probeAmbient` alone.
-    if (cs3d.lightmap || (cs3d.probeAmbient && cs3d.sun) || (cs3d.sky && cs3d.sun)) {
+    if (this.cs3d.lightmap || (this.cs3d.probeAmbient && this.cs3d.sun) || (this.cs3d.sky && this.cs3d.sun)) {
       this.lightsNode = lights([]);
     }
+  }
+
+  /**
+   * three's `clone()` is `new this.constructor().copy(this)`. Without copying
+   * `cs3d`, a cloned door material has no lightmap config, and without a
+   * default here the constructor throws the moment a door is carved.
+   */
+  copy(source) {
+    super.copy(source);
+    if (source.cs3d) this.cs3d = source.cs3d;
+    return this;
   }
 
   setupLightMap(builder) {
@@ -246,6 +257,9 @@ export class MaterialLibrary {
     this.interim = new Map(); // id → flat-colour material shown until textures land
     this.final = new Map(); // id → textured material
     this.flat = null; // id → unlit grey, while the flat view is on (setFlat)
+    /** id → lightmap-only Basic material, while r_simple is on (setSimple). */
+    this.simple = null;
+    this.simpleOn = false;
     this.users = new Map(); // id → Set<Object3D> whose .material we own
     this.textures = new Array(manifest.tex?.dir?.length || 0); // index → THREE.Texture
     this.pendingMats = new Map(); // texIndex → Set<matId> waiting on it
@@ -324,9 +338,9 @@ export class MaterialLibrary {
     this.time.value = seconds;
   }
 
-  /** Current material for an id: the flat view's if it is on, else final, else interim. */
+  /** Current material for an id: the flat view's if it is on, else simple, else final, else interim. */
   get(id) {
-    return this.flat?.get(id) || this.final.get(id) || this.interim.get(id) || null;
+    return this.flat?.get(id) || (this.simpleOn && this.simple?.get(id)) || this.final.get(id) || this.interim.get(id) || null;
   }
 
   /**
@@ -371,6 +385,94 @@ export class MaterialLibrary {
       }
     }
     for (const [id, set] of this.users) for (const o of set) o.material = this.get(id);
+  }
+
+  /**
+   * Swap world/prop materials for a lightmap-only Basic shader, or restore.
+   *
+   * Same swap rule as setFlat: a live Standard node cannot drop its ORM and
+   * environment without a rebuild. Simple materials are built once from the
+   * same textures and kept, so toggling does not recompile.
+   *
+   * Water, glass, unlit and effect cards stay on their real materials. Those
+   * are not the fill-rate of a wall, and a Basic stand-in is the wrong look.
+   *
+   * @param {boolean} on
+   */
+  setSimple(on) {
+    this.simpleOn = !!on;
+    if (on) this._ensureSimple();
+    for (const [id, set] of this.users) for (const o of set) o.material = this.get(id);
+  }
+
+  _ensureSimple() {
+    if (!this.simple) this.simple = new Map();
+    for (const [id] of this.final) {
+      if (this.simple.has(id)) continue;
+      this.simple.set(id, this._buildSimple(this.manifest.materials[id]));
+    }
+  }
+
+  /**
+   * Albedo × baked light, no Standard lobe, no environment, no normal/ORM.
+   * Screen values match setupLightMap: bounce is stored as radiance, sun is
+   * irradiance so it is divided by π here the way Lambert would.
+   */
+  _buildSimple(m) {
+    const full = this.final.get(m.id);
+    if (!full) return this.interim.get(m.id) || null;
+    if (m.effect || m.unlit || m.water || m.glass) return full;
+    const factor = this._factor(m);
+    const base = m.base !== undefined ? this.textures[m.base] : null;
+    const tint = vec3(factor.r, factor.g, factor.b);
+    const albedo = base ? texture(base, uv(0)).rgb.mul(tint) : tint;
+    const mat = new THREE.MeshBasicNodeMaterial();
+    const lightmapped = !!(m.lightmapped && this.lightmap);
+    if (lightmapped) {
+      const lm = this.lightmap;
+      const t = texture(lm.texture, uv(1));
+      let light = t.rgb.mul(t.a).mul(float(lm.range)).mul(lm.intensity);
+      const sun = this.sun;
+      if (sun) {
+        const nDotL = max(dot(transformedNormalWorld, sun.direction), float(0));
+        const vis = sun.mask ? texture(sun.mask, uv(1)).r : float(1);
+        light = light.add(sun.color.mul(sun.intensity).mul(nDotL).mul(vis).div(float(Math.PI)));
+      }
+      mat.colorNode = albedo.mul(light);
+    } else if (this.probeAmbient && this.sunVis && !m.sky) {
+      let light = attribute('_amb', 'vec3');
+      const sun = this.sun;
+      if (sun) {
+        const nDotL = max(dot(transformedNormalWorld, sun.direction), float(0));
+        light = light.add(sun.color.mul(sun.intensity).mul(nDotL).mul(attribute('_sun', 'float')).div(float(Math.PI)));
+      }
+      mat.colorNode = albedo.mul(light);
+    } else if (m.sky && this.sun) {
+      const nDotL = max(dot(transformedNormalWorld, this.sun.direction), float(0));
+      const sunTerm = this.sun.color.mul(this.sun.intensity).mul(nDotL).div(float(Math.PI));
+      mat.colorNode = albedo.mul(sunTerm.add(this.skyAmbient));
+    } else {
+      return full;
+    }
+    if (base && m.alphaMode === 'MASK') {
+      mat.opacityNode = texture(base, uv(0)).a;
+      mat.alphaTest = m.alphaCutoff ?? 0.5;
+    } else if (m.alphaMode === 'BLEND') {
+      mat.transparent = true;
+      mat.depthWrite = false;
+      if (base) mat.opacityNode = texture(base, uv(0)).a.mul(float(m.opacity ?? 1));
+      else mat.opacity = m.opacity ?? 1;
+    }
+    if (m.doubleSided || m.sky) mat.side = THREE.DoubleSide;
+    if (m.decal) {
+      mat.polygonOffset = true;
+      mat.polygonOffsetFactor = -2;
+      mat.polygonOffsetUnits = -2;
+      mat.depthWrite = false;
+    }
+    mat.name = `m${m.id}:simple`;
+    mat.userData = { id: m.id, simple: true, decal: !!m.decal, alphaMode: m.alphaMode, lightmapped: !!m.lightmapped };
+    return mat;
   }
 
   /** Material id from a pack mesh's material name ("m12"). */
@@ -466,8 +568,11 @@ export class MaterialLibrary {
   _rebuildLightmapped() {
     for (const [id, mat] of [...this.final]) {
       if (!this.manifest.materials[id]?.lightmapped) continue;
+      const simpleMat = this.simple?.get(id);
+      this.simple?.delete(id);
       this.final.delete(id);
       this._tryBuild(id);
+      if (simpleMat && simpleMat !== mat) simpleMat.dispose();
       mat.dispose();
     }
   }
@@ -607,6 +712,11 @@ export class MaterialLibrary {
     for (const i of this._texIndices(m)) if (!this.textures[i]) return;
     const mat = this._buildFinal(m);
     this.final.set(id, mat);
+    if (this.simple) this.simple.delete(id);
+    if (this.simpleOn) {
+      if (!this.simple) this.simple = new Map();
+      this.simple.set(id, this._buildSimple(m));
+    }
     const users = this.users.get(id);
     // `get`, not `mat`: with the flat view on, a material finishing its
     // textures must not put them back on screen.
@@ -998,6 +1108,11 @@ export class MaterialLibrary {
     this.lightmap?.texture.dispose();
     this.sun.mask?.dispose();
     for (const m of this.interim.values()) m.dispose();
+    if (this.simple) {
+      for (const [id, m] of this.simple) {
+        if (m !== this.final.get(id)) m.dispose();
+      }
+    }
     for (const m of this.final.values()) m.dispose();
     if (this.flat) for (const m of this.flat.values()) m.dispose();
   }

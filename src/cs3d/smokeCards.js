@@ -74,7 +74,7 @@ const CARD_ALPHA = 1;
  * Blast positions arrive in SCENE units, already converted by the caller.
  */
 const HE_PULL_RADIUS = 340;
-const HE_PULL_SECONDS = 5;
+const HE_PULL_SECONDS = 6;
 const HE_PULL_MAX = 0.55;
 
 /**

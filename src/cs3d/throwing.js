@@ -24,22 +24,20 @@
 // (median of 37 throws, mode 24/37), which is why a grenade does not appear
 // at the crosshair the instant you click.
 //
+// Jumpthrows: CS2 treats a release within 199 ms of takeoff as a perfect
+// throw (shared/sim3d/grenade.js). The flag is sampled HERE, at button-up,
+// not 6 ticks later when the projectile exists.
+//
 // Ammunition: the explorer hands out grenades without limit. That is a
 // deliberate departure — it is a place to practise lineups, not a round of
 // competitive — and it is the ONLY thing in this file that is not the game's
 // behaviour.
 // ---------------------------------------------------------------------------
 
-import { THROW_STRENGTH, THROW_STRENGTH_RATE, GRENADE_SPEC, throwSpeed } from '../../shared/sim3d/grenade.js';
+import { THROW_STRENGTH, THROW_STRENGTH_RATE, GRENADE_SPEC, throwSpeed, isPerfectJumpThrow, THROW_RELEASE_TICKS } from '../../shared/sim3d/grenade.js';
 import { TICK_DT } from '../../shared/sim3d/constants.js';
 
-/**
- * [measured] Seconds between the button coming up and the projectile existing.
- * weapon_fire to the projectile's first tick: median 6 ticks over 37 throws,
- * 24 of them exactly 6 and 8 at 7. The stragglers at 13-14 are throws whose
- * weapon_fire and release did not land on the same tick.
- */
-export const THROW_RELEASE_TICKS = 6;
+export { THROW_RELEASE_TICKS };
 
 /**
  * [guessed] Seconds after the throw before the next grenade is in hand. CS2
@@ -58,14 +56,17 @@ function targetStrength(primary, secondary) {
 export class ThrowControl {
   /**
    * @param {object} o
-   * @param {(o: {type: string, strength: number}) => void} o.onThrow  fires when
+   * @param {(o: {type: string, strength: number, perfectJumpThrow: boolean}) => void} o.onThrow  fires when
    *   the projectile should exist, already delayed by the throw animation
+   * @param {() => { secondsSinceJump: number, jumpHeldOnGround: boolean }} [o.jumpState]
+   *   sampled at button-up, so the 199 ms window is jump→release, not jump→spawn
    * @param {(action: string, o?: object) => void} [o.onAnim]  'pullpin' |
    *   'throw_overhand' | 'throw_underhand' | 'draw'
    */
-  constructor({ onThrow, onAnim } = {}) {
+  constructor({ onThrow, onAnim, jumpState } = {}) {
     this.onThrow = onThrow || (() => {});
     this.onAnim = onAnim || (() => {});
+    this.jumpState = jumpState || null;
     /** The grenade in hand, or null when holding a gun. */
     this.type = null;
     this.held = { primary: false, secondary: false };
@@ -130,7 +131,12 @@ export class ThrowControl {
     this.pinPulled = false;
     this.held.primary = false;
     this.held.secondary = false;
-    this._pending = { type: this.type, strength: this.strength };
+    const jump = this.jumpState ? this.jumpState() : null;
+    this._pending = {
+      type: this.type,
+      strength: this.strength,
+      perfectJumpThrow: !!(jump && (jump.jumpHeldOnGround || isPerfectJumpThrow(jump.secondsSinceJump)))
+    };
     this._release = THROW_RELEASE_TICKS * TICK_DT;
     // Underhand below the midpoint: the game authors both clips and the short
     // toss is visibly a different motion, not a weaker version of the same one.

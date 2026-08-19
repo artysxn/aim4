@@ -18,7 +18,8 @@ import {
   SMOKE_CELL,
   SMOKE_SECONDS,
   SMOKE_REFILL,
-  SMOKE_KNIT
+  SMOKE_KNIT,
+  SMOKE_HOLD
 } from './smokeVolume.js';
 import {
   buildFireSpread,
@@ -134,12 +135,12 @@ const boxWorld = (boxes) => ({
   assert(!smokeBlocks(vol, vol.origin.x, vol.origin.y, vol.origin.z), 'the middle is open');
   const holed = vol.cells.filter((_, i) => cellOpacity(vol, i) > 0.5).length;
   assert(holed < solid, `fewer cells stand than before (${holed} vs ${solid})`);
-  // The rim of the blast knits back almost at once; the middle takes longest.
-  stepSmokeVolume(vol, SMOKE_REFILL * 0.5);
+  // The rim of the blast knits back after SMOKE_HOLD; the middle takes longest.
+  stepSmokeVolume(vol, SMOKE_HOLD + SMOKE_REFILL * 0.5);
   const half = vol.cells.filter((_, i) => cellOpacity(vol, i) > 0.5).length;
   assert(half > holed, 'it is filling back in');
   assert(half < solid, '...but is not there yet');
-  stepSmokeVolume(vol, SMOKE_REFILL);
+  stepSmokeVolume(vol, SMOKE_HOLD + SMOKE_REFILL);
   close(vol.cells.filter((_, i) => cellOpacity(vol, i) > 0.5).length, solid, 2, 'and closes completely');
   assert(smokeBlocks(vol, vol.origin.x, vol.origin.y, vol.origin.z), 'the hole is gone');
 
@@ -243,9 +244,13 @@ const boxWorld = (boxes) => ({
   for (const { i, d } of inBlast) {
     assert(cellOpacity(vol, i) === 0, `a cell ${d.toFixed(0)} units from the blast is gone, not dimmed`);
   }
+  stepSmokeVolume(vol, SMOKE_HOLD * 0.9);
+  for (const { i } of inBlast) {
+    assert(cellOpacity(vol, i) === 0, 'nothing knits back during the hold');
+  }
 
   // ...and it closes, rim first.
-  stepSmokeVolume(vol, SMOKE_REFILL + SMOKE_KNIT);
+  stepSmokeVolume(vol, SMOKE_HOLD + SMOKE_REFILL + SMOKE_KNIT);
   const back = vol.cells.filter((_, i) => cellOpacity(vol, i) > 0.5).length;
   assert(back > standing * 0.9, `the hole knits shut again (${back} of ${standing})`);
 }

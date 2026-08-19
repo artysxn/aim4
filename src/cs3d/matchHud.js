@@ -6,6 +6,7 @@
 // ---------------------------------------------------------------------------
 
 import { worldToRadar, isLowerLevel, RADAR_SIZE } from '../replays/viewer/mapCalibration.js';
+import { hudRadarRotation, hudRadarScale, worldToHudRadar } from './hudRadar.js';
 import { radarImage } from '../replays/shared/roundId.js';
 import {
   iconImgHtml,
@@ -15,6 +16,7 @@ import {
 } from '../replays/viewer/equipmentIcons.js';
 import { itemByName } from './buyMenu.js';
 import { nadeStem } from './practiceMatch.js';
+import { PERF_HELP } from './perfToggles.js';
 
 const esc = (s) =>
   String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -37,7 +39,7 @@ const HELP = [
   'god [0|1]         ignore damage',
   'kill              suicide',
   'respawn           full health at spawn',
-  'team t|ct         switch side',
+  'team t|ct|spec    switch side or spectate',
   'noclip            fly / walk',
   'setpos x y z      teleport (Source coords)',
   'getpos            print setpos / setang',
@@ -48,6 +50,11 @@ const HELP = [
   'score [t ct]      print or set the score',
   'killfeed a v [w]  push a feed row',
   'cl_showpos [0|1]  debug strip',
+  'debug_sun         colour grade sliders',
+  'debug_viewmodel   viewmodel placement',
+  'debug_inspect     inspect under the crosshair',
+  'debug_tooltips    keys overlay',
+  ...PERF_HELP,
   'clear             wipe this log',
   'help              this list'
 ];
@@ -90,7 +97,7 @@ export function createMatchHud({ root, map, match, hooks = {} }) {
       <div class="c3-mh-lives" data-k="lives-ct" data-side="CT"></div>
       <div class="c3-mh-clock-wrap">
         <div class="c3-mh-clock" data-k="clock">1:55</div>
-        <div class="c3-mh-score"><span data-k="score-ct">0</span><span data-k="score-t">0</span></div>
+        <div class="c3-mh-score"><span data-k="scoreCt">0</span><span data-k="scoreT">0</span></div>
       </div>
       <div class="c3-mh-lives" data-k="lives-t" data-side="T"></div>
     </div>
@@ -108,6 +115,19 @@ export function createMatchHud({ root, map, match, hooks = {} }) {
       </div>
     </div>
     <div class="c3-mh-loadout" data-k="loadout"></div>
+    <div class="c3-mh-cam" data-k="cam">
+      <div class="c3-mh-spec" data-k="spec" hidden></div>
+      <div class="c3-mh-play" data-k="play" hidden>
+        <button type="button" data-act="pause">Pause</button>
+        <button type="button" data-act="restart">Restart</button>
+        <button type="button" data-act="exit">Exit</button>
+      </div>
+      <div class="c3-mh-seg" role="group" aria-label="Side">
+        <button type="button" class="c3-mh-seg-btn" data-cam="T">T</button>
+        <button type="button" class="c3-mh-seg-btn" data-cam="CT">CT</button>
+        <button type="button" class="c3-mh-seg-btn" data-cam="spectate">Spectate</button>
+      </div>
+    </div>
     <div class="c3-mh-chat" data-k="chat" hidden>
       <div class="c3-mh-log" data-k="log"></div>
       <form class="c3-mh-form" data-k="form" autocomplete="off">
@@ -135,11 +155,44 @@ export function createMatchHud({ root, map, match, hooks = {} }) {
   let chatOpen = false;
   let lastGen = -1;
   let lastClock = '';
+  let lastOverlayKey = '';
   const _pt = {};
+  let peekTimer = 0;
+  let camMode = 'T';
+
+  node.cam.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-cam]');
+    if (btn) {
+      hooks.onCamMode?.(btn.dataset.cam);
+      return;
+    }
+    const act = e.target.closest('[data-act]')?.dataset.act;
+    if (act) hooks.onPlayback?.(act);
+  });
+
+  function setCamMode(mode) {
+    camMode = mode === 'CT' || mode === 'spectate' ? mode : 'T';
+    node.cam.querySelectorAll('[data-cam]').forEach((b) => b.classList.toggle('is-on', b.dataset.cam === camMode));
+  }
+  setCamMode('T');
+
+  function setSpectateName(name) {
+    const on = camMode === 'spectate';
+    node.spec.hidden = !on;
+    if (on) node.spec.textContent = `spectating (${name || 'Bot'})`;
+  }
+
+  function setPlayback(on, playing) {
+    node.play.hidden = !on;
+    const pause = node.play.querySelector('[data-act="pause"]');
+    if (pause) pause.textContent = playing ? 'Pause' : 'Play';
+  }
 
   function setChat(open) {
+    clearTimeout(peekTimer);
     chatOpen = !!open;
     node.chat.hidden = !chatOpen;
+    node.form.hidden = false;
     node.chat.classList.toggle('is-open', chatOpen);
     hooks.onChatToggle?.(chatOpen);
     if (chatOpen) {
@@ -148,6 +201,18 @@ export function createMatchHud({ root, map, match, hooks = {} }) {
     } else {
       input.blur();
     }
+  }
+
+  function peekLog() {
+    if (chatOpen) return;
+    node.form.hidden = true;
+    node.chat.hidden = false;
+    clearTimeout(peekTimer);
+    peekTimer = setTimeout(() => {
+      if (chatOpen) return;
+      node.chat.hidden = true;
+      node.form.hidden = false;
+    }, 2500);
   }
 
   function logLine(text, kind = 'out') {
@@ -187,7 +252,7 @@ export function createMatchHud({ root, map, match, hooks = {} }) {
     node['lives-t'].dataset.count = String(tAlive);
 
     const gun = snap.held;
-    const showAmmo = gun && !isKnife(gun) && !isGrenade(gun);
+    const showAmmo = gun && !isKnife(gun) && !isGrenade(gun) && snap.clip !== '' && snap.clip != null;
     node.wpn.textContent = itemLabel(gun);
     node.clip.textContent = showAmmo ? `${snap.clip} | ${snap.reserve}` : '';
 
@@ -221,46 +286,75 @@ export function createMatchHud({ root, map, match, hooks = {} }) {
 
   function drawRadar(src, yawDeg, marks) {
     const size = canvas.width;
+    const cx = size / 2;
+    const cy = size / 2;
     ctx.clearRect(0, 0, size, size);
     ctx.save();
     ctx.beginPath();
-    ctx.arc(size / 2, size / 2, size / 2 - 1, 0, Math.PI * 2);
+    ctx.arc(cx, cy, cx - 1, 0, Math.PI * 2);
     ctx.clip();
+    ctx.fillStyle = 'rgba(8,8,8,0.92)';
+    ctx.fillRect(0, 0, size, size);
     const lower = src && isLowerLevel(map.code, src[2]);
     const img = lower && radarImgs.lower.naturalWidth ? radarImgs.lower : radarImgs.default;
-    if (img.naturalWidth) ctx.drawImage(img, 0, 0, size, size);
-    else {
-      ctx.fillStyle = 'rgba(8,8,8,0.85)';
-      ctx.fillRect(0, 0, size, size);
-    }
-    const dots = marks && marks.length ? marks : src ? [{ x: src[0], y: src[1], z: src[2], yaw: yawDeg, self: true, side: match.side }] : [];
-    for (const d of dots) {
-      worldToRadar(map.code, d.x, d.y, _pt);
-      const px = (_pt.x / RADAR_SIZE) * size;
-      const py = (_pt.y / RADAR_SIZE) * size;
+    const origin = { x: 0, y: 0 };
+    if (src) worldToRadar(map.code, src[0], src[1], origin);
+    if (img.naturalWidth && src) {
+      const scale = hudRadarScale(map.code, size);
       ctx.save();
-      ctx.translate(px, py);
-      ctx.rotate(-((d.yaw || 0) * Math.PI) / 180);
-      ctx.beginPath();
-      if (d.self) {
-        ctx.fillStyle = '#f5e36a';
-        ctx.moveTo(9, 0);
-        ctx.lineTo(-6, 5.5);
-        ctx.lineTo(-3, 0);
-        ctx.lineTo(-6, -5.5);
-        ctx.closePath();
-        ctx.fill();
-      } else {
-        ctx.fillStyle = d.side === 'CT' ? '#6ea2f0' : '#e0b15a';
-        ctx.arc(0, 0, 4, 0, Math.PI * 2);
-        ctx.fill();
-      }
+      ctx.translate(cx, cy);
+      ctx.rotate(hudRadarRotation(yawDeg));
+      ctx.drawImage(
+        img,
+        -origin.x * scale,
+        -origin.y * scale,
+        RADAR_SIZE * scale,
+        RADAR_SIZE * scale
+      );
       ctx.restore();
+    } else if (img.naturalWidth) {
+      ctx.drawImage(img, 0, 0, size, size);
+    }
+    ctx.fillStyle = 'rgba(220,220,220,0.1)';
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    const half = (90 * Math.PI) / 360;
+    ctx.arc(cx, cy, cx - 2, -Math.PI / 2 - half, -Math.PI / 2 + half);
+    ctx.closePath();
+    ctx.fill();
+    const dots = marks && marks.length ? marks : [];
+    for (const d of dots) {
+      if (d.self) continue;
+      worldToHudRadar(map.code, d.x, d.y, origin, yawDeg, size, _pt);
+      ctx.beginPath();
+      ctx.fillStyle = d.side === 'CT' ? '#6ea2f0' : '#e0b15a';
+      ctx.arc(_pt.x, _pt.y, 4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    if (src) {
+      ctx.beginPath();
+      ctx.fillStyle = 'rgba(245,227,106,0.28)';
+      ctx.moveTo(cx, cy - 11);
+      ctx.lineTo(cx + 7, cy + 2);
+      ctx.lineTo(cx - 7, cy + 2);
+      ctx.closePath();
+      ctx.fill();
+      ctx.beginPath();
+      ctx.fillStyle = '#f5e36a';
+      ctx.arc(cx, cy, 4.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.fillStyle = '#ffffff';
+      ctx.moveTo(cx, cy - 9);
+      ctx.lineTo(cx + 3.6, cy - 1.5);
+      ctx.lineTo(cx - 3.6, cy - 1.5);
+      ctx.closePath();
+      ctx.fill();
     }
     ctx.restore();
     ctx.beginPath();
-    ctx.arc(size / 2, size / 2, size / 2 - 1.5, 0, Math.PI * 2);
-    ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+    ctx.arc(cx, cy, cx - 1.5, 0, Math.PI * 2);
+    ctx.strokeStyle = '#c4a43a';
     ctx.lineWidth = 2;
     ctx.stroke();
   }
@@ -316,8 +410,9 @@ export function createMatchHud({ root, map, match, hooks = {} }) {
         match.refillAmmo();
         return 'ammo refilled';
       case 'reload':
-        match.reload();
-        return `${match.ammoOf(match.held).clip} in mag`;
+        if (!match.beginReload()) return `${match.ammoOf(match.held).clip} in mag`;
+        hooks.onReload?.();
+        return 'reloading';
       case 'money':
         if (args[0] == null) return `$${st.money}`;
         return `$${match.setMoney(args[0])}`;
@@ -340,9 +435,17 @@ export function createMatchHud({ root, map, match, hooks = {} }) {
       case 'team':
       case 'jointeam': {
         const s = String(args[0] || '').toLowerCase();
-        const side = s === 'ct' || s === '2' ? 'CT' : s === 't' || s === '1' ? 'T' : '';
-        if (!side) return 'team t|ct';
-        hooks.onSide?.(side);
+        const side =
+          s === 'ct' || s === '2'
+            ? 'CT'
+            : s === 't' || s === '1'
+              ? 'T'
+              : s === 'spec' || s === 'spectate' || s === '3'
+                ? 'spectate'
+                : '';
+        if (!side) return 'team t|ct|spec';
+        if (side === 'spectate') hooks.onCamMode?.('spectate');
+        else hooks.onSide?.(side);
         return `team ${side}`;
       }
       case 'noclip':
@@ -398,10 +501,26 @@ export function createMatchHud({ root, map, match, hooks = {} }) {
         hooks.onShowPos?.(next);
         return `cl_showpos ${next ? 1 : 0}`;
       }
+      case 'debug_sun':
+        hooks.onDebugSun?.();
+        return 'debug_sun';
+      case 'debug_viewmodel':
+        hooks.onDebugViewmodel?.();
+        return 'debug_viewmodel';
+      case 'debug_inspect':
+        hooks.onDebugInspect?.();
+        return 'debug_inspect';
+      case 'debug_tooltips': {
+        const on = hooks.onDebugTooltips?.();
+        return `debug_tooltips ${on ? 1 : 0}`;
+      }
       case 'sv_cheats':
         return 'cheats are on';
-      default:
+      default: {
+        const extra = hooks.onCommand?.(cmd, args);
+        if (extra !== undefined && extra !== null) return extra;
         return `unknown command: ${cmd}`;
+      }
     }
   }
 
@@ -435,6 +554,7 @@ export function createMatchHud({ root, map, match, hooks = {} }) {
     },
     echo(text, kind) {
       logLine(text, kind);
+      peekLog();
     },
     /**
      * @param {object} frame
@@ -446,22 +566,31 @@ export function createMatchHud({ root, map, match, hooks = {} }) {
      * @param {number} [frame.tAlive]
      * @param {number} [frame.scoreCt]
      * @param {number} [frame.scoreT]
+     * @param {object} [frame.overlay]  spectate vitals; replaces local snap fields
      */
     update(frame = {}) {
       match.pruneKills();
-      const snap = match.snapshot();
+      const base = match.snapshot();
+      const snap = frame.overlay ? { ...base, ...frame.overlay, gen: base.gen } : base;
       const clockSrc = frame.clock != null ? frame.clock : snap.clock;
       const clock = formatClock(clockSrc);
       if (clock !== lastClock) {
         lastClock = clock;
         node.clock.textContent = clock;
       }
-      if (snap.gen !== lastGen) {
+      const overlayKey = frame.overlay
+        ? `${snap.hp}|${snap.held}|${snap.money}|${snap.dead}|${snap.side}|${(snap.nades || []).join(',')}`
+        : '';
+      if (snap.gen !== lastGen || overlayKey !== lastOverlayKey) {
         lastGen = snap.gen;
+        lastOverlayKey = overlayKey;
         syncStatic(snap, frame);
       }
       drawRadar(frame.src, frame.yaw, frame.marks);
-    }
+    },
+    setCamMode,
+    setSpectateName,
+    setPlayback
   };
 
   api.update();

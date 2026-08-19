@@ -10,7 +10,7 @@ import { CS3D_MAPS } from '../../shared/cs3d/maps.js';
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
 export class Hud {
-  constructor(root, { map, onSensitivity, sens }) {
+  constructor(root, { map, onSensitivity, sens, onImportMount }) {
     this.root = root;
     this.map = map;
     root.innerHTML = `
@@ -25,6 +25,7 @@ export class Hud {
         <div class="c3-stat" data-k="backend"></div>
         <div class="c3-stat" data-k="demo" hidden></div>
       </div>
+      <div class="c3-profile" data-k="profile" hidden></div>
       <div class="c3-roster" data-k="roster" hidden></div>
       <div class="c3-inspect" data-k="inspect" hidden></div>
       <div class="c3-grade" data-k="grade" hidden></div>
@@ -34,34 +35,39 @@ export class Hud {
         <div class="c3-boot-bar"><span></span></div>
         <div class="c3-boot-text">Loading</div>
       </div>
-      <div class="c3-center" data-k="enter">
+      <div class="c3-center" data-k="enter" hidden>
         <div class="c3-panel">
           <div class="c3-panel-title">${esc(map.name)}</div>
           <div class="c3-keys">
             <div><b>Click</b> to enter</div>
             <div><b>W A S D</b> move</div>
-            <div><b>F</b> fly / walk</div>
+            <div><b>CapsLock</b> fly / walk</div>
             <div><b>Space</b> up / jump</div>
             <div><b>C</b> down, <b>Ctrl</b> slow / crouch</div>
             <div><b>Shift</b> fast / walk</div>
-            <div><b>Q</b> next weapon (walk speed cap), <b>T</b> third person</div>
+            <div><b>Q</b> next weapon (walk speed cap)</div>
             <div><b>1 2 3</b> rifle / pistol / knife, <b>4</b> grenades, <b>Mouse</b> fire</div>
+            <div><b>R</b> reload</div>
             <div><b>E</b> open a door</div>
+            <div><b>G</b> drop</div>
             <div><b>B</b> buy menu. Every gun and grenade</div>
             <div><b>Y</b> command chat</div>
-            <div><b>1</b> T spawn, <b>2</b> CT spawn, <b>R</b> respawn</div>
-            <div><b>Esc</b> release, <b>H</b> this panel</div>
-            <div><b>I</b> inspect what you are looking at</div>
-            <div><b>G</b> colour grade sliders, <b>U</b> viewmodel placement</div>
-            <div><b>V</b> flat view — no textures, max fps</div>
+            <div><b>M</b> T / CT / Spectate</div>
+            <div><b>N</b> next spawn</div>
+            <div><b>J</b> place a frozen bot</div>
+            <div><b>H</b> place a bot and stand on it</div>
+            <div><b>K</b> delete the bot you are aiming at</div>
+            <div><b>O</b> skip thrown grenades</div>
+            <div><b>Esc</b> menu</div>
             <div class="c3-keys-demo"><b>Drop</b> an .aim4replay on the page to watch it here</div>
-            <div class="c3-keys-demo"><b>1-0</b> player POV, <b>X</b> free camera</div>
+            <div class="c3-keys-demo"><b>1-0</b> spectate a player</div>
             <div class="c3-keys-demo"><b>P</b> play / pause, <b>, .</b> step (Shift: half-second)</div>
-            <div class="c3-keys-demo"><b>[ ]</b> previous / next round, <b>M</b> speed</div>
+            <div class="c3-keys-demo"><b>[ ]</b> previous / next round</div>
           </div>
           <!-- The trainer's sensitivity, on the trainer's scale and step:
                editing it here changes it for the gamemodes too. -->
           <label class="c3-sens">Sensitivity <input type="number" step="0.001" min="0.001" value="${sens}"></label>
+          <div class="c3-import" data-k="import"></div>
           <div class="c3-maps"></div>
         </div>
       </div>
@@ -75,6 +81,9 @@ export class Hud {
     this.bootText = root.querySelector('.c3-boot-text');
     /** True once the map has been revealed; the boot screen never comes back. */
     this.booted = false;
+    this.tooltips = false;
+    this.locked = false;
+    this.panelOpen = false;
     const picker = root.querySelector('.c3-maps');
     picker.innerHTML = CS3D_MAPS.map((m) => {
       const href = m.bareRoute === false ? `/de_${m.slug}` : `/${m.slug}`;
@@ -84,14 +93,15 @@ export class Hud {
     const sensInput = root.querySelector('.c3-sens input');
     sensInput.addEventListener('change', () => onSensitivity?.(sensInput.value));
     sensInput.addEventListener('keydown', (e) => e.stopPropagation());
+    onImportMount?.(this.el.import);
     this._fpsN = 0;
     this._fpsT = performance.now();
   }
 
   setLocked(locked) {
     this.locked = locked;
-    this.el.enter.hidden = locked || !!this.panelOpen;
     this.root.classList.toggle('is-locked', locked);
+    this._syncEnter();
   }
 
   /**
@@ -101,11 +111,18 @@ export class Hud {
    */
   setPanelOpen(on) {
     this.panelOpen = !!on;
-    this.el.enter.hidden = !!this.locked || this.panelOpen;
+    this._syncEnter();
   }
 
+  /** Keys overlay. Only `debug_tooltips` turns this on. */
   toggleHelp() {
-    this.el.enter.hidden = !this.el.enter.hidden;
+    this.tooltips = !this.tooltips;
+    this._syncEnter();
+    return this.tooltips;
+  }
+
+  _syncEnter() {
+    this.el.enter.hidden = !!this.locked || !this.tooltips;
   }
 
   setMode(mode, thirdPerson = false) {
@@ -166,6 +183,21 @@ export class Hud {
 
   setBackend(name) {
     this.el.backend.textContent = name;
+  }
+
+  /**
+   * CPU pass times and 1% / 10% lows. Hidden when `text` is null.
+   * Preformatted; this is a measuring strip, not a caption.
+   */
+  setProfile(text) {
+    const el = this.el.profile;
+    if (!text) {
+      el.hidden = true;
+      el.textContent = '';
+      return;
+    }
+    el.hidden = false;
+    el.textContent = text;
   }
 
   /** The flat view is a mode you can forget you are in; say so in the strip. */

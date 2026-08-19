@@ -32,15 +32,10 @@ export const TICK_DT = fr(1 / TICK_RATE);
 export const GRAVITY = fr(800);
 
 /**
- * [measured] Jump launch velocity — and NOT CSGO's 301.993377. Two
- * independent, subtick-phase-immune estimators agree across 158k pro jumps:
- * apex rise is 55.50u (MAD 0.25), never 57, and the energy method on the
- * fitted arcs gives ~298. CS2 retuned jump height 57 → 55.5 and this is the
- * same formula at the new height: sqrt(2·800·55.5). Final confirmation of
- * the exact convar default belongs to the CS2-server instrument; the demos
- * bound it to 298.0 ± 0.7.
+ * [docs] sv_jump_impulse. Leak default "301.993377" = sqrt(2*800*57).
+ * Shared with jumpthrow inherit so walk jump and nade takeoff use one number.
  */
-export const JUMP_IMPULSE = fr(Math.sqrt(2 * 800 * 55.5));
+export const JUMP_IMPULSE = fr(301.993377);
 
 /**
  * [docs] Upward speed above which CategorizePosition refuses to glue the
@@ -86,19 +81,29 @@ export const AIR_SPEED_CAP = fr(30);
 // Weapon run speeds themselves live in shared/sim/weapons.js (WEAPON_SIM);
 // these are the multipliers CS2 stacks on top of the active weapon's speed.
 
-/**
- * [docs] Ducked speed cap as a fraction of weapon run speed (215 → 73.1).
- * This corpus can't check it — its rounds predate the duck flag — so the
- * duck plateau stays unverified until a reparse or the server instrument.
- */
+/** [docs] CS_PLAYER_SPEED_DUCK_MODIFIER (cs_shareddefs). */
 export const DUCK_SPEED_SCALE = fr(0.34);
 
-/**
- * [measured] Shift slow-walk fraction. Oracle: every weapon's walk mode
- * sits at 0.52 of its run mode across the corpus (ak 111.8/215, knife
- * 130/250, awp 104/200, …).
- */
+/** [docs] CS_PLAYER_SPEED_WALK_MODIFIER. */
 export const WALK_SPEED_SCALE = fr(0.52);
+
+/** [docs] CS_PLAYER_SPEED_CLIMB_MODIFIER. */
+export const CLIMB_MODIFIER = fr(0.34);
+
+/** [docs] Hardcoded 250 in CCSGameMovement::Accelerate / sv_accelerate_use_weapon_speed. */
+export const ACCEL_SPEED_REF = fr(250);
+
+/** [docs] sv_accelerate_use_weapon_speed default. */
+export const ACCELERATE_USE_WEAPON_SPEED = true;
+
+/** [docs] Only cap walk once current speed is this close to the walk cap. */
+export const WALK_DELAY_CAP_SLACK = fr(25);
+
+/** [docs] sv_enablebunnyhopping 0 → crop to this × maxspeed before jump. */
+export const BUNNYJUMP_MAX_SPEED_FACTOR = fr(1.1);
+
+/** [docs] Ground velocity-modifier recovery (1/2.5 per second toward 1). */
+export const VELOCITY_MODIFIER_RECOVERY = fr(1 / 2.5);
 
 // ---- hull -----------------------------------------------------------------
 // Same numbers as units.js HULL; restated here in f32 because the sim traces
@@ -112,40 +117,41 @@ export const EYE_DUCK = fr(46.04);
 export const STEP_HEIGHT = fr(18);
 
 // ---- ducking --------------------------------------------------------------
-// CS2's duck is a state machine: duck amount travels along a duck-speed that
-// is itself state, decays under repeated crouches (2023 crouch fatigue) and
-// recovers over time; unduck retries against headroom. NONE of that is
-// recoverable from demos (FLAG_DUCKING is one bit per tick) or from any
-// .vdata — the constants live in the game binary. Everything below is
-// therefore [guessed] and quarantined behind DUCK: the sim treats duck as an
-// instant hull/speed change until the server instrument measures the curve.
+// CCSGameMovement::Duck / CheckParameters (cstrike15 leak).
 
 export const DUCK = Object.freeze({
-  /** [guessed] seconds to fully duck at full duck speed (CSGO lineage). */
-  TIME_TO_DUCK: fr(0.22),
-  /** [guessed] seconds to fully unduck. */
-  TIME_TO_UNDUCK: fr(0.28),
-  /** [guessed] resting duck speed (m_flDuckSpeed default). */
-  SPEED_DEFAULT: fr(8),
-  /** [guessed] fatigue floor / recovery — placeholders, shape unknown. */
-  SPEED_MIN: fr(2),
-  RECOVERY_PER_SEC: fr(3)
+  /** [docs] CS_PLAYER_DUCK_SPEED_IDEAL. */
+  SPEED_IDEAL: fr(8),
+  /** [docs] Duck-in approaches at duckSpeed * 0.8. */
+  IN_SCALE: fr(0.8),
+  /** [docs] Unduck floor so semi-duck cannot linger. */
+  UNDUCK_MIN_SPEED: fr(1.5),
+  /** [docs] DuckingEnabled false below this duckSpeed. */
+  ENABLED_MIN_SPEED: fr(1.5),
+  /** [docs] sv_timebetweenducks. */
+  TIME_BETWEEN: fr(0.4),
+  /** [docs] get_sv_crouch_spam_penalty on press/release. */
+  SPAM_PENALTY: fr(2),
+  /** [docs] Approach toward ideal, per second. */
+  RECOVERY_PER_SEC: fr(3),
+  /** [docs] Extra recover when >64u from last full-speed crouch pos. */
+  EXTRA_RECOVERY_PER_SEC: fr(6),
+  /** [docs] Distance (units) that unlocks the extra recover. */
+  EXTRA_RECOVERY_DIST: fr(64)
 });
 
 // ---- stamina --------------------------------------------------------------
-// CS2 kept jump/land fatigue. The shape is measurable from the corpus
-// (successive bhop takeoff Δz ratios) but not yet measured, so the sim ships
-// with it OFF; turning it on before the oracle confirms the curve would make
-// jump chains wrong in a new way instead of wrong in a known way.
+// CCSGameMovement CheckParameters / ReduceTimers / OnJump / OnLand.
 
 export const STAMINA = Object.freeze({
-  ENABLED: false,
-  /** [guessed] sv_staminamax lineage. */
+  /** [docs] STAMINA_RANGE: the divisor of the speed/jump scale. */
+  RANGE: fr(100),
+  /** [docs] sv_staminamax. */
   MAX: fr(80),
-  /** [guessed] sv_staminajumpcost. */
+  /** [docs] sv_staminajumpcost. */
   JUMP_COST: fr(0.08),
-  /** [guessed] sv_staminalandcost. */
+  /** [docs] sv_staminalandcost. */
   LAND_COST: fr(0.05),
-  /** [guessed] sv_staminarecoveryrate, per second. */
+  /** [docs] sv_staminarecoveryrate, per second. */
   RECOVERY_RATE: fr(60)
 });

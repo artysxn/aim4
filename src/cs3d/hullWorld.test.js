@@ -32,11 +32,11 @@ function assert(cond, msg) {
 }
 
 // Four walls across the x axis, one of each kind, in mapLoader's band order:
-//   light (solid + entity) | both (sky) | walkOnly (playerclip) | nadeOnly (grenadeclip)
+//   light (solid + entity) | both (empty) | walkOnly (playerclip + sky) | nadeOnly (grenadeclip)
 const bands = { light: [], both: [], walkOnly: [], nadeOnly: [] };
 boxTriangles([100, -300, -50], [110, 300, 300], bands.light); // solid
-boxTriangles([700, -300, -50], [710, 300, 300], bands.both); // sky
 boxTriangles([200, -300, -50], [210, 300, 300], bands.walkOnly); // playerclip
+boxTriangles([700, -300, -50], [710, 300, 300], bands.walkOnly); // sky
 boxTriangles([300, -300, -50], [310, 300, 300], bands.nadeOnly); // grenadeclip
 
 const order = [...bands.light, ...bands.both, ...bands.walkOnly, ...bands.nadeOnly];
@@ -83,10 +83,10 @@ assert(!blocked(nade, 150, 250), 'a grenade passes THROUGH playerclip');
 assert(!blocked(walk, 250, 350), 'a player walks through grenadeclip');
 assert(blocked(nade, 250, 350), 'a grenade is stopped by grenadeclip');
 
-// The sky lid stops both, and it lives in a band after the light range, which
-// is the case that catches an off-by-one in the band boundaries.
+// The sky lid stops a player and NOT a grenade. CS2's nade mask skips
+// CONTENTS_SKY, which is why a throw into open sky does not bounce off air.
 assert(blocked(walk, 650, 750), 'a player is stopped by the sky brush');
-assert(blocked(nade, 650, 750), 'a grenade is stopped by the sky brush');
+assert(!blocked(nade, 650, 750), 'a grenade passes THROUGH the sky brush');
 
 // And the light set is narrower than both: solid only, no sky.
 const light = createHullWorld(collider, 'light');

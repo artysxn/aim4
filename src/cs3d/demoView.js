@@ -33,6 +33,7 @@ import { FLAG_DUCKING, FLAG_AIRBORNE, readRecord, lerpAngle } from '../replays/s
 import { cameraYawFromSource } from '../../shared/sim3d/units.js';
 import { HULL_STAND, HULL_DUCK, EYE_STAND, EYE_DUCK, HULL_HALF_WIDE } from '../../shared/sim3d/constants.js';
 import { SMOKE_SECONDS, SMOKE_RADIUS, FIRE_SECONDS } from './nadeEffects.js';
+import { inventoryAt, isSecondary } from '../replays/viewer/equipmentIcons.js';
 
 const DEG = Math.PI / 180;
 const RAD = 180 / Math.PI;
@@ -178,6 +179,79 @@ export class DemoView {
 
   shiftRound(d) {
     this.setRound(this.roundIndex + d);
+  }
+
+  /** Rewind to freeze-end and play. */
+  restart() {
+    if (!this.ticks) return;
+    const live = (this.meta.freezeEndTick ?? this.ticks.header.firstTick) - this.ticks.header.firstTick;
+    this.row = Math.max(0, Math.min(this.ticks.header.tickCount - 1, live));
+    this.playing = true;
+    this._clearNades();
+    this.onChange(this);
+  }
+
+  /** Alive slots in the current row, in slot order. Same skip-dead as view3d. */
+  liveSlots() {
+    if (!this.ticks) return [];
+    const r0 = Math.max(0, Math.min(this.ticks.header.tickCount - 1, Math.floor(this.row)));
+    const out = [];
+    for (let slot = 0; slot < (this.ticks.header.playerCount || 10); slot++) {
+      if (readRecord(this.ticks.view, r0, slot, _a).alive) out.push(slot);
+    }
+    return out;
+  }
+
+  playerName(slot) {
+    return this.meta?.players?.find((p) => p.slot === slot)?.name || '';
+  }
+
+  /**
+   * Match-HUD fields for one slot at the current row. Null when the demo is
+   * not loaded. Money and util are freezetime stats plus pickups; mag counts
+   * are not in the tick record.
+   */
+  hudOverlay(slot) {
+    if (!this.ticks || slot == null || slot < 0) return null;
+    const r0 = Math.max(0, Math.min(this.ticks.header.tickCount - 1, Math.floor(this.row)));
+    const a = readRecord(this.ticks.view, r0, slot, _a);
+    const player = this.meta.players?.find((p) => p.slot === slot);
+    const id = player?.id;
+    const stats = (id && this.meta.stats?.[id]) || {};
+    const h = this.ticks.header;
+    const tick = h.firstTick + this.row * h.stride;
+    const weapon = this.meta.weapons?.[a.weapon] || '';
+    const inv = inventoryAt({
+      loadout: stats.loadout || [],
+      grenades: this.meta.events?.grenades,
+      itemEvents: this.meta.events?.items,
+      playerId: id,
+      tick,
+      state: a,
+      activeWeapon: weapon
+    });
+    const nades = (inv.util || []).filter((x) => x !== 'defuser' && x !== 'c4');
+    const pistol = (inv.items || []).find((x) => isSecondary(x)) || '';
+    const kills = (this.meta.events?.kills || []).filter((k) => k.attacker === id && k.tick <= tick).length;
+    return {
+      hp: a.alive ? a.health : 0,
+      dead: !a.alive,
+      side: a.side || '',
+      money: stats.money || 0,
+      held: inv.active || weapon,
+      primary: inv.primary || '',
+      pistol,
+      knife: 'knife',
+      nades,
+      clip: '',
+      reserve: '',
+      roundKills: kills,
+      name: player?.name || 'Bot',
+      x: a.x,
+      y: a.y,
+      z: a.z,
+      yaw: a.yaw
+    };
   }
 
   togglePlay() {

@@ -1,16 +1,26 @@
 // ---------------------------------------------------------------------------
 // src/cs3d/crosshairOverlay.js
-// The same PNG sits in the middle of Map Practice and the timeline 3D canvas.
+// Trainer crosshair (src/components/Crosshair.js) over Map Practice and the
+// timeline 3D canvas. Same gap / length / color / dot as the aim trainer.
 // ---------------------------------------------------------------------------
 
-import url from '../crosshair.png';
+import { Crosshair } from '../components/Crosshair.js';
+import { SettingsManager } from '../core/SettingsManager.js';
 
-export function mountCrosshair(parent) {
-  const img = document.createElement('img');
-  img.className = 'c3-crosshair';
-  img.src = url;
-  img.alt = '';
-  img.draggable = false;
-  parent.appendChild(img);
-  return img;
+/**
+ * @param {HTMLElement} parent
+ * @param {{ settings?: import('../core/SettingsManager.js').SettingsManager, scaleToResolution?: boolean }} [opts]
+ * @returns {{ canvas: HTMLCanvasElement, crosshair: import('../components/Crosshair.js').Crosshair }}
+ */
+export function mountCrosshair(parent, { settings, scaleToResolution = true } = {}) {
+  const canvas = document.createElement('canvas');
+  canvas.className = 'c3-crosshair-canvas';
+  canvas.setAttribute('aria-hidden', 'true');
+  parent.appendChild(canvas);
+  const xh = new Crosshair(settings || new SettingsManager(), canvas, {
+    fillParent: true,
+    scaleToResolution
+  });
+  xh.setVisible(true);
+  return { canvas, crosshair: xh };
 }
