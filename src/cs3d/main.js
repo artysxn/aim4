@@ -9,7 +9,7 @@
 import './cs3d.css';
 import * as THREE from 'three/webgpu';
 import { cs3dMapForPath, cs3dMap, CS3D_MAPS } from '../../shared/cs3d/maps.js';
-import { cameraYawFromSource, sceneToSource, sourceYawFromCamera } from '../../shared/sim3d/units.js';
+import { cameraYawFromSource, sceneToSource, sourceToScene, sourceYawFromCamera } from '../../shared/sim3d/units.js';
 import { MapPack, assetBase } from './mapLoader.js';
 import { MapLighting } from './sky.js';
 import { installGrade } from './grade.js';
@@ -18,6 +18,8 @@ import { patchWebGPUPartialAttributeUpload } from './threePatches.js';
 import { Player } from './player.js';
 import { Controls } from './controls.js';
 import { Hud } from './hud.js';
+import { createPracticeMatch } from './practiceMatch.js';
+import { createMatchHud } from './matchHud.js';
 import { FpsView } from './fpsView.js';
 import { DemoView } from './demoView.js';
 import { sharedPlayerModels, liveBodies } from './playerModels.js';
@@ -34,6 +36,7 @@ import { ThrowControl } from './throwing.js';
 import { Interactives } from './interactives.js';
 import { Shooting } from './shooting.js';
 import { SettingsManager, VIEWMODEL_FOV_MIN, VIEWMODEL_FOV_MAX } from '../core/SettingsManager.js';
+import { sourceVFovFromHFov } from '../utils/MathUtils.js';
 import { loadDemoBytes, loadDemoFile } from './demoData.js';
 
 const params = new URLSearchParams(location.search);
@@ -79,7 +82,15 @@ const scene = new THREE.Scene();
 // Units, not metres: near 4u; far 120k u covers the largest map, its 3D
 // skybox drawn ×16, and the sky dome. (near 1 → 4 buys back most of the
 // depth precision that far range costs.)
-const camera = new THREE.PerspectiveCamera(90, window.innerWidth / window.innerHeight, 4, 120000);
+// 90 is CS2 / Source horizontal FOV (4:3). Three.js wants the vertical that
+// produces, same as the trainer's hFov slider. Passing 90 through raw made
+// the world much wider than the game.
+const camera = new THREE.PerspectiveCamera(
+  sourceVFovFromHFov(90),
+  window.innerWidth / window.innerHeight,
+  4,
+  120000
+);
 camera.rotation.order = 'YXZ';
 scene.add(camera);
 
@@ -90,6 +101,7 @@ let mapRenderer = null;
 const controls = new Controls(canvas, player, {
   onLock: (locked) => {
     hud.setLocked(locked);
+    if (locked) matchHud?.closeChat();
     // Losing the mouse mid-hold must not leave a pin pulled: the button-up
     // that would have thrown it never arrives.
     if (!locked) throwControl.cancel();
@@ -137,7 +149,10 @@ const controls = new Controls(canvas, player, {
   onFpsView: () => fpsView.toggle(),
   // Q: the next weapon in the explorer's pocket — the run-speed cap and the
   // hands both follow it.
-  onWeapon: () => equipWeapon(player.cycleWeapon()),
+  onWeapon: () => {
+    const next = match.cycleHeld();
+    if (next) equipWeapon(next);
+  },
   // T: third person — the camera behind the walking body's own agent model,
   // animated live from the movement sim (the same body the demos drive).
   onThirdPerson: () => {
@@ -161,11 +176,23 @@ const controls = new Controls(canvas, player, {
   // it needs the cursor, so it drops the pointer lock while it is up.
   onVmTune: () => vmTuner.toggle(),
   onCancel: () => {
+    if (matchHud?.chatOpen) {
+      matchHud.closeChat();
+      return;
+    }
     buyMenu.close();
     vmTuner.close();
+  },
+  onChat: () => {
+    buyMenu.close();
+    vmTuner.close();
+    matchHud?.openChat();
   }
 });
 let thirdPerson = false;
+const match = createPracticeMatch({ side: 'T' });
+let _chatRelock = false;
+let _respawnAt = 0;
 const hud = new Hud(uiRoot, {
   map,
   sens: controls.sens,
@@ -179,16 +206,89 @@ const buyMenu = createBuyMenu({
   // model with the list, because being a CT is what it means.
   onSide: (s) => {
     lastSide = s;
+    match.setSide(s);
+    if (match.held) equipWeapon(match.held, { draw: false });
   },
   getHeld: () => player.weapon,
   // Only a loaded pack can say a weapon is missing from it. Before it lands
   // (or without one at all) nothing is marked, because nothing is known.
   has: (name) => !vmAssets.ready || !!vmAssets.stats(name),
-  onPick: (name) => equipWeapon(name),
+  onPick: (name) => {
+    const r = match.buy(name);
+    if (!r.ok) {
+      matchHud.echo((r.reason || 'cannot buy').replace(/_/g, ' '));
+      return false;
+    }
+    equipWeapon(r.name);
+    return true;
+  },
   onToggle: (open) => {
-    hud.setPanelOpen(open);
+    if (open) matchHud.closeChat();
+    hud.setPanelOpen(open || matchHud.chatOpen);
     if (open) controls.exitLock();
-    else controls.requestLock();
+    else if (!matchHud.chatOpen) controls.requestLock();
+  }
+});
+const matchHud = createMatchHud({
+  root: uiRoot,
+  map,
+  match,
+  hooks: {
+    onChatToggle: (open) => {
+      hud.setPanelOpen(open || buyMenu.open);
+      if (open) {
+        _chatRelock = controls.locked;
+        controls.exitLock();
+      } else if (_chatRelock) {
+        _chatRelock = false;
+        controls.requestLock();
+      }
+    },
+    onEquip: (name) => equipWeapon(name),
+    onSide: (side) => {
+      lastSide = side;
+      match.setSide(side);
+      spawnAt(side);
+    },
+    onNoclip: () => {
+      player.setMode(player.mode === 'fly' ? 'walk' : 'fly');
+      hud.setMode(player.mode, thirdPerson);
+    },
+    onWalk: () => {
+      player.setMode('walk');
+      hud.setMode(player.mode, thirdPerson);
+    },
+    onSetpos: (x, y, z) => {
+      const [sx, sy, sz] = sourceToScene(x, y, z);
+      player.teleport(new THREE.Vector3(sx, sy, sz), player.yaw, player.pitch);
+    },
+    onGetpos: () => {
+      const p = player.mode === 'walk' ? player.feet : camera.position;
+      const s = sceneToSource(p.x, player.mode === 'walk' ? p.y : p.y - 64, p.z);
+      const yaw = sourceYawFromCamera(player.yaw);
+      const pitch = -player.pitch * (180 / Math.PI);
+      return `setpos ${s[0].toFixed(2)} ${s[1].toFixed(2)} ${s[2].toFixed(2)}; setang ${pitch.toFixed(2)} ${yaw.toFixed(2)} 0`;
+    },
+    onSetang: (pitch, yaw) => {
+      player.yaw = cameraYawFromSource(yaw);
+      player.pitch = -pitch * (Math.PI / 180);
+      player.syncCamera();
+    },
+    onRespawn: () => {
+      _respawnAt = 0;
+      match.respawn();
+      spawnAt();
+    },
+    onDied: () => {
+      _respawnAt = performance.now() + 2000;
+    },
+    onRestart: () => {
+      _respawnAt = 0;
+      lastSide = match.side;
+      if (match.held) equipWeapon(match.held, { draw: false });
+      spawnAt(match.side);
+    },
+    onShowPos: (on) => uiRoot.classList.toggle('is-showpos', !!on)
   }
 });
 hud.setLocked(false);
@@ -257,11 +357,8 @@ const vmTuner = createViewModelTuner({ viewModel, vmPass, settings: vmSettings, 
  * no inventory to hold one of each, and cycling is the fastest way to get from
  * a smoke lineup to the molotov that follows it.
  */
-const SLOTS = { 1: 'ak47', 2: 'glock', 3: 'knife' };
-const NADE_SLOT = ['smokegrenade', 'flashbang', 'hegrenade', 'molotov', 'incgrenade', 'decoy'];
-let nadeIndex = -1;
 const attackHeld = { primary: false, secondary: false };
-let held = 'knife';
+let held = match.held;
 
 // ---- utility ----------------------------------------------------------------
 // The throw state machine (pin, charge, release), the projectiles it puts in
@@ -311,7 +408,15 @@ const projectiles = new Projectiles({
     // damage. A molotov deliberately does neither (shared/sim3d/interactives.js).
     if (type === 'hegrenade') {
       const stats = vmAssets.stats?.('hegrenade');
-      interactives.blast(pos, stats?.range || HE_RADIUS, stats?.damage || HE_DAMAGE);
+      const radius = stats?.range || HE_RADIUS;
+      const maxDmg = stats?.damage || HE_DAMAGE;
+      interactives.blast(pos, radius, maxDmg);
+      const eye = player.mode === 'walk' ? player.eye(_heEye) : _heEye.copy(camera.position);
+      const src = sceneToSource(eye.x, eye.y, eye.z);
+      const dist = Math.hypot(pos.x - src[0], pos.y - src[1], pos.z - src[2]);
+      if (dist < radius && match.hurt(maxDmg * (1 - dist / radius)) <= 0) {
+        _respawnAt = performance.now() + 2000;
+      }
     }
     // A flashbang you can see blinds you. The eye and the look direction are
     // the camera's, so this is honest in third person and in fly mode too.
@@ -338,14 +443,18 @@ const throwControl = new ThrowControl({
     });
     // It has left the hand. The next one is drawn a moment later.
     viewModel.showWeapon(false);
+    match.consumeNade(type);
   },
   onAnim: (action) => {
     if (!viewModel.ready) return;
-    if (action === 'draw') viewModel.redraw();
-    else viewModel.playThrow(action);
+    if (action === 'draw') {
+      if (match.held && match.held !== held) equipWeapon(match.held);
+      else viewModel.redraw();
+    } else viewModel.playThrow(action);
   }
 });
 const _throwEye = new THREE.Vector3();
+const _heEye = new THREE.Vector3();
 
 /**
  * Hold a weapon by name — the slot keys, Q, and every row of the buy menu all
@@ -358,6 +467,7 @@ const _throwEye = new THREE.Vector3();
 function equipWeapon(name, { draw = true } = {}) {
   if (!name) return;
   held = name;
+  match.hold(name);
   if (vmAssets.ready) viewModel.setWeapon(name, { draw });
   // The body's speed cap follows what it is holding, as it does in the game.
   player.setWeapon(name);
@@ -369,12 +479,8 @@ function equipWeapon(name, { draw = true } = {}) {
 }
 
 function equipSlot(n) {
-  if (n === 4) {
-    nadeIndex = (nadeIndex + 1) % NADE_SLOT.length;
-    equipWeapon(NADE_SLOT[nadeIndex]);
-    return;
-  }
-  equipWeapon(SLOTS[n]);
+  const name = match.slot(n);
+  if (name) equipWeapon(name);
 }
 
 /**
@@ -382,11 +488,13 @@ function equipSlot(n) {
  * the weapon's own cycle time out of weapons.vdata), so this only has to ask.
  */
 function tryAttack(button) {
-  if (!controls.locked || player.mode !== 'walk' || thirdPerson) return;
+  if (!controls.locked || player.mode !== 'walk' || thirdPerson || match.dead) return;
+  if (button === 'primary' && !match.canFire(held)) return;
   const fired = viewModel.attack(button, performance.now() / 1000);
   // The viewmodel owns the timing, so a shot only leaves the barrel when it
   // says one did — a click during the deploy lockout traces nothing.
   if (fired === false || button !== 'primary') return;
+  match.consumeAmmo(held);
   const eye = player.eye(_shotEye);
   camera.getWorldDirection(_shotDir);
   shooting.fire(
@@ -479,12 +587,16 @@ let spawnIndex = 0;
 
 function spawnAt(side) {
   if (!pack?.manifest) return;
+  if (match.dead) match.respawn();
+  _respawnAt = 0;
   if (side) {
     lastSide = side;
+    match.setSide(side);
     spawnIndex = 0;
     // Half the guns are one side's only; a respawn on the other side changes
     // what the list should be showing.
     buyMenu.refresh();
+    if (match.held) equipWeapon(match.held, { draw: false });
   } else {
     spawnIndex++;
   }
@@ -1019,6 +1131,31 @@ function frame(now) {
   const speed = player.mode === 'walk' ? Math.hypot(player.vel.x, player.vel.z) : player.flyVel.length();
   hud.setStatus(_src, speed);
   hud.tickFps();
+  if (_respawnAt && now >= _respawnAt) {
+    _respawnAt = 0;
+    match.respawn();
+    spawnAt();
+  }
+  match.tick(dt);
+  const demo = demoView.active ? demoView.status() : null;
+  const marks = demoView.active ? demoView.marks.slice() : [];
+  if (!demoView.active || demoView.povSlot === null) {
+    marks.push({ x: _src[0], y: _src[1], z: _src[2], yaw: sourceYawFromCamera(player.yaw), self: true, side: lastSide });
+  }
+  let ctAlive;
+  let tAlive;
+  if (demoView.active) {
+    ctAlive = demoView.marks.filter((p) => p.side === 'CT').length;
+    tAlive = demoView.marks.filter((p) => p.side === 'T').length;
+  }
+  matchHud.update({
+    src: _src,
+    yaw: sourceYawFromCamera(player.yaw),
+    marks,
+    clock: demo ? demo.clock : undefined,
+    ctAlive,
+    tAlive
+  });
 }
 
 window.addEventListener('resize', () => {
@@ -1036,5 +1173,5 @@ requestAnimationFrame(frame);
 if (import.meta.env.DEV) {
   // `frame` too: a hidden tab gets no rAF, so driving it by hand is the only
   // way to render (and screenshot) the real path from a headless session.
-  window.__cs3d = { THREE, scene, camera, player, nadeEffects, projectiles, throwControl, get pack() { return pack; }, renderer, lighting: () => lighting, fpsView, demoView, playerModels, viewModel, vmPass, vmTuner, buyMenu, frame, renderFrame, sunTracker, get mapRenderer() { return mapRenderer; } };
+  window.__cs3d = { THREE, scene, camera, player, nadeEffects, projectiles, throwControl, get pack() { return pack; }, renderer, lighting: () => lighting, fpsView, demoView, playerModels, viewModel, vmPass, vmTuner, buyMenu, match, matchHud, frame, renderFrame, sunTracker, get mapRenderer() { return mapRenderer; } };
 }

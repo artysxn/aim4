@@ -122,6 +122,8 @@ export class DemoView {
       this._bodies.push({ group: g, body, nose, model: null, prev: null });
     }
 
+    /** Source-space dots for the match HUD radar. Rewritten every update. */
+    this.marks = [];
     this._nades = new Map(); // grenade index -> { mesh, kind }
     this._nadeGeo = new THREE.SphereGeometry(5, 10, 8);
     this._smokeGeo = new THREE.SphereGeometry(SMOKE_RADIUS, 20, 14);
@@ -311,6 +313,7 @@ export class DemoView {
     this._lastRow = this.row;
     const rowsPerSecond = (h.tickRate || 64) / (h.stride || 1);
     const useModels = !!this.playerModels?.ready;
+    this.marks = [];
 
     for (let slot = 0; slot < (h.playerCount || 10); slot++) {
       const a = readRecord(this.ticks.view, r0, slot, _a);
@@ -354,6 +357,7 @@ export class DemoView {
         }
       }
       bodyState.prev = { row: this.row, x, y, z };
+      this.marks.push({ x, y, z, yaw, side: a.side, slot, self: slot === this.povSlot });
       if (useModels && (a.side === 'T' || a.side === 'CT')) {
         // The agent model. Velocity from the row-to-row delta (¼-unit
         // quantised, smoothed inside the body); heading from that velocity;

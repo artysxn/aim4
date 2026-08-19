@@ -105,6 +105,16 @@ const CATALOGUE = [
   }
 ];
 
+/** Catalogue row for a bare weapon name, or null. */
+export function itemByName(name) {
+  const bare = String(name || '').replace(/^weapon_/, '');
+  for (const g of CATALOGUE) {
+    const it = g.items.find((i) => i.name === bare);
+    if (it) return { ...it, group: g.key };
+  }
+  return null;
+}
+
 /**
  * The menu.
  *
@@ -186,8 +196,8 @@ export function createBuyMenu({ root, onPick, getSide, onSide, has, getHeld, onT
       if (e.target === el) api.close();
       return;
     }
-    onPick?.(btn.dataset.w);
-    api.close();
+    // false keeps the menu up (could not afford it, wrong side, …).
+    if (onPick?.(btn.dataset.w) !== false) api.close();
   });
 
   const api = {

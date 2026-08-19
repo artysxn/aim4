@@ -47,7 +47,8 @@ export class Hud {
             <div><b>Q</b> next weapon (walk speed cap), <b>T</b> third person</div>
             <div><b>1 2 3</b> rifle / pistol / knife, <b>4</b> grenades, <b>Mouse</b> fire</div>
             <div><b>E</b> open a door</div>
-            <div><b>B</b> buy menu — every gun and grenade</div>
+            <div><b>B</b> buy menu. Every gun and grenade</div>
+            <div><b>Y</b> command chat</div>
             <div><b>1</b> T spawn, <b>2</b> CT spawn, <b>R</b> respawn</div>
             <div><b>Esc</b> release, <b>H</b> this panel</div>
             <div><b>I</b> inspect what you are looking at</div>

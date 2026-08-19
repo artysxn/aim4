@@ -242,6 +242,10 @@ export class Controls {
         case 'KeyX':
           this.hooks.onPovExit?.();
           break;
+        case 'KeyY':
+          e.preventDefault();
+          this.hooks.onChat?.();
+          break;
         case 'Space':
           if (this.locked) this.player.input.jump = true;
           break;

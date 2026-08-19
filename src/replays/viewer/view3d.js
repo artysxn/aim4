@@ -35,6 +35,7 @@ import { sharedPlayerModels } from '../../cs3d/playerModels.js';
 import { ViewModelAssets, ViewModel, createViewModelPass } from '../../cs3d/viewModel.js';
 import { cs3dMap } from '../../../shared/cs3d/maps.js';
 import { cameraYawFromSource } from '../../../shared/sim3d/units.js';
+import { sourceVFovFromHFov } from '../../utils/MathUtils.js';
 import {
   HULL_STAND,
   HULL_DUCK,
@@ -70,6 +71,8 @@ const FIRE_RADIUS = 110;
 const _vmCube = new Float32Array(18);
 const _vmColor = new THREE.Color();
 
+// CS2 / Source horizontal FOV (4:3). Three.js cameras take the matching
+// vertical; passing 90 through raw was much wider than the game.
 const FOV_DEFAULT = 90;
 const FOV_MIN = 25;
 const FOV_MAX = 90;
@@ -181,9 +184,9 @@ export function createView3d({ slug, onModeChange }) {
     if (THREE.PCFSoftShadowMap !== undefined) renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
     scene = new THREE.Scene();
-    camera = new THREE.PerspectiveCamera(FOV_DEFAULT, 16 / 9, 4, 120000);
+    camera = new THREE.PerspectiveCamera(sourceVFovFromHFov(FOV_DEFAULT), 16 / 9, 4, 120000);
     camera.rotation.order = 'YXZ';
-    camera.fov = fov;
+    camera.fov = sourceVFovFromHFov(fov);
     scene.add(camera);
     player = new Player(camera);
     controls = new Controls(canvas, player, { pageKeys: false, lockOnClick: false });
@@ -733,7 +736,7 @@ export function createView3d({ slug, onModeChange }) {
         return;
       }
       fov = Math.max(FOV_MIN, Math.min(FOV_MAX, fov / factor));
-      camera.fov = fov;
+      camera.fov = sourceVFovFromHFov(fov);
       camera.updateProjectionMatrix();
     },
 
