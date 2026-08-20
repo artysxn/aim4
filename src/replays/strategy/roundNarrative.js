@@ -69,9 +69,9 @@ import { createNamer } from './regionNames.js';
 import { normalizeNadeType, TYPE_WORDS } from './utilityImport.js';
 import { isGun, normalizeLoadout } from '../viewer/equipmentIcons.js';
 import { SMOKE_RADIUS_UNITS } from '../viewer/utilityMarkers.js';
-import { bombSitePieces, hasBombSites } from '../zones/bombSites.js';
+import { bombSitePieces, hasBombSites, pieceCenter } from '../zones/bombSites.js';
 import { hasKeyZones, keyZonesFor } from '../zones/keyZones.js';
-import { pointInPiece } from '../zones/zoneGeom.js';
+import { pointInPiece, ringSignedArea } from '../zones/zoneGeom.js';
 import { mapHasStackedFloors, regionLevelForZ } from '../zones/zoneLevel.js';
 
 /** Position samples per second. Five seconds is the shortest thing measured. */
@@ -769,8 +769,8 @@ export function buildRoundNotes({
   /**
    * When the call is over.
    *
-   * Whichever of these comes first: two T bodies inside the A or B plant zone
-   * (plus a two second grace, so the line covers the entry itself), the bomb
+   * Whichever of these comes first: two T bodies inside the A or B key zone
+   * itself (plus a two second grace, so the line covers the entry itself), the bomb
    * down, either side cut to three, or the round levelled at four apiece. Past
    * that moment the round is a fight, and a stratbook row that kept narrating
    * it would be describing an outcome rather than a plan.
@@ -789,11 +789,16 @@ export function buildRoundNotes({
    * The A and B plant zones.
    *
    * KEY zones, not the painted zone layer and not the bombsite rectangle. Key
-   * zones are the regions drawn per bombsite letter in the Sites editor - the
-   * ground a plant is actually made on - and they are what "two men are on the
-   * site" means. The bombsite rectangle is the fallback for a map nobody has
-   * drawn key zones for yet, so the rule still fires there rather than
-   * silently never ending the call.
+   * zones are the regions drawn per bombsite letter in the Sites editor, and
+   * they are what "two men are on the site" means. The bombsite rectangle is
+   * the fallback for a map nobody has drawn key zones for yet, so the rule
+   * still fires there rather than silently never ending the call.
+   *
+   * Only the BIGGEST piece per letter counts. A site is drawn as up to four
+   * pieces - a1, a2, a3, a4 - and those smaller ones are sub-regions of the
+   * approach, not the site: one of Mirage's reaches back into T spawn, so
+   * treating any of them as "on A" ended the call four seconds into the round.
+   * The largest piece is the site itself, which is the zone being asked about.
    *
    * Piece lists are resolved once per floor: `keyZonesFor` re-sanitizes the
    * whole structure on every call, and this is asked ten times a second for
@@ -803,11 +808,37 @@ export function buildRoundNotes({
     const useKey = hasKeyZones(network);
     if (!useKey && !hasBombSites(network)) return { painted: false, at: () => '' };
     const stacked = mapHasStackedFloors(mapCode);
+    const areaOf = (p) =>
+      p?.type === 'poly' ? Math.abs(ringSignedArea(p.ring)) : Math.abs((p?.w || 0) * (p?.h || 0));
+    const biggest = (list) => {
+      let best = null;
+      for (const piece of list || []) {
+        if (!best || areaOf(piece) > areaOf(best)) best = piece;
+      }
+      return best ? [best] : [];
+    };
+    /**
+     * The site's own zone, checked against the site it claims to be.
+     *
+     * Most maps in this library paint their key zones as the APPROACHES to a
+     * site (Mirage's A is T Outside A / CT Spawn / T Palace / Jungle) with no
+     * piece covering the plant at all. Taking the biggest of those as "A" puts
+     * the cutoff in Jungle. So the bombsite is used as the ground truth: if
+     * the letter's biggest key zone does not contain its own bombsite, that
+     * paint is not a plant zone and the bombsite rectangle stands in.
+     */
+    const zoneFor = (site, opts) => {
+      const bomb = bombSitePieces(network, site, opts);
+      if (!useKey) return bomb;
+      const big = biggest(keyZonesFor(network, site, opts));
+      if (!big.length) return bomb;
+      const center = bomb[0] ? pieceCenter(bomb[0]) : null;
+      if (!center) return big;
+      return pointInPiece(center.x, center.y, big[0]) ? big : bomb;
+    };
     const listsFor = (level) => {
       const opts = level ? { level, mapCode } : {};
-      return useKey
-        ? { a: keyZonesFor(network, 'a', opts), b: keyZonesFor(network, 'b', opts) }
-        : { a: bombSitePieces(network, 'a', opts), b: bombSitePieces(network, 'b', opts) };
+      return { a: zoneFor('a', opts), b: zoneFor('b', opts) };
     };
     const byLevel = stacked
       ? { default: listsFor('default'), lower: listsFor('lower') }

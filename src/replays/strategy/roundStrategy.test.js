@@ -1149,44 +1149,66 @@ test('one man wandering onto a site is not leading an entry', () => {
   assert.ok(!note.includes('Go 1st'), `a lurker was called the entry: "${note}"`);
 });
 
-test('the plant zone is the KEY zone, not the bombsite rectangle', () => {
-  // Key zones and bombsites disagree on purpose: the bombsite sits over A Ramp,
-  // the key zone over Catwalk. Two men walk into Catwalk and nowhere near the
-  // rectangle, and that is what has to end the call.
-  const net = {
-    ...NETWORK,
-    keyZones: { a: [{ type: 'rect', x: 600, y: 0, w: 400, h: 400, level: 'default' }], b: [] }
-  };
-  const late = {
-    type: 'smokegrenade',
-    player: 'aaa',
-    throwTick: T0 + 40 * RATE,
-    detonateTick: T0 + 41 * RATE,
-    at: { ...AT.ramp, z: 0 }
-  };
+/** A real plant zone: bigger than the bombsite rectangle, and containing it. */
+const PLANT_A = { type: 'rect', x: -200, y: 600, w: 800, h: 800, level: 'default' };
+/** An approach piece, off to the side of the site. */
+const APPROACH_A = { type: 'rect', x: 600, y: 0, w: 400, h: 400, level: 'default' };
+/** Inside PLANT_A, outside the bombsite rectangle. */
+const AT_EDGE = { x: 520, y: 700 };
+
+/** Two men walk somewhere, and a grenade is thrown late. Did the call end? */
+function endedBefore(net, where, late) {
   const track = fakeTrack({
-    0: [{ at: 0, ...AT.spawn }, { at: 10, ...AT.mid }, { at: 20, ...AT.cat }],
-    1: [{ at: 0, ...AT.spawn }, { at: 22, ...AT.cat }],
+    0: [{ at: 0, ...AT.spawn }, { at: 10, ...AT.mid }, { at: 20, ...where }],
+    1: [{ at: 0, ...AT.spawn }, { at: 22, ...where }],
     2: [{ at: 0, ...AT.spawn }],
     3: [{ at: 0, ...AT.spawn }],
     4: [{ at: 0, ...AT.spawn }]
   });
-  const opts = {
-    meta: roundMeta({ players: FIVE, grenades: [late] }),
-    track,
-    mapCode: 'MIR',
-    side: 'T',
-    playerIds: ['aaa'],
-    links: [{ grenade: late, type: 'smokegrenade', word: 'Smoke', spot: 'A Ramp', throwId: 'zzzz' }],
-    economy: 'Full buy'
-  };
-  const withKey = body(buildRoundNotes({ ...opts, network: net }).get('aaa'));
-  assert.ok(!withKey.includes('zzzz'), `key zone entry did not end the call: "${withKey}"`);
+  const note = body(
+    buildRoundNotes({
+      meta: roundMeta({ players: FIVE, grenades: [late] }),
+      track,
+      network: net,
+      mapCode: 'MIR',
+      side: 'T',
+      playerIds: ['aaa'],
+      links: [{ grenade: late, type: 'smokegrenade', word: 'Smoke', spot: 'Catwalk', throwId: 'zzzz' }],
+      economy: 'Full buy'
+    }).get('aaa')
+  );
+  return !note.includes('zzzz');
+}
 
-  // Without key zones painted the bombsite rectangle stands in, and nobody ever
-  // reaches it, so the same round runs to the end.
-  const withoutKey = body(buildRoundNotes({ ...opts, network: NETWORK }).get('aaa'));
-  assert.ok(withoutKey.includes('zzzz'), `bombsite fallback ended early: "${withoutKey}"`);
+const LATE_SMOKE = {
+  type: 'smokegrenade',
+  player: 'aaa',
+  throwTick: T0 + 40 * RATE,
+  detonateTick: T0 + 41 * RATE,
+  at: { ...AT.cat, z: 0 }
+};
+
+test('the plant zone is the biggest key zone, not its approach pieces', () => {
+  const net = { ...NETWORK, keyZones: { a: [APPROACH_A, PLANT_A], b: [] } };
+  // PLANT_A is the larger piece and the one holding the bombsite, so it is A.
+  assert.equal(endedBefore(net, AT_EDGE, LATE_SMOKE), true, 'the site itself did not end the call');
+  // Standing in the smaller approach piece is not standing on the site.
+  assert.equal(endedBefore(net, AT.cat, LATE_SMOKE), false, 'an approach piece ended the call');
+});
+
+test('the key zone beats the bombsite rectangle when it is a real plant zone', () => {
+  const net = { ...NETWORK, keyZones: { a: [PLANT_A], b: [] } };
+  // AT_EDGE is inside the key zone but outside the tight bombsite rectangle.
+  assert.equal(endedBefore(net, AT_EDGE, LATE_SMOKE), true);
+  assert.equal(endedBefore(NETWORK, AT_EDGE, LATE_SMOKE), false, 'the rectangle reached too far');
+});
+
+test('key zones that miss their own bombsite fall back to the rectangle', () => {
+  // Every piece is an approach and none covers the plant, which is how most of
+  // the library is painted. That paint cannot be the plant zone.
+  const net = { ...NETWORK, keyZones: { a: [APPROACH_A], b: [] } };
+  assert.equal(endedBefore(net, AT.cat, LATE_SMOKE), false, 'an approach ended the call');
+  assert.equal(endedBefore(net, AT.ramp, LATE_SMOKE), true, 'the bombsite did not stand in');
 });
 
 test('the call covers the two seconds after the second man is in', () => {
