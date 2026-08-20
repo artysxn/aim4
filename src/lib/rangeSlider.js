@@ -20,7 +20,8 @@
  * @param {string} [opts.label]  what the pair is selecting, for screen readers
  * @param {(from: number, to: number) => void} [opts.onChange]
  * @returns {{ el: HTMLElement, get: () => {from: number, to: number},
- *   set: (from: number, to: number) => void }}
+ *   set: (from: number, to: number) => void,
+ *   setMarks: (marks: Array<{ at: number, color?: string }>) => void }}
  */
 export function createRangeSlider({
   min = 0,
@@ -37,6 +38,9 @@ export function createRangeSlider({
 
   const el = document.createElement('div');
   el.className = 'rs';
+
+  const marksEl = document.createElement('div');
+  marksEl.className = 'rs-marks';
 
   const track = document.createElement('div');
   track.className = 'rs-track';
@@ -69,7 +73,7 @@ export function createRangeSlider({
 
   const loEl = input('lo');
   const hiEl = input('hi');
-  el.append(track, loEl, hiEl);
+  el.append(track, marksEl, loEl, hiEl);
 
   // Whichever handle the pointer is nearer to comes to the front, so a pair
   // sitting on top of each other can still be pulled apart in either
@@ -97,6 +101,19 @@ export function createRangeSlider({
     hiEl.value = String(hi);
   }
 
+  function paintMarks(list) {
+    marksEl.replaceChildren();
+    for (const m of list || []) {
+      const at = Number(m.at);
+      if (!Number.isFinite(at)) continue;
+      const node = document.createElement('span');
+      node.className = 'rs-mark';
+      node.style.left = `${((at - min) / span) * 100}%`;
+      if (m.color) node.style.background = m.color;
+      marksEl.appendChild(node);
+    }
+  }
+
   paint();
 
   return {
@@ -106,6 +123,7 @@ export function createRangeSlider({
       lo = Math.max(min, Math.min(max, nextFrom));
       hi = Math.max(lo, Math.min(max, nextTo));
       paint();
-    }
+    },
+    setMarks: paintMarks
   };
 }

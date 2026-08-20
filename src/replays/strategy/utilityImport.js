@@ -55,6 +55,18 @@ export const TYPE_WORDS = {
   flashbang: 'Flash'
 };
 
+/** Timeline marks: HE, flash, smoke, molotov. */
+export const NADE_MARK_COLORS = {
+  hegrenade: '#1f7a32',
+  flashbang: '#8fd4f0',
+  smokegrenade: '#c8c8c8',
+  molotov: '#ffb020'
+};
+
+export function nadeMarkColor(type) {
+  return NADE_MARK_COLORS[normalizeNadeType(type)] || '';
+}
+
 export function normalizeNadeType(type) {
   const t = String(type || '')
     .toLowerCase()

@@ -28,8 +28,18 @@
 //                     is lining up a throw, which is the next line instead
 //   line up           standing somewhere with utility out and throwing it
 //                     later: where he sets up, and when it leaves his hand
+//   fights            shots traded with the other side, named by the ground
+//                     both men were on: "Fight Jungle from Top Con"
+//   spam              ten or more bullets into one cloud
 //   drops / pickups   utility handed between players
 //   smoke             standing inside one
+//
+// Two things are not moments in the round and so do not sit in the sequence at
+// all: what a player bought, and whether he took the bomb out of spawn. Both
+// open the line, in that order, ahead of the first thing he does.
+//
+// Every note opens with the name of the player it was read off, so a coach
+// reading the A Lurk column knows whose round he is about to watch.
 //
 // Times are the clock, never a duration. A player reads "until 1:21" against
 // the clock on his own screen; "for 14s" he would have to do arithmetic during
@@ -72,6 +82,20 @@ const HOLD_SECONDS = 5;
 const GUN_HOLD_SECONDS = 5;
 /** A grenade thrown this soon after leaving a spot was lined up on it. */
 const LINEUP_TAIL_SECONDS = 2.5;
+/** Shots traded with the same opponent inside this window are one fight. */
+const FIGHT_MERGE_SECONDS = 4;
+/** Bullets into one cloud before it counts as spamming it. */
+const SPAM_SHOTS = 10;
+/** How far down a barrel a smoke still counts as the thing being shot at. */
+const SPAM_RANGE_UNITS = 2200;
+/** Shots fired from inside the cloud are not shots at it. */
+const SPAM_MIN_STANDOFF = SMOKE_RADIUS_UNITS + 40;
+/** Utility leaving the hand this early is thrown off spawn: "insta", not a clock. */
+const INSTA_CLOCKS = new Set(['1:55', '1:54']);
+/** The bomb belongs to whoever carried it through most of this opening window. */
+const BOMB_WINDOW_SECONDS = 10;
+/** Touching it for less than this is not carrying it. */
+const BOMB_MIN_HOLD_SECONDS = 2;
 
 /**
  * An execute: this many grenades, from this many players, inside this window,
@@ -153,6 +177,25 @@ export function execWindow(throws) {
 }
 
 const lower = (word) => String(word || '').toLowerCase();
+
+/**
+ * Does the shot at (ox, oy) facing `yaw` run into the cloud at (cx, cy)?
+ *
+ * Flat ray against a circle, the same test the duel sight lines use for smoke.
+ * Walls are not consulted: a player unloading into a cloud he cannot see
+ * through is exactly the case being counted, and asking whether the bullets
+ * arrived would throw away every wall-bang and every spam through the corner.
+ */
+function shotIntoCloud(ox, oy, yaw, cx, cy, radius, range) {
+  const dx = Math.cos((yaw * Math.PI) / 180);
+  const dy = Math.sin((yaw * Math.PI) / 180);
+  const px = cx - ox;
+  const py = cy - oy;
+  const proj = px * dx + py * dy;
+  if (proj <= 0 || proj > range) return false;
+  const perp2 = px * px + py * py - proj * proj;
+  return perp2 <= radius * radius;
+}
 
 /**
  * The moment a line reads as. Lines that print a clock are placed by THAT
@@ -404,6 +447,8 @@ export function buyString(loadout, state) {
  * @param {string[]} args.playerIds  the five on that side
  * @param {Array} args.links       from foldRoundUtility — throw ids to link
  * @param {string} args.economy    the economy chosen in the Add strategy form
+ * @param {number} [args.windowFrom]  seconds after freeze, inclusive
+ * @param {number} [args.windowTo]    seconds after freeze, inclusive
  * @returns {Map<string, string>} playerId → note
  */
 export function buildRoundNotes({
@@ -414,7 +459,9 @@ export function buildRoundNotes({
   side,
   playerIds,
   links = [],
-  economy = ''
+  economy = '',
+  windowFrom = 0,
+  windowTo = ROUND_SECONDS
 }) {
   const notes = new Map();
   const ids = (playerIds || []).filter(Boolean);
@@ -422,9 +469,18 @@ export function buildRoundNotes({
 
   const timing = timingFor(meta);
   const rate = timing.tickRate || 64;
-  const t0 = timing.freezeEndTick;
-  const endTick = Math.min(timing.endTick, t0 + ROUND_SECONDS * rate);
-  const secOf = (tick) => (tick - t0) / rate;
+  const live0 = timing.freezeEndTick;
+  const rawFrom = Number(windowFrom);
+  const rawTo = Number(windowTo);
+  const winFrom = Math.max(0, Math.min(ROUND_SECONDS, Number.isFinite(rawFrom) ? rawFrom : 0));
+  const winTo = Math.max(
+    winFrom,
+    Math.min(ROUND_SECONDS, Number.isFinite(rawTo) ? rawTo : ROUND_SECONDS)
+  );
+  const windowed = winFrom > 0.05 || winTo < ROUND_SECONDS - 0.05;
+  const t0 = live0 + winFrom * rate;
+  const endTick = Math.min(timing.endTick, live0 + winTo * rate);
+  const secOf = (tick) => (tick - live0) / rate;
   const namer = createNamer(network, mapCode);
   const slotOf = new Map((meta.players || []).map((p) => [p.id, p.slot]));
 
@@ -446,7 +502,11 @@ export function buildRoundNotes({
   }
 
   const allGrenades = meta.events?.grenades || [];
-  const ourGrenades = allGrenades.filter((g) => sideIds.has(g.player));
+  const ourGrenades = allGrenades.filter((g) => {
+    if (!sideIds.has(g.player)) return false;
+    const tick = Number(g.throwTick);
+    return Number.isFinite(tick) && tick >= t0 && tick <= endTick;
+  });
   const linkOf = new Map(links.map((l) => [l.grenade, l]));
   const weaponNames = (meta.weapons || []).map((w) => String(w || ''));
   const nameOf = new Map((meta.players || []).map((p) => [p.id, p.name || '']));
@@ -461,18 +521,152 @@ export function buildRoundNotes({
       .sort((a, b) => a.sec - b.sec)
   );
 
-  /** Smokes that were up, for "standing in one". */
+  /**
+   * Smokes that were up, for "standing in one" and for "spamming one".
+   *
+   * Both sides' clouds, because the smoke a player empties a magazine into is
+   * almost always the other team's.
+   */
   const smokes = allGrenades
     .filter((g) => normalizeNadeType(g.type) === 'smokegrenade')
     .map((g) => ({
       x: Number(g.at?.x),
       y: Number(g.at?.y),
+      spot: namer.positionName(Number(g.at?.x), Number(g.at?.y), Number(g.at?.z) || 0),
       from: Number(g.detonateTick ?? g.throwTick),
       to: Number(g.detonateTick ?? g.throwTick) + SMOKE_SECONDS * rate
     }))
     .filter((s) => Number.isFinite(s.x) && Number.isFinite(s.y) && Number.isFinite(s.from));
 
-  /** Our own utility in the air, for "entered while it was flying". */
+  /**
+   * Bullets each player put into each cloud.
+   *
+   * A shot is aimed at a cloud when the cloud is up, the barrel points at it,
+   * and the shooter is standing outside it. Ten of those is a player holding
+   * the trigger down on a smoke rather than one stray round crossing it.
+   */
+  const spamCounts = new Map();
+  for (const shot of meta.events?.shots || []) {
+    if (!sideIds.has(shot.player)) continue;
+    if (shot.tick < t0 || shot.tick > endTick) continue;
+    if (!isGun(shot.weapon)) continue;
+    const ox = Number(shot.x);
+    const oy = Number(shot.y);
+    const yaw = Number(shot.yaw);
+    if (!Number.isFinite(ox) || !Number.isFinite(oy) || !Number.isFinite(yaw)) continue;
+    for (let i = 0; i < smokes.length; i++) {
+      const sm = smokes[i];
+      if (shot.tick < sm.from || shot.tick > sm.to) continue;
+      const away = Math.hypot(sm.x - ox, sm.y - oy);
+      if (away < SPAM_MIN_STANDOFF) continue;
+      if (!shotIntoCloud(ox, oy, yaw, sm.x, sm.y, SMOKE_RADIUS_UNITS, SPAM_RANGE_UNITS)) continue;
+      const key = `${shot.player}|${i}`;
+      const hit = spamCounts.get(key);
+      if (hit) hit.n += 1;
+      else spamCounts.set(key, { n: 1, player: shot.player, spot: sm.spot, tick: shot.tick });
+      break;
+    }
+  }
+
+  /**
+   * Who carried the bomb out of spawn.
+   *
+   * NOT the tick buffer: these demos never set FLAG_HAS_BOMB, so a note built
+   * off it would silently say nobody ever had the bomb. The freezetime loadout
+   * does carry "C4 Explosive", and the bomb event chain (dropped / pickup /
+   * planted) says where it went from there, so the two together give a holder
+   * at every moment. A bomb dropped in freezetime and picked up after the round
+   * goes live never appears in any loadout at all, which is why the chain has
+   * to be replayed from the start of the round rather than from `t0`.
+   */
+  const bombCarrier = (() => {
+    let holder = '';
+    for (const who of sideIds) {
+      if (normalizeLoadout(meta.stats?.[who]?.loadout || []).includes('c4')) holder = who;
+    }
+    const chain = [...(meta.events?.bomb || [])]
+      .filter((b) => b.type === 'dropped' || b.type === 'pickup' || b.type === 'planted')
+      .sort((a, b) => (a.tick || 0) - (b.tick || 0));
+
+    const until = Math.min(endTick, t0 + BOMB_WINDOW_SECONDS * rate);
+    const held = new Map();
+    let since = t0;
+    for (const b of chain) {
+      const tick = b.tick || 0;
+      if (tick <= t0) {
+        holder = b.type === 'pickup' ? b.player : '';
+        continue;
+      }
+      if (tick > until) break;
+      if (holder) held.set(holder, (held.get(holder) || 0) + (tick - since));
+      since = tick;
+      holder = b.type === 'pickup' ? b.player : '';
+    }
+    if (holder && since < until) held.set(holder, (held.get(holder) || 0) + (until - since));
+
+    let best = '';
+    let bestTicks = BOMB_MIN_HOLD_SECONDS * rate;
+    for (const [who, ticks] of held) {
+      if (sideIds.has(who) && ticks > bestTicks) {
+        bestTicks = ticks;
+        best = who;
+      }
+    }
+    return best;
+  })();
+
+  /**
+   * Where each side's bodies stood when shots were traded.
+   *
+   * A duel throws off a dozen player_hurt rows, so the exchanges are collapsed
+   * per opponent: one fight, named by the ground both men were standing on when
+   * it started. Positions rather than zones, because "Fight Jungle from Top
+   * Con" is the useful sentence and "Fight A Site from Mid" is not.
+   */
+  const spotScratch = {};
+  const spotOf = (who, tick) => {
+    const slot = slotOf.get(who);
+    if (slot == null || slot < 0) return '';
+    const st = track.sample(slot, tick, spotScratch);
+    if (!st || !Number.isFinite(st.x)) return '';
+    const where = namer.namesAt(st.x, st.y, st.z);
+    return where.position || where.zone || '';
+  };
+
+  const contacts = [];
+  const addContact = (tick, attacker, victim) => {
+    if (!attacker || !victim) return;
+    const ours = sideIds.has(attacker) ? attacker : sideIds.has(victim) ? victim : '';
+    const theirs = ours === attacker ? victim : attacker;
+    if (!ours || sideIds.has(theirs)) return;
+    if (tick < t0 || tick > endTick) return;
+    contacts.push({ tick, ours, theirs });
+  };
+  for (const k of meta.events?.kills || []) addContact(k.tick || 0, k.attacker, k.victim);
+  for (const d of meta.events?.damage || []) addContact(d.tick || 0, d.attacker, d.victim);
+  contacts.sort((a, b) => a.tick - b.tick);
+
+  /** One entry per exchange this player was in, in time order. */
+  function fightsFor(id) {
+    const out = [];
+    /** opponent → tick of the last exchange already written. */
+    const open = new Map();
+    for (const c of contacts) {
+      if (c.ours !== id) continue;
+      const last = open.get(c.theirs);
+      if (last != null && c.tick - last <= FIGHT_MERGE_SECONDS * rate) {
+        open.set(c.theirs, c.tick);
+        continue;
+      }
+      open.set(c.theirs, c.tick);
+      const at = spotOf(c.theirs, c.tick);
+      if (!at) continue;
+      out.push({ sec: secOf(c.tick), at, from: spotOf(id, c.tick) });
+    }
+    return out;
+  }
+
+  /** Our own utility in the air, for "went in behind it". */
   const flights = ourGrenades
     .map((g) => {
       const from = Number(g.throwTick);
@@ -545,7 +739,8 @@ export function buildRoundNotes({
     }
     const zoneRuns = runsFrom(samples, step, (s) => s.zone);
     // The first zone is the spawn. It never produces a movement event.
-    const spawnEndsAt = zoneRuns.length ? zoneRuns[0].to : 0;
+    // A mid-round window has no spawn: the first box is just where he was.
+    const spawnEndsAt = windowed ? -1 : zoneRuns.length ? zoneRuns[0].to : 0;
 
     /** @type {Array<{ sec: number, text: string, exec?: boolean }>} */
     const events = [];
@@ -578,7 +773,12 @@ export function buildRoundNotes({
       // spent with a smoke in hand is not holding an angle.
       const gunSecs = stay.samples.filter((s) => s.gun).length * step;
       if (gunSecs >= GUN_HOLD_SECONDS) {
-        events.push({ sec: stay.from, at: stay.to, text: `Stay ${stay.name} until ${clockAt(stay.to)}` });
+        events.push({
+          sec: stay.from,
+          at: stay.to,
+          stay: true,
+          text: `Stay ${stay.name} until ${clockAt(stay.to)}`
+        });
       }
 
       // Utility out on this spot, and thrown from it: a line-up. Independent of
@@ -620,7 +820,13 @@ export function buildRoundNotes({
       const word = link?.word || TYPE_WORDS[normalizeNadeType(g.type)] || '';
       if (!word) continue;
       const sec = secOf(Number(g.throwTick));
-      const label = [word, link?.spot || '', `at ${clockAt(sec)}`].filter(Boolean).join(' ');
+      // A smoke leaving the hand on the first tick of the round is called an
+      // insta, not "at 1:55" — the whole point is that it needs no timing.
+      const insta =
+        normalizeNadeType(g.type) === 'smokegrenade' && INSTA_CLOCKS.has(clockAt(sec));
+      const label = [word, link?.spot || '', insta ? 'insta' : clockAt(sec)]
+        .filter(Boolean)
+        .join(' ');
       events.push({ sec, at: sec, text: link?.throwId ? `<${label}><!${link.throwId}>` : label });
     }
 
@@ -629,7 +835,7 @@ export function buildRoundNotes({
     // Never back into the spawn zone. A body drifting over that boundary is
     // the same "first zone" the rules already ignore, and "Go T Spawn on flash"
     // is not an instruction anyone would give.
-    const spawnZone = zoneRuns[0]?.name || '';
+    const spawnZone = windowed ? '' : zoneRuns[0]?.name || '';
     let lastGo = '';
     for (const run of zoneRuns.slice(1)) {
       if (run.name === spawnZone) continue;
@@ -686,20 +892,59 @@ export function buildRoundNotes({
       else if (h.to === id) events.push({ sec: h.sec, text: `Pick up ${word}` });
     }
 
+    // ---- emptying a magazine into a cloud ---------------------------------
+    for (const hit of spamCounts.values()) {
+      if (hit.player !== id || hit.n < SPAM_SHOTS || !hit.spot) continue;
+      events.push({ sec: secOf(hit.tick), text: `Spam the ${hit.spot} smoke` });
+    }
+
+    // ---- taking a fight ---------------------------------------------------
+    for (const f of fightsFor(id)) {
+      events.push({
+        sec: f.sec,
+        fight: true,
+        // Both men on the same painted spot is one place, not two: "Fight CT
+        // Spawn from CT Spawn" says nothing the first half did not.
+        text: f.from && f.from !== f.at ? `Fight ${f.at} from ${f.from}` : `Fight in ${f.at}`
+      });
+    }
+
     // Ordered by the clock each line SHOWS, not by when its situation began.
     // "Stay Top mid until 1:38" is ordered by 1:38; putting it where the stay
     // started would print 1:38 ahead of a throw at 1:45 and read backwards.
     events.sort((a, b) => eventClock(a) - eventClock(b) || a.sec - b.sec);
 
+    // Trading with two men on the same angle, or re-peeking the same one, is
+    // one line. The reader gains nothing from "Fight A from A Balc" three times
+    // over, and the fights themselves are the only events that repeat verbatim.
+    for (let i = events.length - 1; i > 0; i--) {
+      if (events[i].fight && events[i].text === events[i - 1].text) events.splice(i, 1);
+    }
+
+    // A hold is only worth writing when the note goes on to say what happens
+    // when it ends. "Stay Mid until 1:40" as the last thing on the line leaves
+    // the reader asking "then what?" and the clock is really just where the
+    // round ran out or where he died, which is not an instruction.
+    while (events.length && events[events.length - 1].stay) events.pop();
+
     let note = joinEvents(events, exec);
-    if (showBuy) {
+    // Carrying the bomb is not something he does at a moment, it is the job he
+    // leaves spawn with, so it opens the line rather than sitting in sequence.
+    if (!windowed && id === bombCarrier) note = note ? `Take bomb. ${note}` : 'Take bomb.';
+    if (showBuy && !windowed) {
       const buy = buyString(
         meta.stats?.[id]?.loadout || [],
         track.sample(slot, t0, scratch)
       );
       if (buy) note = note ? `${buy}. ${note}` : `${buy}.`;
     }
-    notes.set(id, note.length > NOTE_MAX ? `${note.slice(0, NOTE_MAX - 1).trimEnd()}…` : note);
+
+    // Whose round this was read off. A coach opening the A Lurk column wants to
+    // know he is watching ropz before he reads a word of what ropz did.
+    const who = nameOf.get(id) || '';
+    const room = NOTE_MAX - (who ? who.length + 2 : 0);
+    if (note.length > room) note = `${note.slice(0, room - 1).trimEnd()}…`;
+    notes.set(id, who ? (note ? `${who}: ${note}` : who) : note);
   }
 
   return notes;

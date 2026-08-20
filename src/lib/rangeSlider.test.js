@@ -28,6 +28,10 @@ class El {
   append(...cs) {
     for (const c of cs) this.appendChild(c);
   }
+  replaceChildren(...cs) {
+    this.children = [];
+    this.append(...cs);
+  }
   setAttribute(k, v) {
     this.attributes[k] = String(v);
   }
@@ -147,6 +151,25 @@ function build(opts) {
   assert.deepEqual(rs.get(), { from: -5, to: 40 }, 'and it can be put back programmatically');
   rs.set(100, 200);
   assert.deepEqual(rs.get(), { from: 40, to: 40 }, 'out of range clamps rather than throwing');
+}
+
+// ---------------------------------------------------------------------------
+// Event marks sit on the track at the value they belong to
+// ---------------------------------------------------------------------------
+
+{
+  const { rs } = build({ min: 0, max: 100 });
+  rs.setMarks([
+    { at: 25, color: '#1f7a32' },
+    { at: 50, color: '#8fd4f0' }
+  ]);
+  const marks = rs.el.children.find((c) => c.className === 'rs-marks');
+  assert.equal(marks.children.length, 2);
+  assert.equal(marks.children[0].style.left, '25%');
+  assert.equal(marks.children[0].style.background, '#1f7a32');
+  assert.equal(marks.children[1].style.left, '50%');
+  rs.setMarks([]);
+  assert.equal(marks.children.length, 0, 'marks can be cleared');
 }
 
 console.log('rangeSlider.test.js ok');

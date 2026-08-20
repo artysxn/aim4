@@ -33,7 +33,7 @@ import {
 } from '../stats/statsTables.js';
 import { RadarRenderer, SIDE_COLORS } from './radarRenderer.js';
 import { Playback, RoundSequence } from './playback.js';
-import { clockAt, formatClock, timingFor } from './roundClock.js';
+import { clockAt, formatClock, timingFor, ROUND_SECONDS } from './roundClock.js';
 import { economyLabel, winningSide } from '../shared/roundId.js';
 import { iconImgHtml, inventoryAt } from './equipmentIcons.js';
 import { DRAW_COLORS, DrawingLayer } from './drawing.js';
@@ -75,8 +75,10 @@ import {
   summarizeDuelStats
 } from '../duels/duelStats.js';
 import { spinnerHtml } from '../../lib/spinner.js';
+import { createRangeSlider } from '../../lib/rangeSlider.js';
 import { getStatsPayload } from '../statsCache.js';
 import { resolveSeats, saveStrategyFromRound, sidePlayers } from '../strategy/addStrategy.js';
+import { nadeMarkColor } from '../strategy/utilityImport.js';
 import { ROLE_SCAN_ROUNDS } from '../strategy/roundRoles.js';
 import { cs3dMap } from '../../../shared/cs3d/maps.js';
 import view2dIcon from '../../icons/demo_2d.svg?raw';
@@ -294,6 +296,10 @@ export function createTimelineViewer({
             </div>
             <select class="site-select" id="rv-strat-econ" aria-label="Economy type"></select>
             <select class="site-select" id="rv-strat-call" aria-label="Call type"></select>
+            <div class="rv-strat-window">
+              <div class="rv-strat-range" id="rv-strat-range"></div>
+              <div class="rv-strat-range-read" id="rv-strat-range-read"></div>
+            </div>
             <button type="button" class="rv-playlist-strategy rv-strat-confirm" id="rv-strat-confirm">
               ${icon(addTacticIcon)}
               <span>CONFIRM</span>
@@ -512,6 +518,9 @@ export function createTimelineViewer({
   const stratNameEl = el.querySelector('#rv-strat-name');
   const stratEconEl = el.querySelector('#rv-strat-econ');
   const stratCallEl = el.querySelector('#rv-strat-call');
+  let stratSide = '';
+  /** @type {ReturnType<typeof createRangeSlider>|null} */
+  let stratRange = null;
 
   // Hotkey legend: show on demo open, hide for later rounds / click.
   // The note and playlist docks used to float over the map and had to push it
@@ -1176,6 +1185,15 @@ export function createTimelineViewer({
         `<span class="rv-mark kill" style="left:${at(k.tick) * 100}%;background:${color}" title="Kill"></span>`
       );
     }
+    for (const g of events.grenades || []) {
+      const color = nadeMarkColor(g.type);
+      if (!color) continue;
+      const tick = Number(g.throwTick);
+      if (!Number.isFinite(tick)) continue;
+      parts.push(
+        `<span class="rv-mark nade" style="left:${at(tick) * 100}%;background:${color}"></span>`
+      );
+    }
     const noteList = roundNotes.length ? roundNotes : notesFromMeta(activeMeta);
     // Marks are the team review's record; outside it a note is just a note.
     const markClassFor = (n, coach) => {
@@ -1199,6 +1217,7 @@ export function createTimelineViewer({
       );
     }
     marksEl.innerHTML = parts.join('');
+    syncStratRange();
   }
 
   let scrubbing = false;
@@ -3333,7 +3352,58 @@ export function createTimelineViewer({
     closePlaylistScopeMenu();
   });
 
-  let stratSide = 'T';
+  function stratClockLabel(seconds) {
+    const left = Math.max(0, Math.round(ROUND_SECONDS - seconds));
+    return `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
+  }
+
+  function paintStratRangeRead() {
+    const read = el.querySelector('#rv-strat-range-read');
+    if (!read || !stratRange) return;
+    const { from, to } = stratRange.get();
+    read.textContent = `${stratClockLabel(from)} to ${stratClockLabel(to)}`;
+  }
+
+  function stratNadeMarks() {
+    const meta = activeMeta;
+    if (!meta) return [];
+    const timing = timingFor(meta);
+    const t0 = timing.freezeEndTick;
+    const rate = timing.tickRate || 64;
+    const marks = [];
+    for (const g of meta.events?.grenades || []) {
+      const color = nadeMarkColor(g.type);
+      if (!color) continue;
+      if (stratSide) {
+        const side = sideOfPlayer(g.player);
+        if (side !== stratSide) continue;
+      }
+      const sec = (Number(g.throwTick) - t0) / rate;
+      if (!Number.isFinite(sec) || sec < 0 || sec > ROUND_SECONDS) continue;
+      marks.push({ at: sec, color });
+    }
+    return marks;
+  }
+
+  function syncStratRange() {
+    if (!stratFormEl || stratFormEl.hidden) return;
+    const slot = el.querySelector('#rv-strat-range');
+    if (!slot) return;
+    if (!stratRange) {
+      stratRange = createRangeSlider({
+        min: 0,
+        max: ROUND_SECONDS,
+        from: 0,
+        to: ROUND_SECONDS,
+        step: 1,
+        label: 'Part of the round',
+        onChange: paintStratRangeRead
+      });
+      slot.replaceChildren(stratRange.el);
+    }
+    stratRange.setMarks(stratNadeMarks());
+    paintStratRangeRead();
+  }
 
   function fillStratSelect(select, options, placeholder, keep) {
     if (!select) return;
@@ -3349,9 +3419,9 @@ export function createTimelineViewer({
   }
 
   function setStratSide(side, keepCall) {
-    stratSide = side === 'CT' ? 'CT' : 'T';
+    stratSide = side === 'CT' ? 'CT' : side === 'T' ? 'T' : '';
     stratFormEl?.querySelectorAll('[data-strat-side]').forEach((btn) => {
-      const on = btn.dataset.stratSide === stratSide;
+      const on = Boolean(stratSide) && btn.dataset.stratSide === stratSide;
       btn.classList.toggle('active', on);
       btn.setAttribute('aria-pressed', on ? 'true' : 'false');
     });
@@ -3361,6 +3431,7 @@ export function createTimelineViewer({
       'Select call type',
       keepCall !== undefined ? keepCall : stratCallEl?.value
     );
+    syncStratRange();
   }
 
   function setPlaylistStratMode(on) {
@@ -3371,7 +3442,9 @@ export function createTimelineViewer({
       closePlaylistScopeMenu();
       if (stratNameEl) stratNameEl.value = '';
       fillStratSelect(stratEconEl, STRAT_ECONOMY, 'Select economy type', '');
-      setStratSide('T', '');
+      setStratSide('', '');
+      stratRange?.set(0, ROUND_SECONDS);
+      syncStratRange();
       stratNameEl?.focus();
     }
   }
@@ -3510,6 +3583,10 @@ export function createTimelineViewer({
       stratNameEl?.focus();
       return;
     }
+    if (!stratSide) {
+      stratMsg('Pick T or CT.', true);
+      return;
+    }
     if (!economy) {
       stratMsg('Pick an economy type.', true);
       return;
@@ -3562,10 +3639,16 @@ export function createTimelineViewer({
         category,
         economy,
         roundFile: file,
+        roundUrl: new URL(
+          `/demos?round=${encodeURIComponent(file)}`,
+          window.location.origin
+        ).toString(),
         meta,
         track,
         network,
         seats,
+        windowFrom: stratRange?.get().from ?? 0,
+        windowTo: stratRange?.get().to ?? ROUND_SECONDS,
         onStatus: (text) => stratMsg(text)
       });
       if (destroyed) return;

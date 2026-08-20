@@ -4,7 +4,9 @@
 // and My Strategies.
 //
 // One controller owns all five pages because they share the same roster fetch:
-// switching between them re-renders, it does not re-load. Team pages are
+// Overview and Roles re-render that snapshot. Documents, Stratbook Editor, and
+// My Strategies refetch on show so items created elsewhere (antistrat, Add
+// strategy from a round) appear without a full reload. Team pages are
 // signed-in only, except /d/<shareId> document links which open view-only for
 // anyone. The server rejects anything the account may not do, so the UI hides
 // controls rather than enforcing rules.
@@ -67,6 +69,9 @@ const PAGES = [
   'team-utility-archive',
   'team-autocoach'
 ];
+
+/** Lists that other shells write to. Refetch the roster when these pages show. */
+const REFETCH_ON_SHOW = new Set(['team-docs', 'team-stratbook', 'team-strategies']);
 
 const STRAT_ECONOMY = [
   'Pistol',
@@ -334,17 +339,7 @@ export function initTeamView({ auth, escapeHtml }) {
       // Teams only here — the full demo library is heavy and only needed on Overview.
       const teamList = await fetchTeams().catch(() => []);
       if (token !== loadToken) return;
-      teams = teamList;
-      // Keep the selected team across reloads when it still exists.
-      const nextTeam = teams.find((t) => t.id === team?.id) || teams[0] || null;
-      if (nextTeam?.id !== team?.id) {
-        autocoachSummary = null;
-        autocoachSelectedPlayer = '';
-        autocoachReviewDemoId = '';
-        demos = [];
-        demosLoaded = false;
-      }
-      team = nextTeam;
+      adoptTeams(teamList);
       loaded = true;
       if (pendingInvite) {
         const code = pendingInvite;
@@ -360,6 +355,36 @@ export function initTeamView({ auth, escapeHtml }) {
     } finally {
       if (token === loadToken) loadInFlight = false;
     }
+  }
+
+  /** Keep the selected team across reloads when it still exists. */
+  function adoptTeams(teamList) {
+    teams = teamList || [];
+    const nextTeam = teams.find((t) => t.id === team?.id) || teams[0] || null;
+    if (nextTeam?.id !== team?.id) {
+      autocoachSummary = null;
+      autocoachSelectedPlayer = '';
+      autocoachReviewDemoId = '';
+      demos = [];
+      demosLoaded = false;
+    }
+    team = nextTeam;
+  }
+
+  /**
+   * Documents / stratbook can change outside this shell. Paint the current
+   * snapshot first, then replace it when GET /api/teams returns.
+   */
+  async function refreshTeam() {
+    if (!signedIn() || loadInFlight) return;
+    const token = ++loadToken;
+    const teamList = await fetchTeams().catch(() => null);
+    if (token !== loadToken || !teamList) return;
+    adoptTeams(teamList);
+    if (page === 'team-stratbook' || page === 'team-strategies') {
+      utilityIndexTeamId = '';
+    }
+    render();
   }
 
   // ---- shared chrome ------------------------------------------------------
@@ -2155,10 +2180,17 @@ export function initTeamView({ auth, escapeHtml }) {
 
   function expandStratRow(row) {
     if (!row) return;
-    row.querySelectorAll('textarea.sb-role-note').forEach((ta) => {
+    const tas = [...row.querySelectorAll('textarea.sb-role-note')];
+    tas.forEach((ta) => {
       ta.style.height = 'auto';
-      ta.style.height = `${Math.max(28, ta.scrollHeight)}px`;
     });
+    let maxH = 28;
+    for (const ta of tas) maxH = Math.max(maxH, ta.scrollHeight);
+    tas.forEach((ta) => {
+      ta.style.height = `${maxH}px`;
+    });
+    const desc = row.querySelector('input[data-sb-field="description"]');
+    if (desc) desc.style.height = `${maxH}px`;
   }
 
   function collapseStratRow(row) {
@@ -2167,6 +2199,8 @@ export function initTeamView({ auth, escapeHtml }) {
       if (ta === document.activeElement) return;
       ta.style.height = '28px';
     });
+    const desc = row.querySelector('input[data-sb-field="description"]');
+    if (desc && desc !== document.activeElement) desc.style.height = '';
   }
 
   function applyStratbookViewHeights() {
@@ -2216,22 +2250,36 @@ export function initTeamView({ auth, escapeHtml }) {
     const ta = roleNoteEl(id, idx);
     if (!ta) return;
     ta.value = value;
-    ta.style.height = 'auto';
-    ta.style.height = `${Math.max(28, ta.scrollHeight)}px`;
+    const row = ta.closest('tr.sb-row');
+    if (row) expandStratRow(row);
   }
 
-  function isRoleDragHandle(e, wrap) {
-    if (e.target === wrap) return true;
-    const ta = e.target.closest?.('textarea.sb-role-note');
-    if (!ta || !wrap.contains(ta)) return false;
-    const r = ta.getBoundingClientRect();
-    const pad = 6;
-    return (
-      e.clientX - r.left <= pad ||
-      r.right - e.clientX <= pad ||
-      e.clientY - r.top <= pad ||
-      r.bottom - e.clientY <= pad
-    );
+  function roleNoteFromWrap(wrap) {
+    if (!wrap) return null;
+    const id = wrap.dataset.sbId || '';
+    const idx = Number(wrap.dataset.sbIdx);
+    if (!id || Number.isNaN(idx)) return null;
+    return { id, idx, wrap };
+  }
+
+  function roleDropWrapAt(x, y, sourceWrap) {
+    const prev = sourceWrap.style.pointerEvents;
+    sourceWrap.style.pointerEvents = 'none';
+    const hit = document.elementFromPoint(x, y);
+    sourceWrap.style.pointerEvents = prev;
+    const drop =
+      hit?.closest?.('[data-sb-role-drag]') ||
+      hit?.closest?.('.sb-cell-role')?.querySelector('[data-sb-role-drag]');
+    if (!drop || drop === sourceWrap) return null;
+    if (drop.closest('table') !== sourceWrap.closest('table')) return null;
+    return drop;
+  }
+
+  function setRoleDropTarget(drop) {
+    shellEl.querySelectorAll('[data-sb-role-drag].is-drop-target').forEach((el) => {
+      if (el !== drop) el.classList.remove('is-drop-target');
+    });
+    drop?.classList.add('is-drop-target');
   }
 
   async function applyRoleNoteDrag(from, to, duplicate) {
@@ -3170,9 +3218,7 @@ export function initTeamView({ auth, escapeHtml }) {
   });
 
   shellEl.addEventListener('focusin', (e) => {
-    const ta = e.target.closest?.('textarea.sb-role-note');
-    if (!ta) return;
-    const row = ta.closest('.sb-row');
+    const row = e.target.closest?.('tr.sb-row');
     if (row) expandStratRow(row);
   });
 
@@ -3188,8 +3234,8 @@ export function initTeamView({ auth, escapeHtml }) {
       const v = ta.value;
       ta.value = `${v.slice(0, start)}\n${v.slice(end)}`;
       ta.selectionStart = ta.selectionEnd = start + 1;
-      ta.style.height = 'auto';
-      ta.style.height = `${Math.max(28, ta.scrollHeight)}px`;
+      const row = ta.closest('tr.sb-row');
+      if (row) expandStratRow(row);
       return;
     }
     e.preventDefault();
@@ -3223,8 +3269,8 @@ export function initTeamView({ auth, escapeHtml }) {
     }
     const ta = e.target.closest?.('textarea.sb-role-note');
     if (ta) {
-      ta.style.height = 'auto';
-      ta.style.height = `${Math.max(28, ta.scrollHeight)}px`;
+      const row = ta.closest('tr.sb-row');
+      if (row) expandStratRow(row);
     }
   });
 
@@ -3248,32 +3294,83 @@ export function initTeamView({ auth, escapeHtml }) {
   });
 
   // Drag a real member onto a placeholder to merge seats / positions.
-  // Role-note tiles: grab the outline to swap, Shift+drop to copy.
+  // Role-note tiles: drag the box to swap, Shift+drop to copy.
+  const ROLE_DRAG_PX = 6;
   let roleDragFrom = null;
   let roleDragCopy = false;
+  let roleDragActive = false;
+  let roleDragStart = null;
 
-  shellEl.addEventListener('mousedown', (e) => {
-    const wrap = e.target.closest('[data-sb-role-drag]');
-    if (!wrap || !team?.isAdmin) return;
-    wrap.draggable = isRoleDragHandle(e, wrap);
-  });
-  window.addEventListener('mouseup', () => {
-    if (roleDragFrom) return;
-    shellEl.querySelectorAll('[data-sb-role-drag]').forEach((el) => {
-      el.draggable = false;
+  function onRolePointerMove(e) {
+    if (!roleDragStart || !roleDragFrom) return;
+    if (!roleDragActive) {
+      const dx = e.clientX - roleDragStart.x;
+      const dy = e.clientY - roleDragStart.y;
+      if (dx * dx + dy * dy < ROLE_DRAG_PX * ROLE_DRAG_PX) return;
+      roleDragActive = true;
+      roleDragFrom.wrap.classList.add('is-dragging');
+      if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+      window.getSelection()?.removeAllRanges?.();
+    }
+    e.preventDefault();
+    roleDragCopy = Boolean(e.shiftKey);
+    setRoleDropTarget(roleDropWrapAt(e.clientX, e.clientY, roleDragFrom.wrap));
+  }
+
+  function onRolePointerUp(e) {
+    window.removeEventListener('pointermove', onRolePointerMove);
+    window.removeEventListener('pointerup', onRolePointerUp);
+    window.removeEventListener('pointercancel', onRolePointerCancel);
+    if (!roleDragStart || !roleDragFrom) return;
+    const from = roleDragFrom;
+    const active = roleDragActive;
+    const duplicate = Boolean(e.shiftKey || roleDragCopy);
+    const drop = active ? roleDropWrapAt(e.clientX, e.clientY, from.wrap) : null;
+    const to = drop ? roleNoteFromWrap(drop) : null;
+    from.wrap.classList.remove('is-dragging');
+    shellEl.querySelectorAll('[data-sb-role-drag].is-drop-target').forEach((el) => {
+      el.classList.remove('is-drop-target');
     });
+    roleDragFrom = null;
+    roleDragCopy = false;
+    roleDragActive = false;
+    roleDragStart = null;
+    if (!active || !to) return;
+    void applyRoleNoteDrag(from, to, duplicate);
+  }
+
+  function onRolePointerCancel() {
+    window.removeEventListener('pointermove', onRolePointerMove);
+    window.removeEventListener('pointerup', onRolePointerUp);
+    window.removeEventListener('pointercancel', onRolePointerCancel);
+    roleDragFrom?.wrap?.classList.remove('is-dragging');
+    shellEl.querySelectorAll('[data-sb-role-drag].is-drop-target').forEach((el) => {
+      el.classList.remove('is-drop-target');
+    });
+    roleDragFrom = null;
+    roleDragCopy = false;
+    roleDragActive = false;
+    roleDragStart = null;
+  }
+
+  shellEl.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0 || !team?.isAdmin) return;
+    const wrap = e.target.closest?.('[data-sb-role-drag]');
+    if (!wrap) return;
+    const from = roleNoteFromWrap(wrap);
+    if (!from) return;
+    roleDragStart = { x: e.clientX, y: e.clientY };
+    roleDragFrom = from;
+    roleDragActive = false;
+    roleDragCopy = false;
+    window.addEventListener('pointermove', onRolePointerMove, { passive: false });
+    window.addEventListener('pointerup', onRolePointerUp);
+    window.addEventListener('pointercancel', onRolePointerCancel);
   });
+
   shellEl.addEventListener('dragstart', (e) => {
-    const wrap = e.target.closest('[data-sb-role-drag]');
-    if (wrap && wrap.draggable && team?.isAdmin) {
-      const id = wrap.dataset.sbId || '';
-      const idx = Number(wrap.dataset.sbIdx);
-      if (!id || Number.isNaN(idx)) return;
-      roleDragFrom = { id, idx, wrap };
-      e.dataTransfer?.setData('text/aim4-role-note', `${id}\t${idx}`);
-      e.dataTransfer?.setData('text/plain', `${id}\t${idx}`);
-      if (e.dataTransfer) e.dataTransfer.effectAllowed = 'copyMove';
-      wrap.classList.add('is-dragging');
+    if (e.target.closest('[data-sb-role-drag]')) {
+      e.preventDefault();
       return;
     }
     const row = e.target.closest('[data-drag-member]');
@@ -3285,32 +3382,10 @@ export function initTeamView({ auth, escapeHtml }) {
     row.classList.add('is-dragging');
   });
   shellEl.addEventListener('dragend', (e) => {
-    const wrap = e.target.closest('[data-sb-role-drag]');
-    roleDragFrom = null;
-    roleDragCopy = false;
-    if (wrap) {
-      wrap.classList.remove('is-dragging');
-      wrap.draggable = false;
-    }
     e.target.closest('[data-drag-member]')?.classList.remove('is-dragging');
     shellEl.querySelectorAll('.is-drop-target').forEach((el) => el.classList.remove('is-drop-target'));
   });
   shellEl.addEventListener('dragover', (e) => {
-    if (roleDragFrom) {
-      const drop = e.target.closest('[data-sb-role-drag]');
-      if (!drop || drop === roleDragFrom.wrap) return;
-      if (drop.closest('table') !== roleDragFrom.wrap.closest('table')) return;
-      e.preventDefault();
-      if (e.dataTransfer) e.dataTransfer.dropEffect = e.shiftKey ? 'copy' : 'move';
-      roleDragCopy = Boolean(e.shiftKey);
-      if (!drop.classList.contains('is-drop-target')) {
-        shellEl.querySelectorAll('[data-sb-role-drag].is-drop-target').forEach((el) => {
-          el.classList.remove('is-drop-target');
-        });
-        drop.classList.add('is-drop-target');
-      }
-      return;
-    }
     const drop = e.target.closest('[data-drop-dummy]');
     if (!drop || !team?.isAdmin) return;
     e.preventDefault();
@@ -3318,33 +3393,12 @@ export function initTeamView({ auth, escapeHtml }) {
     drop.classList.add('is-drop-target');
   });
   shellEl.addEventListener('dragleave', (e) => {
-    const roleDrop = e.target.closest('[data-sb-role-drag]');
-    if (roleDrop) {
-      if (roleDrop.contains(e.relatedTarget)) return;
-      roleDrop.classList.remove('is-drop-target');
-      return;
-    }
     const drop = e.target.closest('[data-drop-dummy]');
     if (!drop) return;
     if (drop.contains(e.relatedTarget)) return;
     drop.classList.remove('is-drop-target');
   });
   shellEl.addEventListener('drop', async (e) => {
-    if (roleDragFrom) {
-      const drop = e.target.closest('[data-sb-role-drag]');
-      e.preventDefault();
-      drop?.classList.remove('is-drop-target');
-      const from = roleDragFrom;
-      roleDragFrom = null;
-      if (!drop || drop === from.wrap) return;
-      if (drop.closest('table') !== from.wrap.closest('table')) return;
-      const to = { id: drop.dataset.sbId || '', idx: Number(drop.dataset.sbIdx) };
-      if (!to.id || Number.isNaN(to.idx)) return;
-      const duplicate = Boolean(e.shiftKey || roleDragCopy || e.dataTransfer?.dropEffect === 'copy');
-      roleDragCopy = false;
-      await applyRoleNoteDrag(from, to, duplicate);
-      return;
-    }
     const drop = e.target.closest('[data-drop-dummy]');
     if (!drop || !team?.isAdmin) return;
     e.preventDefault();
@@ -3429,8 +3483,9 @@ export function initTeamView({ auth, escapeHtml }) {
       };
       if (params.invite) pendingInvite = params.invite;
       void ents.ready();
-      // Page switches must paint immediately. Only the first visit / invite /
-      // auth recovery refetch teams — never block nav on the demo library.
+      // Page switches must paint immediately. Overview keeps the first roster
+      // fetch so nav never waits on the demo library. Documents / Stratbook /
+      // My Strategies refetch so outside creates show up on enter.
       if (params.invite) {
         void load();
         return;
@@ -3442,6 +3497,7 @@ export function initTeamView({ auth, escapeHtml }) {
       }
       render();
       if (page === 'team-overview') void ensureDemos();
+      if (REFETCH_ON_SHOW.has(page)) void refreshTeam();
     },
     onHide() {
       if (shareView) return;

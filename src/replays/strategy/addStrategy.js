@@ -34,7 +34,7 @@ import {
   ROLE_SCAN_ROUNDS,
   seatPlayers
 } from './roundRoles.js';
-import { timingFor } from '../viewer/roundClock.js';
+import { ROUND_SECONDS, timingFor } from '../viewer/roundClock.js';
 
 /** The viewer opens half a second before release, so the throw is watchable. */
 const LEAD_SECONDS = 0.5;
@@ -128,10 +128,13 @@ export async function resolveSeats({
  * @param {string} args.category
  * @param {string} args.economy
  * @param {string} args.roundFile   round id, for the "watch this throw" link
+ * @param {string} [args.roundUrl]   absolute link to the round, for the row's 2D button
  * @param {object} args.meta
  * @param {object} args.track
  * @param {object|null} args.network
  * @param {string[]} args.seats     player id per stratbook column
+ * @param {number} [args.windowFrom]  seconds after freeze; only events in this window
+ * @param {number} [args.windowTo]
  * @param {(text: string) => void} [args.onStatus]
  * @returns {Promise<{ strategy: object, utilityAdded: number }>}
  */
@@ -143,21 +146,31 @@ export async function saveStrategyFromRound({
   category,
   economy,
   roundFile,
+  roundUrl = '',
   meta,
   track,
   network,
   seats,
+  windowFrom = 0,
+  windowTo = ROUND_SECONDS,
   onStatus = () => {}
 }) {
   const timing = timingFor(meta);
   const rate = timing.tickRate || 64;
+  const live0 = timing.freezeEndTick;
+  const fromTick = live0 + Math.max(0, windowFrom) * rate;
+  const toTick = live0 + Math.max(windowFrom, windowTo) * rate;
   const slotOf = new Map((meta.players || []).map((p) => [p.id, p.slot]));
   const namer = createNamer(network, mapCode);
   const ids = new Set(seats.filter(Boolean));
   const scratch = {};
 
   const grenades = (meta.events?.grenades || [])
-    .filter((g) => ids.has(g.player) && Number.isFinite(Number(g.throwTick)))
+    .filter((g) => {
+      if (!ids.has(g.player) || !Number.isFinite(Number(g.throwTick))) return false;
+      const tick = Number(g.throwTick);
+      return tick >= fromTick && tick <= toTick;
+    })
     .sort((a, b) => Number(a.throwTick) - Number(b.throwTick));
 
   /** Where the thrower stood at release — the setpos a viewer can teleport to. */
@@ -207,7 +220,9 @@ export async function saveStrategyFromRound({
     side,
     playerIds: seats.filter(Boolean),
     links,
-    economy
+    economy,
+    windowFrom,
+    windowTo
   });
 
   onStatus('Saving strategy…');
@@ -218,6 +233,10 @@ export async function saveStrategyFromRound({
     category,
     economy,
     description: '',
+    // The row's 2D button opens the round this was read from. That IS the 2D
+    // view of this strategy, and it is the first thing anyone reading the row
+    // will want.
+    link2d: roundUrl,
     roleNotes: seats.map((id) => (id ? notes.get(id) || '' : '')),
     visibleAll: true
   });

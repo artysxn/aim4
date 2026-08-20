@@ -2143,6 +2143,40 @@ body.rv-open {
   height: 16px;
 }
 
+.rv-strat-window {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 2px 0 4px;
+}
+
+.rv-strat-range {
+  width: 100%;
+}
+
+.rv-strat-range .rs {
+  height: 18px;
+}
+
+.rv-strat-range .rs-fill {
+  background: #e0453c;
+}
+
+.rv-strat-range .rs-input::-webkit-slider-thumb {
+  background: #e0453c;
+  border-color: rgba(255, 255, 255, 0.85);
+}
+
+.rv-strat-range .rs-input::-moz-range-thumb {
+  background: #e0453c;
+  border-color: rgba(255, 255, 255, 0.85);
+}
+
+.rv-strat-range-read {
+  color: var(--muted);
+  font: 400 12px var(--font-body);
+}
+
 .rv-strat-confirm {
   flex: none;
   width: 100%;
@@ -3233,6 +3267,13 @@ body.rv-open {
 .rv-mark.kill {
   width: 2px;
   height: 12px;
+}
+
+.rv-mark.nade {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45);
 }
 
 .rv-mark.note {
@@ -9119,6 +9160,26 @@ th.tm-rl-name,
   box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.5);
 }
 
+.rs-marks {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 10px;
+  margin-top: -5px;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.rs-mark {
+  position: absolute;
+  top: 0;
+  width: 1px;
+  height: 100%;
+  transform: translateX(-50%);
+  background: #c8c8c8;
+}
+
 /* The two round-clock sliders and the buy pickers above a live map. */
 .doc-embed-filters {
   display: flex;
@@ -9587,7 +9648,23 @@ th.tm-rl-name,
   max-width: none;
 }
 
-/* Role columns share the same equal width as every other column. */
+.sb-cell-name {
+  vertical-align: middle;
+}
+
+.sb-cell-name .sb-input {
+  height: 28px;
+}
+
+.sb-cell-desc .sb-input {
+  min-height: 28px;
+}
+
+.sb-cell-links {
+  vertical-align: middle;
+  text-align: center;
+}
+
 .sb-role-h,
 .sb-cell-role {
   box-sizing: border-box;
@@ -9608,6 +9685,7 @@ th.tm-rl-name,
 .sb-role-wrap {
   display: block;
   min-width: 0;
+  height: 100%;
   padding: 3px;
   border-radius: 5px;
   box-shadow: inset 0 0 0 1px rgba(255, 70, 70, 0.55);
@@ -9639,7 +9717,7 @@ th.tm-rl-name,
   white-space: pre-wrap;
   line-height: 1.35;
   box-sizing: border-box;
-  cursor: text;
+  cursor: grab;
 }
 
 /* Compact: clip role text until hover/focus. Full: always expanded. */
@@ -9648,6 +9726,10 @@ th.tm-rl-name,
   max-height: 28px;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+.sb-maps.is-compact .sb-row:not(:hover):not(:focus-within) input[data-sb-field="description"] {
+  height: 28px !important;
 }
 
 .sb-maps.is-compact .sb-row:not(:hover):not(:focus-within) .sb-cell-role {
@@ -9699,8 +9781,16 @@ th.tm-rl-name,
   color: var(--accent);
 }
 
-.sb-cell-all {
+.sb-cell-all,
+.sb-cell-visible,
+.sb-cell-del {
   text-align: center;
+  vertical-align: middle;
+}
+
+.sb-cell-all .sb-check {
+  display: block;
+  margin: 0 auto;
 }
 
 .sb-check {
@@ -9722,6 +9812,10 @@ th.tm-rl-name,
 
 .sb-visible {
   position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  width: 100%;
 }
 
 .sb-visible-btn {
