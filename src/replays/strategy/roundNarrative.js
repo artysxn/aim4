@@ -33,6 +33,15 @@
 //   spam              ten or more bullets into one cloud
 //   drops / pickups   utility handed between players
 //   smoke             standing inside one
+//   lurk              solo on the far site while a core of three or more
+//                     walks into a key zone
+//   search            walking an a1–a4 / b1–b4 piece that the plant then
+//                     follows. Contact if nobody threw in the last five
+//                     seconds; Rush out if the next five cover 1000 PSDT
+//   fake              two or more nades from a 40% minority while a core
+//                     of three exists
+//   2x / synced       two pops of the same flash from one man, or a flash
+//                     and HE leaving two teammates together
 //
 // Two things are not moments in the round and so do not sit in the sequence at
 // all: what a player bought, and whether he took the bomb out of spawn. Both
@@ -65,6 +74,8 @@
 // ---------------------------------------------------------------------------
 
 import { ROUND_SECONDS, timingFor } from '../viewer/roundClock.js';
+import { findCore } from '../coach/cores.js';
+import { pulledStringDistance } from '../roles/roleMetrics.js';
 import { createNamer } from './regionNames.js';
 import { normalizeNadeType, TYPE_WORDS } from './utilityImport.js';
 import { isGun, normalizeLoadout } from '../viewer/equipmentIcons.js';
@@ -130,6 +141,26 @@ const ENTRY_GROUP_SECONDS = 8;
 const ENTRY_GROUP_MIN = 3;
 /** How far back from his entry the action that took him in may sit. */
 const FIRST_IN_LOOKBACK_SECONDS = 6;
+/** Approach key zone → plant on that letter, for Search / Contact / Rush out. */
+const SEARCH_PLANT_SECONDS = 20;
+/** No teammate throw inside this window turns Search into Contact. */
+const CONTACT_UTIL_SECONDS = 5;
+/** PSDT over this window at the Search threshold is a Rush out. */
+const RUSH_SECONDS = 5;
+const RUSH_PSDT = 1000;
+/** Fake: core this size, thrower in a group this share of the living side or less. */
+const FAKE_CORE = 3;
+const FAKE_MINORITY = 0.4;
+const FAKE_NADES = 2;
+/** Same flash, same man: origins this close, landings this close → "2x". */
+const DOUBLE_FLASH_ORIGIN = 50;
+const DOUBLE_FLASH_LANDING = 100;
+/** Flash / HE pair: landings, throwers, and throw clocks this close → synced. */
+const SYNC_LANDING = 500;
+const SYNC_THROWERS = 500;
+const SYNC_SECONDS = 0.5;
+/** HE detonating inside a smoke, or this far past its edge. */
+const NADE_IN_SMOKE_PAD = 25;
 
 /**
  * An execute: this many grenades, from this many players, inside this window,
@@ -212,6 +243,29 @@ export function execWindow(throws) {
 
 const lower = (word) => String(word || '').toLowerCase();
 
+const dist2d = (ax, ay, bx, by) => Math.hypot(ax - bx, ay - by);
+
+/** Flash / HE as they appear inside a "synced with …" clause. */
+function syncWord(type) {
+  const t = normalizeNadeType(type);
+  if (t === 'hegrenade') return 'HE';
+  if (t === 'flashbang') return 'flash';
+  return '';
+}
+
+/** Two flashes from one man that should read as one "2x" line. */
+function sameFlash(a, b) {
+  if (!a?.nade || !b?.nade) return false;
+  if (a.nade.type !== 'flashbang' || b.nade.type !== 'flashbang') return false;
+  if (![a.nade.ox, a.nade.oy, b.nade.ox, b.nade.oy, a.nade.lx, a.nade.ly, b.nade.lx, b.nade.ly].every(Number.isFinite)) {
+    return a.nade.head === b.nade.head && a.nade.id === b.nade.id;
+  }
+  return (
+    dist2d(a.nade.ox, a.nade.oy, b.nade.ox, b.nade.oy) <= DOUBLE_FLASH_ORIGIN &&
+    dist2d(a.nade.lx, a.nade.ly, b.nade.lx, b.nade.ly) <= DOUBLE_FLASH_LANDING
+  );
+}
+
 /**
  * Does the shot at (ox, oy) facing `yaw` run into the cloud at (cx, cy)?
  *
@@ -251,9 +305,11 @@ const eventClock = (e) => (Number.isFinite(e.at) ? e.at : e.sec);
  */
 function collapseNades(events) {
   const out = [];
-  const tag = (head, when, id) => {
-    const label = [head, when].filter(Boolean).join(' ');
-    return id ? `<${label}><!${id}>` : label;
+  const render = (b, when, count) => {
+    const bits = count > 1 ? [b.nade.head, '2x', when] : [b.nade.head, when];
+    const label = bits.filter(Boolean).join(' ');
+    const tagged = b.nade.id ? `<${label}><!${b.nade.id}>` : label;
+    return b.nade.synced ? `${tagged} (${b.nade.synced})` : tagged;
   };
   for (let i = 0; i < events.length; i++) {
     const e = events[i];
@@ -271,28 +327,20 @@ function collapseNades(events) {
       end += 1;
     }
     if (end === i) {
-      out.push({ ...e, text: e.nade.lineup || tag(e.nade.head, e.nade.when, e.nade.id) });
+      out.push({ ...e, text: e.nade.lineup || render(e, e.nade.when, 1) });
       i = end;
       continue;
     }
     const burst = events.slice(i, end + 1);
     const spots = new Set(burst.map((b) => b.nade.from).filter(Boolean));
     const shared = spots.size === 1 && burst.every((b) => b.nade.from) ? [...spots][0] : '';
-    // The same lineup thrown twice is a double, not two lines that look like a
-    // copy-paste slip: "Flash Top mid 1:47 x2".
+    // Two pops of the same flash from one step: "Flash over B 2x 1:49".
     const parts = [];
     for (let n = 0; n < burst.length; n++) {
       const b = burst[n];
       let same = 1;
-      while (
-        n + same < burst.length &&
-        burst[n + same].nade.head === b.nade.head &&
-        burst[n + same].nade.id === b.nade.id
-      ) {
-        same += 1;
-      }
-      const label = tag(b.nade.head, n === 0 ? b.nade.when : '', b.nade.id);
-      parts.push(same > 1 ? `${label} x${same}` : label);
+      while (n + same < burst.length && sameFlash(b, burst[n + same])) same += 1;
+      parts.push(render(b, n === 0 ? b.nade.when : '', same));
       n += same - 1;
     }
     out.push({
@@ -806,7 +854,7 @@ export function buildRoundNotes({
    */
   const plantZones = (() => {
     const useKey = hasKeyZones(network);
-    if (!useKey && !hasBombSites(network)) return { painted: false, at: () => '' };
+    if (!useKey && !hasBombSites(network)) return { painted: false, at: () => '', keyAt: () => null };
     const stacked = mapHasStackedFloors(mapCode);
     const areaOf = (p) =>
       p?.type === 'poly' ? Math.abs(ringSignedArea(p.ring)) : Math.abs((p?.w || 0) * (p?.h || 0));
@@ -827,10 +875,10 @@ export function buildRoundNotes({
      * the letter's biggest key zone does not contain its own bombsite, that
      * paint is not a plant zone and the bombsite rectangle stands in.
      */
-    const zoneFor = (site, opts) => {
+    const zoneFor = (site, opts, list) => {
       const bomb = bombSitePieces(network, site, opts);
       if (!useKey) return bomb;
-      const big = biggest(keyZonesFor(network, site, opts));
+      const big = biggest(list);
       if (!big.length) return bomb;
       const center = bomb[0] ? pieceCenter(bomb[0]) : null;
       if (!center) return big;
@@ -838,25 +886,61 @@ export function buildRoundNotes({
     };
     const listsFor = (level) => {
       const opts = level ? { level, mapCode } : {};
-      return { a: zoneFor('a', opts), b: zoneFor('b', opts) };
+      const listA = useKey ? keyZonesFor(network, 'a', opts) : [];
+      const listB = useKey ? keyZonesFor(network, 'b', opts) : [];
+      const a = zoneFor('a', opts, listA);
+      const b = zoneFor('b', opts, listB);
+      const keys = [];
+      if (useKey) {
+        for (const [site, list, plant] of [
+          ['A', listA, a[0]],
+          ['B', listB, b[0]]
+        ]) {
+          const plantIsKey = plant && list.includes(plant);
+          list.forEach((piece, i) => {
+            keys.push({
+              site,
+              index: i + 1,
+              piece,
+              plant: Boolean(plantIsKey && piece === plant)
+            });
+          });
+        }
+      }
+      return { a, b, keys };
     };
     const byLevel = stacked
       ? { default: listsFor('default'), lower: listsFor('lower') }
       : { '': listsFor(null) };
+    const packAt = (x, y, z) => byLevel[stacked ? regionLevelForZ(mapCode, z) : ''] || byLevel[''];
     return {
       painted: true,
       at(x, y, z) {
-        const lists = byLevel[stacked ? regionLevelForZ(mapCode, z) : ''] || byLevel[''];
+        const lists = packAt(x, y, z);
         if (!lists) return '';
         for (const piece of lists.a) if (pointInPiece(x, y, piece)) return 'A';
         for (const piece of lists.b) if (pointInPiece(x, y, piece)) return 'B';
         return '';
+      },
+      keyAt(x, y, z) {
+        const lists = packAt(x, y, z);
+        if (!lists?.keys?.length) return null;
+        let hit = null;
+        for (const item of lists.keys) {
+          if (!pointInPiece(x, y, item.piece)) continue;
+          if (item.plant) return item;
+          if (!hit) hit = item;
+        }
+        return hit;
       }
     };
   })();
 
   /** First tick each of ours stood inside a bombsite, for the entry group. */
   const enteredSiteAt = new Map();
+  /** First time each of ours walked an a1–a4 / b1–b4 piece that is not the plant. */
+  const approachEntry = [];
+  const seenApproach = new Set();
 
   const cutoffSec = (() => {
     const marks = [];
@@ -906,8 +990,30 @@ export function buildRoundNotes({
           if (!isT && !sideIds.has(p.id)) continue;
           const st = track.sample(p.slot, tick, siteScratch);
           if (!st?.alive || !Number.isFinite(st.x)) continue;
-          if (!plantZones.at(st.x, st.y, st.z)) continue;
-          if (sideIds.has(p.id) && !enteredSiteAt.has(p.id)) enteredSiteAt.set(p.id, tick);
+          const plantLetter = plantZones.at(st.x, st.y, st.z);
+          if (sideIds.has(p.id)) {
+            const key = plantZones.keyAt(st.x, st.y, st.z);
+            if (key && !key.plant) {
+              const sig = `${p.id}|${key.site}|${key.index}`;
+              if (!seenApproach.has(sig)) {
+                seenApproach.add(sig);
+                const where = namer.namesAt(st.x, st.y, st.z);
+                approachEntry.push({
+                  id: p.id,
+                  tick,
+                  sec: secOf(tick),
+                  site: key.site,
+                  index: key.index,
+                  position: where.position || '',
+                  zone: where.zone || ''
+                });
+              }
+            }
+          }
+          if (!plantLetter) continue;
+          if (sideIds.has(p.id) && !enteredSiteAt.has(p.id)) {
+            enteredSiteAt.set(p.id, { tick, site: plantLetter });
+          }
           if (isT) inSite.add(p.id);
         }
         if (!twoIn && inSite.size >= CUTOFF_ENTRIES) twoIn = tick;
@@ -928,19 +1034,19 @@ export function buildRoundNotes({
    * lurking.
    */
   const firstIn = (() => {
-    const entries = [...enteredSiteAt.entries()].sort((a, b) => a[1] - b[1]);
+    const entries = [...enteredSiteAt.entries()].sort((a, b) => a[1].tick - b[1].tick);
     if (entries.length < ENTRY_GROUP_MIN) return '';
-    const [lead, leadTick] = entries[0];
-    const together = entries.filter(([, tick]) => tick - leadTick <= ENTRY_GROUP_SECONDS * rate);
+    const [lead, leadInfo] = entries[0];
+    const together = entries.filter(([, info]) => info.tick - leadInfo.tick <= ENTRY_GROUP_SECONDS * rate);
     return together.length >= ENTRY_GROUP_MIN ? lead : '';
   })();
-  const firstInSec = firstIn ? secOf(enteredSiteAt.get(firstIn)) : 0;
+  const firstInSec = firstIn ? secOf(enteredSiteAt.get(firstIn).tick) : 0;
   /** Where he went in, for the case where no line exists to hang the mark on. */
   const firstInZone = (() => {
     if (!firstIn) return '';
     const slot = slotOf.get(firstIn);
     if (slot == null || slot < 0) return '';
-    const st = track.sample(slot, enteredSiteAt.get(firstIn), {});
+    const st = track.sample(slot, enteredSiteAt.get(firstIn).tick, {});
     if (!st || !Number.isFinite(st.x)) return '';
     return namer.namesAt(st.x, st.y, st.z).zone || '';
   })();
@@ -965,8 +1071,129 @@ export function buildRoundNotes({
     const slot = slotOf.get(id);
     if (slot == null || slot < 0) return null;
     const s = track.sample(slot, tick, handoverScratch);
-    return s && Number.isFinite(s.x) ? { x: s.x, y: s.y } : null;
+    return s && Number.isFinite(s.x) ? { x: s.x, y: s.y, z: s.z || 0 } : null;
   };
+
+  const coreScratch = {};
+  function livingSide(tick) {
+    const alive = [];
+    for (const p of meta.players || []) {
+      if (!sideIds.has(p.id)) continue;
+      if ((deadAt.get(p.id) || Infinity) <= tick) continue;
+      if (p.slot == null || p.slot < 0) continue;
+      const st = track.sample(p.slot, tick, coreScratch);
+      if (!st?.alive || !Number.isFinite(st.x)) continue;
+      alive.push({ id: p.id, x: st.x, y: st.y, z: st.z || 0 });
+    }
+    return alive;
+  }
+
+  /** First man into an a1–a4 / b1–b4 piece when a teammate is with him. */
+  const goFirstApproach = new Set();
+  {
+    const byPiece = new Map();
+    for (const e of approachEntry) {
+      const k = `${e.site}|${e.index}`;
+      const list = byPiece.get(k) || [];
+      list.push(e);
+      byPiece.set(k, list);
+    }
+    for (const group of byPiece.values()) {
+      group.sort((a, b) => a.tick - b.tick);
+      const lead = group[0];
+      const together = group.filter((e) => e.tick - lead.tick <= ENTRY_GROUP_SECONDS * rate);
+      if (together.length >= 2) goFirstApproach.add(`${lead.id}|${lead.site}|${lead.index}`);
+    }
+  }
+
+  const firstPlantTick = { A: Infinity, B: Infinity };
+  for (const info of enteredSiteAt.values()) {
+    if (info.tick < firstPlantTick[info.site]) firstPlantTick[info.site] = info.tick;
+  }
+
+  /**
+   * Solo on the far site: the first time a core of three walks into a key
+   * zone, everyone outside that core is lurking there.
+   */
+  const lurkAt = new Map();
+  {
+    const keyHits = [
+      ...approachEntry.map((e) => ({ id: e.id, tick: e.tick, site: e.site })),
+      ...[...enteredSiteAt.entries()].map(([id, info]) => ({ id, tick: info.tick, site: info.site }))
+    ].sort((a, b) => a.tick - b.tick);
+    for (const hit of keyHits) {
+      const core = findCore(livingSide(hit.tick));
+      if (core.size < FAKE_CORE || !core.core.includes(hit.id)) continue;
+      for (const lid of core.lurkers) {
+        const st = positionAt(lid, hit.tick);
+        if (!st) continue;
+        const key = plantZones.keyAt(st.x, st.y, st.z);
+        const plant = plantZones.at(st.x, st.y, st.z);
+        const place = key?.site || plant || namer.namesAt(st.x, st.y, st.z).zone || '';
+        if (place) lurkAt.set(lid, place);
+      }
+      break;
+    }
+  }
+
+  const syncedFor = new Map();
+  {
+    const syncables = ourGrenades.filter((g) => syncWord(g.type));
+    for (let i = 0; i < syncables.length; i++) {
+      for (let j = i + 1; j < syncables.length; j++) {
+        const a = syncables[i];
+        const b = syncables[j];
+        if (a.player === b.player) continue;
+        if (Math.abs(Number(a.throwTick) - Number(b.throwTick)) > SYNC_SECONDS * rate) continue;
+        const oa = positionAt(a.player, Number(a.throwTick));
+        const ob = positionAt(b.player, Number(b.throwTick));
+        if (!oa || !ob || dist2d(oa.x, oa.y, ob.x, ob.y) > SYNC_THROWERS) continue;
+        const lx = Number(a.at?.x);
+        const ly = Number(a.at?.y);
+        const rx = Number(b.at?.x);
+        const ry = Number(b.at?.y);
+        if (![lx, ly, rx, ry].every(Number.isFinite) || dist2d(lx, ly, rx, ry) > SYNC_LANDING) continue;
+        const aName = nameOf.get(a.player) || '';
+        const bName = nameOf.get(b.player) || '';
+        if (!syncedFor.has(a) && bName) syncedFor.set(a, `synced with ${syncWord(b.type)} from ${bName}`);
+        if (!syncedFor.has(b) && aName) syncedFor.set(b, `synced with ${syncWord(a.type)} from ${aName}`);
+      }
+    }
+  }
+
+  function nadeFields(g, head, when, extra = {}) {
+    const origin = positionAt(g.player, Number(g.throwTick));
+    const type = normalizeNadeType(g.type);
+    let outHead = head;
+    if (type === 'hegrenade') {
+      const lx = Number(g.at?.x);
+      const ly = Number(g.at?.y);
+      const det = Number(g.detonateTick ?? g.throwTick);
+      const r = SMOKE_RADIUS_UNITS + NADE_IN_SMOKE_PAD;
+      if (Number.isFinite(lx) && Number.isFinite(ly) && Number.isFinite(det)) {
+        for (const sm of smokes) {
+          if (det < sm.from || det > sm.to) continue;
+          if ((sm.x - lx) ** 2 + (sm.y - ly) ** 2 > r * r) continue;
+          const spot = sm.spot || extra.spot || '';
+          if (spot) outHead = `Nade the ${spot} smoke`;
+          break;
+        }
+      }
+    }
+    return {
+      head: outHead,
+      when,
+      id: extra.id || '',
+      from: extra.from || spotOf(g.player, Number(g.throwTick)),
+      type,
+      ox: origin?.x,
+      oy: origin?.y,
+      lx: Number(g.at?.x),
+      ly: Number(g.at?.y),
+      synced: syncedFor.get(g) || '',
+      lineup: extra.lineup
+    };
+  }
   const handovers = utilityHandovers({
     items: meta.events?.items || [],
     grenades: allGrenades,
@@ -1088,13 +1315,12 @@ export function buildRoundNotes({
         events.push({
           sec: first.sec,
           at: thrownAt,
-          nade: {
-            head: what,
-            when: clockAt(thrownAt),
+          nade: nadeFields(g, what, clockAt(thrownAt), {
             id: link?.throwId || '',
             from: stay.name,
+            spot: link?.spot || '',
             lineup: `Line up ${tag} from ${stay.name}, throw at ${clockAt(thrownAt)}`
-          }
+          })
         });
       }
     }
@@ -1113,12 +1339,11 @@ export function buildRoundNotes({
       events.push({
         sec,
         at: sec,
-        nade: {
-          head: [word, link?.spot || ''].filter(Boolean).join(' '),
-          when: insta ? 'insta' : clockAt(sec),
+        nade: nadeFields(g, [word, link?.spot || ''].filter(Boolean).join(' '), insta ? 'insta' : clockAt(sec), {
           id: link?.throwId || '',
-          from: spotOf(id, Number(g.throwTick))
-        }
+          from: spotOf(id, Number(g.throwTick)),
+          spot: link?.spot || ''
+        })
       });
     }
 
@@ -1144,6 +1369,40 @@ export function buildRoundNotes({
         go: true,
         text: `Go ${run.name} on ${lower(cover.word)}${who ? ` from ${who}` : ''}`
       });
+    }
+
+    // ---- a1–a4 / b1–b4: Search, Contact, Rush out, or Go 1st --------------
+    const keySeen = new Set();
+    for (const e of approachEntry) {
+      if (e.id !== id) continue;
+      if (keySeen.has(e.site)) continue;
+      keySeen.add(e.site);
+      const plantTick = firstPlantTick[e.site];
+      const follows =
+        Number.isFinite(plantTick) &&
+        plantTick >= e.tick &&
+        plantTick - e.tick <= SEARCH_PLANT_SECONDS * rate;
+      if (follows) {
+        const window = samples.filter((s) => s.sec >= e.sec && s.sec <= e.sec + RUSH_SECONDS);
+        const psdt = pulledStringDistance(window);
+        const util = ourGrenades.some((g) => {
+          const s = secOf(Number(g.throwTick));
+          return s < e.sec && s >= e.sec - CONTACT_UTIL_SECONDS;
+        });
+        const pos = e.position || e.zone;
+        let text = 'Rush out';
+        if (psdt < RUSH_PSDT) {
+          const verb = util ? 'Search' : 'Contact';
+          text = pos ? `${verb} ${pos}` : verb;
+        }
+        events.push({ sec: e.sec, keyMove: true, text });
+      } else if (goFirstApproach.has(`${e.id}|${e.site}|${e.index}`)) {
+        events.push({ sec: e.sec, keyMove: true, text: `Go 1st out ${e.site}` });
+      }
+    }
+    for (let i = events.length - 1; i >= 0; i--) {
+      if (!events[i].go || events[i].keyMove) continue;
+      if (events.some((e) => e.keyMove && Math.abs(e.sec - events[i].sec) <= 1)) events.splice(i, 1);
     }
 
     // ---- standing in smoke -----------------------------------------------
@@ -1215,7 +1474,7 @@ export function buildRoundNotes({
     events.push(...live);
 
     // The man who went in first is told so, on the action that took him in.
-    if (id === firstIn) {
+    if (id === firstIn && !events.some((e) => String(e.text || '').startsWith('Go 1st'))) {
       let lead = null;
       for (const e of events) {
         if (!e.go || e.sec > firstInSec) continue;
@@ -1247,7 +1506,32 @@ export function buildRoundNotes({
     // round ran out or where he died, which is not an instruction.
     while (events.length && events[events.length - 1].stay) events.pop();
 
-    let note = joinEvents(collapseNades(events), exec);
+    const searched = events.some((e) => e.keyMove && /^(Search |Contact |Rush out)/.test(e.text));
+    if (!searched && lurkAt.has(id)) {
+      events.push({
+        sec: Number.isFinite(cutoffSec) ? cutoffSec : 1e9,
+        text: `Lurk ${lurkAt.get(id)}`
+      });
+    }
+
+    const collapsed = collapseNades(events);
+    const nadeCount = events.filter((e) => e.nade).length;
+    if (nadeCount >= FAKE_NADES) {
+      const first = events.find((e) => e.nade);
+      const tick = t0 + first.sec * rate;
+      const alive = livingSide(tick);
+      const core = findCore(alive);
+      if (core.size >= FAKE_CORE && !core.core.includes(id)) {
+        const share = (alive.length - core.size) / Math.max(1, alive.length);
+        if (share <= FAKE_MINORITY + 1e-9) {
+          const st = positionAt(id, tick);
+          const zone = st ? namer.namesAt(st.x, st.y, st.z).zone : '';
+          const hit = collapsed.find((e) => e.nade);
+          if (zone && hit) hit.text = `Fake ${zone}. ${hit.text}`;
+        }
+      }
+    }
+    let note = joinEvents(collapsed, exec);
     // Carrying the bomb is not something he does at a moment, it is the job he
     // leaves spawn with, so it opens the line rather than sitting in sequence.
     if (!windowed && id === bombCarrier) note = note ? `Take bomb. ${note}` : 'Take bomb.';
