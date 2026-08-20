@@ -69,6 +69,10 @@ import { createNamer } from './regionNames.js';
 import { normalizeNadeType, TYPE_WORDS } from './utilityImport.js';
 import { isGun, normalizeLoadout } from '../viewer/equipmentIcons.js';
 import { SMOKE_RADIUS_UNITS } from '../viewer/utilityMarkers.js';
+import { bombSitePieces, hasBombSites } from '../zones/bombSites.js';
+import { hasKeyZones, keyZonesFor } from '../zones/keyZones.js';
+import { pointInPiece } from '../zones/zoneGeom.js';
+import { mapHasStackedFloors, regionLevelForZ } from '../zones/zoneLevel.js';
 
 /** Position samples per second. Five seconds is the shortest thing measured. */
 const SAMPLE_HZ = 2;
@@ -82,6 +86,17 @@ const HOLD_SECONDS = 5;
 const GUN_HOLD_SECONDS = 5;
 /** A grenade thrown this soon after leaving a spot was lined up on it. */
 const LINEUP_TAIL_SECONDS = 2.5;
+/**
+ * Utility has to sit in the hand this long before the throw to be a "line up".
+ *
+ * Pulling a molotov and throwing it a second later is a throw, and writing
+ * "Line up Con molo from Top mid, throw at 1:47" for it is four times the words
+ * of "Molo Con 1:47" for none of the meaning. A line-up is a man who took the
+ * spot early and held the nade waiting.
+ */
+const LINEUP_MIN_SETUP_SECONDS = 3;
+/** Grenades leaving hands this close together are one burst, timed once. */
+const BURST_SECONDS = 2;
 /** Shots traded with the same opponent inside this window are one fight. */
 const FIGHT_MERGE_SECONDS = 4;
 /** Bullets into one cloud before it counts as spamming it. */
@@ -96,6 +111,25 @@ const INSTA_CLOCKS = new Set(['1:55', '1:54']);
 const BOMB_WINDOW_SECONDS = 10;
 /** Touching it for less than this is not carrying it. */
 const BOMB_MIN_HOLD_SECONDS = 2;
+
+/**
+ * Where the strategy stops.
+ *
+ * A stratbook row is a call, and a call ends when the round turns into a fight
+ * nobody scripted. These are the moments that happens: bodies in the plant
+ * zone, the bomb down, or enough men dead that everyone is improvising.
+ */
+const CUTOFF_ENTRIES = 2;
+/** Grace after the second body arrives, so the line covers the entry itself. */
+const CUTOFF_ENTRY_GRACE_SECONDS = 2;
+const CUTOFF_ALIVE = 3;
+const CUTOFF_EVEN = 4;
+/** Men entering the site inside this window are one group. */
+const ENTRY_GROUP_SECONDS = 8;
+/** A group this size has a first man worth naming. */
+const ENTRY_GROUP_MIN = 3;
+/** How far back from his entry the action that took him in may sit. */
+const FIRST_IN_LOOKBACK_SECONDS = 6;
 
 /**
  * An execute: this many grenades, from this many players, inside this window,
@@ -203,6 +237,72 @@ function shotIntoCloud(ox, oy, yaw, cx, cy, radius, range) {
  * print no clock fall where they happened.
  */
 const eventClock = (e) => (Number.isFinite(e.at) ? e.at : e.sec);
+
+/**
+ * Render the grenade lines, folding a burst into one clause.
+ *
+ * Utility thrown in succession is one action. Four grenades two seconds apart
+ * do not need four clocks and four "from" clauses — the first says when, and
+ * if they all left the same spot, one trailing "from Top mid" says where.
+ * A grenade on its own keeps the fuller wording, including the "Line up …"
+ * form when the player genuinely set it up early.
+ *
+ * @param {Array<object>} events  in reading order; grenade ones carry `.nade`
+ */
+function collapseNades(events) {
+  const out = [];
+  const tag = (head, when, id) => {
+    const label = [head, when].filter(Boolean).join(' ');
+    return id ? `<${label}><!${id}>` : label;
+  };
+  for (let i = 0; i < events.length; i++) {
+    const e = events[i];
+    if (!e.nade) {
+      out.push(e);
+      continue;
+    }
+    // How far the burst runs: each grenade within BURST_SECONDS of the last.
+    let end = i;
+    while (
+      end + 1 < events.length &&
+      events[end + 1].nade &&
+      eventClock(events[end + 1]) - eventClock(events[end]) <= BURST_SECONDS
+    ) {
+      end += 1;
+    }
+    if (end === i) {
+      out.push({ ...e, text: e.nade.lineup || tag(e.nade.head, e.nade.when, e.nade.id) });
+      i = end;
+      continue;
+    }
+    const burst = events.slice(i, end + 1);
+    const spots = new Set(burst.map((b) => b.nade.from).filter(Boolean));
+    const shared = spots.size === 1 && burst.every((b) => b.nade.from) ? [...spots][0] : '';
+    // The same lineup thrown twice is a double, not two lines that look like a
+    // copy-paste slip: "Flash Top mid 1:47 x2".
+    const parts = [];
+    for (let n = 0; n < burst.length; n++) {
+      const b = burst[n];
+      let same = 1;
+      while (
+        n + same < burst.length &&
+        burst[n + same].nade.head === b.nade.head &&
+        burst[n + same].nade.id === b.nade.id
+      ) {
+        same += 1;
+      }
+      const label = tag(b.nade.head, n === 0 ? b.nade.when : '', b.nade.id);
+      parts.push(same > 1 ? `${label} x${same}` : label);
+      n += same - 1;
+    }
+    out.push({
+      ...e,
+      text: shared ? `${parts.join(', ')} from ${shared}` : parts.join(', ')
+    });
+    i = end;
+  }
+  return out;
+}
 
 /**
  * One note out of one player's events, with the execute gathered up.
@@ -666,6 +766,154 @@ export function buildRoundNotes({
     return out;
   }
 
+  /**
+   * When the call is over.
+   *
+   * Whichever of these comes first: two T bodies inside the A or B plant zone
+   * (plus a two second grace, so the line covers the entry itself), the bomb
+   * down, either side cut to three, or the round levelled at four apiece. Past
+   * that moment the round is a fight, and a stratbook row that kept narrating
+   * it would be describing an outcome rather than a plan.
+   *
+   * The T-entry test is about Ts whichever side this note is for: a CT column
+   * stops at the same moment, because that is when its setup stopped mattering
+   * too.
+   */
+  const tIds = new Set(
+    (meta.players || [])
+      .filter((p) => (p.team === 1 ? side1 : p.team === 2 ? side2 : '') === 'T')
+      .map((p) => p.id)
+  );
+
+  /**
+   * The A and B plant zones.
+   *
+   * KEY zones, not the painted zone layer and not the bombsite rectangle. Key
+   * zones are the regions drawn per bombsite letter in the Sites editor - the
+   * ground a plant is actually made on - and they are what "two men are on the
+   * site" means. The bombsite rectangle is the fallback for a map nobody has
+   * drawn key zones for yet, so the rule still fires there rather than
+   * silently never ending the call.
+   *
+   * Piece lists are resolved once per floor: `keyZonesFor` re-sanitizes the
+   * whole structure on every call, and this is asked ten times a second for
+   * ten bodies.
+   */
+  const plantZones = (() => {
+    const useKey = hasKeyZones(network);
+    if (!useKey && !hasBombSites(network)) return { painted: false, at: () => '' };
+    const stacked = mapHasStackedFloors(mapCode);
+    const listsFor = (level) => {
+      const opts = level ? { level, mapCode } : {};
+      return useKey
+        ? { a: keyZonesFor(network, 'a', opts), b: keyZonesFor(network, 'b', opts) }
+        : { a: bombSitePieces(network, 'a', opts), b: bombSitePieces(network, 'b', opts) };
+    };
+    const byLevel = stacked
+      ? { default: listsFor('default'), lower: listsFor('lower') }
+      : { '': listsFor(null) };
+    return {
+      painted: true,
+      at(x, y, z) {
+        const lists = byLevel[stacked ? regionLevelForZ(mapCode, z) : ''] || byLevel[''];
+        if (!lists) return '';
+        for (const piece of lists.a) if (pointInPiece(x, y, piece)) return 'A';
+        for (const piece of lists.b) if (pointInPiece(x, y, piece)) return 'B';
+        return '';
+      }
+    };
+  })();
+
+  /** First tick each of ours stood inside a bombsite, for the entry group. */
+  const enteredSiteAt = new Map();
+
+  const cutoffSec = (() => {
+    const marks = [];
+
+    const plant = (meta.events?.bomb || []).find((b) => b.type === 'planted');
+    if (plant?.tick > t0) marks.push(secOf(plant.tick));
+
+    // Deaths, in order, against the count each side started with.
+    const teamOf = new Map((meta.players || []).map((p) => [p.id, p.team === 1 ? side1 : side2]));
+    const alive = { T: 0, CT: 0 };
+    for (const p of meta.players || []) {
+      const s = teamOf.get(p.id);
+      if (s === 'T' || s === 'CT') alive[s] += 1;
+    }
+    const deaths = (meta.events?.kills || [])
+      .filter((k) => k.victim && (k.tick || 0) >= t0)
+      .sort((a, b) => (a.tick || 0) - (b.tick || 0));
+    for (const k of deaths) {
+      const s = teamOf.get(k.victim);
+      if (s !== 'T' && s !== 'CT') continue;
+      alive[s] -= 1;
+      if (
+        alive.T <= CUTOFF_ALIVE ||
+        alive.CT <= CUTOFF_ALIVE ||
+        (alive.T === CUTOFF_EVEN && alive.CT === CUTOFF_EVEN)
+      ) {
+        marks.push(secOf(k.tick || 0));
+        break;
+      }
+    }
+
+    // Bodies on the site. Walked here rather than off the per-player samples
+    // below, because the answer is about the side as a whole and every column
+    // has to stop at the same second.
+    if (plantZones.painted) {
+      const siteScratch = {};
+      const inSite = new Set();
+      let twoIn = 0;
+      const stride = Math.max(1, Math.round(rate / 2));
+      // The whole round, not just up to the cutoff: the entry GROUP is still
+      // forming after the second man is in, and the third arriving late is
+      // what makes the first man worth naming.
+      for (let tick = t0; tick <= endTick; tick += stride) {
+        for (const p of meta.players || []) {
+          if (p.slot == null || p.slot < 0) continue;
+          const isT = tIds.has(p.id);
+          if (!isT && !sideIds.has(p.id)) continue;
+          const st = track.sample(p.slot, tick, siteScratch);
+          if (!st?.alive || !Number.isFinite(st.x)) continue;
+          if (!plantZones.at(st.x, st.y, st.z)) continue;
+          if (sideIds.has(p.id) && !enteredSiteAt.has(p.id)) enteredSiteAt.set(p.id, tick);
+          if (isT) inSite.add(p.id);
+        }
+        if (!twoIn && inSite.size >= CUTOFF_ENTRIES) twoIn = tick;
+      }
+      // Plus a moment, so the line still covers the entry that ended it.
+      if (twoIn) marks.push(secOf(twoIn) + CUTOFF_ENTRY_GRACE_SECONDS);
+    }
+
+    return marks.length ? Math.min(...marks) : Infinity;
+  })();
+
+  /**
+   * The man who went in first, when a group went in together.
+   *
+   * Measured on the same plant zones the cutoff uses, so the mark can always
+   * land on a line the cutoff kept. Only when it IS a group: one player
+   * wandering into the site ahead of nobody is not leading an entry, he is
+   * lurking.
+   */
+  const firstIn = (() => {
+    const entries = [...enteredSiteAt.entries()].sort((a, b) => a[1] - b[1]);
+    if (entries.length < ENTRY_GROUP_MIN) return '';
+    const [lead, leadTick] = entries[0];
+    const together = entries.filter(([, tick]) => tick - leadTick <= ENTRY_GROUP_SECONDS * rate);
+    return together.length >= ENTRY_GROUP_MIN ? lead : '';
+  })();
+  const firstInSec = firstIn ? secOf(enteredSiteAt.get(firstIn)) : 0;
+  /** Where he went in, for the case where no line exists to hang the mark on. */
+  const firstInZone = (() => {
+    if (!firstIn) return '';
+    const slot = slotOf.get(firstIn);
+    if (slot == null || slot < 0) return '';
+    const st = track.sample(slot, enteredSiteAt.get(firstIn), {});
+    if (!st || !Number.isFinite(st.x)) return '';
+    return namer.namesAt(st.x, st.y, st.z).zone || '';
+  })();
+
   /** Our own utility in the air, for "went in behind it". */
   const flights = ourGrenades
     .map((g) => {
@@ -795,9 +1043,10 @@ export function buildRoundNotes({
             t.player === id &&
             !linedUp.has(t) &&
             normalizeNadeType(t.type) === first.nade &&
-            secOf(Number(t.throwTick)) >= first.sec &&
+            secOf(Number(t.throwTick)) >= first.sec + LINEUP_MIN_SETUP_SECONDS &&
             secOf(Number(t.throwTick)) <= stay.to + LINEUP_TAIL_SECONDS
         );
+        // Not a line-up: the plain throw line below says it in four words.
         if (!g) continue;
         linedUp.add(g);
         const link = linkOf.get(g);
@@ -808,7 +1057,13 @@ export function buildRoundNotes({
         events.push({
           sec: first.sec,
           at: thrownAt,
-          text: `Line up ${tag} from ${stay.name}, throw at ${clockAt(thrownAt)}`
+          nade: {
+            head: what,
+            when: clockAt(thrownAt),
+            id: link?.throwId || '',
+            from: stay.name,
+            lineup: `Line up ${tag} from ${stay.name}, throw at ${clockAt(thrownAt)}`
+          }
         });
       }
     }
@@ -824,10 +1079,16 @@ export function buildRoundNotes({
       // insta, not "at 1:55" — the whole point is that it needs no timing.
       const insta =
         normalizeNadeType(g.type) === 'smokegrenade' && INSTA_CLOCKS.has(clockAt(sec));
-      const label = [word, link?.spot || '', insta ? 'insta' : clockAt(sec)]
-        .filter(Boolean)
-        .join(' ');
-      events.push({ sec, at: sec, text: link?.throwId ? `<${label}><!${link.throwId}>` : label });
+      events.push({
+        sec,
+        at: sec,
+        nade: {
+          head: [word, link?.spot || ''].filter(Boolean).join(' '),
+          when: insta ? 'insta' : clockAt(sec),
+          id: link?.throwId || '',
+          from: spotOf(id, Number(g.throwTick))
+        }
+      });
     }
 
     // ---- going somewhere, behind someone's utility -----------------------
@@ -849,6 +1110,7 @@ export function buildRoundNotes({
       const who = nameOf.get(cover.player) || '';
       events.push({
         sec: run.from,
+        go: true,
         text: `Go ${run.name} on ${lower(cover.word)}${who ? ` from ${who}` : ''}`
       });
     }
@@ -914,6 +1176,33 @@ export function buildRoundNotes({
     // started would print 1:38 ahead of a throw at 1:45 and read backwards.
     events.sort((a, b) => eventClock(a) - eventClock(b) || a.sec - b.sec);
 
+    // Past the cutoff the round stopped being a call, so the line stops too.
+    // Measured on the clock each line shows, which is the order they are in:
+    // a hold running past the cutoff is a hold the call no longer covers.
+    const live = events.filter((e) => eventClock(e) <= cutoffSec);
+    events.length = 0;
+    events.push(...live);
+
+    // The man who went in first is told so, on the action that took him in.
+    if (id === firstIn) {
+      let lead = null;
+      for (const e of events) {
+        if (!e.go || e.sec > firstInSec) continue;
+        if (firstInSec - e.sec <= FIRST_IN_LOOKBACK_SECONDS) lead = e;
+      }
+      if (lead) lead.text = `Go 1st. ${lead.text}`;
+      else {
+        // No line to hang it on: he walked in on his own utility, or on none.
+        // Name the site so the mark still says where he went first.
+        events.push({
+          sec: firstInSec,
+          at: firstInSec,
+          text: firstInZone ? `Go 1st into ${firstInZone}` : 'Go 1st'
+        });
+        events.sort((a, b) => eventClock(a) - eventClock(b) || a.sec - b.sec);
+      }
+    }
+
     // Trading with two men on the same angle, or re-peeking the same one, is
     // one line. The reader gains nothing from "Fight A from A Balc" three times
     // over, and the fights themselves are the only events that repeat verbatim.
@@ -927,7 +1216,7 @@ export function buildRoundNotes({
     // round ran out or where he died, which is not an instruction.
     while (events.length && events[events.length - 1].stay) events.pop();
 
-    let note = joinEvents(events, exec);
+    let note = joinEvents(collapseNades(events), exec);
     // Carrying the bomb is not something he does at a moment, it is the job he
     // leaves spawn with, so it opens the line rather than sitting in sequence.
     if (!windowed && id === bombCarrier) note = note ? `Take bomb. ${note}` : 'Take bomb.';

@@ -36,7 +36,9 @@ const NETWORK = {
     { id: 'z_a', name: 'A Site', positionIds: ['p_ramp'] }
   ],
   areas: [],
-  visionBlocks: []
+  visionBlocks: [],
+  // A bombsite sitting over the A Ramp box, so entries can be staged.
+  bombSites: { a: [{ type: 'rect', x: 0, y: 800, w: 400, h: 400, level: 'default' }], b: [] }
 };
 
 const AT = {
@@ -631,9 +633,10 @@ test('four grenades from two players after 1:35 gather under one exec clause', (
     economy: 'Full buy'
   }).get('aaa');
   assert.match(body(note), /^On exec, do Flash /);
-  // Both of his throws sit inside the one clause.
+  // Both of his throws sit inside the one clause, and being the same throw two
+  // seconds apart they read as a double rather than as two identical lines.
   assert.equal((note.match(/On exec/g) || []).length, 1);
-  assert.equal((note.match(/Flash /g) || []).length, 2);
+  assert.match(note, / x2/);
 });
 
 test('the same burst before 1:35 is the default, not an exec', () => {
@@ -1018,4 +1021,311 @@ test('brushing the bomb for a second is not carrying it', () => {
     economy: 'Full buy'
   });
   assert.ok(!notes.get('eee').includes('Take bomb'), 'one second counted as carrying');
+});
+
+test('the line stops when two Ts are standing on the site', () => {
+  const late = {
+    type: 'smokegrenade',
+    player: 'aaa',
+    throwTick: T0 + 45 * RATE,
+    detonateTick: T0 + 46 * RATE,
+    at: { ...AT.cat, z: 0 }
+  };
+  const track = fakeTrack({
+    0: [{ at: 0, ...AT.spawn }, { at: 10, ...AT.mid }, { at: 20, ...AT.ramp }],
+    1: [{ at: 0, ...AT.spawn }, { at: 30, ...AT.ramp }],
+    2: [{ at: 0, ...AT.spawn }],
+    3: [{ at: 0, ...AT.spawn }],
+    4: [{ at: 0, ...AT.spawn }]
+  });
+  const meta = roundMeta({ players: FIVE, grenades: [late] });
+  // A fight at 25s, inside the call; the smoke at 45s is outside it.
+  meta.events.damage = [{ tick: T0 + 25 * RATE, attacker: 'aaa', victim: 'fff', hp: 30 }];
+  const note = body(
+    buildRoundNotes({
+      meta,
+      track,
+      network: NETWORK,
+      mapCode: 'MIR',
+      side: 'T',
+      playerIds: ['aaa'],
+      links: [{ grenade: late, type: 'smokegrenade', word: 'Smoke', spot: 'Catwalk', throwId: 'zzzz' }],
+      economy: 'Full buy'
+    }).get('aaa')
+  );
+  // The second body lands on the site at 30s, which is where the call ends.
+  assert.ok(!note.includes('zzzz'), `wrote past the cutoff: "${note}"`);
+  assert.match(note, /Stay Top Mid until \d:\d\d, Fight/);
+});
+
+test('the line stops when the bomb goes down', () => {
+  const meta = roundMeta({ players: FIVE });
+  meta.events.bomb = [{ type: 'planted', tick: T0 + 25 * RATE, player: 'aaa', site: 'A' }];
+  const note = body(
+    buildRoundNotes({
+      meta,
+      track: fakeTrack({
+        0: [{ at: 0, ...AT.spawn }, { at: 10, ...AT.mid }, { at: 30, ...AT.cat }]
+      }),
+      network: NETWORK,
+      mapCode: 'MIR',
+      side: 'T',
+      playerIds: ['aaa'],
+      economy: 'Full buy'
+    }).get('aaa')
+  );
+  assert.ok(!note.includes('Catwalk'), `wrote past the plant: "${note}"`);
+});
+
+test('the line stops when a side is cut to three', () => {
+  const meta = roundMeta({ players: FIVE });
+  // Two of ours die: 5v5 to 4v5 to 3v5.
+  meta.events.kills = [
+    { tick: T0 + 12 * RATE, attacker: 'fff', victim: 'ddd', weapon: 'ak47' },
+    { tick: T0 + 20 * RATE, attacker: 'fff', victim: 'eee', weapon: 'ak47' }
+  ];
+  const note = body(
+    buildRoundNotes({
+      meta,
+      track: fakeTrack({
+        0: [{ at: 0, ...AT.spawn }, { at: 5, ...AT.mid }, { at: 30, ...AT.cat }]
+      }),
+      network: NETWORK,
+      mapCode: 'MIR',
+      side: 'T',
+      playerIds: ['aaa'],
+      economy: 'Full buy'
+    }).get('aaa')
+  );
+  assert.ok(!note.includes('Catwalk'), `wrote past three alive: "${note}"`);
+});
+
+test('the first man of a group entry is marked on the line that took him in', () => {
+  const molo = {
+    type: 'molotov',
+    player: 'eee',
+    throwTick: T0 + 17 * RATE,
+    detonateTick: T0 + 19 * RATE,
+    at: { ...AT.ramp, z: 0 }
+  };
+  // Three men onto the site, aaa first, behind eee's molotov.
+  const track = fakeTrack({
+    0: [{ at: 0, ...AT.spawn }, { at: 12, ...AT.mid }, { at: 20, ...AT.ramp }],
+    1: [{ at: 0, ...AT.spawn }, { at: 24, ...AT.ramp }],
+    2: [{ at: 0, ...AT.spawn }, { at: 26, ...AT.ramp }],
+    3: [{ at: 0, ...AT.spawn }],
+    4: [{ at: 0, ...AT.spawn }]
+  });
+  const notes = buildRoundNotes({
+    meta: roundMeta({ players: FIVE, grenades: [molo] }),
+    track,
+    network: NETWORK,
+    mapCode: 'MIR',
+    side: 'T',
+    playerIds: ['aaa', 'bbb'],
+    economy: 'Full buy'
+  });
+  assert.match(body(notes.get('aaa')), /Go 1st\. Go A Site on molo from five/);
+  assert.ok(!notes.get('bbb').includes('Go 1st'), 'two men were both first');
+});
+
+test('one man wandering onto a site is not leading an entry', () => {
+  const track = fakeTrack({
+    0: [{ at: 0, ...AT.spawn }, { at: 12, ...AT.mid }, { at: 20, ...AT.ramp }],
+    1: [{ at: 0, ...AT.spawn }],
+    2: [{ at: 0, ...AT.spawn }],
+    3: [{ at: 0, ...AT.spawn }],
+    4: [{ at: 0, ...AT.spawn }]
+  });
+  const note = buildRoundNotes({
+    meta: roundMeta({ players: FIVE }),
+    track,
+    network: NETWORK,
+    mapCode: 'MIR',
+    side: 'T',
+    playerIds: ['aaa'],
+    economy: 'Full buy'
+  }).get('aaa');
+  assert.ok(!note.includes('Go 1st'), `a lurker was called the entry: "${note}"`);
+});
+
+test('the plant zone is the KEY zone, not the bombsite rectangle', () => {
+  // Key zones and bombsites disagree on purpose: the bombsite sits over A Ramp,
+  // the key zone over Catwalk. Two men walk into Catwalk and nowhere near the
+  // rectangle, and that is what has to end the call.
+  const net = {
+    ...NETWORK,
+    keyZones: { a: [{ type: 'rect', x: 600, y: 0, w: 400, h: 400, level: 'default' }], b: [] }
+  };
+  const late = {
+    type: 'smokegrenade',
+    player: 'aaa',
+    throwTick: T0 + 40 * RATE,
+    detonateTick: T0 + 41 * RATE,
+    at: { ...AT.ramp, z: 0 }
+  };
+  const track = fakeTrack({
+    0: [{ at: 0, ...AT.spawn }, { at: 10, ...AT.mid }, { at: 20, ...AT.cat }],
+    1: [{ at: 0, ...AT.spawn }, { at: 22, ...AT.cat }],
+    2: [{ at: 0, ...AT.spawn }],
+    3: [{ at: 0, ...AT.spawn }],
+    4: [{ at: 0, ...AT.spawn }]
+  });
+  const opts = {
+    meta: roundMeta({ players: FIVE, grenades: [late] }),
+    track,
+    mapCode: 'MIR',
+    side: 'T',
+    playerIds: ['aaa'],
+    links: [{ grenade: late, type: 'smokegrenade', word: 'Smoke', spot: 'A Ramp', throwId: 'zzzz' }],
+    economy: 'Full buy'
+  };
+  const withKey = body(buildRoundNotes({ ...opts, network: net }).get('aaa'));
+  assert.ok(!withKey.includes('zzzz'), `key zone entry did not end the call: "${withKey}"`);
+
+  // Without key zones painted the bombsite rectangle stands in, and nobody ever
+  // reaches it, so the same round runs to the end.
+  const withoutKey = body(buildRoundNotes({ ...opts, network: NETWORK }).get('aaa'));
+  assert.ok(withoutKey.includes('zzzz'), `bombsite fallback ended early: "${withoutKey}"`);
+});
+
+test('the call covers the two seconds after the second man is in', () => {
+  const net = {
+    ...NETWORK,
+    keyZones: { a: [{ type: 'rect', x: 0, y: 800, w: 400, h: 400, level: 'default' }], b: [] }
+  };
+  const nadeAt = (sec, id) => ({
+    type: 'hegrenade',
+    player: 'aaa',
+    throwTick: T0 + sec * RATE,
+    detonateTick: T0 + (sec + 1) * RATE,
+    at: { ...AT.cat, z: 0 },
+    _id: id
+  });
+  // Second body is in at 22s, so the call runs to 24s.
+  const inGrace = nadeAt(23, 'keep');
+  const past = nadeAt(26, 'drop');
+  const track = fakeTrack({
+    0: [{ at: 0, ...AT.spawn }, { at: 10, ...AT.mid }, { at: 20, ...AT.ramp }],
+    1: [{ at: 0, ...AT.spawn }, { at: 22, ...AT.ramp }],
+    2: [{ at: 0, ...AT.spawn }],
+    3: [{ at: 0, ...AT.spawn }],
+    4: [{ at: 0, ...AT.spawn }]
+  });
+  const note = body(
+    buildRoundNotes({
+      meta: roundMeta({ players: FIVE, grenades: [inGrace, past] }),
+      track,
+      network: net,
+      mapCode: 'MIR',
+      side: 'T',
+      playerIds: ['aaa'],
+      links: [
+        { grenade: inGrace, type: 'hegrenade', word: 'Nade', spot: 'Catwalk', throwId: 'keep' },
+        { grenade: past, type: 'hegrenade', word: 'Nade', spot: 'Catwalk', throwId: 'drop' }
+      ],
+      economy: 'Full buy'
+    }).get('aaa')
+  );
+  assert.ok(note.includes('keep'), `the grace window was not covered: "${note}"`);
+  assert.ok(!note.includes('drop'), `wrote past the grace window: "${note}"`);
+});
+
+test('a quick pull and throw is a throw, not a line-up', () => {
+  // On the spot at 8s, smoke out at 20s, thrown at 21s. One second is not
+  // setting something up.
+  const nade = {
+    type: 'smokegrenade',
+    player: 'aaa',
+    throwTick: T0 + 21 * RATE,
+    detonateTick: T0 + 23 * RATE,
+    at: { ...AT.cat, z: 0 }
+  };
+  const track = fakeTrack({
+    0: [
+      { at: 0, ...AT.spawn },
+      { at: 8, ...AT.mid, weapon: GUN },
+      { at: 20, ...AT.mid, weapon: SMOKE_OUT },
+      { at: 22, ...AT.mid, weapon: GUN },
+      { at: 40, ...AT.ramp, weapon: GUN }
+    ]
+  });
+  const note = body(
+    buildRoundNotes({
+      meta: roundMeta({ players: FIVE, grenades: [nade] }),
+      track,
+      network: NETWORK,
+      mapCode: 'MIR',
+      side: 'T',
+      playerIds: ['aaa'],
+      links: [{ grenade: nade, type: 'smokegrenade', word: 'Smoke', spot: 'Catwalk', throwId: 'nF4e' }],
+      economy: 'Full buy'
+    }).get('aaa')
+  );
+  assert.ok(!note.includes('Line up'), `a one second pull became a line-up: "${note}"`);
+  assert.match(note, /<Smoke Catwalk 1:34><!nF4e>/);
+});
+
+test('grenades in succession are timed once and share their origin', () => {
+  const at = (sec, type) => ({
+    type,
+    player: 'aaa',
+    throwTick: T0 + sec * RATE,
+    detonateTick: T0 + (sec + 1) * RATE,
+    at: { ...AT.ramp, z: 0 }
+  });
+  // Three throws a second apart, all from Top Mid.
+  const one = at(10, 'molotov');
+  const two = at(11, 'flashbang');
+  const three = at(12, 'hegrenade');
+  const note = body(
+    buildRoundNotes({
+      meta: roundMeta({ players: FIVE, grenades: [one, two, three] }),
+      track: fakeTrack({ 0: [{ at: 0, ...AT.spawn }, { at: 6, ...AT.mid }] }),
+      network: NETWORK,
+      mapCode: 'MIR',
+      side: 'T',
+      playerIds: ['aaa'],
+      links: [
+        { grenade: one, type: 'molotov', word: 'Molo', spot: 'Con', throwId: 'aaaa' },
+        { grenade: two, type: 'flashbang', word: 'Flash', spot: 'Con', throwId: 'bbbb' },
+        { grenade: three, type: 'hegrenade', word: 'Nade', spot: 'Con', throwId: 'cccc' }
+      ],
+      economy: 'Full buy'
+    }).get('aaa')
+  );
+  assert.equal(
+    note,
+    '<Molo Con 1:45><!aaaa>, <Flash Con><!bbbb>, <Nade Con><!cccc> from Top Mid'
+  );
+});
+
+test('grenades far apart keep their own clocks', () => {
+  const at = (sec, type) => ({
+    type,
+    player: 'aaa',
+    throwTick: T0 + sec * RATE,
+    detonateTick: T0 + (sec + 1) * RATE,
+    at: { ...AT.ramp, z: 0 }
+  });
+  const one = at(10, 'molotov');
+  const two = at(20, 'flashbang');
+  const note = body(
+    buildRoundNotes({
+      meta: roundMeta({ players: FIVE, grenades: [one, two] }),
+      track: fakeTrack({ 0: [{ at: 0, ...AT.spawn }, { at: 6, ...AT.mid }] }),
+      network: NETWORK,
+      mapCode: 'MIR',
+      side: 'T',
+      playerIds: ['aaa'],
+      links: [
+        { grenade: one, type: 'molotov', word: 'Molo', spot: 'Con', throwId: 'aaaa' },
+        { grenade: two, type: 'flashbang', word: 'Flash', spot: 'Con', throwId: 'bbbb' }
+      ],
+      economy: 'Full buy'
+    }).get('aaa')
+  );
+  assert.match(note, /<Molo Con 1:45><!aaaa>/);
+  assert.match(note, /<Flash Con 1:35><!bbbb>/);
+  assert.ok(!note.includes('from Top Mid'), 'unrelated throws were merged');
 });
