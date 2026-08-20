@@ -11,6 +11,7 @@
 // ---------------------------------------------------------------------------
 
 import { enhanceDocEmbeds } from './docEmbeds.js';
+import { collectOutline } from './docOutline.js';
 
 const SIZES = [
   { key: '13', label: 'Small' },
@@ -200,7 +201,10 @@ export function createDocsEditor({ escapeHtml, onSave, onDirty }) {
         <button type="button" class="doc-tool" data-paste-plain title="Paste without formatting (Ctrl+Shift+V)">T</button>
         <button type="button" class="doc-tool" data-clear title="Clear formatting">A</button>
       </div>
-      <span class="doc-saved" id="doc-saved"></span>
+      <div class="doc-toolbar-end">
+        <button type="button" class="btn btn-sm" data-copy-doc-link hidden>Copy link</button>
+        <span class="doc-saved" id="doc-saved"></span>
+      </div>
     </div>
     <div class="doc-page">
       <div class="doc-surface" id="doc-surface" contenteditable="true" spellcheck="true"></div>
@@ -210,6 +214,8 @@ export function createDocsEditor({ escapeHtml, onSave, onDirty }) {
   const savedEl = el.querySelector('#doc-saved');
   let dirty = false;
   let saveTimer = 0;
+  let outlineTimer = 0;
+  let outlineItems = [];
 
   // Without a block wrapper the caret sits in a bare text node, where Enter is
   // a no-op in Chromium and "start of line" cannot be identified at all. Every
@@ -330,6 +336,7 @@ export function createDocsEditor({ escapeHtml, onSave, onDirty }) {
       node.style.fontSize = `${e.target.value}px`;
     });
     markDirty();
+    scheduleOutline();
   });
 
   el.querySelector('[data-gap]').addEventListener('change', (e) => {
@@ -605,6 +612,7 @@ export function createDocsEditor({ escapeHtml, onSave, onDirty }) {
     // reaches the handler above.
     if (e.inputType === 'insertText' && e.data === ' ') maybeAutoList();
     markDirty();
+    scheduleOutline();
   });
   surface.addEventListener('blur', () => save());
   surface.addEventListener('keyup', syncToolbar);
@@ -637,6 +645,77 @@ export function createDocsEditor({ escapeHtml, onSave, onDirty }) {
     }
   }
 
+  function outlineHost() {
+    return el.closest('.tm-docs')?.querySelector('[data-doc-outline]') || null;
+  }
+
+  function scheduleOutline() {
+    window.clearTimeout(outlineTimer);
+    outlineTimer = window.setTimeout(paintOutline, 160);
+  }
+
+  function paintOutline() {
+    const host = outlineHost();
+    if (!host) return;
+    outlineItems = collectOutline(surface);
+    if (!outlineItems.length) {
+      host.hidden = true;
+      host.innerHTML = '';
+      return;
+    }
+    host.hidden = false;
+    const tree = outlineItems
+      .map((item, i) => {
+        const label = escapeHtml(item.text);
+        return `<button type="button" class="tm-doc-outline-item is-l${item.level}" data-doc-jump="${i}" title="${label}">${label}</button>`;
+      })
+      .join('');
+    host.innerHTML = `<div class="tm-doc-outline-title">Outline</div><div class="tm-doc-outline-tree">${tree}</div>`;
+    host.onclick = (e) => {
+      const btn = e.target.closest?.('[data-doc-jump]');
+      if (!btn) return;
+      e.preventDefault();
+      jumpTo(Number(btn.dataset.docJump));
+    };
+    bindOutlineScroll();
+    syncOutlineActive();
+  }
+
+  let scrollRoot = null;
+  function bindOutlineScroll() {
+    const next = el.closest('.tm-shell') || window;
+    if (scrollRoot === next) return;
+    unbindOutlineScroll();
+    scrollRoot = next;
+    scrollRoot.addEventListener('scroll', syncOutlineActive, { passive: true });
+  }
+
+  function unbindOutlineScroll() {
+    if (!scrollRoot) return;
+    scrollRoot.removeEventListener('scroll', syncOutlineActive);
+    scrollRoot = null;
+  }
+
+  function jumpTo(index) {
+    const item = outlineItems[index];
+    if (!item?.el) return;
+    item.el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function syncOutlineActive() {
+    const host = outlineHost();
+    if (!host || !outlineItems.length) return;
+    const mark = 96;
+    let current = 0;
+    for (let i = 0; i < outlineItems.length; i++) {
+      const top = outlineItems[i].el.getBoundingClientRect().top;
+      if (top <= mark) current = i;
+    }
+    host.querySelectorAll('[data-doc-jump]').forEach((btn) => {
+      btn.classList.toggle('is-on', Number(btn.dataset.docJump) === current);
+    });
+  }
+
   return {
     el,
     /** @param {{html?: string, lineHeight?: string}} doc */
@@ -653,6 +732,7 @@ export function createDocsEditor({ escapeHtml, onSave, onDirty }) {
       savedEl.textContent = 'Saved';
       savedEl.classList.remove('dirty');
       syncToolbar();
+      paintOutline();
     },
     focus() {
       surface.focus();
@@ -660,12 +740,23 @@ export function createDocsEditor({ escapeHtml, onSave, onDirty }) {
     html() {
       return wrapForSave(sanitizeHtml(surface.innerHTML));
     },
+    refreshOutline() {
+      paintOutline();
+    },
     flush() {
       window.clearTimeout(saveTimer);
       return save();
     },
     destroy() {
       window.clearTimeout(saveTimer);
+      window.clearTimeout(outlineTimer);
+      unbindOutlineScroll();
+      const host = outlineHost();
+      if (host) {
+        host.onclick = null;
+        host.hidden = true;
+        host.innerHTML = '';
+      }
       el.remove();
     }
   };

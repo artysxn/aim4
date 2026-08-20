@@ -43,7 +43,6 @@ import { PACKAGE_EXT } from '../replays/shared/replayPackage.js';
 import { formatBytes } from '../replays/tickStore.js';
 import { createStatsPanel, defaultMinRounds } from '../replays/stats/statsPanel.js';
 import { createAnalyticsPanel } from '../replays/analytics/analyticsPanel.js';
-import { createChartsPanel } from '../replays/charts/chartsPanel.js';
 import { invalidateStatsCache, getStatsPayload } from '../replays/statsCache.js';
 import commentsIcon from '../icons/demos_comments.svg?raw';
 import bookmarkIcon from '../icons/demos_bookmarks_added.svg?raw';
@@ -75,15 +74,12 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
   const statsBodyEl = document.getElementById('rp-stats-body');
   const analyticsPageEl = document.getElementById('rp-analytics-page');
   const analyticsBodyEl = document.getElementById('rp-analytics-body');
-  const chartsPageEl = document.getElementById('rp-charts-page');
-  const chartsBodyEl = document.getElementById('rp-charts-body');
 
   const PAGE_PATHS = {
     library: '/demos',
     playlists: '/playlists',
     stats: '/database',
     analytics: '/patterns',
-    charts: '/charts',
     upload: '/uploads'
   };
 
@@ -121,11 +117,10 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
   let viewerModule = null;
   /** Round name already opened from the URL, so it opens once per link. */
   let openedRound = '';
-  /** @type {'library' | 'upload' | 'playlists' | 'stats' | 'analytics' | 'charts'} */
+  /** @type {'library' | 'upload' | 'playlists' | 'stats' | 'analytics'} */
   let subpage = 'library';
   /** Built on first use; payloads reused across visits. */
   let analyticsPanel = null;
-  let chartsPanel = null;
   let statsPanel = null;
   /** @type {{demos?: string[], files?: string[], title?: string}} */
   let statsScope = {};
@@ -3317,8 +3312,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       name === 'upload' ||
       name === 'playlists' ||
       name === 'stats' ||
-      name === 'analytics' ||
-      name === 'charts'
+      name === 'analytics'
         ? name
         : 'library';
     subpage = next;
@@ -3327,7 +3321,6 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     if (playlistsPageEl) playlistsPageEl.hidden = next !== 'playlists';
     if (statsPageEl) statsPageEl.hidden = next !== 'stats';
     if (analyticsPageEl) analyticsPageEl.hidden = next !== 'analytics';
-    if (chartsPageEl) chartsPageEl.hidden = next !== 'charts';
 
     if (push) {
       if (onNavigate) {
@@ -3349,9 +3342,6 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     } else if (next === 'analytics') {
       stopPolling();
       openAnalyticsPage();
-    } else if (next === 'charts') {
-      stopPolling();
-      openChartsPage();
     } else if (next === 'upload') {
       void refreshMineDemos().then(() => renderMine());
       if (visible) startPolling();
@@ -3718,26 +3708,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       });
       analyticsBodyEl.appendChild(analyticsPanel.el);
     }
-    // Chapter before load so antistrat mounts before the shared fetch finishes
-    // (and so a failed pattern-finder spend cannot strand it on "Loading teams…").
-    const chapter = new URLSearchParams(window.location.search).get('chapter');
-    if (chapter) analyticsPanel.setChapter(chapter);
     analyticsPanel.load();
-  }
-
-  /** Mount the chart builder on first use; the payload is reused after that. */
-  function openChartsPage() {
-    if (!chartsBodyEl) return;
-    if (!chartsPanel) {
-      chartsPanel = createChartsPanel({ escapeHtml });
-      chartsBodyEl.appendChild(chartsPanel.el);
-    }
-    chartsPanel.mountPageHead?.();
-    // `params` carries ?view=<shareId> through to the saved-views strip.
-    chartsPanel.load({
-      ...statsScope,
-      params: Object.fromEntries(new URLSearchParams(window.location.search))
-    });
   }
 
   // ---- deep links ---------------------------------------------------------
@@ -3953,8 +3924,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
         !visible ||
         subpage === 'playlists' ||
         subpage === 'stats' ||
-        subpage === 'analytics' ||
-        subpage === 'charts'
+        subpage === 'analytics'
       )
         return;
       // A poll tick is skippable by definition: if one is still running, the
@@ -3986,7 +3956,6 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
         params.page === 'playlists' ||
         params.page === 'stats' ||
         params.page === 'analytics' ||
-        params.page === 'charts' ||
         params.page === 'library'
           ? params.page
           : 'library';
@@ -4037,8 +4006,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       if (
         page === 'playlists' ||
         page === 'stats' ||
-        page === 'analytics' ||
-        page === 'charts'
+        page === 'analytics'
       ) {
         stopPolling();
       } else {

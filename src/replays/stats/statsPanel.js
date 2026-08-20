@@ -45,6 +45,7 @@ import {
   playerColumnsWithRoles,
   playerMatchColumns,
   teamMatchColumns,
+  omitPlayerTeamColumn,
   statsTableHtml
 } from './statsTables.js';
 import {
@@ -104,7 +105,9 @@ export function createStatsPanel({
   onDetailChange,
   onPlayRounds,
   /** Put Players / Teams / Filters in the site page-head next to DATABASE. */
-  usePageHead = false
+  usePageHead = false,
+  /** Overview: every row is already this team, so hide the Team column. */
+  omitTeamColumn = false
 }) {
   const el = document.createElement('div');
   el.className = 'st-panel';
@@ -2121,9 +2124,10 @@ export function createStatsPanel({
     }
 
     const mode = roleMode();
-    const playerCols = mode
+    let playerCols = mode
       ? playerColumnsWithRoles(mode)
       : { columns: PLAYER_COLUMNS, fixedCount: PLAYER_FIXED_BASE.length };
+    if (omitTeamColumn) playerCols = omitPlayerTeamColumn(playerCols);
 
     // Entity search means "show these rows"; do not also hide them under min-rounds.
     const searching = hasEntityPick();

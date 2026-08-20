@@ -492,6 +492,38 @@ a {
   display: none;
 }
 
+.tm-doc-search {
+  box-sizing: border-box;
+  width: 200px;
+  height: 32px;
+  margin: 0;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: #050505;
+  color: #5c5c62;
+  font: 400 14px var(--font-body);
+  outline: none;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.tm-doc-search::placeholder {
+  color: #5c5c62;
+  font-weight: 400;
+}
+
+.tm-doc-search::-webkit-search-decoration,
+.tm-doc-search::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+}
+
+.page-head-actions [data-new-doc] {
+  box-sizing: border-box;
+  height: 32px;
+  padding: 0 14px;
+}
+
 .rp-text-btn {
   padding: 6px 10px;
   border: 0;

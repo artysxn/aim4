@@ -360,6 +360,8 @@ const mkRound = ({ s1, w, t = [], ct = [] }) => ({
   assert.equal(fake.ours.share, 100, 'every T round of theirs on this map was one');
   assert.equal(fake.league.share, 50);
   assert.equal(fake.index, 2, 'so they call it twice as often as the library does');
+  assert.equal(fake.faced.share, 66.7, 'two of the three T rounds they faced were A Fakes');
+  assert.equal(fake.facedIndex, 1.33, 'opponents call it more against them than the library does');
 
   // League winrate is the RUNNER's, not ours: four A Fakes, two won by the T side.
   assert.equal(fake.league.winrate, 50);

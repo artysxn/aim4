@@ -6,6 +6,9 @@
 // editor's sanitizer keeps: numbers, tables,
 // round links (/demos?rounds=…) and inert widget divs, which docEmbeds.js
 // mounts on load. No pictures, and no prose beyond the data.
+//
+// Chapters are Title (h1, 25px). Subchapters are Heading (h2, 19px). The
+// documents outline jumps on those two types.
 // ---------------------------------------------------------------------------
 
 import { MAPS } from '../shared/roundId.js';
@@ -71,6 +74,22 @@ export function shortDate(ts) {
 const NONE = '<p>No matching rounds.</p>';
 const LINK_FILES_MAX = 40;
 
+/** Docs editor Title / Heading sizes, so the outline can jump to them. */
+const TITLE_STYLE = 'font-size: 25px';
+const HEADING_STYLE = 'font-size: 19px';
+
+function titleHtml(html) {
+  return `<h1 style="${TITLE_STYLE}">${html}</h1>`;
+}
+
+function headingHtml(html) {
+  return `<h2 style="${HEADING_STYLE}">${html}</h2>`;
+}
+
+function subheadHtml(html) {
+  return `<h3>${html}</h3>`;
+}
+
 function li(items) {
   return items.length ? `<ul>${items.map((x) => `<li>${x}</li>`).join('')}</ul>` : '';
 }
@@ -110,7 +129,7 @@ const NADE_WORD = {
 function renderPistols(esc, s) {
   const parts = [];
   if (s.t.length) {
-    parts.push('<p><strong>T pistols</strong></p>');
+    parts.push(headingHtml('T pistols'));
     parts.push(
       li(
         s.t.map((r) => {
@@ -136,7 +155,7 @@ function renderPistols(esc, s) {
   }
   if (s.ct.length) {
     const order = s.ctOrder?.length ? s.ctOrder : ['A', 'ee', 'B'];
-    parts.push(`<p><strong>CT pistols</strong> (${esc(order.join(' - '))})</p>`);
+    parts.push(headingHtml(`CT pistols (${esc(order.join(' - '))})`));
     parts.push(
       li(
         s.ct.map((r) => {
@@ -188,7 +207,9 @@ function renderUtility(esc, s, mapCode) {
     const bag = s.sides[side];
     if (!bag) continue;
     parts.push(
-      `<p><strong>${side}, full buy vs full buy</strong> (${link(esc, `${bag.rounds} rounds`, bag.files)})</p>`
+      headingHtml(
+        `${side}, full buy vs full buy (${link(esc, `${bag.rounds} rounds`, bag.files)})`
+      )
     );
     parts.push(
       `<p>Average per round: smokes ${bag.avg.smokegrenade}, molotovs ${bag.avg.molotov}, flashes ${bag.avg.flashbang}, HE ${bag.avg.hegrenade}.</p>`
@@ -219,7 +240,7 @@ function renderTells(esc, s) {
       link(esc, String(t.rounds), t.files),
       esc(t.others.map((o) => `${o.label} ${o.rounds}`).join(', ') || '—')
     ]);
-    parts.push(`<p><strong>${side}</strong></p>`);
+    parts.push(headingHtml(side));
     parts.push(table(['Utility', 'Call', 'Rate', 'Rounds', 'Thrown', 'Otherwise'], rows));
   }
   if (!parts.length) {
@@ -249,8 +270,9 @@ function renderResponses(esc, s) {
         reply.winrate === null ? '—' : `${reply.winrate}%`
       ])
     );
+    parts.push(headingHtml(side));
     parts.push(
-      `<p><strong>${side}</strong>, answering something ${bag.other} did ${bag.lead}s+ earlier, in ${bag.minShare}%+ of those rounds and at least ${bag.minRounds} times</p>`
+      `<p>Answering something ${bag.other} did ${bag.lead}s+ earlier, in ${bag.minShare}%+ of those rounds and at least ${bag.minRounds} times</p>`
     );
     parts.push(table(['When they', 'We answer', 'Rate', 'Rounds', 'Win'], rows));
   }
@@ -290,7 +312,7 @@ function renderAntiBuy(esc, s) {
           : '—'
       ];
     });
-    parts.push(`<p><strong>${side}</strong></p>`);
+    parts.push(headingHtml(side));
     parts.push(
       table(
         ['Round', 'N', 'Win', side === 'T' ? 'Commit' : 'First fight', 'Shape', 'Calls'],
@@ -322,7 +344,7 @@ function renderBuyContext(esc, s) {
             .join(', ')
         : '—'
     ]);
-    parts.push(`<p><strong>${side}</strong></p>`);
+    parts.push(headingHtml(side));
     parts.push(table(['Round', 'N', 'Win', 'Set call', 'Default', 'Calls'], rows));
   }
   return parts.length ? parts.join('') : NONE;
@@ -358,7 +380,7 @@ function renderAdvantageSide(esc, s, label) {
         rounds: s.spacing.rounds
       })
     : '';
-  return `<p><strong>${label}</strong> (${link(esc, `${s.rounds} rounds`, s.files)})</p>${li(rows)}${chart}`;
+  return `${headingHtml(`${label} (${link(esc, `${s.rounds} rounds`, s.files)})`)}${li(rows)}${chart}`;
 }
 
 function renderAdvantage(esc, s) {
@@ -404,7 +426,8 @@ function renderFirstEngagement(esc, s, mapCode) {
           points: bag.heat
         })
       : '';
-    parts.push(`<p><strong>${side}</strong> (${bag.rounds} rounds)</p>${li(rows)}${map}`);
+    parts.push(headingHtml(`${side} (${bag.rounds} rounds)`));
+    parts.push(`${li(rows)}${map}`);
   }
   return parts.length ? parts.join('') : NONE;
 }
@@ -440,7 +463,7 @@ function renderOpenings(esc, s) {
     if (!bag) continue;
     const head = side === 'CT' ? 'CT, AWP openings' : side;
     parts.push(
-      `<p><strong>${esc(head)}</strong> (${link(esc, `${bag.rounds} rounds`, bag.files)})</p>`
+      headingHtml(`${esc(head)} (${link(esc, `${bag.rounds} rounds`, bag.files)})`)
     );
     parts.push(
       li(
@@ -624,7 +647,7 @@ function renderPhaseSide(esc, s, label) {
   if (s.ground.length) {
     rows.push(`Ground held: ${s.ground.map((g) => `${esc(g.name)} ${g.share}%`).join(', ')}`);
   }
-  return `<p><strong>${label}</strong></p>${li(rows)}`;
+  return `${headingHtml(label)}${li(rows)}`;
 }
 
 function renderPhase(esc, s) {
@@ -636,13 +659,15 @@ function renderPlayers(esc, s, mapCode) {
   if (!s.length) return NONE;
   const parts = [];
   for (const p of s) {
-    parts.push(`<h3>${esc(p.name)}</h3>`);
+    parts.push(headingHtml(esc(p.name)));
     parts.push(`<p>T: ${esc(p.tRole || 'unknown')}, CT: ${esc(p.ctRole || 'unknown')}</p>`);
     for (const side of ['T', 'CT']) {
       const bag = p.sides[side];
       if (!bag) continue;
       parts.push(
-        `<p><strong>${side} side</strong> (${bag.rounds} rounds, ${bag.fullRounds ?? bag.rounds} full buys)</p>`
+        subheadHtml(
+          `${side} side (${bag.rounds} rounds, ${bag.fullRounds ?? bag.rounds} full buys)`
+        )
       );
       if (bag.heat?.length) {
         parts.push(
@@ -713,7 +738,7 @@ function renderPlayers(esc, s, mapCode) {
 export function buildAntistratDocHtml(spec, esc) {
   const mapName = MAPS[spec.mapCode]?.name || spec.mapCode;
   const parts = [];
-  parts.push(`<h1>Antistrat: ${esc(spec.teamName)} on ${esc(mapName)}</h1>`);
+  parts.push(titleHtml(`Antistrat: ${esc(spec.teamName)} on ${esc(mapName)}`));
   parts.push(`<p>${esc(spec.matches.map((m) => m.label).join(', '))}</p>`);
 
   // One-click loads of every full buy per side, into the timeline or the
@@ -773,7 +798,7 @@ export function buildAntistratDocHtml(spec, esc) {
     const cat = antistratCategory(key);
     if (!cat || !render[key]) continue;
     const data = sections[key];
-    parts.push(`<h2>${esc(cat.label)}</h2>`);
+    parts.push(titleHtml(esc(cat.label)));
     parts.push(data ? render[key](data) : NONE);
   }
 

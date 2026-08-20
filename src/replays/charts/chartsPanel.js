@@ -83,14 +83,6 @@ export function createChartsPanel({ escapeHtml }) {
   const canvasEl = el.querySelector('#ch-canvas');
   const detailsEl = el.querySelector('#ch-details');
 
-  const pageHeadEl = document.createElement('div');
-  pageHeadEl.className = 'ch-page-actions';
-  pageHeadEl.innerHTML = `
-    <div class="ch-mode-tabs" role="tablist" aria-label="Charts mode">
-      <button type="button" class="seg-tab active" data-ch-mode="graph" role="tab" aria-selected="true">Graph</button>
-      <button type="button" class="seg-tab" data-ch-mode="compare" role="tab" aria-selected="false">Compare</button>
-    </div>`;
-
   let facts = null;
   /** Cache key of the facts currently in memory (`library` or demos:…). */
   let factsKey = '';
@@ -333,23 +325,7 @@ export function createChartsPanel({ escapeHtml }) {
       </div>`;
   }
 
-  /** Charts are scatter-only; Compare is a mode on top of the same graph. */
-  const isScatter = () => true;
   const source = () => findSubject(state.subject).source;
-
-  function syncModeTabs() {
-    const comparing = Boolean(state.compare?.on);
-    pageHeadEl.querySelectorAll('[data-ch-mode]').forEach((btn) => {
-      const on = comparing ? btn.dataset.chMode === 'compare' : btn.dataset.chMode === 'graph';
-      btn.classList.toggle('active', on);
-      btn.setAttribute('aria-selected', on ? 'true' : 'false');
-    });
-  }
-
-  function mountPageHead() {
-    document.getElementById('page-head-actions')?.replaceChildren(pageHeadEl);
-    syncModeTabs();
-  }
 
   // ---- saved views --------------------------------------------------------
   //
@@ -366,19 +342,21 @@ export function createChartsPanel({ escapeHtml }) {
       // fields this one needs.
       for (const [key, value] of Object.entries(spec)) {
         if (!(key in state)) continue;
-        if (key === 'compare' && value && typeof value === 'object') {
-          const legacySlots = Array.isArray(value.slots) ? value.slots : null;
-          state.compare = {
-            on: Boolean(value.on),
-            a: normalizeCompareSlot(value.a || legacySlots?.[0]),
-            b: normalizeCompareSlot(value.b || legacySlots?.[1])
-          };
+        if (key === 'compare') {
+          if (value && typeof value === 'object') {
+            const legacySlots = Array.isArray(value.slots) ? value.slots : null;
+            state.compare = {
+              on: false,
+              a: normalizeCompareSlot(value.a || legacySlots?.[0]),
+              b: normalizeCompareSlot(value.b || legacySlots?.[1])
+            };
+          }
           continue;
         }
         state[key] = value;
       }
       state.type = 'scatter';
-      syncModeTabs();
+      state.compare.on = false;
       renderSide();
       renderCanvas();
       mountSavedViews();
@@ -842,11 +820,7 @@ export function createChartsPanel({ escapeHtml }) {
   }
 
   function compareSlotsBlock() {
-    if (!state.compare?.on) return '';
-    return `<div class="ch-compare-slots">
-      ${compareSlotHtml('a')}
-      ${compareSlotHtml('b')}
-    </div>`;
+    return '';
   }
 
   function renderSide() {
@@ -1318,7 +1292,6 @@ export function createChartsPanel({ escapeHtml }) {
   const changeTokenRef = { current: 0 };
 
   function afterChange({ rebuildSide = true } = {}) {
-    syncModeTabs();
     // Keep the side chrome when only the plot changes; always yield so a
     // sidebar click can interrupt mid-recompute.
     if (rebuildSide) {
@@ -1355,19 +1328,6 @@ export function createChartsPanel({ escapeHtml }) {
       d.removeAttribute('open');
     }
   }
-
-  function setCompareMode(on) {
-    state.compare.on = Boolean(on);
-    state.type = 'scatter';
-    syncModeTabs();
-    afterChange();
-  }
-
-  pageHeadEl.addEventListener('click', (e) => {
-    const mode = e.target.closest('[data-ch-mode]')?.dataset?.chMode;
-    if (mode === 'graph') setCompareMode(false);
-    else if (mode === 'compare') setCompareMode(true);
-  });
 
   sideEl.addEventListener('toggle', (e) => {
     const details = e.target.closest?.('details.ch-dd');
@@ -1864,7 +1824,6 @@ export function createChartsPanel({ escapeHtml }) {
       factsKey === key &&
       factsGeneration === statsCacheGeneration()
     ) {
-      mountPageHead();
       renderSide();
       renderCanvas();
       canvasEl.removeAttribute('aria-busy');
@@ -1911,7 +1870,6 @@ export function createChartsPanel({ escapeHtml }) {
         return;
       }
       state.type = 'scatter';
-      mountPageHead();
       renderSide();
       renderCanvas();
       canvasEl.removeAttribute('aria-busy');
@@ -1943,14 +1901,12 @@ export function createChartsPanel({ escapeHtml }) {
   return {
     el,
     load,
-    mountPageHead,
     destroy() {
       document.removeEventListener('pointermove', onDocPointerMove);
       marksResizeObs?.disconnect();
       marksResizeObs = null;
       if (marksDrawPending) cancelAnimationFrame(marksDrawPending);
       hideTip();
-      if (pageHeadEl.isConnected) pageHeadEl.remove();
       el.remove();
     }
   };

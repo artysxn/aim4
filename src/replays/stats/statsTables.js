@@ -634,6 +634,16 @@ export const PLAYER_DUEL_COLUMNS = [];
 
 export const PLAYER_COLUMNS = [...PLAYER_FIXED_BASE, ...PLAYER_METRIC_COLUMNS];
 
+/** Drop the Team identity column (Overview already locks to one roster). */
+export function omitPlayerTeamColumn({ columns, fixedCount }) {
+  const teamAt = columns.findIndex((c) => c.key === 'team');
+  if (teamAt < 0) return { columns, fixedCount };
+  return {
+    columns: columns.filter((c) => c.key !== 'team'),
+    fixedCount: teamAt < fixedCount ? Math.max(1, fixedCount - 1) : fixedCount
+  };
+}
+
 /** Alias kept for the viewer scoreboard (same columns as the Statistics page). */
 export const PLAYER_COLUMNS_WITH_DUELS = PLAYER_COLUMNS;
 
@@ -1155,7 +1165,9 @@ export function statsTableHtml(rows, opts) {
     /** When set, footer averages these rows instead of the visible/sorted set. */
     averageRows = null,
     /** Keep input order (no column sort). Used for fixed comparison layouts. */
-    preserveOrder = false
+    preserveOrder = false,
+    /** Optional extra class on each body row (e.g. T/CT tint). */
+    rowClass = null
   } = opts;
   if (!rows.length) {
     return '<p class="view-empty">Nothing matches these filters.</p>';
@@ -1223,6 +1235,22 @@ export function statsTableHtml(rows, opts) {
               ? `<td class="${cls}" data-tip="${escapeHtml(t)}">${label}</td>`
               : `<td class="${cls}">${label}</td>`;
           }
+          if (typeof c.html === 'function') {
+            const content = c.html(r);
+            const t = c.tip?.(r);
+            const cls = [
+              c.align === 'left' ? 'left' : '',
+              c.strong ? 'strong' : '',
+              typeof c.cellClass === 'function' ? c.cellClass(r) : c.cellClass || '',
+              t ? 'has-tip' : '',
+              stick.trim()
+            ]
+              .filter(Boolean)
+              .join(' ');
+            return t
+              ? `<td class="${cls}" data-tip="${escapeHtml(t)}">${content}</td>`
+              : `<td class="${cls}">${content}</td>`;
+          }
           const text = c.cell(r);
           const t = c.tip?.(r);
           const cls = [
@@ -1240,7 +1268,13 @@ export function statsTableHtml(rows, opts) {
             : `<td class="${cls}">${content}</td>`;
         })
         .join('');
-      const rowCls = r.compareRole === 'us' ? ' class="st-row-us"' : '';
+      const extra = [
+        r.compareRole === 'us' ? 'st-row-us' : '',
+        rowClass ? rowClass(r) : ''
+      ]
+        .filter(Boolean)
+        .join(' ');
+      const rowCls = extra ? ` class="${escapeHtml(extra)}"` : '';
       return `<tr${rowCls}>${rankCell}${cells}</tr>`;
     })
     .join('');

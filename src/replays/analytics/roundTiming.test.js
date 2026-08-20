@@ -361,7 +361,7 @@ const tag = (k, at) => ({ k, m: at === null ? {} : { When: at } });
 }
 
 // ---------------------------------------------------------------------------
-// The team overview table: fixed columns, and grey that means one thing
+// The team overview table: database chrome, one map, T/CT tint
 // ---------------------------------------------------------------------------
 
 {
@@ -373,7 +373,10 @@ const tag = (k, at) => ({ k, m: at === null ? {} : { When: at } });
       remove() {},
       appendChild() {},
       replaceChildren() {},
-      querySelector: () => null
+      querySelector: () => null,
+      querySelectorAll: () => [],
+      addEventListener() {},
+      contains() { return false; }
     })
   };
   const esc = (x) =>
@@ -384,6 +387,7 @@ const tag = (k, at) => ({ k, m: at === null ? {} : { When: at } });
     s1,
     s2: s1 === 'T' ? 'CT' : 'T',
     w,
+    f: 'round.bin',
     rl: {
       v: 7,
       t: t.map((k) => ({ k, m: { When: 20 } })),
@@ -392,7 +396,7 @@ const tag = (k, at) => ({ k, m: at === null ? {} : { When: at } });
   });
   const panel = createRoundListPanel({ escapeHtml: esc });
   panel.update({
-    mapCode: 'NUK',
+    preferredMap: 'NUK',
     teamName: 'Vitality',
     payload: {
       demos: [
@@ -413,35 +417,24 @@ const tag = (k, at) => ({ k, m: at === null ? {} : { When: at } });
   });
   const html = panel.el.innerHTML;
 
-  // Every table declares the same columns, so a panel showing several maps
-  // lines them all up rather than refitting each to its own longest name.
-  assert.ok(html.includes('<colgroup>'), 'the table pins its columns');
-  assert.ok(html.includes('tm-rl-c-when'), 'by name, so the CSS can size them once');
-  assert.ok(html.includes('table-layout') === false, 'the layout mode lives in the CSS');
-
-  // Grey is the library, everywhere, and the panel says so.
-  assert.ok(
-    /Grey<\/span> is the library average/.test(html),
-    'the legend explains what grey means'
-  );
+  assert.ok(html.includes('st-table'), 'the table uses the database chrome');
+  assert.ok(html.includes('data-rl-map'), 'a map picker sits next to the title');
+  assert.ok(html.includes('data-sort="ran"'), 'Ran is a column');
+  assert.ok(html.includes('data-sort="faced"'), 'Faced is a column');
+  assert.ok(!html.includes('Grey'), 'no library-average caption');
+  assert.ok(!html.includes('T rounds'), 'no T/CT section titles');
+  assert.ok(html.includes('tm-rl-t'), 'T rows are tinted');
+  assert.ok(html.includes('/demos?rounds='), 'Ran/Faced open those rounds in a new tab');
 
   const body = html.slice(html.indexOf('<tbody>'), html.indexOf('</tbody>'));
-  const titles = [...body.matchAll(/title="([^"]+)"/g)].map((m) => m[1]);
+  const tips = [...body.matchAll(/data-tip="([^"]+)"/g)].map((m) => m[1]);
   assert.ok(
-    titles.some((t) => /We ran it 2 times and won 1 \(50\.0%\)\. Everyone else: 3 rounds at 66\.7%/.test(t)),
-    'the winrate cell shows its working, ours and theirs'
+    tips.some((t) => /We ran this 2 times/.test(t)),
+    'Ran hover says how many we ran'
   );
   assert.ok(
-    titles.some((t) => /2 of our 2 T rounds is 100\.0%\. Everyone else: 3 of 4 is 75\.0%/.test(t)),
-    'and so does the usage cell'
-  );
-  assert.ok(
-    titles.some((t) => /100\.0% \/ 75\.0% = 1\.33x/.test(t)),
-    'the index says which division produced it'
-  );
-  assert.ok(
-    titles.some((t) => /Median clock we call it at/.test(t)),
-    'the clock says whose clock it is'
+    tips.some((t) => /Won 1 of 2 rounds we ran/.test(t)),
+    'Win% hover is the ran winrate'
   );
 }
 

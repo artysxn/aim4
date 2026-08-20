@@ -78,10 +78,6 @@
               <span class="side-icon" data-icon="database"></span>
               <span class="side-label">Database</span>
             </a>
-            <a class="side-link" href="/charts" data-nav="charts">
-              <span class="side-icon" data-icon="charts"></span>
-              <span class="side-label">Charts</span>
-            </a>
             <a class="side-link" href="/patterns" data-nav="patterns">
               <span class="side-icon" data-icon="pattern-inspector"></span>
               <span class="side-label">Pattern Finder</span>
@@ -95,7 +91,15 @@
                 <span class="side-icon" data-icon="pf-antistrat"></span>
                 <span class="side-label">Teams</span>
               </a>
+              <a class="side-link side-sub-link" href="/patterns?chapter=charts" data-pf-chapter="charts">
+                <span class="side-icon" data-icon="charts"></span>
+                <span class="side-label">Charts</span>
+              </a>
             </div>
+            <a class="side-link" href="/performance" data-nav="performance">
+              <span class="side-icon" data-icon="performance"></span>
+              <span class="side-label">Performance</span>
+            </a>
             <a class="side-link" href="/uploads" data-nav="uploads">
               <span class="side-icon" data-icon="uploads"></span>
               <span class="side-label">My Uploads</span>
@@ -136,7 +140,7 @@
             </a>
             <a class="side-link" href="/team/replays" data-nav="team-autocoach">
               <span class="side-icon" data-icon="team-autocoach"></span>
-              <span class="side-label">Team Replays</span>
+              <span class="side-label">Matches</span>
             </a>
             <a class="side-link" href="/team/creator" data-nav="team-creator">
               <span class="side-icon" data-icon="team-creator"></span>
@@ -150,7 +154,19 @@
             <span class="side-cat-label">Training</span>
             <a class="side-link" href="/training" data-nav="training">
               <span class="side-icon" data-icon="gamemodes"></span>
-              <span class="side-label">Gamemodes</span>
+              <span class="side-label">Play</span>
+            </a>
+            <a class="side-link" href="/map-practice" data-nav="map-practice">
+              <span class="side-icon" data-icon="map-practice"></span>
+              <span class="side-label">Map Practice</span>
+            </a>
+            <a class="side-link" href="/routines" data-nav="routines">
+              <span class="side-icon" data-icon="routines"></span>
+              <span class="side-label">Routines</span>
+            </a>
+            <a class="side-link" href="/achievements" data-nav="achievements">
+              <span class="side-icon" data-icon="achievements"></span>
+              <span class="side-label">Achievements</span>
             </a>
             <a class="side-link" href="/leaderboards" data-nav="leaderboards">
               <span class="side-icon" data-icon="leaderboards"></span>
@@ -159,14 +175,6 @@
             <a class="side-link" href="/replay-viewer" data-nav="replay-viewer">
               <span class="side-icon" data-icon="replay-viewer"></span>
               <span class="side-label">Replay Viewer</span>
-            </a>
-            <a class="side-link" href="/routines" data-nav="routines">
-              <span class="side-icon" data-icon="routines"></span>
-              <span class="side-label">Routines</span>
-            </a>
-            <a class="side-link" href="/map-practice" data-nav="map-practice">
-              <span class="side-icon" data-icon="map-practice"></span>
-              <span class="side-label">Map Practice</span>
             </a>
           </div>
 
@@ -273,12 +281,6 @@
                 <div id="rp-analytics-body"></div>
               </div>
             </div>
-
-            <div class="view-pad view-pad-fill rp-charts-page" id="rp-charts-page" hidden>
-              <div class="rp-stats-panel">
-                <div id="rp-charts-body"></div>
-              </div>
-            </div>
           </section>
 
           <!-- Team -------------------------------------------------------- -->
@@ -370,6 +372,20 @@
             </div>
           </section>
 
+          <!-- Achievements ----------------------------------------------- -->
+          <section class="view" data-view="achievements">
+            <div class="view-pad">
+              <p class="view-empty">Achievements are coming soon.</p>
+            </div>
+          </section>
+
+          <!-- Performance ------------------------------------------------ -->
+          <section class="view" data-view="performance">
+            <div class="view-pad">
+              <p class="view-empty">Performance is coming soon.</p>
+            </div>
+          </section>
+
           <!-- Replay Viewer (aim-trainer profiles + last/best runs) -------- -->
           <section class="view" data-view="replay-viewer">
             <div class="view-pad">
@@ -428,7 +444,7 @@
             <div class="foot-col">
               <h4>Game</h4>
               <a href="/train">Trainer</a>
-              <a href="/training" data-nav="training">Gamemodes</a>
+              <a href="/training" data-nav="training">Play</a>
               <a href="/leaderboards" data-nav="leaderboards">Leaderboards</a>
               <a href="/demos" data-nav="demos">Demo Manager</a>
               <a href="/database" data-nav="database">Database</a>

@@ -50,6 +50,11 @@ import { createRoundListPanel } from '../replays/analytics/roundListPanel.js';
 import { analyzeDemoCoach } from '../replays/coach/analyzeDemo.js';
 import { COACH_CATEGORY_LABELS } from '../replays/coach/coachMessages.js';
 import { POSITION_MAPS, positionsFor } from '../replays/roles/teamPositions.js';
+import {
+  mapWinrateCompareKind,
+  mapWinrateGapSpan,
+  mapWinrateHint
+} from '../replays/analytics/mapWinrateHint.js';
 import { createDocsEditor } from './docsEditor.js';
 import { mountDrawingBoard } from './drawingBoard.js';
 import { mountUtilityArchive } from './utilityArchive.js';
@@ -58,6 +63,8 @@ import { renderStratNoteLinks, safeHref } from './stratNoteLinks.js';
 
 /** Below this a per-side winrate is noise, so the bar stays empty. */
 const MIN_SIDE_ROUNDS = 12;
+/** Overview map pool: Overpass is out of the active pool. */
+const OVERVIEW_MAPS = POSITION_MAPS.filter((m) => m.code !== 'OVP');
 
 const PAGES = [
   'team-overview',
@@ -190,6 +197,8 @@ export function initTeamView({ auth, escapeHtml }) {
   /** Lazy-loaded timeline viewer module. */
   let viewerModule = null;
   let openDocId = '';
+  /** Filter on the Documents page search box. */
+  let docsQuery = '';
   /** Public /d/<code> landings — view-only, signed in or not. */
   let pendingShare = '';
   let openingShare = false;
@@ -637,7 +646,7 @@ export function initTeamView({ auth, escapeHtml }) {
   }
 
   function emptyMapStats() {
-    return POSITION_MAPS.map((m) => ({
+    return OVERVIEW_MAPS.map((m) => ({
       code: m.code,
       name: m.name,
       matches: 0,
@@ -647,41 +656,14 @@ export function initTeamView({ auth, escapeHtml }) {
       roundWinrate: null,
       tWinrate: null,
       tRounds: 0,
+      tPrw: null,
       ctWinrate: null,
       ctRounds: 0,
+      ctPrw: null,
       pistolWinrate: null,
       pistols: 0,
       prw: null
     }));
-  }
-
-  function mapsInsightsHtml() {
-    const played = (overviewMaps.length ? overviewMaps : emptyMapStats()).filter(
-      (m) => m.matches > 0 && Number.isFinite(m.roundWinrate)
-    );
-    if (!played.length) return '';
-    const byRwr = [...played].sort((a, b) => b.roundWinrate - a.roundWinrate);
-    const best = byRwr[0];
-    const worst = byRwr[byRwr.length - 1];
-    const byPistol = [...played]
-      .filter((m) => m.pistols >= 2 && Number.isFinite(m.pistolWinrate))
-      .sort((a, b) => b.pistolWinrate - a.pistolWinrate);
-    const pistol = byPistol[0];
-    const bits = [
-      `Best RWR: ${escapeHtml(best.name)} ${escapeHtml(pct1(best.roundWinrate))}`,
-      best !== worst
-        ? `Lowest RWR: ${escapeHtml(worst.name)} ${escapeHtml(pct1(worst.roundWinrate))}`
-        : ''
-    ];
-    if (pistol) {
-      bits.push(
-        `Pistols: ${escapeHtml(pistol.name)} ${escapeHtml(pct1(pistol.pistolWinrate))}`
-      );
-    }
-    return `<ul class="tm-map-insights">${bits
-      .filter(Boolean)
-      .map((b) => `<li>${b}</li>`)
-      .join('')}</ul>`;
   }
 
   function mapsBodyHtml() {
@@ -694,37 +676,44 @@ export function initTeamView({ auth, escapeHtml }) {
      *
      * Anchored at 50%, because a map pool decision is never "how high is this
      * number" but "which side of even is it, and by how much". Below-even bars
-     * grow left from the centre line, above-even grow right.
+     * grow left from the centre line, above-even grow right. Predicted winrate
+     * sits on the same track as a dashed overlay of the gap vs actual.
      */
-    const sideBar = (side, rate, rounds) => {
+    const sideBar = (side, rate, rounds, prw) => {
       const known = Number.isFinite(rate) && rounds >= MIN_SIDE_ROUNDS;
       const offset = known ? Math.max(-50, Math.min(50, rate - 50)) : 0;
       const left = offset < 0 ? 50 + offset : 50;
-      return `<span class="tm-map-bar" data-side="${side}"
-        title="${side} round winrate${known ? ` ${pct1(rate)} over ${rounds} rounds` : ', not enough rounds yet'}">
+      const kind = known ? mapWinrateCompareKind(rate, prw) : '';
+      const gap = kind ? mapWinrateGapSpan(rate, prw) : null;
+      const overlay =
+        gap && kind
+          ? `<span class="tm-map-bar-prw is-${kind}" style="left:${gap.left}%;width:${gap.width}%"></span>`
+          : '';
+      const hint = kind ? mapWinrateHint(rate, prw) : '';
+      const title = hint
+        ? hint
+        : `${side} round winrate${known ? ` ${pct1(rate)} over ${rounds} rounds` : ', not enough rounds yet'}`;
+      return `<span class="tm-map-bar" data-side="${side}" title="${escapeHtml(title)}">
         <span class="tm-map-bar-track">
           <span class="tm-map-bar-fill" style="left:${left}%;width:${Math.abs(offset)}%"></span>
+          ${overlay}
         </span>
-        <span class="tm-map-bar-label">${side} ${known ? escapeHtml(pct1(rate)) : '—'}</span>
+        <span class="tm-map-bar-label">${side}</span>
       </span>`;
     };
-    return `${mapsInsightsHtml()}<ul class="tm-maps-list">${rows
+    return `<ul class="tm-maps-list">${rows
       .map((m) => {
         const active = overviewMapFilter === m.code ? ' is-active' : '';
-        const record =
-          m.matches > 0 ? `${m.wins}–${m.losses}` : '—';
+        const name =
+          m.matches > 0
+            ? `${escapeHtml(m.name)} (${m.wins}W, ${m.losses}L)`
+            : escapeHtml(m.name);
         return `
       <li class="tm-map-row${active}" data-tm-map="${escapeHtml(m.code)}" role="button" tabindex="0">
-        <span class="tm-map-name">${escapeHtml(m.name)}</span>
-        <span class="tm-map-wl" title="Map wins–losses">${escapeHtml(record)}</span>
-        <span class="tm-map-rwr" title="Round winrate">${escapeHtml(pct1(m.roundWinrate))}</span>
-        <span class="tm-map-prw" title="Predicted round winrate">${escapeHtml(pct1(m.prw))}</span>
-        <span class="tm-map-pistol" title="Pistol rounds won${
-          m.pistols ? ` (${m.pistols})` : ''
-        }">${escapeHtml(pct1(m.pistolWinrate))}</span>
+        <span class="tm-map-name">${name}</span>
         <span class="tm-map-bars">
-          ${sideBar('T', m.tWinrate, m.tRounds)}
-          ${sideBar('CT', m.ctWinrate, m.ctRounds)}
+          ${sideBar('T', m.tWinrate, m.tRounds, m.tPrw)}
+          ${sideBar('CT', m.ctWinrate, m.ctRounds, m.ctPrw)}
         </span>
       </li>`;
       })
@@ -773,7 +762,7 @@ export function initTeamView({ auth, escapeHtml }) {
       const want = teamNameKey(team?.name || '');
       /** @type {Map<string, {matches: number, wins: number, losses: number, rounds: number, won: number, prwSum: number, prwN: number}>} */
       const acc = new Map();
-      for (const m of POSITION_MAPS) {
+      for (const m of OVERVIEW_MAPS) {
         acc.set(m.code, {
           matches: 0,
           wins: 0,
@@ -784,8 +773,8 @@ export function initTeamView({ auth, escapeHtml }) {
           prwN: 0,
           // Per side, because a map is two different games and a single
           // winrate hides which half of it is the problem.
-          T: { rounds: 0, won: 0 },
-          CT: { rounds: 0, won: 0 },
+          T: { rounds: 0, won: 0, prwSum: 0, prwN: 0 },
+          CT: { rounds: 0, won: 0, prwSum: 0, prwN: 0 },
           pistols: 0,
           pistolsWon: 0
         });
@@ -819,11 +808,16 @@ export function initTeamView({ auth, escapeHtml }) {
           if (Number.isFinite(prw)) {
             s.prwSum += prw;
             s.prwN += 1;
+            if (bag) {
+              bag.prwSum += prw;
+              bag.prwN += 1;
+            }
           }
         }
       }
       const rate = (bag) => (bag.rounds ? (bag.won / bag.rounds) * 100 : null);
-      overviewMaps = POSITION_MAPS.map((m) => {
+      const sidePrw = (bag) => (bag.prwN ? bag.prwSum / bag.prwN : null);
+      overviewMaps = OVERVIEW_MAPS.map((m) => {
         const s = acc.get(m.code);
         return {
           code: m.code,
@@ -835,8 +829,10 @@ export function initTeamView({ auth, escapeHtml }) {
           roundWinrate: s.rounds ? (s.won / s.rounds) * 100 : null,
           tWinrate: rate(s.T),
           tRounds: s.T.rounds,
+          tPrw: sidePrw(s.T),
           ctWinrate: rate(s.CT),
           ctRounds: s.CT.rounds,
+          ctPrw: sidePrw(s.CT),
           pistolWinrate: s.pistols ? (s.pistolsWon / s.pistols) * 100 : null,
           pistols: s.pistols,
           prw: s.prwN ? s.prwSum / s.prwN : null
@@ -855,31 +851,20 @@ export function initTeamView({ auth, escapeHtml }) {
 
   /**
    * The round library panel reads the stats panel's payload rather than
-   * fetching again: a map pick already pulls the full library in for the
-   * compare columns, and that is exactly the basis the averages need.
+   * fetching again. Map picks stay on this team's demos.
    */
   function paintRoundList() {
     if (!overviewRoundList) return;
     overviewRoundList.update({
-      mapCode: overviewMapFilter,
+      preferredMap: overviewMapFilter,
       teamName: team?.name || '',
-      payload: overviewStatsPanel?.getPayload?.() || null,
-      scoped: overviewStatsPanel?.isLibraryScope?.() === false
+      payload: overviewStatsPanel?.getPayload?.() || null
     });
   }
 
   function applyOverviewMapToStats() {
     if (!overviewStatsPanel?.applyView) return;
-    // Maps only — do not reset Players/Teams; remounts and map picks used to force Teams.
-    const maps = overviewMapFilter || [];
-    // Full-library compare only when a single map is picked (worst/best/mid).
-    if (overviewMapFilter && overviewStatsPanel.ensureLibraryPayload) {
-      void overviewStatsPanel.ensureLibraryPayload().then(() => {
-        overviewStatsPanel.applyView({ maps });
-        paintRoundList();
-      });
-      return;
-    }
+    const maps = overviewMapFilter ? [overviewMapFilter] : [];
     overviewStatsPanel.applyView({ maps });
     paintRoundList();
   }
@@ -910,10 +895,13 @@ export function initTeamView({ auth, escapeHtml }) {
     const mount = document.getElementById('tm-overview-stats');
     if (mount) {
       const ids = teamDemos.map((d) => d.id).filter(Boolean);
-      // Team-scoped stats for the default view (fast). Full library is loaded
-      // lazily when a map chip is selected for database-wide compare.
+      // Team-scoped stats. Map picks filter those same demos; they do not
+      // expand to the full database.
       const key = `${team.id}|${teamNameKey(team.name)}|${ids.join(',')}`;
-      if (!overviewStatsPanel) overviewStatsPanel = createStatsPanel({ escapeHtml });
+      if (!overviewStatsPanel) overviewStatsPanel = createStatsPanel({
+        escapeHtml,
+        omitTeamColumn: true
+      });
       if (overviewStatsPanel.el.parentElement !== mount) {
         mount.replaceChildren(overviewStatsPanel.el);
       }
@@ -1048,13 +1036,6 @@ export function initTeamView({ auth, escapeHtml }) {
             <div class="tm-card-head">
               <h3 class="tm-card-title">Map winrate</h3>
             </div>
-            <div class="tm-maps-head" aria-hidden="true">
-              <span></span>
-              <span>W–L</span>
-              <span>RWR</span>
-              <span>PRW</span>
-              <span>PIS</span>
-            </div>
             <div id="tm-overview-maps">${mapsBodyHtml()}</div>
           </section>
         </div>
@@ -1085,6 +1066,9 @@ export function initTeamView({ auth, escapeHtml }) {
   function sharedDocHtml(doc) {
     return `
       <div class="tm-docs tm-docs-shared">
+        <aside class="tm-docs-side">
+          <nav class="tm-doc-outline" data-doc-outline hidden></nav>
+        </aside>
         <div class="tm-doc-main" id="tm-doc-main">
           <div class="tm-doc-head">
             <h1 class="tm-doc-title-static">${escapeHtml(doc.title || 'Untitled')}</h1>
@@ -1137,68 +1121,43 @@ export function initTeamView({ auth, escapeHtml }) {
   }
 
   function documentsHtml() {
-    const docs = [...(team.documents || [])].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
-    const open = docs.find((d) => d.id === openDocId);
-    const shareUrl = open ? documentShareUrl(open.shareId) : '';
+    const open = (team.documents || []).find((d) => d.id === openDocId);
     return `
-      ${headerHtml('', '<button type="button" class="btn btn-sm primary" data-new-doc>New document</button>')}
+      ${headerHtml('')}
       <div class="tm-docs">
-        <aside class="tm-doc-list">
-          ${
-            docs.length
-              ? docs
-                  .map(
-                    (d) => `
-              <div class="tm-doc-item${d.id === openDocId ? ' active' : ''}" data-open-doc="${escapeHtml(d.id)}">
-                <span class="tm-doc-name">${escapeHtml(d.title)}</span>
-                <span class="tm-doc-meta">@${escapeHtml(d.authorName || '')} · ${escapeHtml(
-                  formatWhen(d.updatedAt)
-                )}</span>
-                ${
-                  d.canEdit
-                    ? `<button type="button" class="rp-btn-icon danger tm-doc-del" data-del-doc="${escapeHtml(
-                        d.id
-                      )}" title="Delete">×</button>`
-                    : ''
-                }
-              </div>`
-                  )
-                  .join('')
-              : '<p class="view-empty">No documents yet.</p>'
-          }
+        <aside class="tm-docs-side">
+        <div class="tm-doc-list">
+          ${docsListInnerHtml()}
+        </div>
+        <nav class="tm-doc-outline" data-doc-outline hidden></nav>
         </aside>
         <div class="tm-doc-main" id="tm-doc-main">
           ${
             open
-              ? `<div class="tm-doc-head">
-                  <input class="site-input tm-doc-title" id="tm-doc-title" value="${escapeHtml(
-                    open.title
-                  )}" ${open.canEdit ? '' : 'readonly'} maxlength="120" />
-                  ${
-                    shareUrl
-                      ? `<button type="button" class="btn btn-sm" data-copy-doc-link title="${escapeHtml(
-                          shareUrl
-                        )}">Copy link</button>`
-                      : ''
-                  }
-                  <span class="tm-note">Last edit by @${escapeHtml(open.updatedBy || open.authorName || '')}</span>
-                </div>
-                <div id="tm-doc-editor"></div>`
+              ? `<div id="tm-doc-editor"></div>`
               : '<p class="view-empty">Pick a document, or start a new one.</p>'
           }
         </div>
       </div>`;
   }
 
-  /** Patch the docs sidebar / title without tearing down the live editor. */
-  function refreshDocsChrome() {
-    const list = shellEl.querySelector('.tm-doc-list');
-    if (list) {
-      const docs = [...(team.documents || [])].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
-      list.innerHTML = docs.length
-        ? docs
-            .map(
-              (d) => `
+  function sortedDocs() {
+    return [...(team.documents || [])].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  }
+
+  function filteredDocs() {
+    const q = docsQuery.trim().toLowerCase();
+    const docs = sortedDocs();
+    if (!q) return docs;
+    return docs.filter((d) => {
+      const title = String(d.title || '').toLowerCase();
+      const author = String(d.authorName || '').toLowerCase();
+      return title.includes(q) || author.includes(q);
+    });
+  }
+
+  function docItemHtml(d) {
+    return `
               <div class="tm-doc-item${d.id === openDocId ? ' active' : ''}" data-open-doc="${escapeHtml(d.id)}">
                 <span class="tm-doc-name">${escapeHtml(d.title)}</span>
                 <span class="tm-doc-meta">@${escapeHtml(d.authorName || '')} · ${escapeHtml(
@@ -1211,39 +1170,77 @@ export function initTeamView({ auth, escapeHtml }) {
                       )}" title="Delete">×</button>`
                     : ''
                 }
-              </div>`
-            )
-            .join('')
+              </div>`;
+  }
+
+  function docsListInnerHtml() {
+    const docs = filteredDocs();
+    if (!docs.length) {
+      return docsQuery.trim()
+        ? '<p class="view-empty">No matching documents.</p>'
         : '<p class="view-empty">No documents yet.</p>';
     }
-    const open = (team.documents || []).find((d) => d.id === openDocId);
-    const title = shellEl.querySelector('#tm-doc-title');
-    if (title && open && document.activeElement !== title) {
-      title.value = open.title || '';
+    return docs.map(docItemHtml).join('');
+  }
+
+  function paintDocsList() {
+    const list = shellEl.querySelector('.tm-doc-list');
+    if (list) list.innerHTML = docsListInnerHtml();
+  }
+
+  function mountDocsHeadActions() {
+    const slot = document.getElementById('page-head-actions');
+    if (!slot) return;
+    if (page !== 'team-docs' || shareView) return;
+    if (slot.querySelector('[data-doc-search]')) {
+      const input = slot.querySelector('[data-doc-search]');
+      if (input && document.activeElement !== input) input.value = docsQuery;
+      return;
     }
-    const head = shellEl.querySelector('.tm-doc-head');
-    if (head && open) {
-      const shareUrl = documentShareUrl(open.shareId);
-      let copyBtn = head.querySelector('[data-copy-doc-link]');
-      if (shareUrl) {
-        if (!copyBtn) {
-          copyBtn = document.createElement('button');
-          copyBtn.type = 'button';
-          copyBtn.className = 'btn btn-sm';
-          copyBtn.dataset.copyDocLink = '';
-          copyBtn.textContent = 'Copy link';
-          const note = head.querySelector('.tm-note');
-          head.insertBefore(copyBtn, note || null);
-        }
-        copyBtn.title = shareUrl;
-      } else if (copyBtn) {
-        copyBtn.remove();
-      }
+    slot.innerHTML = `
+      <input type="search" class="tm-doc-search" data-doc-search placeholder="Search" spellcheck="false" autocomplete="off" aria-label="Search documents" />
+      <button type="button" class="btn btn-sm primary" data-new-doc>New document</button>`;
+    const input = slot.querySelector('[data-doc-search]');
+    if (input) input.value = docsQuery;
+  }
+
+  function clearDocsHeadActions() {
+    const slot = document.getElementById('page-head-actions');
+    if (slot?.querySelector('[data-doc-search]')) slot.replaceChildren();
+  }
+
+  async function createDocument() {
+    const res = await run(
+      () => saveTeamDocument(team.id, { title: 'Untitled', html: '' }),
+      'Document created.'
+    );
+    if (res?.document) {
+      team = res.team || team;
+      teams = teams.map((x) => (x.id === team.id ? team : x));
+      openDocId = res.document.id;
+      render();
     }
-    const note = shellEl.querySelector('.tm-doc-head .tm-note');
-    if (note && open) {
-      note.textContent = `Last edit by @${open.updatedBy || open.authorName || ''}`;
+  }
+
+  function syncCopyLink() {
+    const open = (team?.documents || []).find((d) => d.id === openDocId);
+    const url = open ? documentShareUrl(open.shareId) : '';
+    const btn = editor?.el?.querySelector('[data-copy-doc-link]');
+    if (!btn) return;
+    if (url) {
+      btn.hidden = false;
+      btn.title = url;
+    } else {
+      btn.hidden = true;
+      btn.title = '';
     }
+  }
+
+  /** Patch the docs sidebar without tearing down the live editor. */
+  function refreshDocsChrome() {
+    paintDocsList();
+    syncCopyLink();
+    editor?.refreshOutline?.();
   }
 
   async function mountEditor() {
@@ -1282,7 +1279,7 @@ export function initTeamView({ auth, escapeHtml }) {
     editor.load({ html: doc.html });
     if (!meta?.canEdit) {
       editor.el.querySelector('#doc-surface')?.setAttribute('contenteditable', 'false');
-      editor.el.querySelector('#doc-toolbar')?.setAttribute('hidden', 'hidden');
+      editor.el.querySelector('#doc-toolbar')?.classList.add('is-readonly');
     }
     refreshDocsChrome();
   }
@@ -2535,6 +2532,7 @@ export function initTeamView({ auth, escapeHtml }) {
 
   function render() {
     syncTeamChrome();
+    if (page !== 'team-docs' || shareView || !team) clearDocsHeadActions();
     const onBoard = page === 'team-drawing-board' || page === 'team-utility-archive';
     const onOverview = page === 'team-overview';
     if (!onBoard) destroyBoardMount();
@@ -2609,6 +2607,7 @@ export function initTeamView({ auth, escapeHtml }) {
         mountedDocId = '';
       }
       shellEl.innerHTML = documentsHtml();
+      mountDocsHeadActions();
       if (live) {
         const host = shellEl.querySelector('#tm-doc-editor');
         if (host) {
@@ -2688,12 +2687,23 @@ export function initTeamView({ auth, escapeHtml }) {
         'team-strategies': 'My Strategies',
         'team-drawing-board': 'Drawing Board',
         'team-utility-archive': 'Utility Archive',
-        'team-autocoach': 'Team Replays'
+        'team-autocoach': 'Matches'
       }[name] || 'Team'
     );
   }
 
   // ---- events -------------------------------------------------------------
+
+  document.getElementById('page-head-actions')?.addEventListener('click', (e) => {
+    if (page !== 'team-docs' || shareView) return;
+    if (e.target.closest('[data-new-doc]')) void createDocument();
+  });
+  document.getElementById('page-head-actions')?.addEventListener('input', (e) => {
+    const search = e.target.closest?.('[data-doc-search]');
+    if (!search || page !== 'team-docs') return;
+    docsQuery = search.value;
+    paintDocsList();
+  });
 
   shellEl.addEventListener('click', async (e) => {
     const t = e.target;
@@ -2937,16 +2947,7 @@ export function initTeamView({ auth, escapeHtml }) {
 
     // ---- documents --------------------------------------------------------
     if (t.closest('[data-new-doc]')) {
-      const res = await run(
-        () => saveTeamDocument(team.id, { title: 'Untitled', html: '' }),
-        'Document created.'
-      );
-      if (res?.document) {
-        team = res.team || team;
-        teams = teams.map((x) => (x.id === team.id ? team : x));
-        openDocId = res.document.id;
-        render();
-      }
+      void createDocument();
       return;
     }
     const delDoc = t.closest('[data-del-doc]');
@@ -3141,19 +3142,6 @@ export function initTeamView({ auth, escapeHtml }) {
       const res = await run(
         () => setTeamPosition(team.id, memberId, rolesSide, map, pos.value),
         'Position saved.'
-      );
-      if (res?.team) {
-        team = res.team;
-        teams = teams.map((x) => (x.id === team.id ? team : x));
-      }
-      return;
-    }
-
-    const title = t.closest('#tm-doc-title');
-    if (title && openDocId) {
-      const res = await run(
-        () => saveTeamDocument(team.id, { id: openDocId, title: title.value }),
-        'Renamed.'
       );
       if (res?.team) {
         team = res.team;
@@ -3520,6 +3508,7 @@ export function initTeamView({ auth, escapeHtml }) {
     },
     onHide() {
       if (shareView) return;
+      clearDocsHeadActions();
       editor?.flush();
       editor?.destroy();
       editor = null;

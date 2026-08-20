@@ -24,10 +24,12 @@ import sideDatabase from '../icons/sideicons/sideicon_database.svg?raw';
 import sideCharts from '../icons/sideicons/sideicon_charts.svg?raw';
 import sideInspector from '../icons/sideicons/sideicon_inspector.svg?raw';
 import sideUpload from '../icons/sideicons/sideicon_upload.svg?raw';
+import sidePerformance from '../icons/sideicons/sideicon_performance.svg?raw';
 import sideGamemodes from '../icons/sideicons/sideicon_gamemodes.svg?raw';
 import sideLeaderboards from '../icons/sideicons/sideicon_leaderboards.svg?raw';
 import sideReplayViewer from '../icons/sideicons/sideicon_replayviewer.svg?raw';
 import sideRoutines from '../icons/sideicons/sideicon_routines.svg?raw';
+import sideAchievements from '../icons/sideicons/sideicon_achievements.svg?raw';
 import sideMapPractice from '../icons/sideicons/sideicon_map_practice.svg?raw';
 import sideTeam from '../icons/sideicons/sideicon_team.svg?raw';
 import sideTeamDocs from '../icons/sideicons/sideicon_docs.svg?raw';
@@ -153,6 +155,7 @@ const ICONS = {
   'demo-playlists': sidePlaylists,
   database: sideDatabase,
   charts: sideCharts,
+  performance: sidePerformance,
   'pattern-inspector': sideInspector,
   'pf-players': pfPlayers,
   'pf-antistrat': pfAntistrat,
@@ -164,6 +167,7 @@ const ICONS = {
   leaderboards: sideLeaderboards,
   'replay-viewer': sideReplayViewer,
   routines: sideRoutines,
+  achievements: sideAchievements,
   'map-practice': sideMapPractice,
   team: sideTeam,
   'team-docs': sideTeamDocs,
@@ -246,7 +250,7 @@ if (IS_MOBILE) {
     trainingPad.innerHTML = `
       <div class="mobile-desktop-only">
         <h3>Aim training is desktop only</h3>
-        <p>Gamemodes need a mouse and pointer lock.</p>
+        <p>Play needs a mouse and pointer lock.</p>
         <a class="btn" href="${viewSwitchUrl('desktop')}">Use the desktop site</a>
       </div>`;
   }
@@ -448,13 +452,6 @@ const ROUTES = {
   demos: { title: 'Demo Manager', path: '/demos', shell: 'replays', page: 'library' },
   playlists: { title: 'Demo Playlists', path: '/playlists', shell: 'replays', page: 'playlists' },
   database: { title: 'Database', path: '/database', shell: 'replays', page: 'stats' },
-  charts: {
-    title: 'Charts',
-    path: '/charts',
-    shell: 'replays',
-    page: 'charts',
-    requires: 'analytics.charts'
-  },
   patterns: {
     title: 'Pattern Finder',
     path: '/patterns',
@@ -462,6 +459,7 @@ const ROUTES = {
     page: 'analytics',
     requires: 'analytics.pattern_finder'
   },
+  performance: { title: 'Performance', path: '/performance', shell: 'performance' },
   uploads: { title: 'My Uploads', path: '/uploads', shell: 'replays', page: 'upload' },
   team: { title: 'Team', path: '/team', shell: 'team', page: 'team-overview' },
   'team-documents': {
@@ -501,7 +499,7 @@ const ROUTES = {
     page: 'team-utility-archive'
   },
   'team-autocoach': {
-    title: 'Team Replays',
+    title: 'Matches',
     path: '/team/replays',
     shell: 'team',
     page: 'team-autocoach'
@@ -511,12 +509,13 @@ const ROUTES = {
     path: '/team/creator',
     shell: 'strategy-creator'
   },
-  training: { title: 'Gamemodes', path: '/training', shell: 'training' },
+  training: { title: 'Play', path: '/training', shell: 'training' },
   leaderboards: { title: 'Leaderboards', path: '/leaderboards', shell: 'leaderboards' },
   'replay-viewer': { title: 'Replay Viewer', path: '/replay-viewer', shell: 'replay-viewer' },
   football: { title: 'Football', path: '/football', shell: 'football' },
   tools: { title: 'Tools', path: '/tools', shell: 'tools' },
   routines: { title: 'Routines', path: '/routines', shell: 'routines' },
+  achievements: { title: 'Achievements', path: '/achievements', shell: 'achievements' },
   'map-practice': { title: 'Map Practice', path: '/map-practice', shell: 'map-practice' },
   player: { title: 'Player', path: '/player', shell: 'player' },
   account: { title: 'My Profile', path: '/account', shell: 'account' },
@@ -541,16 +540,21 @@ const ROUTES = {
   forbidden: { title: 'No access', path: '/403', shell: 'error' }
 };
 
-/** Old /replays/* bookmarks → new top-level paths. */
+/** Old /replays/* bookmarks → new top-level paths. Destinations may include a query. */
 const LEGACY_PATHS = {
   '/replays': '/demos',
   '/replays/playlists': '/playlists',
   '/replays/stats': '/database',
-  '/replays/charts': '/charts',
+  '/charts': '/patterns?chapter=charts',
+  '/replays/charts': '/patterns?chapter=charts',
   '/replays/analytics': '/patterns',
   '/replays/upload': '/uploads',
   '/team/autocoach': '/team/replays'
 };
+
+function legacyPathOnly(dest) {
+  return String(dest || '').split('?')[0] || '/';
+}
 
 const PATH_TO_ROUTE = Object.fromEntries(
   Object.entries(ROUTES).map(([name, r]) => [r.path, name])
@@ -569,7 +573,7 @@ function cleanPath(pathname = window.location.pathname) {
 function routeFromPath(pathname = window.location.pathname) {
   const clean = cleanPath(pathname);
   if (LEGACY_PATHS[clean]) {
-    return PATH_TO_ROUTE[LEGACY_PATHS[clean]] || 'home';
+    return PATH_TO_ROUTE[legacyPathOnly(LEGACY_PATHS[clean])] || 'home';
   }
   // A typo'd or dead link gets told so, not silently teleported home. The
   // special prefixes (/i/, /d/, /s2/, /player/…) have already been rewritten
@@ -581,12 +585,17 @@ function searchParams() {
   return Object.fromEntries(new URLSearchParams(window.location.search));
 }
 
-/** Rewrite legacy /replays/* URLs once on load (keeps query string). */
+/** Rewrite legacy /replays/* URLs once on load (keeps leftover query params). */
 {
   const clean = cleanPath();
   const next = LEGACY_PATHS[clean];
   if (next) {
-    window.history.replaceState(null, '', next + window.location.search + window.location.hash);
+    const dest = new URL(next, window.location.origin);
+    const incoming = new URLSearchParams(window.location.search);
+    for (const [k, v] of incoming) {
+      if (!dest.searchParams.has(k)) dest.searchParams.set(k, v);
+    }
+    window.history.replaceState(null, '', dest.pathname + dest.search + window.location.hash);
   }
 }
 
@@ -734,16 +743,23 @@ function applyRouteGate(route, shell) {
   const host = document.querySelector(`.view[data-view="${shell}"]`);
   if (!host) return;
   host.querySelector(':scope > .upgrade-gate')?.remove();
-  if (!route.requires) return;
+  let requires = route.requires;
+  if (
+    route.path === '/patterns' &&
+    new URLSearchParams(window.location.search).get('chapter') === 'charts'
+  ) {
+    requires = 'analytics.charts';
+  }
+  if (!requires) return;
 
   const show = () => {
     host.querySelector(':scope > .upgrade-gate')?.remove();
     if (activeRoute !== PATH_TO_ROUTE[route.path]) return;
-    if (entitlements.can(route.requires)) return;
-    const tier = entitlements.requiredPlan(route.requires);
+    if (entitlements.can(requires)) return;
+    const tier = entitlements.requiredPlan(requires);
     host.prepend(
       upgradePrompt({
-        message: `${entitlements.label(route.requires)} is available on ${
+        message: `${entitlements.label(requires)} is available on ${
           PLAN_NAMES[tier] || tier
         }.`,
         requiredTier: tier,
@@ -899,8 +915,17 @@ document.addEventListener('click', (e) => {
     setView('player', true, { ...params, id: player[1] });
     return;
   }
-  const route =
-    PATH_TO_ROUTE[clean] || (LEGACY_PATHS[clean] ? PATH_TO_ROUTE[LEGACY_PATHS[clean]] : '');
+  const legacy = LEGACY_PATHS[clean];
+  if (legacy) {
+    const dest = new URL(legacy, window.location.origin);
+    e.preventDefault();
+    setView(PATH_TO_ROUTE[dest.pathname] || 'home', true, {
+      ...Object.fromEntries(dest.searchParams),
+      ...params
+    });
+    return;
+  }
+  const route = PATH_TO_ROUTE[clean];
   if (!route) return;
   e.preventDefault();
   setView(route, true, params);

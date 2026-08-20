@@ -171,7 +171,7 @@ export function initHomeView({ auth, escapeHtml }) {
   /** The four places worth one click from the front page. */
   function jumpHtml() {
     const links = [
-      ['/training', 'training', 'Gamemodes'],
+      ['/training', 'training', 'Play'],
       ['/demos', 'demos', 'Demo Manager'],
       ['/team', 'team', 'Team'],
       ['/leaderboards', 'leaderboards', 'Leaderboards']

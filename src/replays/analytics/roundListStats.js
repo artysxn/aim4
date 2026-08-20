@@ -17,7 +17,7 @@ import { rowTags } from './roundTags.js';
 const pct = (part, whole) => (whole > 0 ? Math.round((part / whole) * 1000) / 10 : null);
 
 function emptyBag() {
-  return { rounds: 0, wins: 0, at: [] };
+  return { rounds: 0, wins: 0, at: [], files: new Set() };
 }
 
 const rate = (bag) => pct(bag.wins, bag.rounds);
@@ -43,13 +43,16 @@ function timing(bag) {
  * @property {string} label
  * @property {{ rounds: number, wins: number, winrate: number|null, share: number|null }} ours
  *   The team running the call on this side.
- * @property {{ rounds: number, wins: number, winrate: number|null }} faced
+ * @property {{ rounds: number, wins: number, winrate: number|null, share: number|null, files: string[] }} faced
  *   The same call arriving at them from the other side.
  * @property {{ rounds: number, wins: number, winrate: number|null, share: number|null }} league
  *   Every team in the payload, this call on this side.
  * @property {number|null} index
  *   Our share of rounds divided by the library's. 1 is average, 2 is twice as
  *   often, null when the library has never run it.
+ * @property {number|null} facedIndex
+ *   Faced share divided by the library's. Above 1 means opponents call it
+ *   against us more than the library does.
  */
 
 /**
@@ -118,6 +121,8 @@ export function roundListStats(payload, { mapCode, teamName }) {
           if (row.w === ours) bag.wins++;
           const at = tagTrigger(tag);
           if (at !== null) bag.at.push(at);
+          const file = String(row.f || '').trim();
+          if (file) bag.files.add(file);
         }
       }
     }
@@ -131,20 +136,34 @@ export function roundListStats(payload, { mapCode, teamName }) {
       const facedBag = b.faced.get(def.key) || emptyBag();
       const leagueBag = b.league.get(def.key) || emptyBag();
       const ourShare = pct(ourBag.rounds, b.ourRounds);
+      const facedShare = pct(facedBag.rounds, b.facedRounds);
       const leagueShare = pct(leagueBag.rounds, b.leagueRounds);
+      const pack = (bag, extra) => ({
+        rounds: bag.rounds,
+        wins: bag.wins,
+        at: bag.at,
+        files: [...(bag.files || [])],
+        ...extra
+      });
       return {
         key: def.key,
         label: def.label,
         desc: def.desc,
-        ours: { ...ourBag, winrate: rate(ourBag), share: ourShare, timing: timing(ourBag) },
-        faced: { ...facedBag, winrate: rate(facedBag), timing: timing(facedBag) },
-        league: {
-          ...leagueBag,
+        ours: pack(ourBag, { winrate: rate(ourBag), share: ourShare, timing: timing(ourBag) }),
+        faced: pack(facedBag, {
+          winrate: rate(facedBag),
+          share: facedShare,
+          timing: timing(facedBag)
+        }),
+        league: pack(leagueBag, {
           winrate: rate(leagueBag),
           share: leagueShare,
           timing: timing(leagueBag)
-        },
-        index: leagueShare ? Math.round((ourShare / leagueShare) * 100) / 100 : null
+        }),
+        index: leagueShare ? Math.round((ourShare / leagueShare) * 100) / 100 : null,
+        facedIndex: leagueShare && facedShare != null
+          ? Math.round((facedShare / leagueShare) * 100) / 100
+          : null
       };
     });
     sides[side] = {

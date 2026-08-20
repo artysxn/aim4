@@ -6133,6 +6133,19 @@ body.rv-open {
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
 }
 
+.an-chapter-icon {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+.an-chapter-icon svg {
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
+}
+
 .an-wip-chip {
   padding: 1px 5px;
   border-radius: 4px;
@@ -7772,120 +7785,60 @@ table.rp-mine-table tbody tr {
   min-width: 0;
 }
 
-/* Round library: name · N · win% · use/avg · index · bar · faced */
+/* Round types: same table chrome as Database, one map at a time. */
 .tm-roundlist {
   min-width: 0;
 }
 
-.tm-rl-side + .tm-rl-side {
-  margin-top: 12px;
+.tm-roundlist .tm-card-head {
+  margin-bottom: 0;
 }
 
-.tm-rl-map + .tm-rl-map {
-  margin-top: 16px;
-  padding-top: 14px;
-  border-top: 1px solid var(--border);
-}
-
-.tm-rl-map-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 6px;
-}
-
-.tm-rl-map-name {
-  font: 600 13px var(--font-body);
-  color: var(--text);
-}
-
-.tm-rl-side .an-side-title small {
-  color: var(--muted);
-  font-weight: 500;
-}
-
-/* The round-type table.
-   Fixed layout with a colgroup, so every map's table lines its columns up in
-   the same places: a panel showing five maps is five tables, and auto widths
-   would refit each one to its own longest call name. */
-.tm-rl-table {
-  width: 100%;
-  table-layout: fixed;
-  border-collapse: collapse;
-  font: 500 12px var(--font-body);
-  font-variant-numeric: tabular-nums;
-}
-
-.tm-rl-c-name { width: auto; }
-.tm-rl-c-when { width: 3.4em; }
-.tm-rl-c-win { width: 6.4em; }
-.tm-rl-c-n { width: 2.4em; }
-.tm-rl-c-use { width: 6.4em; }
-.tm-rl-c-idx { width: 3.4em; }
-.tm-rl-c-bar { width: 4.5em; }
-.tm-rl-c-faced { width: 5em; }
-
-.tm-rl-table th {
-  padding: 0 8px 4px 0;
-  border-bottom: 1px solid var(--border);
-  color: var(--muted);
-  font: 500 10px var(--font-body);
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
-  text-align: right;
-  white-space: nowrap;
-}
-
-.tm-rl-table td {
-  padding: 4px 8px 4px 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.tm-rl-table tbody tr:nth-child(odd) {
-  background: rgba(255, 255, 255, 0.02);
-}
-
-/* A call this team has never run still earns its row: the gap is the finding. */
-.tm-rl-table tr.is-unused th,
-.tm-rl-table tr.is-unused td {
-  color: var(--muted);
-}
-
-th.tm-rl-name,
-.tm-rl-table th.tm-rl-name {
-  text-align: left;
-}
-
-.tm-rl-name {
-  padding: 4px 8px 4px 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-weight: 500;
-  text-align: left;
-}
-
-.tm-rl-num {
-  text-align: right;
-}
-
-/* Grey is the library average, everywhere it appears. */
-.tm-rl-sub {
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.tm-rl-barcell {
-  vertical-align: middle;
-}
-
-.tm-rl-note {
+.tm-roundlist .tm-rl-map {
+  box-sizing: border-box;
+  width: 148px;
+  height: 32px;
   margin: 0;
-  color: var(--muted);
-  font: 500 11px var(--font-body);
+  padding: 0 28px 0 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background-color: #050505;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath fill='%235c5c62' d='M1 1l4 4 4-4'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  background-size: 10px 6px;
+  color: #5c5c62;
+  font: 400 13px var(--font-body);
+  line-height: 32px;
+  appearance: none;
+  -webkit-appearance: none;
+  outline: none;
+}
+
+.tm-roundlist .st-hscroll-body {
+  max-height: min(70vh, 640px);
+  overflow-x: auto;
+  overflow-y: auto;
+}
+
+.tm-roundlist .st-table tbody tr.tm-rl-t td,
+.tm-roundlist .st-table tbody tr.tm-rl-t td.st-sticky {
+  background-color: #1c0606;
+}
+
+.tm-roundlist .st-table tbody tr.tm-rl-ct td,
+.tm-roundlist .st-table tbody tr.tm-rl-ct td.st-sticky {
+  background-color: #091626;
+}
+
+.tm-roundlist .st-table tbody tr.tm-rl-t:hover td,
+.tm-roundlist .st-table tbody tr.tm-rl-t:hover td.st-sticky {
+  background-color: #2a0c0c;
+}
+
+.tm-roundlist .st-table tbody tr.tm-rl-ct:hover td,
+.tm-roundlist .st-table tbody tr.tm-rl-ct:hover td.st-sticky {
+  background-color: #0d2238;
 }
 
 .tm-overview-stats-mount {
@@ -7916,44 +7869,25 @@ th.tm-rl-name,
   border-radius: 0;
 }
 
-.tm-maps-head,
-/* name · W-L · RWR · PRW · pistols — side bars sit on the next row */
 .tm-map-row {
-  display: grid;
-  grid-template-columns: minmax(5.5em, 1fr) 2.6em 3em 3em 2.8em;
-  gap: 4px 6px;
-  align-items: center;
-  font: 500 12px var(--font-body);
-  font-variant-numeric: tabular-nums;
-}
-
-.tm-maps-head {
-  color: var(--muted);
-  font: 500 10px var(--font-body);
-  letter-spacing: 0.02em;
-  padding: 0 2px 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 7px 2px;
   border-bottom: 1px solid var(--border);
-}
-
-.tm-maps-head span:not(:first-child),
-.tm-map-wl,
-.tm-map-rwr,
-.tm-map-prw,
-.tm-map-pistol {
-  text-align: right;
+  cursor: pointer;
+  color: var(--text);
 }
 
 .tm-map-bars {
-  grid-column: 1 / -1;
   display: flex;
   flex-direction: column;
-  gap: 3px;
-  padding: 2px 0 0;
+  gap: 4px;
 }
 
 .tm-map-bar {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 4.2em;
+  grid-template-columns: minmax(0, 1fr) 1.6em;
   align-items: center;
   gap: 6px;
 }
@@ -7962,8 +7896,8 @@ th.tm-rl-name,
    big the number is. The line itself is the 50% mark. */
 .tm-map-bar-track {
   position: relative;
-  height: 4px;
-  border-radius: 2px;
+  height: 8px;
+  border-radius: 3px;
   background: rgba(255, 255, 255, 0.07);
 }
 
@@ -7974,6 +7908,7 @@ th.tm-rl-name,
   top: -1px;
   bottom: -1px;
   width: 1px;
+  z-index: 2;
   background: rgba(255, 255, 255, 0.22);
 }
 
@@ -7981,8 +7916,39 @@ th.tm-rl-name,
   position: absolute;
   top: 0;
   bottom: 0;
-  border-radius: 2px;
+  border-radius: 3px;
   background: currentColor;
+}
+
+.tm-map-bar-prw {
+  position: absolute;
+  z-index: 1;
+  pointer-events: none;
+  border-radius: 3px;
+}
+
+.tm-map-bar-prw.is-under {
+  top: 2px;
+  bottom: 2px;
+  background: repeating-linear-gradient(
+    -45deg,
+    currentColor 0,
+    currentColor 1px,
+    transparent 1px,
+    transparent 3.5px
+  );
+}
+
+.tm-map-bar-prw.is-over {
+  top: 0;
+  bottom: 0;
+  background: repeating-linear-gradient(
+    -45deg,
+    currentColor 0,
+    currentColor 2.5px,
+    transparent 2.5px,
+    transparent 3.5px
+  );
 }
 
 .tm-map-bar[data-side='T'] {
@@ -8007,28 +7973,6 @@ th.tm-rl-name,
   flex-direction: column;
 }
 
-.tm-map-insights {
-  list-style: none;
-  margin: 0 0 8px;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  color: var(--muted);
-  font: 500 12px var(--font-body);
-}
-
-.tm-map-insights li {
-  padding: 0 2px;
-}
-
-.tm-map-row {
-  padding: 7px 2px;
-  border-bottom: 1px solid var(--border);
-  cursor: pointer;
-  color: var(--text);
-}
-
 .tm-map-row:last-child {
   border-bottom: 0;
 }
@@ -8050,16 +7994,7 @@ th.tm-rl-name,
   color: var(--text);
 }
 
-.tm-map-wl,
-.tm-map-rwr,
-.tm-map-prw {
-  color: var(--muted);
-}
-
-.tm-map-row.is-active .tm-map-name,
-.tm-map-row.is-active .tm-map-wl,
-.tm-map-row.is-active .tm-map-rwr,
-.tm-map-row.is-active .tm-map-prw {
+.tm-map-row.is-active .tm-map-name {
   color: var(--text);
 }
 
@@ -8145,6 +8080,69 @@ th.tm-rl-name,
   border: 0;
   border-radius: var(--radius);
   background: var(--surface);
+}
+
+/* Statistics title + Players/Teams/Filters on one row. */
+.tm-card.tm-overview-stats {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 12px;
+  row-gap: 10px;
+}
+
+.tm-overview-stats .tm-card-head {
+  grid-column: 1;
+  grid-row: 1;
+  min-width: 0;
+}
+
+.tm-overview-stats-mount,
+.tm-overview-stats .st-panel {
+  display: contents;
+}
+
+.tm-overview-stats .st-head {
+  grid-column: 2;
+  grid-row: 1;
+  margin: 0;
+  min-width: 0;
+  justify-content: flex-end;
+  flex-wrap: nowrap;
+  gap: 8px;
+}
+
+.tm-overview-stats .st-head-main {
+  order: 2;
+}
+
+.tm-overview-stats .st-head-actions {
+  order: 1;
+  margin-left: 0;
+}
+
+.tm-overview-stats .st-scope,
+.tm-overview-stats [data-st-search-toggle],
+.tm-overview-stats .st-search {
+  display: none;
+}
+
+.tm-overview-stats .st-filters,
+.tm-overview-stats .st-body {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 700px) {
+  .tm-card.tm-overview-stats {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .tm-overview-stats .st-head {
+    grid-column: 1;
+    grid-row: 2;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
 }
 
 /* Stacked cards on Roles / Documents — not side-by-side grid cells. */
@@ -8742,6 +8740,26 @@ th.tm-rl-name,
   .tm-docs {
     grid-template-columns: minmax(0, 1fr);
   }
+
+  .tm-docs-side {
+    position: static;
+    height: auto;
+    max-height: none;
+  }
+
+  .tm-doc-outline {
+    max-height: 220px;
+  }
+}
+
+.tm-docs-side {
+  position: sticky;
+  top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  height: calc(100vh - 120px);
+  min-height: 0;
 }
 
 .tm-doc-list {
@@ -8752,15 +8770,81 @@ th.tm-rl-name,
   border: 0;
   border-radius: var(--radius);
   background: var(--surface);
-  max-height: 70vh;
+  flex: 0 1 auto;
+  /* 9 latest rows in view; older docs stay reachable by scroll. */
+  max-height: calc(16px + 9 * 48px + 8 * 4px);
+  min-height: 0;
   overflow-y: auto;
+}
+
+.tm-doc-outline {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px 8px 12px;
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.tm-doc-outline[hidden] {
+  display: none;
+}
+
+.tm-doc-outline-title {
+  margin: 0 8px 8px;
+  color: var(--muted);
+  font: 600 11px var(--font-body);
+}
+
+.tm-doc-outline-tree {
+  margin-left: 8px;
+  padding-left: 10px;
+  border-left: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.tm-doc-outline-item {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font: 500 13px var(--font-body);
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.tm-doc-outline-item.is-l2 {
+  padding-left: 20px;
+}
+
+.tm-doc-outline-item.is-l3 {
+  padding-left: 32px;
+}
+
+.tm-doc-outline-item:hover {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+}
+
+.tm-doc-outline-item.is-on {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text);
 }
 
 .tm-doc-item {
   position: relative;
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
+  justify-content: center;
   gap: 2px;
+  min-height: 48px;
   padding: 8px 26px 8px 10px;
   border-radius: var(--radius-sm);
   cursor: pointer;
@@ -8826,9 +8910,23 @@ th.tm-rl-name,
 }
 
 .tm-docs-shared {
-  grid-template-columns: minmax(0, 1fr);
-  max-width: 920px;
+  grid-template-columns: 220px minmax(0, 1fr);
+  max-width: 1140px;
   margin: 0 auto;
+}
+
+.tm-docs-shared:has([data-doc-outline][hidden]) {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.tm-docs-shared:has([data-doc-outline][hidden]) .tm-docs-side {
+  display: none;
+}
+
+@media (max-width: 900px) {
+  .tm-docs-shared {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .doc-editor {
@@ -8878,6 +8976,25 @@ th.tm-rl-name,
   color: var(--accent);
 }
 
+.doc-toolbar-end {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.doc-toolbar-end .btn-sm {
+  box-sizing: border-box;
+  height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.doc-toolbar.is-readonly .doc-tool-group {
+  display: none;
+}
+
 .doc-size,
 .doc-gap {
   padding: 3px 6px;
@@ -8885,9 +9002,12 @@ th.tm-rl-name,
 }
 
 .doc-saved {
-  margin-left: auto;
   color: var(--muted);
   font: 500 11px var(--font-body);
+}
+
+.doc-saved:empty {
+  display: none;
 }
 
 .doc-saved.dirty {
@@ -8908,6 +9028,33 @@ th.tm-rl-name,
   font: 400 15px var(--font-body);
   line-height: 1.7;
   min-height: 55vh;
+}
+
+.doc-surface h1,
+.doc-surface h2,
+.doc-surface h3 {
+  scroll-margin-top: 16px;
+  color: var(--text);
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.doc-surface h1 {
+  margin: 8px 0 10px;
+  font-size: 25px;
+  line-height: 1.25;
+}
+
+.doc-surface h2 {
+  margin: 16px 0 8px;
+  font-size: 19px;
+  line-height: 1.3;
+}
+
+.doc-surface h3 {
+  margin: 12px 0 6px;
+  font-size: 15px;
+  line-height: 1.35;
 }
 
 .doc-surface:focus {

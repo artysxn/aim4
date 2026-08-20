@@ -159,6 +159,10 @@ html[data-mobile] .page-title {
   white-space: nowrap;
 }
 
+html[data-mobile] .tm-doc-search {
+  width: 120px;
+}
+
 /* ---- Content spacing -------------------------------------------------------- */
 
 html[data-mobile] .view-pad {

@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// Pattern finder, two chapters:
+// Pattern finder, three chapters:
 //   Search   map-first filters + optional subjects → drawn-selection rules
 //            (each with its own feature and clock window), the matching
 //            rounds on the left under the filters, stats on the right with a
@@ -7,6 +7,7 @@
 //            links and saved views keep resolving.
 //   Teams    scout a library team, write a team document (antistratPanel).
 //            Chapter key stays `antistrat` for the same reason.
+//   Charts   scatter builder over the stats index (chartsPanel).
 // ---------------------------------------------------------------------------
 
 import { consumeCapability, formatApiError } from '../api.js';
@@ -46,6 +47,8 @@ import {
 import { renderUpgradeError } from '../../site/upgradeGate.js';
 import { createSavedViews } from '../savedViews.js';
 import { createAntistratPanel } from './antistratPanel.js';
+import { createChartsPanel } from '../charts/chartsPanel.js';
+import sideCharts from '../../icons/sideicons/sideicon_charts.svg?raw';
 
 const PHASE_OPTS = [
   { key: 'early', label: 'Early' },
@@ -71,7 +74,8 @@ function defaultTimeWindow() {
 /** Chapters. Keys are load-bearing (URLs, saved views); labels are not. */
 const CHAPTERS = [
   { key: 'players', label: 'Search' },
-  { key: 'antistrat', label: 'Teams' }
+  { key: 'antistrat', label: 'Teams' },
+  { key: 'charts', label: 'Charts', icon: sideCharts }
 ];
 
 /** Format a finite number for leaderboard cells; `digits` = decimal places. */
@@ -107,7 +111,8 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
         <div class="an-main" id="an-main"><p class="view-empty">Select a map to begin.</p></div>
       </div>
     </div>
-    <div class="an-chapter" data-chapter="antistrat" hidden></div>`;
+    <div class="an-chapter" data-chapter="antistrat" hidden></div>
+    <div class="an-chapter" data-chapter="charts" hidden></div>`;
 
   const sidebarEl = el.querySelector('#an-sidebar');
   const mainEl = el.querySelector('#an-main');
@@ -124,21 +129,28 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
   let chapter = 'players';
   /** @type {ReturnType<typeof createAntistratPanel> | null} */
   let antistrat = null;
+  /** @type {ReturnType<typeof createChartsPanel> | null} */
+  let charts = null;
 
   function chapterEl(key) {
     return el.querySelector(`.an-chapter[data-chapter="${key}"]`);
   }
 
   function renderChapterNav() {
-    chaptersEl.innerHTML = CHAPTERS.map(
-      (c) => `<button type="button" class="an-chapter-btn${c.key === chapter ? ' active' : ''}"
-        data-an-chapter="${c.key}">${escapeHtml(c.label)}</button>`
-    ).join('');
+    chaptersEl.innerHTML = CHAPTERS.map((c) => {
+      const icon = c.icon
+        ? `<span class="an-chapter-icon" aria-hidden="true">${c.icon}</span>`
+        : '';
+      return `<button type="button" class="an-chapter-btn${c.key === chapter ? ' active' : ''}"
+        data-an-chapter="${c.key}">${icon}${escapeHtml(c.label)}</button>`;
+    }).join('');
   }
 
-  function setChapter(next) {
-    if (!CHAPTERS.some((c) => c.key === next)) return;
-    chapter = next;
+  function shareParams() {
+    return Object.fromEntries(new URLSearchParams(window.location.search));
+  }
+
+  function applyChapterChrome({ resetShare = false } = {}) {
     for (const c of CHAPTERS) {
       const host = chapterEl(c.key);
       if (host) host.hidden = c.key !== chapter;
@@ -151,6 +163,10 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     });
     if (window.location.pathname.replace(/\/+$/, '') === '/patterns') {
       const params = new URLSearchParams(window.location.search);
+      if (resetShare) {
+        params.delete('v');
+        params.delete('view');
+      }
       if (chapter === 'players') params.delete('chapter');
       else params.set('chapter', chapter);
       const q = params.toString();
@@ -160,21 +176,51 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
         `/patterns${q ? `?${q}` : ''}`
       );
     }
+  }
 
+  function ensureCharts() {
+    const host = chapterEl('charts');
+    if (!charts && host) {
+      charts = createChartsPanel({ escapeHtml });
+      host.appendChild(charts.el);
+    }
+  }
+
+  function ensureAntistrat() {
+    const host = chapterEl('antistrat');
+    if (!antistrat && host) {
+      antistrat = createAntistratPanel({ escapeHtml });
+      host.appendChild(antistrat.el);
+    }
+  }
+
+  function loadCharts() {
+    ensureCharts();
+    charts?.load({ params: shareParams() });
+  }
+
+  function setChapter(next) {
+    if (!CHAPTERS.some((c) => c.key === next)) return;
+    const switching = chapter !== next;
+    chapter = next;
+    applyChapterChrome({ resetShare: switching });
+
+    if (chapter === 'charts') {
+      loadCharts();
+      return;
+    }
     if (chapter === 'antistrat') {
-      const host = chapterEl('antistrat');
-      if (!antistrat && host) {
-        antistrat = createAntistratPanel({ escapeHtml });
-        host.appendChild(antistrat.el);
-      }
+      ensureAntistrat();
       // Prefer the shared payload; if it is not ready yet, antistrat self-fetches
       // so a failed / skipped Players spend cannot leave "Loading teams…" forever.
       antistrat?.load(payload);
       return;
     }
-    if (chapter === 'players' && payload) {
+    if (payload) {
       render();
       mountSavedViews();
+    } else if (switching) {
+      void load();
     }
   }
 
@@ -1201,14 +1247,23 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
 
   async function load() {
     const token = ++loadToken;
+    const fromUrl = new URLSearchParams(window.location.search).get('chapter');
+    chapter = CHAPTERS.some((c) => c.key === fromUrl) ? fromUrl : 'players';
     mountChapterNav();
-    setChapter(chapter);
+    applyChapterChrome();
+
+    // Charts spends its own quota; skip the pattern-finder fetch.
+    if (chapter === 'charts') {
+      loadCharts();
+      return;
+    }
 
     // Antistrat needs the stats library, not a pattern-finder spend. Fetch the
     // shared payload without consuming, and hand it to the chapter.
     const cacheFresh = () => payloadGeneration === statsCacheGeneration();
 
     if (chapter === 'antistrat') {
+      ensureAntistrat();
       if (payload && cacheFresh()) {
         antistrat?.load(payload);
         return;
@@ -1609,6 +1664,8 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       radar = null;
       antistrat?.destroy();
       antistrat = null;
+      charts?.destroy();
+      charts = null;
       chaptersEl.remove();
       el.remove();
     }
