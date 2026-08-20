@@ -119,17 +119,12 @@ export function createMatchHud({ root, map, match, hooks = {} }) {
       </div>
     </div>
     <div class="c3-mh-loadout" data-k="loadout"></div>
-    <div class="c3-mh-cam" data-k="cam">
+    <div class="c3-mh-cam" data-k="cam" hidden>
       <div class="c3-mh-spec" data-k="spec" hidden></div>
       <div class="c3-mh-play" data-k="play" hidden>
-        <button type="button" data-act="pause">Pause</button>
-        <button type="button" data-act="restart">Restart</button>
-        <button type="button" data-act="exit">Exit</button>
-      </div>
-      <div class="c3-mh-seg" role="group" aria-label="Side">
-        <button type="button" class="c3-mh-seg-btn" data-cam="T">T</button>
-        <button type="button" class="c3-mh-seg-btn" data-cam="CT">CT</button>
-        <button type="button" class="c3-mh-seg-btn" data-cam="spectate">Spectate</button>
+        <button type="button" data-act="pause">Pause (J)</button>
+        <button type="button" data-act="restart">Restart (K)</button>
+        <button type="button" data-act="exit">Exit (L)</button>
       </div>
     </div>
     <div class="c3-mh-chat" data-k="chat" hidden>
@@ -179,31 +174,31 @@ export function createMatchHud({ root, map, match, hooks = {} }) {
   let camMode = 'T';
 
   node.cam.addEventListener('click', (e) => {
-    const btn = e.target.closest('[data-cam]');
-    if (btn) {
-      hooks.onCamMode?.(btn.dataset.cam);
-      return;
-    }
     const act = e.target.closest('[data-act]')?.dataset.act;
     if (act) hooks.onPlayback?.(act);
   });
 
   function setCamMode(mode) {
     camMode = mode === 'CT' || mode === 'spectate' ? mode : 'T';
-    node.cam.querySelectorAll('[data-cam]').forEach((b) => b.classList.toggle('is-on', b.dataset.cam === camMode));
   }
   setCamMode('T');
+
+  function syncCamVisible() {
+    node.cam.hidden = node.play.hidden && node.spec.hidden;
+  }
 
   function setSpectateName(name) {
     const on = camMode === 'spectate';
     node.spec.hidden = !on;
     if (on) node.spec.textContent = `spectating (${name || 'Bot'})`;
+    syncCamVisible();
   }
 
   function setPlayback(on, playing) {
     node.play.hidden = !on;
     const pause = node.play.querySelector('[data-act="pause"]');
-    if (pause) pause.textContent = playing ? 'Pause' : 'Play';
+    if (pause) pause.textContent = playing ? 'Pause (J)' : 'Play (J)';
+    syncCamVisible();
   }
 
   function setChat(open) {

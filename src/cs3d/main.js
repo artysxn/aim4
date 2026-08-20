@@ -240,6 +240,11 @@ const controls = new Controls(canvas, player, {
   onPlaceBot: () => placePracticeBot(false),
   onBoostBot: () => placePracticeBot(true),
   onDeleteBot: () => deleteAimedBot(),
+  onRoundKey: (act) => {
+    if (!demoView?.active) return false;
+    onPlayback(act);
+    return true;
+  },
   onSkipNades: () => skipThrownNades(),
   onXray: () => xray?.toggle(),
   // Tap Q: next weapon in the explorer's pocket. Hold Q: full radar overview.

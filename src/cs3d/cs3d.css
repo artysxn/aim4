@@ -631,6 +631,8 @@ body {
 .c3-import-play button,
 .c3-mh-play button {
   flex: 1;
+  padding: 0 12px;
+  white-space: nowrap;
 }
 
 .c3-mh-cam {
@@ -648,39 +650,12 @@ body {
   font-weight: 600;
   text-shadow: none;
 }
+.c3-mh-cam[hidden] {
+  display: none;
+}
 .c3-mh-spec {
   color: var(--text);
   font-size: 13px;
-}
-.c3-mh-seg {
-  display: flex;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: rgba(255, 255, 255, 0.03);
-}
-.c3-mh-seg-btn {
-  min-width: 72px;
-  height: 32px;
-  padding: 0 10px;
-  border: 0;
-  border-right: 1px solid var(--border);
-  background: transparent;
-  color: var(--muted);
-  font: 600 13px var(--font-body);
-  cursor: pointer;
-}
-.c3-mh-seg-btn:last-child {
-  border-right: 0;
-}
-.c3-mh-seg-btn:hover {
-  background: rgba(255, 255, 255, 0.04);
-  color: var(--text);
-}
-.c3-mh-seg-btn.is-on {
-  background: rgba(255, 255, 255, 0.1);
-  color: var(--text);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
 }
 
 .c3-err {

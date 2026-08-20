@@ -209,13 +209,20 @@ export class Controls {
           this.hooks.onSpeed?.();
           break;
         case 'KeyJ':
+          // A loaded round takes J/K/L for pause / restart / exit. Otherwise J
+          // still plants a frozen bot.
+          if (this.hooks.onRoundKey?.('pause')) break;
           this.hooks.onPlaceBot?.();
           break;
         case 'KeyH':
           this.hooks.onBoostBot?.();
           break;
         case 'KeyK':
+          if (this.hooks.onRoundKey?.('restart')) break;
           this.hooks.onDeleteBot?.();
+          break;
+        case 'KeyL':
+          this.hooks.onRoundKey?.('exit');
           break;
         case 'KeyO':
           this.hooks.onSkipNades?.();
@@ -233,7 +240,7 @@ export class Controls {
         default:
           break;
       }
-      if (this.locked && /^(Space|Key[WASDCQBNEGJHKORX]|Digit[1-4]|ShiftLeft|ControlLeft|CapsLock)$/.test(code)) e.preventDefault();
+      if (this.locked && /^(Space|Key[WASDCQBNEGJHKORXL]|Digit[1-4]|ShiftLeft|ControlLeft|CapsLock)$/.test(code)) e.preventDefault();
     } else if (code === 'Space') {
       this.player.input.jump = false;
     } else if (code === 'KeyQ' && this.pageKeys) {
