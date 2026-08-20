@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { deathFollowShouldSnap, nextFollowSlot } from './view3dFollow.js';
+import { deathFollowShouldSnap, nextCamMode, nextFollowSlot, specKeyForSeat } from './view3dFollow.js';
 
 const players = [
   { id: 'a', slot: 0 },
@@ -68,6 +68,26 @@ const players = [
   assert.equal(deathFollowShouldSnap(100, 80, 64), true, 'a rewind snaps');
   assert.equal(deathFollowShouldSnap(100, 100 + 16, 64), false, 'a quarter second is still motion');
   assert.equal(deathFollowShouldSnap(100, 100 + 17, 64), true, 'a bigger jump is a seek');
+}
+
+{
+  assert.equal(nextCamMode('walk', 1), 'fly');
+  assert.equal(nextCamMode('fly', 1), 'pov');
+  assert.equal(nextCamMode('pov', 1), 'third');
+  assert.equal(nextCamMode('third', 1), 'walk');
+  assert.equal(nextCamMode('walk', -1), 'third');
+  assert.equal(nextCamMode('unknown', 1), 'fly', 'an unknown mode starts the cycle');
+}
+
+{
+  assert.deepEqual(
+    [0, 1, 2, 3, 4].map((i) => specKeyForSeat('left', i)),
+    [1, 2, 3, 4, 5]
+  );
+  assert.deepEqual(
+    [0, 1, 2, 3, 4].map((i) => specKeyForSeat('right', i)),
+    [6, 7, 8, 9, 0]
+  );
 }
 
 console.log('view3dFollow.test.js: ok');

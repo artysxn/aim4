@@ -5,14 +5,12 @@ globalThis.window ??= globalThis;
 import assert from 'node:assert/strict';
 import { EYE_DUCK, EYE_STAND } from '../../shared/sim3d/constants.js';
 
-const { xrayFillColor, xrayHeadOffset, xrayIconList, meshBelongsTo, XRAY_FILL_DARK, XRAY_FILL_RED } = await import('./xray.js');
+const { xrayFillColor, xrayHeadOffset, xrayIconList, meshBelongsTo, XRAY_FILL_T, XRAY_FILL_CT } = await import('./xray.js');
 
-assert.equal(xrayFillColor(100), XRAY_FILL_DARK);
-assert.equal(xrayFillColor(40), XRAY_FILL_DARK);
-assert.equal(xrayFillColor(39), XRAY_FILL_RED);
-assert.equal(xrayFillColor(1), XRAY_FILL_RED);
-assert.equal(xrayFillColor(0), XRAY_FILL_DARK, 'corpses stay dark, not red');
-assert.equal(xrayFillColor(null), XRAY_FILL_DARK);
+assert.equal(xrayFillColor('T'), XRAY_FILL_T);
+assert.equal(xrayFillColor('CT'), XRAY_FILL_CT);
+assert.equal(xrayFillColor(''), XRAY_FILL_T, 'unknown side uses T red');
+assert.equal(xrayFillColor(null), XRAY_FILL_T);
 
 assert.equal(xrayHeadOffset(0), EYE_STAND + 14);
 assert.equal(xrayHeadOffset(1), EYE_DUCK + 14);

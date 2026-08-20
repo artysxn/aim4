@@ -1,17 +1,18 @@
 // ---------------------------------------------------------------------------
 // src/cs3d/xray.js
-// GOTV-style through-wall silhouettes: each player is drawn into a mask
+// GOTV-style through-wall outlines: each player is drawn into a mask
 // (their own shape, unlit, no world geometry), then a fullscreen composite
-// fills the mask and paints a gold halo around its edge. Name, health and
-// loadout icons sit in HTML above the head, the same stack the reference
-// screenshots use.
+// paints a T-red or CT-blue halo around its edge. The fill stays in the
+// mask so the edge can be found; it is not composited. The playermodel
+// already in the scene is left alone. Name, health and loadout icons sit
+// in HTML above the head.
 //
 // Non-player meshes are hidden for the mask pass so the silhouette camera
 // never sees a wall. Viewmodels are a different scene and never enter it.
 // ---------------------------------------------------------------------------
 
 import * as THREE from 'three/webgpu';
-import { float, max, screenUV, texture, uniform, vec2, vec3, vec4 } from 'three/webgpu';
+import { float, max, screenUV, texture, uniform, vec2, vec4 } from 'three/webgpu';
 import { EYE_DUCK, EYE_STAND } from '../../shared/sim3d/constants.js';
 import {
   bareWeapon,
@@ -24,12 +25,9 @@ import {
 /** Camera / mesh layer used only by the silhouette pass. */
 export const XRAY_LAYER = 1;
 
-/** Fill turns red at and below this HP. */
-export const XRAY_HP_RED = 40;
-
-export const XRAY_FILL_DARK = 0x0d0d0d;
-export const XRAY_FILL_RED = 0xc42b2b;
-export const XRAY_GLOW = 0xe8b44a;
+/** Site T / CT: `--rv-t` / `--rv-ct`. */
+export const XRAY_FILL_T = 0xe60611;
+export const XRAY_FILL_CT = 0x5b9fd4;
 
 const HEAD_PAD = 14;
 const RING = [
@@ -62,10 +60,8 @@ const RING = [
 const _proj = new THREE.Vector3();
 const _size = new THREE.Vector2();
 
-export function xrayFillColor(hp) {
-  const n = Number(hp);
-  if (Number.isFinite(n) && n > 0 && n < XRAY_HP_RED) return XRAY_FILL_RED;
-  return XRAY_FILL_DARK;
+export function xrayFillColor(side) {
+  return side === 'CT' ? XRAY_FILL_CT : XRAY_FILL_T;
 }
 
 export function xrayHeadOffset(duck = 0) {
@@ -174,7 +170,7 @@ export function createXrayPass({ renderer, scene, parent }) {
   let rt = null;
   let glowMat = null;
   let glowReady = false;
-  const fillUniform = uniform(new THREE.Color(XRAY_FILL_DARK));
+  const fillUniform = uniform(new THREE.Color(XRAY_FILL_T));
   const texel = uniform(new THREE.Vector2(1, 1));
   const silMat = new THREE.MeshBasicNodeMaterial({
     toneMapped: false,
@@ -223,7 +219,9 @@ export function createXrayPass({ renderer, scene, parent }) {
       depthTest: false,
       depthWrite: false,
       toneMapped: false,
-      fog: false
+      fog: false,
+      blending: THREE.AdditiveBlending,
+      premultipliedAlpha: true
     });
     try {
       const fill = texture(rt.texture, screenUV);
@@ -233,9 +231,10 @@ export function createXrayPass({ renderer, scene, parent }) {
         halo = max(halo, texture(rt.texture, uv).a);
       }
       const edge = max(halo.sub(fill.a), float(0));
-      const gold = vec3(0.91, 0.705, 0.29);
-      const rgb = fill.rgb.mul(fill.a).add(gold.mul(edge));
-      glowMat.colorNode = vec4(rgb, max(fill.a, edge));
+      // Interior is dropped: only the rim is added, so a visible body is not
+      // painted over. Through a wall the rim is the x-ray. Fill RGB is T red
+      // or CT blue from the mask pass.
+      glowMat.colorNode = vec4(fill.rgb.mul(edge), edge);
       glowReady = true;
     } catch (e) {
       console.warn('cs3d: x-ray glow unavailable, drawing fill only', e);
@@ -252,11 +251,11 @@ export function createXrayPass({ renderer, scene, parent }) {
     ensureRt();
     if (!glowReady) return;
 
-    const dark = [];
-    const red = [];
+    const terrorists = [];
+    const cts = [];
     for (const s of live) {
-      if (xrayFillColor(s.hp) === XRAY_FILL_RED) red.push(s.object);
-      else dark.push(s.object);
+      if (xrayFillColor(s.side) === XRAY_FILL_CT) cts.push(s.object);
+      else terrorists.push(s.object);
     }
 
     const prevTarget = renderer.getRenderTarget();
@@ -281,21 +280,21 @@ export function createXrayPass({ renderer, scene, parent }) {
       renderer.clear();
       renderer.autoClear = false;
 
-      if (dark.length) {
-        for (const o of red) o.visible = false;
-        fillUniform.value.setHex(XRAY_FILL_DARK);
+      if (terrorists.length) {
+        for (const o of cts) o.visible = false;
+        fillUniform.value.setHex(XRAY_FILL_T);
         renderer.render(scene, xrayCam);
-        for (const o of red) o.visible = true;
+        for (const o of cts) o.visible = true;
       }
-      if (red.length) {
-        for (const o of dark) o.visible = false;
-        fillUniform.value.setHex(XRAY_FILL_RED);
+      if (cts.length) {
+        for (const o of terrorists) o.visible = false;
+        fillUniform.value.setHex(XRAY_FILL_CT);
         renderer.render(scene, xrayCam);
-        for (const o of dark) o.visible = true;
+        for (const o of terrorists) o.visible = true;
       }
     } finally {
-      for (const o of red) o.visible = true;
-      for (const o of dark) o.visible = true;
+      for (const o of cts) o.visible = true;
+      for (const o of terrorists) o.visible = true;
       for (const o of hidden) o.visible = true;
       for (const [o, m] of stash) o.material = m;
       scene.background = prevBg;

@@ -13,13 +13,12 @@
 // because streaming Nuke's pack costs seconds and the whole point of the
 // button is flicking between the two views of one moment.
 //
-// Camera modes (F toggles the pair, G the other pair):
-//   pov     recorded first person. Left click next player, right click previous.
-//   third   behind that same player. Mouse look orbits; click still cycles.
-//   fly     Map Practice noclip. WASD + pointer lock; G from a follow mode
-//           lands here first.
-//   walk    Map Practice walking body. Same Player as /nuke, same sim.
-// Zoom changes the field of view (max 90). In third person the wheel dollies.
+// Camera modes (F toggles the follow pair, G the free pair, wheel cycles all):
+//   walk    Map Practice walking body.
+//   fly     Map Practice noclip.
+//   pov     recorded first person (player watch). Click a roster number to jump.
+//   third   behind that same player.
+// Zoom is no longer on the wheel in 3D; the wheel steps this list.
 // ---------------------------------------------------------------------------
 
 import * as THREE from 'three/webgpu';
@@ -79,7 +78,7 @@ import {
   scaledAimPunch,
   scaledCameraPunch
 } from '../../cs3d/demoHits.js';
-import { DEATH_FOLLOW_SECONDS, deathFollowShouldSnap, nextFollowSlot } from './view3dFollow.js';
+import { DEATH_FOLLOW_SECONDS, deathFollowShouldSnap, nextCamMode, nextFollowSlot } from './view3dFollow.js';
 
 const DEG = Math.PI / 180;
 const RAD = 180 / Math.PI;
@@ -145,6 +144,8 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange }) {
   // never by wall time, so scrubbing and speed changes stay tick-exact).
   let frame = null;
   let lastTick = null;
+  /** Demo seconds to feed the viewmodel this rAF. Zero while the playhead is held. */
+  let demoAnimDt = 0;
   /** Demo tick at which a death-hold switches to the killer; null when idle. */
   let deathFollowUntilTick = null;
 
@@ -732,10 +733,8 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange }) {
   /**
    * The gun, once per drawn frame.
    *
-   * `dt` is wall time on purpose, unlike the bodies: sway and bob are the
-   * viewer's own motion over a held frame, and a paused demo should still
-   * settle rather than freeze mid-swing. What the demo owns — the weapon, the
-   * angles, the speed, the trigger — comes from `povState`.
+   * `dt` is demo time, same as the bodies. A paused playhead must freeze the
+   * clip and the bob, not settle them on wall time.
    */
   function updateViewModel(dt) {
     if (vmAssets.ready && !viewModel.ready) viewModel.setSide('T');
@@ -764,7 +763,10 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange }) {
     }
     if (pov.side === 'T' || pov.side === 'CT') viewModel.setSide(pov.side);
     viewModel.setWeapon(heldWeapon(pov.weapon), { draw: false });
-    for (let i = 0; i < pov.shots; i++) viewModel.attack('primary', performance.now() / 1000 + i * 1e-4);
+    if (dt > 0) {
+      for (let i = 0; i < pov.shots; i++) viewModel.attack('primary', performance.now() / 1000 + i * 1e-4);
+      pov.shots = 0;
+    }
     viewModel.update(dt, {
       speed: pov.speed,
       onGround: !pov.airborne,
@@ -848,6 +850,7 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange }) {
         object: obj,
         name: p?.name || '',
         hp: s?.alive ? Math.max(0, Math.min(100, s.health | 0)) : 0,
+        side: pose?.side === 'T' || pose?.side === 'CT' ? pose.side : sideOf(slot),
         duck: duckOf(s?.alive ? s : pose || {}),
         items: xrayIconList(inv)
       });
@@ -923,6 +926,7 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange }) {
     const dTicks = lastTick === null ? 0 : tick - lastTick;
     const animDt = dTicks > 0 && dTicks <= rate / 4 ? dTicks / rate : 0;
     lastTick = tick;
+    demoAnimDt = animDt;
     const useModels = models.ready;
     povState = null;
     const crossed = consumeShots(tick, rate);
@@ -1264,7 +1268,9 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange }) {
     if (!ready || !visible) return;
     if (isFree() && player) player.update(dt);
     else if (mode === 'third') applyThirdOrbit();
-    updateViewModel(dt);
+    const vmDt = demoAnimDt;
+    demoAnimDt = 0;
+    updateViewModel(vmDt);
     nadeEffects?.update(dt, t / 1000, camera);
     interactives?.update(dt);
     shooting?.update(dt);
@@ -1389,6 +1395,24 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange }) {
       applyFrame();
       onModeChange?.(mode);
       return this.povName;
+    },
+
+    /** Jump to this demo slot. From walk/fly, switches to player watch. */
+    spectateSlot(slot) {
+      const n = Number(slot);
+      if (!Number.isFinite(n) || n < 0) return null;
+      cancelDeathFollow();
+      povSlot = n | 0;
+      if (isFree()) setCamMode('pov');
+      else applyFrame();
+      onModeChange?.(mode);
+      return this.povName;
+    },
+
+    /** Wheel: walk → fly → pov → third, or the other way. */
+    cycleCam(dir = 1) {
+      setCamMode(nextCamMode(mode, dir));
+      return mode;
     },
 
     /** F: from free roam, first person. From follow, pov ↔ third. */

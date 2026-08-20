@@ -1810,6 +1810,7 @@ function collectPracticeXraySubjects() {
       object: obj,
       name: snap?.name || 'Bot',
       hp: snap?.hp ?? b.hp,
+      side: snap?.side || b.side,
       duck: 0,
       items: xrayIconList({
         util: snap?.nades || [],
@@ -1827,6 +1828,7 @@ function collectPracticeXraySubjects() {
       object: live,
       name: snap.name || 'You',
       hp: snap.dead ? 0 : snap.hp,
+      side: liveBody.side || lastSide,
       duck: liveBody.body.duck || 0,
       items: xrayIconList({
         util: snap.nades || [],

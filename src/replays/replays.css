@@ -2825,6 +2825,10 @@ body.rv-open {
   gap: 8px;
 }
 
+.rv-timeline.is-3d .rv-player {
+  cursor: pointer;
+}
+
 .rv-player-pill {
   position: relative;
   flex: 1;
@@ -2865,6 +2869,15 @@ body.rv-open {
   line-height: 22px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.rv-player-num {
+  display: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.rv-timeline.is-3d .rv-player-num {
+  display: inline;
 }
 
 .rv-player-money {
@@ -11981,22 +11994,30 @@ a.ua-link:visited {
 .rv-3d-canvas[hidden] {
   display: none;
 }
-/* The drawing layer and overlays must stay ON TOP of the 3D view, so pencil
-   mode works the same in both. */
+/* Mini 2D radar: droplets and utility, HUD chrome in the corner. */
 .rv-map.is-3d .rv-canvas {
-  visibility: hidden;
+  visibility: visible;
+  inset: auto;
+  top: 10px;
+  left: 10px;
+  width: 176px;
+  height: 176px;
+  z-index: 3;
+  pointer-events: none;
+  overflow: hidden;
+  transform: none;
+  border-radius: var(--radius);
+  background: rgba(10, 10, 10, 0.9);
 }
 .rv-map.is-3d.is-radar-overview .rv-3d-canvas {
   z-index: 1;
-  filter: blur(18px);
-  transform: scale(1.08);
 }
 .rv-map.is-3d.is-radar-overview::before {
   content: '';
   position: absolute;
   inset: 0;
   z-index: 2;
-  background: rgba(0, 0, 0, 0.22);
+  background: rgba(0, 0, 0, 0.62);
   pointer-events: none;
 }
 .rv-map.is-3d.is-radar-overview .rv-canvas {
@@ -12011,9 +12032,9 @@ a.ua-link:visited {
   max-width: calc(100% - 48px);
   max-height: calc(100% - 48px);
   transform: translate(-50%, -50%);
-  background: #1a1a18;
-  border-radius: 0;
-  box-shadow: 0 0 0 1px rgba(200, 220, 245, 0.55);
+  overflow: hidden;
+  background: rgba(10, 10, 10, 0.9);
+  border-radius: var(--radius);
 }
 .rv-map.is-3d.is-radar-overview .c3-crosshair-canvas {
   visibility: hidden;

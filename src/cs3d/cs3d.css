@@ -91,16 +91,12 @@ body {
 #c3-ui.is-radar-overview .c3-xray-labels {
   visibility: hidden;
 }
-body:has(#c3-ui.is-radar-overview) #c3-canvas {
-  filter: blur(18px);
-  transform: scale(1.08);
-}
 #c3-ui.is-radar-overview::before {
   content: '';
   position: absolute;
   inset: 0;
   z-index: 0;
-  background: rgba(0, 0, 0, 0.22);
+  background: rgba(0, 0, 0, 0.62);
   pointer-events: none;
 }
 #c3-ui.is-radar-overview .c3-top,

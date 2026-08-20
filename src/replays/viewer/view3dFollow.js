@@ -8,6 +8,29 @@
 
 export const DEATH_FOLLOW_SECONDS = 0.5;
 
+/** Wheel / G-F order: walk freecam, fly freecam, player watch, third person. */
+export const CAM_CYCLE = ['walk', 'fly', 'pov', 'third'];
+
+export function nextCamMode(current, dir = 1) {
+  const n = CAM_CYCLE.length;
+  const i = CAM_CYCLE.indexOf(current);
+  const from = i < 0 ? 0 : i;
+  const step = dir >= 0 ? 1 : -1;
+  return CAM_CYCLE[(from + step + n) % n];
+}
+
+/**
+ * Spectator hotkey for a roster seat.
+ * Left column is 1-5, right is 6 7 8 9 0.
+ * @param {'left'|'right'} side
+ * @param {number} seat  0-based index on that sidebar
+ */
+export function specKeyForSeat(side, seat) {
+  const i = Math.max(0, seat | 0);
+  if (side === 'right') return i >= 4 ? 0 : i + 6;
+  return i + 1;
+}
+
 /**
  * True when this frame is a seek / first sample, not playback through a death.
  * Matches applyFrame's animation window: more than a quarter second, or back.

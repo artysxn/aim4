@@ -307,6 +307,7 @@ export class DemoView {
         object: obj,
         name: player?.name || '',
         hp: a.alive ? a.health : 0,
+        side: a.side === 'CT' ? 'CT' : a.side === 'T' ? 'T' : '',
         duck,
         items: xrayIconList(inv)
       });

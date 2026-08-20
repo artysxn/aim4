@@ -33,6 +33,7 @@ import {
 } from '../stats/statsTables.js';
 import { RadarRenderer, SIDE_COLORS } from './radarRenderer.js';
 import { Playback, RoundSequence } from './playback.js';
+import { specKeyForSeat } from './view3dFollow.js';
 import { clockAt, formatClock, timingFor, ROUND_SECONDS } from './roundClock.js';
 import { economyLabel, winningSide } from '../shared/roundId.js';
 import { iconImgHtml, inventoryAt } from './equipmentIcons.js';
@@ -423,7 +424,9 @@ export function createTimelineViewer({
       <span class="rv-keys-key">X</span><span class="rv-keys-action">3D X-ray</span>
       <span class="rv-keys-key">Hold Tab</span><span class="rv-keys-action">Match stats</span>
       <span class="rv-keys-key">Hover + S</span><span class="rv-keys-action">Copy setpos</span>
-      <span class="rv-keys-key">Scroll</span><span class="rv-keys-action">Zoom</span>
+      <span class="rv-keys-key">Scroll</span><span class="rv-keys-action">2D zoom. 3D camera</span>
+      <span class="rv-keys-key">Shift+Scroll</span><span class="rv-keys-action">3D zoom</span>
+      <span class="rv-keys-key">1-5 6-0</span><span class="rv-keys-action">3D spectate</span>
       <span class="rv-keys-key">Mouse3</span><span class="rv-keys-action">Pan</span>
       <span class="rv-keys-key">Mouse2</span><span class="rv-keys-action">Draw</span>
       <span class="rv-keys-key">E</span><span class="rv-keys-action">Erase drawing</span>
@@ -599,6 +602,8 @@ export function createTimelineViewer({
    * @type {Map<number, {root: HTMLElement, hp: HTMLElement|null, inv: HTMLElement|null}>}
    */
   const playerRows = new Map();
+  /** 3D spectate hotkey (1-9, 0) → demo slot. Rebuilt with the roster. */
+  const specToSlot = new Map();
   const files = rounds.map((r) => r.file);
 
   let sequence = new RoundSequence(rounds.map(() => ({})));
@@ -861,6 +866,8 @@ export function createTimelineViewer({
         ? 'Walk. G to fly'
         : 'Fly. G to walk'
       : 'Free roam (G)';
+    if (mode3d) set3dRadarFit(true);
+    else set3dRadarFit(false);
     mapEl.classList.toggle('is-3d', mode3d);
     el.classList.toggle('is-3d', mode3d);
     el.classList.toggle('is-3d-immerse', mode3d && immerse3d);
@@ -912,20 +919,18 @@ export function createTimelineViewer({
           view3d.dispose();
           view3d = null;
           sync3dButtons();
+          if (!destroyed) draw();
           return;
         }
       } else {
         view3d.show();
       }
-      // Push the current moment straight in, so the switch shows the same
-      // instant rather than an empty map until the next tick.
-      draw();
     } else {
       immerse3d = false;
       view3d?.hide();
-      draw();
     }
     sync3dButtons();
+    if (!destroyed) draw();
   }
 
   toggle3dBtn.addEventListener('click', (e) => {
@@ -1893,8 +1898,9 @@ export function createTimelineViewer({
     let leftTeam;
     let rightTeam;
     if (s1 === 'CT' && s2 === 'T') {
-      team1El.innerHTML = teamHtml(2, 'T');
-      team2El.innerHTML = teamHtml(1, 'CT');
+      specToSlot.clear();
+      team1El.innerHTML = teamHtml(2, 'T', 'left');
+      team2El.innerHTML = teamHtml(1, 'CT', 'right');
       leftScore = wins.team2;
       rightScore = wins.team1;
       leftSide = 'T';
@@ -1902,8 +1908,9 @@ export function createTimelineViewer({
       leftTeam = 2;
       rightTeam = 1;
     } else {
-      team1El.innerHTML = teamHtml(1, s1 || 'T');
-      team2El.innerHTML = teamHtml(2, s2 || 'CT');
+      specToSlot.clear();
+      team1El.innerHTML = teamHtml(1, s1 || 'T', 'left');
+      team2El.innerHTML = teamHtml(2, s2 || 'CT', 'right');
       leftScore = wins.team1;
       rightScore = wins.team2;
       leftSide = s1 || 'T';
@@ -1952,17 +1959,19 @@ export function createTimelineViewer({
     return { team1, team2 };
   }
 
-  function teamHtml(team, side) {
+  function teamHtml(team, side, column) {
     const players = (activeMeta.players || []).filter((p) => p.team === team);
     const rows = players
-      .map((p) => {
+      .map((p, i) => {
         const st = activeMeta.stats?.[p.id] || {};
+        const spec = specKeyForSeat(column, i);
+        specToSlot.set(spec, p.slot);
         return `
-        <div class="rv-player" data-slot="${p.slot}" data-id="${escapeHtml(p.id)}" data-side="${escapeHtml(side || '')}">
+        <div class="rv-player" data-slot="${p.slot}" data-id="${escapeHtml(p.id)}" data-side="${escapeHtml(side || '')}" data-spec="${spec}">
           <div class="rv-player-hp-row">
             <div class="rv-player-pill">
               <span class="rv-player-hp" data-slot="${p.slot}"></span>
-              <span class="rv-player-name">${escapeHtml(p.name || p.id)}</span>
+              <span class="rv-player-name"><span class="rv-player-num">${spec}. </span>${escapeHtml(p.name || p.id)}</span>
             </div>
             <span class="rv-player-money">$${st.money ?? 0}</span>
           </div>
@@ -2315,16 +2324,50 @@ export function createTimelineViewer({
     mapEl.classList.toggle('erasing', drawing.enabled && drawing.erasing);
   }
 
+  function wheelOn3dView(e) {
+    const t = e.target;
+    if (!t) return false;
+    if (t === view3d?.canvas || t.classList?.contains('rv-3d-canvas')) return true;
+    if (typeof t.closest === 'function' && t.closest('.c3-xray-labels, .c3-flash')) return true;
+    return false;
+  }
+
+  let camWheelLock = 0;
+  function cycle3dCam(deltaY) {
+    const now = performance.now();
+    if (now < camWheelLock) return;
+    if (!view3d) return;
+    view3d.cycleCam(deltaY > 0 ? 1 : -1);
+    camWheelLock = now + 160;
+    sync3dButtons();
+  }
+
+  function spectateBySpec(spec) {
+    if (!mode3d || !view3d) return false;
+    const slot = specToSlot.get(Number(spec));
+    if (slot == null) return false;
+    view3d.spectateSlot(slot);
+    syncPovHighlight();
+    sync3dButtons();
+    return true;
+  }
+
   mapEl.addEventListener(
     'wheel',
     (e) => {
       e.preventDefault();
-      const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
-      // In 3D the wheel is FOV (max 90), except third person, which dollies.
       if (mode3d && view3d) {
-        view3d.zoomBy(factor);
+        if (wheelOn3dView(e)) {
+          if (e.shiftKey) {
+            const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+            view3d.zoomBy(factor);
+          } else {
+            cycle3dCam(e.deltaY);
+          }
+        }
         return;
       }
+      const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
       setZoom(renderer.zoom * factor, e.clientX, e.clientY);
     },
     { passive: false }
@@ -3872,34 +3915,37 @@ export function createTimelineViewer({
     setScoreboardOpen(false);
   }
 
+  function set3dRadarFit(on) {
+    if (on) {
+      if (!savedRadarView) {
+        savedRadarView = {
+          zoom: renderer.zoom,
+          panX: renderer.panX,
+          panY: renderer.panY,
+          viewInset: { ...renderer.viewInset }
+        };
+        renderer.zoom = 1;
+        renderer.panX = 0;
+        renderer.panY = 0;
+        renderer.viewInset = { top: 0, right: 0, bottom: 0, left: 0 };
+        renderer.invalidateMapCache();
+      }
+      return;
+    }
+    if (!savedRadarView) return;
+    renderer.zoom = savedRadarView.zoom;
+    renderer.panX = savedRadarView.panX;
+    renderer.panY = savedRadarView.panY;
+    if (savedRadarView.viewInset) renderer.viewInset = savedRadarView.viewInset;
+    savedRadarView = null;
+    renderer.invalidateMapCache();
+  }
+
   function setRadarOverview(on) {
     const next = Boolean(on) && mode3d;
     if (next === radarOverview) return;
     radarOverview = next;
-    if (next) {
-      savedRadarView = {
-        zoom: renderer.zoom,
-        panX: renderer.panX,
-        panY: renderer.panY,
-        viewInset: { ...renderer.viewInset }
-      };
-      renderer.zoom = 1;
-      renderer.panX = 0;
-      renderer.panY = 0;
-      renderer.viewInset = { top: 0, right: 0, bottom: 0, left: 0 };
-      renderer.invalidateMapCache();
-      mapEl.classList.add('is-radar-overview');
-    } else {
-      if (savedRadarView) {
-        renderer.zoom = savedRadarView.zoom;
-        renderer.panX = savedRadarView.panX;
-        renderer.panY = savedRadarView.panY;
-        if (savedRadarView.viewInset) renderer.viewInset = savedRadarView.viewInset;
-        savedRadarView = null;
-        renderer.invalidateMapCache();
-      }
-      mapEl.classList.remove('is-radar-overview');
-    }
+    mapEl.classList.toggle('is-radar-overview', next);
     if (!destroyed) draw();
   }
 
@@ -5286,7 +5332,8 @@ export function createTimelineViewer({
       hideDeaths: false,
       zoneOverlay,
       duelOverlay: duelOverlayFrame,
-      pov
+      pov,
+      compact: mode3d && !radarOverview
     });
 
     const clock = clockAt(timing, tick);
@@ -5387,6 +5434,17 @@ export function createTimelineViewer({
     if (!e.relatedTarget || !team2El.contains(e.relatedTarget)) hoverSlot = -1;
   });
 
+  function onSpecClick(e) {
+    if (!mode3d) return;
+    const row = e.target.closest('.rv-player[data-spec]');
+    if (!row) return;
+    e.preventDefault();
+    e.stopPropagation();
+    spectateBySpec(row.dataset.spec);
+  }
+  team1El.addEventListener('click', onSpecClick);
+  team2El.addEventListener('click', onSpecClick);
+
   function fmtCoord(n) {
     return (Math.round(n * 1e6) / 1e6).toFixed(6);
   }
@@ -5442,6 +5500,13 @@ export function createTimelineViewer({
       view3d.toggleFree();
       sync3dButtons();
       return;
+    }
+    {
+      const digit = /^Digit(\d)$/.exec(e.code) || /^Numpad(\d)$/.exec(e.code);
+      if (digit && spectateBySpec(digit[1])) {
+        e.preventDefault();
+        return;
+      }
     }
     if (key === 'v') {
       e.preventDefault();
@@ -5515,7 +5580,7 @@ export function createTimelineViewer({
     // Keep the hotkey legend clear of the floating transport and the 3D
     // free-look button, both of which sit on that bottom band of the map.
     el.style.setProperty('--rv-keys-inset', `${overlap + 12}px`);
-    if (renderer.viewInset.bottom !== overlap) {
+    if (!mode3d && renderer.viewInset.bottom !== overlap) {
       renderer.viewInset.bottom = overlap;
       return true;
     }
