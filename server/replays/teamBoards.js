@@ -273,6 +273,11 @@ function emptyUtility(map) {
  *
  * Throws saved before this share the grenade's id namespace, so `used` is the
  * archive-wide set and a missing id is filled in here.
+ *
+ * `round` / `tick` / `player` are the demo this lineup was lifted from, filled
+ * in when a strategy is generated from a bookmarked round. A stratbook link
+ * uses them to open the round on the throw itself rather than only copying the
+ * setpos. Hand-placed throws leave them empty and behave as they always did.
  */
 function sanitizeThrow(t, claim) {
   if (!t || typeof t !== 'object') return null;
@@ -282,7 +287,10 @@ function sanitizeThrow(t, claim) {
     y: clampNum(t.y, -10000, 10000, 0),
     setpos: String(t.setpos || '').trim().slice(0, 240),
     setang: String(t.setang || '').trim().slice(0, 240),
-    comment: String(t.comment || '').trim().slice(0, MAX_COMMENT)
+    comment: String(t.comment || '').trim().slice(0, MAX_COMMENT),
+    round: String(t.round || '').replace(/[^A-Za-z0-9_~-]/g, '').slice(0, 200),
+    tick: Math.max(0, Math.floor(clampNum(t.tick, 0, 1e9, 0))),
+    player: String(t.player || '').replace(/[^A-Za-z0-9]/g, '').slice(0, 8)
   };
 }
 

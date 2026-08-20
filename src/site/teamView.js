@@ -52,6 +52,7 @@ import { createDocsEditor } from './docsEditor.js';
 import { mountDrawingBoard } from './drawingBoard.js';
 import { mountUtilityArchive } from './utilityArchive.js';
 import { spinnerHtml } from '../lib/spinner.js';
+import { renderStratNoteLinks } from './stratNoteLinks.js';
 
 /** Below this a per-side winrate is noise, so the bar stays empty. */
 const MIN_SIDE_ROUNDS = 12;
@@ -167,6 +168,8 @@ export function initTeamView({ auth, escapeHtml }) {
   /** @type {{ destroy: () => void }|null} */
   let boardMount = null;
   let boardMountKey = '';
+  /** `{ map, throwId }` from `/team/utility-archive?map=&u=`. */
+  let pendingUtilityFocus = { map: '', throwId: '' };
   /** @type {ReturnType<typeof createStatsPanel>|null} */
   let overviewStatsPanel = null;
   /** @type {ReturnType<typeof createRoundListPanel>|null} */
@@ -369,12 +372,19 @@ export function initTeamView({ auth, escapeHtml }) {
 
   function mountBoardPage(kind) {
     const key = `${kind}:${team.id}`;
-    if (boardMount && boardMountKey === key) return;
+    if (boardMount && boardMountKey === key) {
+      if (kind === 'utility' && (pendingUtilityFocus.map || pendingUtilityFocus.throwId)) {
+        boardMount.focusThrow?.(pendingUtilityFocus);
+      }
+      return;
+    }
     destroyBoardMount();
     boardMountKey = key;
     const deps = { host: shellEl, teamId: team.id, escapeHtml, headerHtml };
     boardMount =
-      kind === 'drawing' ? mountDrawingBoard(deps) : mountUtilityArchive(deps);
+      kind === 'drawing'
+        ? mountDrawingBoard(deps)
+        : mountUtilityArchive({ ...deps, initialFocus: pendingUtilityFocus });
   }
 
   async function ensureUtilityIndex(force = false) {
@@ -393,22 +403,25 @@ export function initTeamView({ auth, escapeHtml }) {
     }
   }
 
-  /** Escape note text, then turn `&lt;!####&gt;` into copyable utility links. */
+  /** Escape note text, then turn `<label><!id><URL=…>` into links. */
   function noteWithUtilityLinks(raw) {
-    return escapeHtml(raw || '').replace(
-      /&lt;!([A-Za-z0-9]{4})&gt;/g,
-      (_m, id) =>
-        `<button type="button" class="ua-link" data-ua-link="${id}" title="Copy setpos / setang">&lt;!${id}&gt;</button>`
-    );
+    return renderStratNoteLinks(raw, { escapeHtml });
+  }
+
+  /**
+   * The round a throw came from, framed on the thrower half a second before he
+   * lets go. Only throws imported from a demo carry this; hand-placed lineups
+   * have no round to open and just copy.
+   */
+  function throwMomentHref(th) {
+    if (!th?.round || !th?.tick) return '';
+    const q = new URLSearchParams({ round: th.round, tick: String(th.tick) });
+    if (th.player) q.set('focus', th.player);
+    return `/demos?${q}`;
   }
 
   async function copyUtilityById(id) {
-    await ensureUtilityIndex();
-
-    // A throw carries its own id, so a link naming one resolves to exactly that
-    // lineup. This is the whole point of the id living on the throw: the same
-    // landing spot reached from three places is three ids, and a note can say
-    // which one it means instead of asking the reader to guess.
+    if (utilityIndexTeamId !== team?.id) await ensureUtilityIndex();
     let th = null;
     for (const g of utilityIndex) {
       const hit = (g.throws || []).find((t) => t.id === id);
@@ -417,43 +430,32 @@ export function initTeamView({ auth, escapeHtml }) {
         break;
       }
     }
-
     if (!th) {
-      // Older notes name a landing spot. One throw under it is unambiguous;
-      // several still have to be picked from.
       const entry = utilityIndex.find((g) => g.id === id);
-      if (!entry) {
-        setStatus(`No utility with id ${id} in the archive.`, true);
-        return;
-      }
-      const throws = Array.isArray(entry.throws) ? entry.throws : [];
-      if (!throws.length) {
-        setStatus(`${id} has no throw spots yet.`, true);
-        return;
-      }
-      th = throws[0];
-      if (throws.length > 1) {
-        const lines = throws
-          .map((t, i) => `${i + 1}. ${(t.comment || t.setpos || 'Throw').slice(0, 60)}`)
-          .join('\n');
-        const pick = window.prompt(
-          `<!${id}> is a landing spot with ${throws.length} throws. Pick one:\n${lines}`,
-          '1'
-        );
-        if (pick == null) return;
-        const idx = Math.max(1, Math.min(throws.length, Number(pick) || 1)) - 1;
-        th = throws[idx];
-      }
+      const throws = Array.isArray(entry?.throws) ? entry.throws : [];
+      if (throws.length === 1) th = throws[0];
     }
+    if (!th) {
+      setStatus(`No throw ${id} in the archive.`, true);
+      return;
+    }
+    // Opened before the clipboard await: a tab opened after one is a popup as
+    // far as the browser is concerned, and gets blocked.
+    const href = throwMomentHref(th);
+    const opened = href ? window.open(href, '_blank', 'noopener') : null;
 
     const text = [th.setpos, th.setang].filter(Boolean).join('\n');
     if (!text) {
-      setStatus('That throw has no setpos / setang yet.', true);
+      setStatus(
+        opened ? 'Opened the round. That throw has no setpos / setang yet.' : 'That throw has no setpos / setang yet.',
+        !opened
+      );
       return;
     }
+    const where = opened ? ' Round opened.' : '';
     try {
       await navigator.clipboard.writeText(text);
-      setStatus(th.comment ? `Copied. ${th.comment}` : `Copied ${id}.`);
+      setStatus(th.comment ? `Copied. ${th.comment}${where}` : `Copied ${id}.${where}`);
     } catch {
       setStatus('Could not copy to clipboard.', true);
     }
@@ -1978,9 +1980,11 @@ export function initTeamView({ auth, escapeHtml }) {
               const html = noteWithUtilityLinks(note).replace(/\n/g, '<br />') || '—';
               return `<td class="sb-cell-role">${html}</td>`;
             }
-            return `<td class="sb-cell-role"><textarea class="sb-input sb-role-note" data-sb-field="roleNotes" data-sb-idx="${i}" data-sb-id="${escapeHtml(
+            return `<td class="sb-cell-role"><div class="sb-role-wrap" data-sb-role-drag data-sb-id="${escapeHtml(
               s.id
-            )}" rows="1" maxlength="800" placeholder="Role">${escapeHtml(note)}</textarea></td>`;
+            )}" data-sb-idx="${i}"><textarea class="sb-input sb-role-note" data-sb-field="roleNotes" data-sb-idx="${i}" data-sb-id="${escapeHtml(
+              s.id
+            )}" rows="1" maxlength="800" placeholder="Role" draggable="false">${escapeHtml(note)}</textarea></div></td>`;
           })
           .join('');
 
@@ -2014,7 +2018,7 @@ export function initTeamView({ auth, escapeHtml }) {
               ? `<input class="sb-input" type="text" data-sb-field="description" data-sb-id="${escapeHtml(
                   s.id
                 )}" value="${escapeHtml(s.description || '')}" maxlength="500" placeholder="Description" />`
-              : escapeHtml(s.description || '')
+              : noteWithUtilityLinks(s.description || '')
           }</td>
           <td class="sb-cell-links">
             <span class="sb-links">
@@ -2187,6 +2191,79 @@ export function initTeamView({ auth, escapeHtml }) {
     );
     if (res?.team) applyTeam(res.team);
     return res;
+  }
+
+  function roleNotesCopy(s, minLen) {
+    const notes = [...(s.roleNotes || [])].map((n) => String(n ?? ''));
+    const need = Math.max(minLen, notes.length, 5);
+    while (notes.length < need) notes.push('');
+    return notes;
+  }
+
+  function roleNoteEl(id, idx) {
+    return shellEl.querySelector(
+      `textarea.sb-role-note[data-sb-id="${CSS.escape(id)}"][data-sb-idx="${idx}"]`
+    );
+  }
+
+  function readRoleNote(id, idx, fallbackStrat) {
+    const ta = roleNoteEl(id, idx);
+    if (ta) return ta.value;
+    return roleNotesCopy(fallbackStrat, idx + 1)[idx] || '';
+  }
+
+  function writeRoleNote(id, idx, value) {
+    const ta = roleNoteEl(id, idx);
+    if (!ta) return;
+    ta.value = value;
+    ta.style.height = 'auto';
+    ta.style.height = `${Math.max(28, ta.scrollHeight)}px`;
+  }
+
+  function isRoleDragHandle(e, wrap) {
+    if (e.target === wrap) return true;
+    const ta = e.target.closest?.('textarea.sb-role-note');
+    if (!ta || !wrap.contains(ta)) return false;
+    const r = ta.getBoundingClientRect();
+    const pad = 6;
+    return (
+      e.clientX - r.left <= pad ||
+      r.right - e.clientX <= pad ||
+      e.clientY - r.top <= pad ||
+      r.bottom - e.clientY <= pad
+    );
+  }
+
+  async function applyRoleNoteDrag(from, to, duplicate) {
+    if (!from || !to || !team?.isAdmin) return;
+    if (from.id === to.id && from.idx === to.idx) return;
+    const srcStrat = (team.stratbook || []).find((s) => s.id === from.id);
+    const dstStrat = (team.stratbook || []).find((s) => s.id === to.id);
+    if (!srcStrat || !dstStrat) return;
+    const srcVal = readRoleNote(from.id, from.idx, srcStrat);
+    const dstVal = readRoleNote(to.id, to.idx, dstStrat);
+    const minLen = Math.max(from.idx, to.idx) + 1;
+
+    if (from.id === to.id) {
+      const notes = roleNotesCopy(srcStrat, minLen);
+      notes[to.idx] = srcVal;
+      if (!duplicate) notes[from.idx] = dstVal;
+      writeRoleNote(to.id, to.idx, notes[to.idx]);
+      if (!duplicate) writeRoleNote(from.id, from.idx, notes[from.idx]);
+      await patchStrategy(from.id, { roleNotes: notes });
+      return;
+    }
+
+    const srcNotes = roleNotesCopy(srcStrat, minLen);
+    const dstNotes = roleNotesCopy(dstStrat, minLen);
+    dstNotes[to.idx] = srcVal;
+    writeRoleNote(to.id, to.idx, srcVal);
+    if (!duplicate) {
+      srcNotes[from.idx] = dstVal;
+      writeRoleNote(from.id, from.idx, dstVal);
+      await patchStrategy(from.id, { roleNotes: srcNotes });
+    }
+    await patchStrategy(to.id, { roleNotes: dstNotes });
   }
 
   // ---- My Strategies ------------------------------------------------------
@@ -2619,10 +2696,10 @@ export function initTeamView({ auth, escapeHtml }) {
       return;
     }
 
-    const uaLink = t.closest('[data-ua-link]');
-    if (uaLink) {
-      e.preventDefault();
-      await copyUtilityById(uaLink.dataset.uaLink || '');
+    const uaCopy = t.closest('[data-ua-copy]');
+    if (uaCopy) {
+      if (uaCopy.tagName === 'BUTTON') e.preventDefault();
+      void copyUtilityById(uaCopy.dataset.uaCopy || '');
       return;
     }
 
@@ -3171,7 +3248,34 @@ export function initTeamView({ auth, escapeHtml }) {
   });
 
   // Drag a real member onto a placeholder to merge seats / positions.
+  // Role-note tiles: grab the outline to swap, Shift+drop to copy.
+  let roleDragFrom = null;
+  let roleDragCopy = false;
+
+  shellEl.addEventListener('mousedown', (e) => {
+    const wrap = e.target.closest('[data-sb-role-drag]');
+    if (!wrap || !team?.isAdmin) return;
+    wrap.draggable = isRoleDragHandle(e, wrap);
+  });
+  window.addEventListener('mouseup', () => {
+    if (roleDragFrom) return;
+    shellEl.querySelectorAll('[data-sb-role-drag]').forEach((el) => {
+      el.draggable = false;
+    });
+  });
   shellEl.addEventListener('dragstart', (e) => {
+    const wrap = e.target.closest('[data-sb-role-drag]');
+    if (wrap && wrap.draggable && team?.isAdmin) {
+      const id = wrap.dataset.sbId || '';
+      const idx = Number(wrap.dataset.sbIdx);
+      if (!id || Number.isNaN(idx)) return;
+      roleDragFrom = { id, idx, wrap };
+      e.dataTransfer?.setData('text/aim4-role-note', `${id}\t${idx}`);
+      e.dataTransfer?.setData('text/plain', `${id}\t${idx}`);
+      if (e.dataTransfer) e.dataTransfer.effectAllowed = 'copyMove';
+      wrap.classList.add('is-dragging');
+      return;
+    }
     const row = e.target.closest('[data-drag-member]');
     if (!row || !team?.isAdmin) return;
     const id = row.dataset.dragMember;
@@ -3181,10 +3285,32 @@ export function initTeamView({ auth, escapeHtml }) {
     row.classList.add('is-dragging');
   });
   shellEl.addEventListener('dragend', (e) => {
+    const wrap = e.target.closest('[data-sb-role-drag]');
+    roleDragFrom = null;
+    roleDragCopy = false;
+    if (wrap) {
+      wrap.classList.remove('is-dragging');
+      wrap.draggable = false;
+    }
     e.target.closest('[data-drag-member]')?.classList.remove('is-dragging');
     shellEl.querySelectorAll('.is-drop-target').forEach((el) => el.classList.remove('is-drop-target'));
   });
   shellEl.addEventListener('dragover', (e) => {
+    if (roleDragFrom) {
+      const drop = e.target.closest('[data-sb-role-drag]');
+      if (!drop || drop === roleDragFrom.wrap) return;
+      if (drop.closest('table') !== roleDragFrom.wrap.closest('table')) return;
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = e.shiftKey ? 'copy' : 'move';
+      roleDragCopy = Boolean(e.shiftKey);
+      if (!drop.classList.contains('is-drop-target')) {
+        shellEl.querySelectorAll('[data-sb-role-drag].is-drop-target').forEach((el) => {
+          el.classList.remove('is-drop-target');
+        });
+        drop.classList.add('is-drop-target');
+      }
+      return;
+    }
     const drop = e.target.closest('[data-drop-dummy]');
     if (!drop || !team?.isAdmin) return;
     e.preventDefault();
@@ -3192,12 +3318,33 @@ export function initTeamView({ auth, escapeHtml }) {
     drop.classList.add('is-drop-target');
   });
   shellEl.addEventListener('dragleave', (e) => {
+    const roleDrop = e.target.closest('[data-sb-role-drag]');
+    if (roleDrop) {
+      if (roleDrop.contains(e.relatedTarget)) return;
+      roleDrop.classList.remove('is-drop-target');
+      return;
+    }
     const drop = e.target.closest('[data-drop-dummy]');
     if (!drop) return;
     if (drop.contains(e.relatedTarget)) return;
     drop.classList.remove('is-drop-target');
   });
   shellEl.addEventListener('drop', async (e) => {
+    if (roleDragFrom) {
+      const drop = e.target.closest('[data-sb-role-drag]');
+      e.preventDefault();
+      drop?.classList.remove('is-drop-target');
+      const from = roleDragFrom;
+      roleDragFrom = null;
+      if (!drop || drop === from.wrap) return;
+      if (drop.closest('table') !== from.wrap.closest('table')) return;
+      const to = { id: drop.dataset.sbId || '', idx: Number(drop.dataset.sbIdx) };
+      if (!to.id || Number.isNaN(to.idx)) return;
+      const duplicate = Boolean(e.shiftKey || roleDragCopy || e.dataTransfer?.dropEffect === 'copy');
+      roleDragCopy = false;
+      await applyRoleNoteDrag(from, to, duplicate);
+      return;
+    }
     const drop = e.target.closest('[data-drop-dummy]');
     if (!drop || !team?.isAdmin) return;
     e.preventDefault();
@@ -3274,6 +3421,12 @@ export function initTeamView({ auth, escapeHtml }) {
         }
       }
       page = next;
+      pendingUtilityFocus = {
+        map: String(params.map || '').trim().toUpperCase(),
+        throwId: String(params.u || params.throw || '')
+          .replace(/[^A-Za-z0-9]/g, '')
+          .slice(0, 4)
+      };
       if (params.invite) pendingInvite = params.invite;
       void ents.ready();
       // Page switches must paint immediately. Only the first visit / invite /

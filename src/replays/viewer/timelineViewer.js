@@ -75,12 +75,17 @@ import {
   summarizeDuelStats
 } from '../duels/duelStats.js';
 import { spinnerHtml } from '../../lib/spinner.js';
+import { getStatsPayload } from '../statsCache.js';
+import { resolveSeats, saveStrategyFromRound, sidePlayers } from '../strategy/addStrategy.js';
+import { ROLE_SCAN_ROUNDS } from '../strategy/roundRoles.js';
 import { cs3dMap } from '../../../shared/cs3d/maps.js';
 import view2dIcon from '../../icons/demo_2d.svg?raw';
 import view3dIcon from '../../icons/demo_3d.svg?raw';
 import explore3dIcon from '../../icons/demo_3d_EXPLORE.svg?raw';
 import backIcon from '../../icons/icon_back.svg?raw';
 import menuIcon from '../../icons/icon_menu.svg?raw';
+import addTacticIcon from '../../icons/demo_addtactic.svg?raw';
+import settingsIcon from '../../icons/icon_settings.svg?raw';
 import headshotIcon from '../../icons/headshot.png';
 
 const SPEEDS = [0.25, 0.5, 1, 2, 4];
@@ -92,6 +97,27 @@ const MAX_ZOOM = 5;
 const COACH_FOCUS_ZOOM = 2.15;
 /** View travel duration (ms). Quick, but ease-out so it does not feel snapped. */
 const COACH_FOCUS_MS = 300;
+
+/** Same lists as the team stratbook. */
+const STRAT_ECONOMY = ['Pistol', 'Full buy', 'Full buy + AWP', 'Antiforce', 'Force', 'Eco'];
+const STRAT_CATEGORY_T = [
+  'Pistol',
+  'Set call',
+  'Default',
+  'Opener',
+  'Midround',
+  'Lateround',
+  'Cheap exec'
+];
+const STRAT_CATEGORY_CT = [
+  'Pistol',
+  'Set call',
+  'Default',
+  'Opener',
+  'Midround',
+  'Setup',
+  'Retake'
+];
 
 /** The shipped SVGs are a fixed light grey; let CSS drive the colour instead. */
 const icon = (raw) => String(raw).replace(/fill="#[0-9a-fA-F]{3,8}"/g, 'fill="currentColor"');
@@ -227,14 +253,51 @@ export function createTimelineViewer({
           </div>
         </aside>
         <div class="rv-popover" id="rv-playlist-panel" hidden>
-          <div class="rv-playlist-list" id="rv-playlist-list"></div>
-          <div class="rv-popover-foot">
-            <input type="text" id="rv-playlist-new" class="site-input" maxlength="60" placeholder="New playlist" />
-            <select class="site-select rv-playlist-scope" id="rv-playlist-scope" title="Who can see this playlist">
-              <option value="private">Private</option>
-              <option value="team">Team</option>
-            </select>
-            <button type="button" class="btn btn-sm primary" id="rv-playlist-add">Create</button>
+          <p class="rv-playlist-label" id="rv-playlist-label">Select playlist</p>
+          <div class="rv-playlist-browse" id="rv-playlist-browse">
+            <div class="rv-playlist-list" id="rv-playlist-list"></div>
+            <div class="rv-popover-foot rv-playlist-foot">
+              <button type="button" class="rv-playlist-strategy" id="rv-playlist-strategy">
+                ${icon(addTacticIcon)}
+                <span>ADD STRATEGY</span>
+              </button>
+              <div class="rv-playlist-newbox">
+                <input type="text" id="rv-playlist-new" class="site-input" maxlength="60" placeholder="New" aria-label="New playlist name" />
+                <button type="button" class="rv-playlist-gear" id="rv-playlist-gear"
+                  title="Who can see this playlist" aria-label="Who can see this playlist"
+                  aria-expanded="false" aria-haspopup="true" aria-controls="rv-playlist-scope-menu">
+                  ${icon(settingsIcon)}
+                </button>
+                <div class="rv-playlist-scope-menu" id="rv-playlist-scope-menu" hidden role="listbox" aria-label="Playlist visibility">
+                  <div class="rv-az-seg">
+                    <button type="button" class="rv-az-seg-btn active" data-playlist-scope="private" role="option" aria-selected="true">Private</button>
+                    <button type="button" class="rv-az-seg-btn" data-playlist-scope="team" role="option" aria-selected="false">Team</button>
+                  </div>
+                </div>
+              </div>
+              <button type="button" class="btn primary rv-playlist-add" id="rv-playlist-add" title="Create playlist" aria-label="Create playlist">
+                <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M7 1h2v14H7zM1 7h14v2H1z"/></svg>
+              </button>
+            </div>
+          </div>
+          <div class="rv-strat-form" id="rv-strat-form" hidden>
+            <div class="rv-strat-top">
+              <input type="text" id="rv-strat-name" class="site-input" maxlength="120" placeholder="Name" aria-label="Strategy name" />
+              <div class="rp-seg rp-seg-side rv-strat-side" role="group" aria-label="Side">
+                <button type="button" class="rp-seg-btn active" data-strat-side="T" aria-pressed="true" aria-label="T" title="T">
+                  <img src="/icons/icon_t.png" alt="" width="16" height="16" draggable="false" />
+                </button>
+                <button type="button" class="rp-seg-btn" data-strat-side="CT" aria-pressed="false" aria-label="CT" title="CT">
+                  <img src="/icons/icon_ct.png" alt="" width="16" height="16" draggable="false" />
+                </button>
+              </div>
+            </div>
+            <select class="site-select" id="rv-strat-econ" aria-label="Economy type"></select>
+            <select class="site-select" id="rv-strat-call" aria-label="Call type"></select>
+            <button type="button" class="rv-playlist-strategy rv-strat-confirm" id="rv-strat-confirm">
+              ${icon(addTacticIcon)}
+              <span>CONFIRM</span>
+            </button>
           </div>
           <span class="rv-popover-msg" id="rv-playlist-msg"></span>
         </div>
@@ -438,9 +501,17 @@ export function createTimelineViewer({
   const coachPickGo = el.querySelector('#rv-coach-pick-go');
   const bookmarkBtn = el.querySelector('#rv-bookmark');
   const playlistPanel = el.querySelector('#rv-playlist-panel');
+  const playlistLabelEl = el.querySelector('#rv-playlist-label');
+  const playlistBrowseEl = el.querySelector('#rv-playlist-browse');
   const playlistListEl = el.querySelector('#rv-playlist-list');
   const playlistNewEl = el.querySelector('#rv-playlist-new');
+  const playlistGearBtn = el.querySelector('#rv-playlist-gear');
+  const playlistScopeMenu = el.querySelector('#rv-playlist-scope-menu');
   const playlistMsg = el.querySelector('#rv-playlist-msg');
+  const stratFormEl = el.querySelector('#rv-strat-form');
+  const stratNameEl = el.querySelector('#rv-strat-name');
+  const stratEconEl = el.querySelector('#rv-strat-econ');
+  const stratCallEl = el.querySelector('#rv-strat-call');
 
   // Hotkey legend: show on demo open, hide for later rounds / click.
   // The note and playlist docks used to float over the map and had to push it
@@ -2471,6 +2542,10 @@ export function createTimelineViewer({
   function closePopovers(except = null) {
     if (notePanel !== except) notePanel.hidden = true;
     if (playlistPanel !== except) playlistPanel.hidden = true;
+    if (playlistPanel.hidden) {
+      closePlaylistScopeMenu();
+      setPlaylistStratMode(false);
+    }
     noteBtn.classList.toggle('active', !notePanel.hidden);
     bookmarkBtn.classList.toggle('open', !playlistPanel.hidden);
     syncCoachBtn();
@@ -2671,8 +2746,12 @@ export function createTimelineViewer({
       renderer.panX = Number(startAt.panX) || 0;
       renderer.panY = Number(startAt.panY) || 0;
     }
+    // A link that names a body rather than a camera: frame him where he stands.
+    // Pan offsets are canvas pixels, so a generated link can only say "who".
+    const focusId = String(startAt.focus || '');
     startAt = null;
     draw();
+    if (focusId) focusPlayersAtTick([focusId], tick);
     syncMomentUrl({ immediate: true });
   }
 
@@ -3159,7 +3238,6 @@ export function createTimelineViewer({
       .map((p) => {
         const has = (p.rounds || []).includes(file);
         return `<button type="button" class="rv-playlist-item${has ? ' on' : ''}" data-playlist="${escapeHtml(p.id)}">
-          <span class="rv-playlist-check">${has ? '✓' : ''}</span>
           <span class="rv-playlist-name">${escapeHtml(p.name)}</span>
           <span class="rv-playlist-count">${(p.rounds || []).length}</span>
         </button>`;
@@ -3201,14 +3279,32 @@ export function createTimelineViewer({
     if (item) togglePlaylist(item.dataset.playlist);
   });
 
+  let playlistScope = 'private';
+
+  function closePlaylistScopeMenu() {
+    if (!playlistScopeMenu || !playlistGearBtn) return;
+    playlistScopeMenu.hidden = true;
+    playlistGearBtn.setAttribute('aria-expanded', 'false');
+  }
+
+  function setPlaylistScope(scope) {
+    playlistScope = scope === 'team' ? 'team' : 'private';
+    playlistScopeMenu?.querySelectorAll('[data-playlist-scope]').forEach((btn) => {
+      const on = btn.dataset.playlistScope === playlistScope;
+      btn.classList.toggle('active', on);
+      btn.setAttribute('aria-selected', on ? 'true' : 'false');
+    });
+    closePlaylistScopeMenu();
+  }
+
   async function createPlaylist() {
     const name = playlistNewEl.value.trim();
     const file = files[activeIndex];
     if (!name || !file) return;
     playlistMsg.textContent = '';
+    closePlaylistScopeMenu();
     try {
-      const scope = el.querySelector('#rv-playlist-scope')?.value === 'team' ? 'team' : 'private';
-      playlists = await savePlaylist({ name, rounds: [file], scope });
+      playlists = await savePlaylist({ name, rounds: [file], scope: playlistScope });
       playlistNewEl.value = '';
       renderPlaylists();
       syncBookmark();
@@ -3221,6 +3317,277 @@ export function createTimelineViewer({
   playlistNewEl.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') createPlaylist();
   });
+  playlistGearBtn?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const open = playlistScopeMenu.hidden;
+    playlistScopeMenu.hidden = !open;
+    playlistGearBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  });
+  playlistScopeMenu?.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-playlist-scope]');
+    if (btn) setPlaylistScope(btn.dataset.playlistScope);
+  });
+  playlistPanel.addEventListener('click', (e) => {
+    if (playlistScopeMenu.hidden) return;
+    if (e.target.closest('#rv-playlist-gear') || e.target.closest('#rv-playlist-scope-menu')) return;
+    closePlaylistScopeMenu();
+  });
+
+  let stratSide = 'T';
+
+  function fillStratSelect(select, options, placeholder, keep) {
+    if (!select) return;
+    const valid = keep && options.includes(keep) ? keep : '';
+    select.innerHTML =
+      `<option value="" disabled${valid ? '' : ' selected'}>${escapeHtml(placeholder)}</option>` +
+      options
+        .map(
+          (o) =>
+            `<option value="${escapeHtml(o)}"${o === valid ? ' selected' : ''}>${escapeHtml(o)}</option>`
+        )
+        .join('');
+  }
+
+  function setStratSide(side, keepCall) {
+    stratSide = side === 'CT' ? 'CT' : 'T';
+    stratFormEl?.querySelectorAll('[data-strat-side]').forEach((btn) => {
+      const on = btn.dataset.stratSide === stratSide;
+      btn.classList.toggle('active', on);
+      btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+    fillStratSelect(
+      stratCallEl,
+      stratSide === 'CT' ? STRAT_CATEGORY_CT : STRAT_CATEGORY_T,
+      'Select call type',
+      keepCall !== undefined ? keepCall : stratCallEl?.value
+    );
+  }
+
+  function setPlaylistStratMode(on) {
+    if (playlistLabelEl) playlistLabelEl.textContent = on ? 'Add strategy' : 'Select playlist';
+    if (playlistBrowseEl) playlistBrowseEl.hidden = on;
+    if (stratFormEl) stratFormEl.hidden = !on;
+    if (on) {
+      closePlaylistScopeMenu();
+      if (stratNameEl) stratNameEl.value = '';
+      fillStratSelect(stratEconEl, STRAT_ECONOMY, 'Select economy type', '');
+      setStratSide('T', '');
+      stratNameEl?.focus();
+    }
+  }
+
+  el.querySelector('#rv-playlist-strategy')?.addEventListener('click', () => {
+    setPlaylistStratMode(true);
+  });
+  stratFormEl?.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-strat-side]');
+    if (btn) setStratSide(btn.dataset.stratSide);
+  });
+
+  // ---- the round as a stratbook row ---------------------------------------
+  //
+  // Confirm reads the round the way a coach would and writes what it finds:
+  // who played which position, what each of them did in sequence, and every
+  // grenade they threw — the grenades saved into the team's utility archive
+  // first, so the notes can link the throws that come back.
+  //
+  // The whole thing needs a team and the stratbook entitlement, so the button
+  // that opens the form is dead without them rather than failing at the end of
+  // a scan.
+
+  const stratOpenBtn = el.querySelector('#rv-playlist-strategy');
+  const stratConfirmBtn = el.querySelector('#rv-strat-confirm');
+  /** @type {object|null} the team this viewer writes strategies into */
+  let stratTeam = null;
+  let stratTeamPromise = null;
+  let stratBusy = false;
+
+  const stratMsg = (text, bad = false) => {
+    if (!playlistMsg) return;
+    playlistMsg.textContent = text || '';
+    playlistMsg.classList.toggle('bad', Boolean(bad));
+  };
+
+  function syncStratButtons() {
+    if (stratOpenBtn) {
+      const ok = Boolean(stratTeam);
+      stratOpenBtn.disabled = !ok;
+      stratOpenBtn.title = ok
+        ? 'Turn this round into a strategy'
+        : 'Needs a team on a plan with the stratbook';
+    }
+    if (stratConfirmBtn) stratConfirmBtn.disabled = stratBusy || !stratTeam;
+  }
+
+  /**
+   * The team a generated strategy belongs to.
+   *
+   * A member of several teams gets the one playing in this demo when a name
+   * matches, because that is the team whose call this round is. Otherwise the
+   * first team that may edit a stratbook at all, since a non-admin's save
+   * would be rejected by the server anyway.
+   */
+  function ensureStratTeam() {
+    if (stratTeamPromise) return stratTeamPromise;
+    stratTeamPromise = (async () => {
+      try {
+        const ents = getEntitlements();
+        if (ents) {
+          await ents.ready();
+          if (!ents.can(CAP.TEAM_STRATBOOK_ACCESS)) return null;
+        }
+        const res = await fetchTeams().catch(() => []);
+        const list = Array.isArray(res) ? res : res?.teams || [];
+        const editable = list.filter((t) => t.isAdmin || t.isOwner);
+        if (!editable.length) return null;
+        const meta = activeMeta || rounds[0] || {};
+        const n1 = teamNameKey(meta.team1?.name || '');
+        const n2 = teamNameKey(meta.team2?.name || '');
+        const named = editable.find((t) => {
+          const key = teamNameKey(t.name);
+          return key && (key === n1 || key === n2);
+        });
+        return named || editable[0];
+      } catch {
+        return null;
+      }
+    })().then((team) => {
+      stratTeam = team;
+      if (!destroyed) syncStratButtons();
+      return team;
+    });
+    return stratTeamPromise;
+  }
+
+  /** Roles the Statistics database already computed for this whole match. */
+  async function stratDemoRoles() {
+    const fromCache = statsPayload?.demos?.find((d) => d.id === statsDemoId)?.roles;
+    if (fromCache) return fromCache;
+    if (!statsDemoId) return null;
+    try {
+      const res = await fetchStats([statsDemoId]);
+      if (!statsPayload) statsPayload = res;
+      return res?.demos?.find((d) => d.id === statsDemoId)?.roles || res?.demos?.[0]?.roles || null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Rounds this same five played on this side, with tick data, for the local
+   * role walk. Capped at twelve: that is a half, and the ruleset needs no more.
+   */
+  async function stratScanRounds(mapCode, side, playerIds) {
+    const want = new Set(playerIds);
+    const out = [];
+    for (const r of rounds) {
+      if (out.length >= ROLE_SCAN_ROUNDS) break;
+      const meta = peekMeta(r.file) || (await metaFor(r.file));
+      if (!meta || String(meta.map || '').toUpperCase() !== mapCode) continue;
+      const ids = sidePlayers(meta, side);
+      if (ids.length !== want.size || !ids.every((id) => want.has(id))) continue;
+      const track = store.get(r.file)?.full || (await store.loadFull(r.file));
+      if (!track) continue;
+      out.push({ meta, track });
+      // Hand the frame back: this is a dozen full round loads back to back.
+      await new Promise((done) => setTimeout(done, 0));
+    }
+    return out;
+  }
+
+  async function confirmStrategy() {
+    if (stratBusy) return;
+    const team = stratTeam || (await ensureStratTeam());
+    if (!team) {
+      stratMsg('No team with a stratbook on this account.', true);
+      return;
+    }
+    const name = (stratNameEl?.value || '').trim();
+    const economy = stratEconEl?.value || '';
+    const category = stratCallEl?.value || '';
+    if (!name) {
+      stratMsg('Name this strategy first.', true);
+      stratNameEl?.focus();
+      return;
+    }
+    if (!economy) {
+      stratMsg('Pick an economy type.', true);
+      return;
+    }
+    if (!category) {
+      stratMsg('Pick a call type.', true);
+      return;
+    }
+
+    const file = files[activeIndex];
+    const meta = activeMeta;
+    const mapCode = String(meta?.map || renderer.mapCode || '').toUpperCase();
+    if (!file || !meta || !mapCode) {
+      stratMsg('This round is still loading.', true);
+      return;
+    }
+    const playerIds = sidePlayers(meta, stratSide);
+    if (playerIds.length < 2) {
+      stratMsg(`No ${stratSide} side in this round.`, true);
+      return;
+    }
+
+    stratBusy = true;
+    syncStratButtons();
+    try {
+      stratMsg('Reading the round…');
+      const track = store.get(file)?.full || (await store.loadFull(file));
+      if (!track) throw new Error('Could not load this round.');
+      const network = await ensureZoneNetwork();
+
+      stratMsg('Working out positions…');
+      const { columns, seats } = await resolveSeats({
+        mapCode,
+        side: stratSide,
+        playerIds,
+        demoRoles: await stratDemoRoles(),
+        libraryDemos: () => getStatsPayload().then((p) => p?.demos || []),
+        loadRounds: () => stratScanRounds(mapCode, stratSide, playerIds),
+        network
+      });
+      if (!columns.length) {
+        throw new Error(`The stratbook has no ${stratSide} columns for this map.`);
+      }
+
+      const res = await saveStrategyFromRound({
+        teamId: team.id,
+        mapCode,
+        side: stratSide,
+        name,
+        category,
+        economy,
+        roundFile: file,
+        meta,
+        track,
+        network,
+        seats,
+        onStatus: (text) => stratMsg(text)
+      });
+      if (destroyed) return;
+      const bits = [`Added to ${team.name}.`];
+      if (res.utilityAdded) {
+        bits.push(`${res.utilityAdded} grenade${res.utilityAdded === 1 ? '' : 's'} archived.`);
+      }
+      if (res.utilityDropped) {
+        bits.push(`${res.utilityDropped} left out: the archive for this map is full.`);
+      }
+      stratMsg(bits.join(' '));
+      setPlaylistStratMode(false);
+    } catch (err) {
+      if (!destroyed) stratMsg(err?.message || 'Could not build that strategy.', true);
+    } finally {
+      stratBusy = false;
+      if (!destroyed) syncStratButtons();
+    }
+  }
+
+  stratConfirmBtn?.addEventListener('click', confirmStrategy);
+  syncStratButtons();
 
   // The dock holds one panel at a time: bookmarks take it over, and closing
   // them hands it back to the notes rather than leaving an empty column.
@@ -3232,7 +3599,9 @@ export function createTimelineViewer({
     if (open) {
       renderPlaylists();
       if (!playlists) loadPlaylists();
+      void ensureStratTeam();
     } else {
+      setPlaylistStratMode(false);
       setNoteOpen(true, { focus: false });
     }
     syncKeysVisibility();

@@ -3756,7 +3756,12 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       tick,
       zoom: Number.isFinite(zoom) ? zoom : 0,
       panX: Number(params?.px) || 0,
-      panY: Number(params?.py) || 0
+      panY: Number(params?.py) || 0,
+      // `focus=<player id>` frames one body instead of naming a camera. A
+      // stratbook link cannot know the reader's window size, and pan offsets
+      // are in canvas pixels, so px/py from a generated link would land
+      // somewhere else on every screen.
+      focus: String(params?.focus || '')
     };
   }
 

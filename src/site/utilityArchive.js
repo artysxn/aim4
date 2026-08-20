@@ -7,7 +7,7 @@
 import { RadarRenderer } from '../replays/viewer/radarRenderer.js';
 import { radarToWorld, worldToRadar } from '../replays/viewer/mapCalibration.js';
 import { MAPS, MAP_CODES } from '../replays/shared/roundId.js';
-import { fetchUtilityArchive, saveUtilityArchive } from '../replays/api.js';
+import { fetchUtilityArchive, fetchUtilityIndex, saveUtilityArchive } from '../replays/api.js';
 import { drawUtilityMarker, utilityRadiusUnits } from '../replays/viewer/utilityMarkers.js';
 
 const MERGE_UNITS = 75;
@@ -41,6 +41,17 @@ function dist2(a, b) {
   return (a.x - b.x) ** 2 + (a.y - b.y) ** 2;
 }
 
+/**
+ * The demo moment a throw was lifted from, for throws imported from a round.
+ * Hand-placed lineups have no round behind them and get no link.
+ */
+function throwMomentHref(t) {
+  if (!t?.round || !t?.tick) return '';
+  const q = new URLSearchParams({ round: t.round, tick: String(t.tick) });
+  if (t.player) q.set('focus', t.player);
+  return `/demos?${q}`;
+}
+
 function cloneArchive(a) {
   return JSON.parse(JSON.stringify(a));
 }
@@ -50,15 +61,18 @@ function cloneArchive(a) {
  *   host: HTMLElement,
  *   teamId: string,
  *   escapeHtml: (s: string) => string,
- *   headerHtml: (title: string) => string
+ *   headerHtml: (title: string) => string,
+ *   initialFocus?: { map?: string, throwId?: string }
  * }} deps
  */
-export function mountUtilityArchive({ host, teamId, escapeHtml, headerHtml }) {
+export function mountUtilityArchive({ host, teamId, escapeHtml, headerHtml, initialFocus = null }) {
   let map = '';
   let archive = emptyArchive();
   /** Snapshot before an in-progress create/edit session. */
   let checkpoint = null;
   let selectedId = '';
+  /** Throw id to highlight when a stratbook link opened this page. */
+  let selectedThrowId = '';
   /** True while creating a new grenade (dragged) — clicks add throw spots. */
   let creating = false;
   let status = '';
@@ -164,7 +178,7 @@ export function mountUtilityArchive({ host, teamId, escapeHtml, headerHtml }) {
       <div class="db-block">
         <p class="sc-status${statusBad ? ' bad' : ''}" id="ua-status">${escapeHtml(status)}</p>
       </div>
-      <p class="sc-note">In the stratbook editor, write &lt;!1234&gt; to link setpos/setang to a utility spot.</p>
+      <p class="sc-note">In a stratbook note: &lt;smoke&gt;&lt;!abcd&gt; copies the throw. Add &lt;URL=…&gt; to also open a link.</p>
     `;
   }
 
@@ -180,7 +194,6 @@ export function mountUtilityArchive({ host, teamId, escapeHtml, headerHtml }) {
     const showActions = creating || dirty;
     detailEl.innerHTML = `
       <div class="db-block">
-        <code class="ua-id" title="Landing spot id">&lt;!${escapeHtml(g.id)}&gt;</code>
         <input class="site-input" data-name maxlength="80" value="${escapeHtml(g.name || '')}"
           placeholder="Grenade name" aria-label="Grenade name" />
       </div>
@@ -190,13 +203,20 @@ export function mountUtilityArchive({ host, teamId, escapeHtml, headerHtml }) {
             ? `<ul class="ua-throw-list">${g.throws
                 .map(
                   (t, i) => `
-              <li class="ua-throw" data-throw="${i}">
-                <code class="ua-id ua-throw-id" title="Link this exact throw">&lt;!${escapeHtml(
+              <li class="ua-throw${t.id && t.id === selectedThrowId ? ' is-on' : ''}" data-throw="${i}">
+                <code class="ua-id ua-throw-id" title="Throw id for stratbook notes">&lt;!${escapeHtml(
                   t.id || ''
                 )}&gt;</code>
                 <button type="button" class="ua-throw-copy" data-copy-throw="${i}" title="Copy setpos / setang">
                   Copy
                 </button>
+                ${
+                  t.round && t.tick
+                    ? `<a class="ua-throw-copy" href="${escapeHtml(
+                        throwMomentHref(t)
+                      )}" target="_blank" rel="noopener noreferrer" title="Open the round on this throw">Watch</a>`
+                    : ''
+                }
                 <div class="ua-throw-fields">
                   <input class="site-input" data-setpos="${i}" placeholder="setpos …" value="${escapeHtml(
                     t.setpos || ''
@@ -237,6 +257,7 @@ export function mountUtilityArchive({ host, teamId, escapeHtml, headerHtml }) {
     map = code || '';
     archive = emptyArchive(map);
     selectedId = '';
+    selectedThrowId = '';
     creating = false;
     checkpoint = null;
     dirty = false;
@@ -269,6 +290,48 @@ export function mountUtilityArchive({ host, teamId, escapeHtml, headerHtml }) {
     renderTools();
     renderDetail();
     paint();
+  }
+
+  async function focusThrow(focus) {
+    if (!focus) return;
+    let mapCode = String(focus.map || '').trim().toUpperCase();
+    const throwId = String(focus.throwId || '')
+      .replace(/[^A-Za-z0-9]/g, '')
+      .slice(0, 4);
+    if (!mapCode && throwId) {
+      try {
+        const index = await fetchUtilityIndex(teamId);
+        for (const g of index) {
+          if ((g.throws || []).some((t) => t.id === throwId) || g.id === throwId) {
+            mapCode = g.map;
+            break;
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    if (mapCode && mapCode !== map) await loadMap(mapCode);
+    if (!throwId) return;
+    for (const g of archive.grenades) {
+      if ((g.throws || []).some((t) => t.id === throwId)) {
+        selectedId = g.id;
+        selectedThrowId = throwId;
+        creating = false;
+        paint();
+        renderDetail();
+        return;
+      }
+      if (g.id === throwId) {
+        selectedId = g.id;
+        selectedThrowId = '';
+        creating = false;
+        paint();
+        renderDetail();
+        return;
+      }
+    }
+    setStatus(`No throw ${throwId} on this map.`, true);
   }
 
   function worldRadiusPx(units, t) {
@@ -340,11 +403,18 @@ export function mountUtilityArchive({ host, teamId, escapeHtml, headerHtml }) {
         ctx.setLineDash([]);
         ctx.beginPath();
         ctx.arc(x, y, 6 * renderer.dpr, 0, Math.PI * 2);
-        ctx.fillStyle = '#7dff6a';
+        ctx.fillStyle = th.id && th.id === selectedThrowId ? '#fff' : '#7dff6a';
         ctx.fill();
         ctx.strokeStyle = '#000';
         ctx.lineWidth = 1.2 * renderer.dpr;
         ctx.stroke();
+        if (th.id && th.id === selectedThrowId) {
+          ctx.beginPath();
+          ctx.arc(x, y, 9 * renderer.dpr, 0, Math.PI * 2);
+          ctx.strokeStyle = '#fff';
+          ctx.lineWidth = 1.5 * renderer.dpr;
+          ctx.stroke();
+        }
         ctx.restore();
       }
     }
@@ -471,12 +541,14 @@ export function mountUtilityArchive({ host, teamId, escapeHtml, headerHtml }) {
     const hit = hitGrenade(world);
     if (hit) {
       selectedId = hit.id;
+      selectedThrowId = '';
       creating = false;
       paint();
       renderDetail();
       return;
     }
     selectedId = '';
+    selectedThrowId = '';
     paint();
     renderDetail();
   });
@@ -681,6 +753,7 @@ export function mountUtilityArchive({ host, teamId, escapeHtml, headerHtml }) {
       creating = false;
       dirty = false;
       selectedId = '';
+      selectedThrowId = '';
       setStatus('Cancelled.');
       paint();
       renderDetail();
@@ -688,6 +761,14 @@ export function mountUtilityArchive({ host, teamId, escapeHtml, headerHtml }) {
       return;
     }
     if (!g) return;
+    const throwRow = e.target.closest('[data-throw]');
+    if (throwRow && !e.target.closest('input, button, a')) {
+      const i = Number(throwRow.dataset.throw);
+      selectedThrowId = g.throws[i]?.id || '';
+      paint();
+      renderDetail();
+      return;
+    }
     const copy = e.target.closest('[data-copy-throw]');
     if (copy) {
       const i = Number(copy.dataset.copyThrow);
@@ -699,6 +780,7 @@ export function mountUtilityArchive({ host, teamId, escapeHtml, headerHtml }) {
       beginSession();
       const i = Number(dropT.dataset.dropThrow);
       g.throws.splice(i, 1);
+      if (!g.throws.some((t) => t.id === selectedThrowId)) selectedThrowId = '';
       dirty = true;
       paint();
       renderDetail();
@@ -709,6 +791,7 @@ export function mountUtilityArchive({ host, teamId, escapeHtml, headerHtml }) {
       beginSession();
       archive.grenades = archive.grenades.filter((x) => x.id !== g.id);
       selectedId = '';
+      selectedThrowId = '';
       creating = false;
       dirty = true;
       try {
@@ -729,8 +812,10 @@ export function mountUtilityArchive({ host, teamId, escapeHtml, headerHtml }) {
   renderTools();
   renderDetail();
   paint();
+  if (initialFocus?.map || initialFocus?.throwId) void focusThrow(initialFocus);
 
   return {
+    focusThrow,
     destroy() {
       window.removeEventListener('resize', paint);
       window.removeEventListener('pointermove', onWinMove);
