@@ -28,6 +28,8 @@
 //                     the last position before that zone: "Go Underground
 //                     to Lower Mid"
 //   stay              five seconds or more on one position with a GUN in hand.
+//                     Two of those in a row collapse: the second is "then
+//                     search", not another until-clock
 //                     Five seconds holding a smoke is not holding an angle, it
 //                     is lining up a throw, which is the next line instead
 //   line up           standing somewhere with utility out and throwing it
@@ -1689,6 +1691,7 @@ export function buildRoundNotes({
         continue;
       }
       pathTold.add(key);
+      e.pathGo = true;
       e.text = `Go ${e.fromPos} to ${e.stayZone}. ${e.text}`;
     }
 
@@ -1799,6 +1802,25 @@ export function buildRoundNotes({
     // the reader asking "then what?" and the clock is really just where the
     // round ran out or where he died, which is not an instruction.
     while (events.length && events[events.length - 1].stay) events.pop();
+
+    // Two idle sits back to back are one hold, then a search. A stay that
+    // already named a new zone ("Go Ramp to B Banana. Stay …") is an arrival,
+    // not a second sit, and starts the next run.
+    for (let i = 0; i < events.length - 1; ) {
+      if (!events[i].stay) {
+        i += 1;
+        continue;
+      }
+      let j = i + 1;
+      while (j < events.length && events[j].stay && !events[j].pathGo) j += 1;
+      if (j === i + 1) {
+        i += 1;
+        continue;
+      }
+      events[i].text = `${events[i].text}, then search`;
+      events.splice(i + 1, j - i - 1);
+      i += 1;
+    }
 
     const searched = events.some((e) => e.keyMove && /^(Search |Contact |Rush out)/.test(e.text));
     if (!searched && lurkAt.has(id)) {

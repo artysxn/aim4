@@ -54,7 +54,7 @@ import { createDocsEditor } from './docsEditor.js';
 import { mountDrawingBoard } from './drawingBoard.js';
 import { mountUtilityArchive } from './utilityArchive.js';
 import { spinnerHtml } from '../lib/spinner.js';
-import { renderStratNoteLinks } from './stratNoteLinks.js';
+import { renderStratNoteLinks, safeHref } from './stratNoteLinks.js';
 
 /** Below this a per-side winrate is noise, so the bar stays empty. */
 const MIN_SIDE_ROUNDS = 12;
@@ -443,6 +443,19 @@ export function initTeamView({ auth, escapeHtml }) {
     const q = new URLSearchParams({ round: th.round, tick: String(th.tick) });
     if (th.player) q.set('focus', th.player);
     return `/demos?${q}`;
+  }
+
+  /** Stratbook 2D field: same-origin paths stay in the app, anything else is a tab. */
+  function strat2dHref(raw) {
+    const href = safeHref(raw);
+    if (!href) return '';
+    try {
+      const u = new URL(href, window.location.origin);
+      if (u.origin === window.location.origin) return `${u.pathname}${u.search}${u.hash}`;
+    } catch {
+      /* keep the sanitized href */
+    }
+    return href;
   }
 
   async function copyUtilityById(id) {
@@ -2441,10 +2454,16 @@ export function initTeamView({ auth, escapeHtml }) {
       .map((s) => {
         const note = playerRoleNote(s, playerId);
         const name = (s.name || 'Untitled').toUpperCase();
+        const href = strat2dHref(s.link2d);
+        const nameHtml = href
+          ? `<a class="ms-name-link" href="${escapeHtml(href)}"${
+              href.startsWith('/') ? '' : ' target="_blank" rel="noopener noreferrer"'
+            } title="Open 2D">${escapeHtml(name)}</a>`
+          : escapeHtml(name);
         const noteHtml = noteWithUtilityLinks(note).replace(/\n/g, '<br />');
         return `
         <tr class="ms-row ms-${side.toLowerCase()}">
-          <td class="ms-cell-name">${escapeHtml(name)}</td>
+          <td class="ms-cell-name">${nameHtml}</td>
           <td class="ms-cell-econ ${econClass(s.economy)}">${escapeHtml(s.economy || '')}</td>
           <td class="ms-cell-cat ${catClass(s.category)}">${escapeHtml(s.category || '')}</td>
           <td class="ms-cell-note">${noteHtml || '<span class="ms-note-empty">—</span>'}</td>

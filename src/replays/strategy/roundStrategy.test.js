@@ -419,8 +419,53 @@ test('going somewhere is a zone; staying somewhere is a position', () => {
   const gos = note.match(/Go [^,]+/g) || [];
   assert.deepEqual(gos, ['Go Mid', 'Go A Site on flash from two']);
   // …while the spots he sat on inside those zones are named exactly.
-  assert.match(note, /Stay Top Mid until \d:\d\d/);
-  assert.match(note, /Stay Catwalk until \d:\d\d/);
+  assert.match(note, /Stay Top Mid until \d:\d\d, then search/);
+  assert.ok(!note.includes('Stay Catwalk'), note);
+});
+
+test('two stays in a row become stay, then search; a Go-to-zone stay is not the second sit', () => {
+  // Same idle pair as Banana bottom → Banana: sit one painted box, shuffle to
+  // the next box in that zone, then take a fight. A real zone change in
+  // between ("Go Top Mid to A Site. Stay A Ramp") stays an arrival.
+  const siteNet = {
+    ...NETWORK,
+    positions: [
+      ...NETWORK.positions,
+      { id: 'p_site', name: 'A Default', pieces: [{ type: 'rect', x: 0, y: 1300, w: 400, h: 400 }] }
+    ],
+    zones: [
+      NETWORK.zones[0],
+      NETWORK.zones[1],
+      { id: 'z_a', name: 'A Site', positionIds: ['p_ramp', 'p_site'] }
+    ]
+  };
+  const meta = roundMeta({ players: FIVE });
+  meta.events.damage = [{ tick: T0 + 45 * RATE, attacker: 'fff', victim: 'aaa', hp: 30 }];
+  const note = body(
+    buildRoundNotes({
+      meta,
+      track: fakeTrack({
+        0: [
+          { at: 0, ...AT.spawn },
+          { at: 12, ...AT.mid },
+          { at: 20, ...AT.ramp },
+          { at: 28, x: 200, y: 1500 },
+          { at: 40, ...AT.cat }
+        ],
+        5: [{ at: 0, ...AT.mid }]
+      }),
+      network: siteNet,
+      mapCode: 'MIR',
+      side: 'T',
+      playerIds: ['aaa'],
+      economy: 'Full buy'
+    }).get('aaa')
+  );
+  assert.match(
+    note,
+    /Stay Top Mid until \d:\d\d, Go Top Mid to A Site\. Stay A Ramp until \d:\d\d, then search, Fight/
+  );
+  assert.ok(!note.includes('Stay A Default'), note);
 });
 
 test('a note opens with the buy on a pistol round and not on a full buy', () => {
