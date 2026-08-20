@@ -277,6 +277,8 @@ export function createRecoilState() {
     punchVel: [0, 0],
     /** The cosmetic shake. Never touches a bullet. */
     viewPunch: [0, 0],
+    /** TraceAttack roll (Source z). Spray recoil never writes this. */
+    punchRoll: 0,
     /** Where in the table the next shot reads. Fractional between sprays. */
     index: 0,
     /** Shots since the trigger was last released, for the HUD and the ramp. */
@@ -291,6 +293,7 @@ export function resetRecoil(state) {
   state.punch[0] = state.punch[1] = 0;
   state.punchVel[0] = state.punchVel[1] = 0;
   state.viewPunch[0] = state.viewPunch[1] = 0;
+  state.punchRoll = 0;
   state.index = 0;
   state.shotsFired = 0;
   state.lastShotTime = -1e9;
@@ -387,6 +390,13 @@ export function updateRecoil(state, dt) {
     state.punch[0] += state.punchVel[0] * h * 0.5;
     state.punch[1] += state.punchVel[1] * h * 0.5;
     hybridDecay(state.viewPunch, VIEW_PUNCH_DECAY, 0, h);
+    state.punchRoll *= Math.exp(-PUNCH_DECAY_EXP * h);
+    {
+      const lin = PUNCH_DECAY_LIN * h;
+      const mag = Math.abs(state.punchRoll || 0);
+      if (mag > lin) state.punchRoll *= 1 - lin / mag;
+      else state.punchRoll = 0;
+    }
     state._sub -= h;
   }
 }
@@ -397,9 +407,10 @@ export function updateRecoil(state, dt) {
  * `weapon_recoil_scale` is applied here rather than at the kick, which is why
  * the values a demo carries are half what the bullets use.
  */
-export function aimPunch(state, out = [0, 0]) {
+export function aimPunch(state, out = [0, 0, 0]) {
   out[0] = state.punch[0] * RECOIL_SCALE;
   out[1] = state.punch[1] * RECOIL_SCALE;
+  out[2] = (state.punchRoll || 0) * RECOIL_SCALE;
   return out;
 }
 
@@ -411,10 +422,29 @@ export function aimPunch(state, out = [0, 0]) {
  * bullets are going, and reproducing it is the difference between a spray that
  * can be learned the way CS players learn it and one that cannot.
  */
-export function cameraPunch(state, out = [0, 0]) {
+export function cameraPunch(state, out = [0, 0, 0]) {
   out[0] = state.viewPunch[0] + state.punch[0] * RECOIL_SCALE * VIEW_RECOIL_TRACKING;
   out[1] = state.viewPunch[1] + state.punch[1] * RECOIL_SCALE * VIEW_RECOIL_TRACKING;
+  out[2] = (state.punchRoll || 0) * RECOIL_SCALE * VIEW_RECOIL_TRACKING;
   return out;
+}
+
+/**
+ * CCSPlayer::TraceAttack writing m_aimPunchAngle. `delta` is degrees of raw
+ * punch from shared/sim3d/flinch.js. Blast replaces pitch; bullets add.
+ */
+export function applyHitFlinch(state, delta, { replacePitch = false } = {}) {
+  if (!state || !delta) return state;
+  if (replacePitch) state.punch[0] = delta.pitch || 0;
+  else state.punch[0] += delta.pitch || 0;
+  state.punch[1] += delta.yaw || 0;
+  state.punchRoll = (state.punchRoll || 0) + (delta.roll || 0);
+  const capHead = 3 * -12;
+  if (state.punch[0] < capHead) state.punch[0] = capHead;
+  const capRoll = 3 * 9;
+  if (state.punchRoll < -capRoll) state.punchRoll = -capRoll;
+  if (state.punchRoll > capRoll) state.punchRoll = capRoll;
+  return state;
 }
 
 // ---- the recoil index -------------------------------------------------------

@@ -85,6 +85,28 @@ body {
   pointer-events: none;
   z-index: 7;
 }
+#c3-ui.is-radar-overview .c3-crosshair-canvas {
+  visibility: hidden;
+}
+#c3-ui.is-radar-overview .c3-xray-labels {
+  visibility: hidden;
+}
+body:has(#c3-ui.is-radar-overview) #c3-canvas {
+  filter: blur(18px);
+  transform: scale(1.08);
+}
+#c3-ui.is-radar-overview::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background: rgba(0, 0, 0, 0.22);
+  pointer-events: none;
+}
+#c3-ui.is-radar-overview .c3-top,
+#c3-ui.is-radar-overview .c3-mh > :not(.c3-mh-overview) {
+  visibility: hidden;
+}
 
 #c3-ui {
   position: fixed;
@@ -722,6 +744,12 @@ body {
   flex-direction: column;
   gap: 8px;
 }
+.c3-pause-actions .c3-import {
+  margin-top: 0;
+}
+.c3-pause-actions .c3-import-open {
+  width: 100%;
+}
 .c3-pause-btn {
   display: block;
   width: 100%;
@@ -1024,6 +1052,34 @@ body {
   overflow: hidden;
   background: rgba(0, 0, 0, 0.55);
   box-shadow: 0 0 0 1.5px #c4a43a;
+  z-index: 2;
+}
+.c3-mh.is-overview .c3-mh-radar {
+  visibility: hidden;
+}
+.c3-mh-overview {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+}
+.c3-mh-overview[hidden] {
+  display: none;
+}
+.c3-mh-overview canvas {
+  width: min(72vmin, 680px);
+  height: min(72vmin, 680px);
+  max-width: calc(100% - 48px);
+  max-height: calc(100% - 48px);
+  display: block;
+  background: #1a1a18;
+  box-shadow: 0 0 0 1px rgba(200, 220, 245, 0.55);
+}
+.c3-mh > :not(.c3-mh-overview) {
+  z-index: 2;
 }
 .c3-mh-radar canvas {
   width: 100%;
@@ -1278,4 +1334,57 @@ body {
   color: #5c5c62;
   font: 400 13px var(--font-body);
   outline: none;
+}
+
+.c3-xray-labels {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 6;
+}
+.c3-xray-tag {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  pointer-events: none;
+  will-change: transform;
+}
+.c3-xray-icons {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  margin-bottom: 2px;
+}
+.c3-xray-icon {
+  display: block;
+  height: 14px;
+  width: auto;
+  max-width: 40px;
+  object-fit: contain;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.85));
+}
+.c3-xray-name,
+.c3-xray-hp {
+  color: #e8a84a;
+  font: 700 12px/1.15 var(--font-body, sans-serif);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
+  white-space: nowrap;
+}
+.c3-xray-hp {
+  font-size: 11px;
+}
+.c3-xray-ptr {
+  width: 0;
+  height: 0;
+  margin-top: 2px;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 6px solid #e8a84a;
 }

@@ -271,14 +271,18 @@ export function createTimelineViewer({
         <div class="rv-map">
           <canvas class="rv-canvas" id="rv-canvas"></canvas>
           <div class="rv-clock-row" id="rv-clock-row">
-            <span class="rv-clock-team" id="rv-clock-team-left" data-side="T"></span>
-            <span class="rv-clock-odds" id="rv-odds-left" data-side="T" hidden></span>
-            <span class="rv-match-score" id="rv-score-left" data-side="T">0</span>
+            <div class="rv-clock-side is-left">
+              <span class="rv-clock-odds" id="rv-odds-left" data-side="T" hidden></span>
+              <span class="rv-clock-team" id="rv-clock-team-left" data-side="T"></span>
+              <span class="rv-match-score" id="rv-score-left" data-side="T">0</span>
+            </div>
             <div class="rv-clock" id="rv-clock" role="button" tabindex="0"
               title="Copy link to this moment">00:00</div>
-            <span class="rv-match-score" id="rv-score-right" data-side="CT">0</span>
-            <span class="rv-clock-odds" id="rv-odds-right" data-side="CT" hidden></span>
-            <span class="rv-clock-team" id="rv-clock-team-right" data-side="CT"></span>
+            <div class="rv-clock-side is-right">
+              <span class="rv-match-score" id="rv-score-right" data-side="CT">0</span>
+              <span class="rv-clock-team" id="rv-clock-team-right" data-side="CT"></span>
+              <span class="rv-clock-odds" id="rv-odds-right" data-side="CT" hidden></span>
+            </div>
           </div>
           <div class="rv-feed-stack" id="rv-feed-stack">
             <div class="rv-killfeed" id="rv-killfeed" aria-live="polite"></div>
@@ -346,6 +350,9 @@ export function createTimelineViewer({
     </div>
     <button type="button" class="rv-keys" id="rv-keys" title="Click to hide" aria-label="Keyboard shortcuts. Click to hide">
       <span class="rv-keys-key">Space</span><span class="rv-keys-action">Pause / Unpause</span>
+      <span class="rv-keys-key">Hold Q</span><span class="rv-keys-action">3D radar overview</span>
+      <span class="rv-keys-key">X</span><span class="rv-keys-action">3D X-ray</span>
+      <span class="rv-keys-key">Hold Tab</span><span class="rv-keys-action">Match stats</span>
       <span class="rv-keys-key">Hover + S</span><span class="rv-keys-action">Copy setpos</span>
       <span class="rv-keys-key">Scroll</span><span class="rv-keys-action">Zoom</span>
       <span class="rv-keys-key">Mouse3</span><span class="rv-keys-action">Pan</span>
@@ -649,6 +656,8 @@ export function createTimelineViewer({
   let view3d = null;
   let mode3d = false;
   let immerse3d = false;
+  let radarOverview = false;
+  let savedRadarView = null;
   let map3dSlug = cs3dMap(rounds[0]?.map || '')?.slug || null;
   /** Last /3d payload: dataReady, mapReady, upgradeable, job. */
   let avail3d = null;
@@ -773,7 +782,9 @@ export function createTimelineViewer({
         : 'Fly. G to walk'
       : 'Free roam (G)';
     mapEl.classList.toggle('is-3d', mode3d);
+    el.classList.toggle('is-3d', mode3d);
     el.classList.toggle('is-3d-immerse', mode3d && immerse3d);
+    if (!mode3d) setRadarOverview(false);
     syncPovHighlight();
     syncPovBtn();
   }
@@ -793,6 +804,16 @@ export function createTimelineViewer({
           const { createView3d } = await import('./view3d.js');
           view3d = createView3d({
             slug: map3dSlug,
+            sampleSlot: (slot, atTick, out) => {
+              const tr = store.track(files[activeIndex]);
+              if (!tr) return null;
+              return tr.sample(slot, atTick, out || {});
+            },
+            tickRange: () => {
+              const tr = store.track(files[activeIndex]);
+              if (!tr) return null;
+              return { first: tr.firstTick, last: tr.lastTick, stride: tr.stride };
+            },
             onModeChange: () => {
               sync3dButtons();
               syncPovHighlight();
@@ -2274,9 +2295,9 @@ export function createTimelineViewer({
     }
     closePopovers();
 
-    // In 3D: left click next player, right click previous. Fly/walk/third:
-    // an unlocked click grabs the mouse first (Map Practice). The pencil still
-    // owns both buttons when it is out.
+    // In 3D: left click next player, right click previous. Freecam: an
+    // unlocked click grabs the mouse. The pencil still owns both buttons
+    // when it is out.
     if (mode3d && view3d && !drawing.enabled) {
       if (e.button === 0 || e.button === 2) {
         pendingClick = null;
@@ -3399,9 +3420,81 @@ export function createTimelineViewer({
     setScoreboardOpen(false);
   }
 
-  window.addEventListener('keydown', onTabDown);
-  window.addEventListener('keyup', onTabUp);
+  function setRadarOverview(on) {
+    const next = Boolean(on) && mode3d;
+    if (next === radarOverview) return;
+    radarOverview = next;
+    if (next) {
+      savedRadarView = {
+        zoom: renderer.zoom,
+        panX: renderer.panX,
+        panY: renderer.panY,
+        viewInset: { ...renderer.viewInset }
+      };
+      renderer.zoom = 1;
+      renderer.panX = 0;
+      renderer.panY = 0;
+      renderer.viewInset = { top: 0, right: 0, bottom: 0, left: 0 };
+      renderer.invalidateMapCache();
+      mapEl.classList.add('is-radar-overview');
+    } else {
+      if (savedRadarView) {
+        renderer.zoom = savedRadarView.zoom;
+        renderer.panX = savedRadarView.panX;
+        renderer.panY = savedRadarView.panY;
+        if (savedRadarView.viewInset) renderer.viewInset = savedRadarView.viewInset;
+        savedRadarView = null;
+        renderer.invalidateMapCache();
+      }
+      mapEl.classList.remove('is-radar-overview');
+    }
+    if (!destroyed) draw();
+  }
+
+  let qHoldingRadar = false;
+
+  function onQDown(e) {
+    if (e.code !== 'KeyQ') return;
+    if (e.target.matches?.('input, textarea, select')) return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (!mode3d) return;
+    e.preventDefault();
+    if (e.repeat) return;
+    qHoldingRadar = true;
+    setRadarOverview(true);
+  }
+
+  function onQUp(e) {
+    if (e.code !== 'KeyQ') return;
+    if (!qHoldingRadar) return;
+    e.preventDefault();
+    qHoldingRadar = false;
+    setRadarOverview(false);
+  }
+
+  function onQCancel() {
+    if (!qHoldingRadar) return;
+    qHoldingRadar = false;
+    setRadarOverview(false);
+  }
+
+  function onXDown(e) {
+    if (e.code !== 'KeyX') return;
+    if (e.target.matches?.('input, textarea, select')) return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (!mode3d || !view3d) return;
+    e.preventDefault();
+    if (e.repeat) return;
+    view3d.toggleXray();
+  }
+
+  window.addEventListener('keydown', onTabDown, true);
+  window.addEventListener('keyup', onTabUp, true);
   window.addEventListener('blur', onTabCancel);
+  window.addEventListener('keydown', onQDown, true);
+  window.addEventListener('keyup', onQUp, true);
+  window.addEventListener('blur', onQCancel);
+  window.addEventListener('keydown', onXDown, true);
 
   // ---- coach --------------------------------------------------------------
   //
@@ -3563,10 +3656,10 @@ export function createTimelineViewer({
   }
 
   /**
-   * The round win chance, in the two places it is read from: beside each team
-   * on the clock row, and in the Predicted Winrate header. Both are blanked
-   * when the chart is off — an odds number with no graph behind it is a claim
-   * the user has not asked for and cannot check.
+   * The round win chance, on the outer edges of the clock row and in the
+   * Predicted Winrate header. Both are blanked when the chart is off — an odds
+   * number with no graph behind it is a claim the user has not asked for and
+   * cannot check.
    */
   function syncSideWinrates(now) {
     const pctFor = (side) =>
@@ -4721,7 +4814,9 @@ export function createTimelineViewer({
         // The round's weapon dictionary: the agent bodies pick their clip set
         // (rifle / pistol / knife) from the held weapon's name.
         weapons: activeMeta.weapons || [],
-        teamSides: { 1: activeMeta.team1Side, 2: activeMeta.team2Side }
+        teamSides: { 1: activeMeta.team1Side, 2: activeMeta.team2Side },
+        roundKey: files[activeIndex] || '',
+        stats: track ? activeMeta.stats || {} : {}
       });
     }
 
@@ -5091,9 +5186,13 @@ export function createTimelineViewer({
       view3d?.dispose();
       view3d = null;
       window.removeEventListener('keydown', onKey);
-      window.removeEventListener('keydown', onTabDown);
-      window.removeEventListener('keyup', onTabUp);
+      window.removeEventListener('keydown', onTabDown, true);
+      window.removeEventListener('keyup', onTabUp, true);
       window.removeEventListener('blur', onTabCancel);
+      window.removeEventListener('keydown', onQDown, true);
+      window.removeEventListener('keyup', onQUp, true);
+      window.removeEventListener('blur', onQCancel);
+      window.removeEventListener('keydown', onXDown, true);
       window.removeEventListener('resize', onResize);
       window.removeEventListener('keydown', onGraphShiftKey);
       window.removeEventListener('keyup', onGraphShiftKey);

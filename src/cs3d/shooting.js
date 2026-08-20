@@ -111,7 +111,7 @@ export class Shooting {
     const walls = out.impacts
       .filter((i) => i.penetrated && i.exit)
       .map((i) => ({ surface: i.surface, thickness: i.exit.thickness, damage: i.damage }));
-    const shot = { ...out, walls, broken, carved, weapon: weapon.name };
+    const shot = { ...out, walls, broken, carved, weapon: weapon.name, dir };
     if (this.traces) this._draw(eye, dir, out);
     this.onShot(shot);
     return shot;

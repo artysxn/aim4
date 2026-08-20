@@ -37,6 +37,8 @@ const out = {
   s.fire(eye, dir);
   assert.equal(s.lines.length, 0, 'traces off must not record segments');
   assert.equal(s.root.children.length, 0, 'traces off must not create GPU lines');
+  const shot = s.fire(eye, dir);
+  assert.equal(shot.dir, dir, 'the shot carries the bullet direction');
   s.dispose();
 }
 

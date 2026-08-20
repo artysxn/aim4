@@ -30,10 +30,23 @@
 // ---------------------------------------------------------------------------
 
 import * as THREE from 'three/webgpu';
-import { FLAG_DUCKING, FLAG_AIRBORNE, readRecord, lerpAngle } from '../replays/shared/tickFormat.js';
+import { FLAG_DUCKING, FLAG_AIRBORNE, PLAYER_SLOTS, readRecord, lerpAngle } from '../replays/shared/tickFormat.js';
 import { cameraYawFromSource } from '../../shared/sim3d/units.js';
 import { HULL_STAND, HULL_DUCK, EYE_STAND, EYE_DUCK, HULL_HALF_WIDE } from '../../shared/sim3d/constants.js';
-import { inventoryAt, isSecondary } from '../replays/viewer/equipmentIcons.js';
+import { hudLoadout, inventoryAt } from '../replays/viewer/equipmentIcons.js';
+import { markXrayObject, xrayIconList } from './xray.js';
+import {
+  consumeForward,
+  resolveDemoHit,
+  applyTraceHit,
+  killedOnTick,
+  createPovFlinch,
+  addPovFlinch,
+  decayPovFlinch,
+  resetPovFlinch,
+  scaledAimPunch,
+  scaledCameraPunch
+} from './demoHits.js';
 
 const DEG = Math.PI / 180;
 const RAD = 180 / Math.PI;
@@ -45,6 +58,7 @@ const TEAM_COLOR = { T: 0xd9a24a, CT: 0x5b87e0 };
 const _a = {};
 const _b = {};
 const _c = {};
+const _radarNext = {};
 const _euler = new THREE.Euler(0, 0, 0, 'YXZ');
 const _quat = new THREE.Quaternion();
 const _fwd = new THREE.Vector3();
@@ -58,14 +72,16 @@ export class DemoView {
    *   agent models + clips; bodies fall back to placeholders until it is ready
    * @param {import('./demoNades.js').DemoNades} [o.nades]  the round's utility,
    *   drawn with the practice engine. Without one a demo simply has no grenades.
+   * @param {import('./blood.js').BloodSpray} [o.blood]
    * @param {(view: DemoView) => void} [o.onChange]  fired on state changes
    *   (round, play, POV) — not per frame; the HUD polls status() for the clock.
    */
-  constructor({ camera, getPack, playerModels, nades, onChange }) {
+  constructor({ camera, getPack, playerModels, nades, blood, onChange }) {
     this.camera = camera;
     this.getPack = getPack;
     this.playerModels = playerModels || null;
     this.nades = nades || null;
+    this.blood = blood || null;
     this.onChange = onChange || (() => {});
 
     this.demo = null;
@@ -81,6 +97,13 @@ export class DemoView {
     this._lastRow = -1;
     /** POV player's weapon/speed/view for the viewmodel; see povState(). */
     this._pov = null;
+    this._flinch = createPovFlinch();
+    this._camPunch = [0, 0, 0];
+    this._aimPunch = [0, 0, 0];
+    this._hurtTick = null;
+    this._hurtRound = -1;
+    this._hitStates = Array.from({ length: 10 }, () => ({}));
+    this._pendingHits = [];
 
     this.root = new THREE.Group();
     this.root.name = 'demo';
@@ -101,16 +124,19 @@ export class DemoView {
       const nose = new THREE.Mesh(this._noseGeo, this._noseMat);
       nose.position.set(HULL_HALF_WIDE + 6, EYE_STAND - 4, 0);
       g.add(body, nose);
+      markXrayObject(g);
       g.visible = false;
       this.root.add(g);
       // `model` is the animated agent body once the players pack has loaded;
       // `group` (the placeholder) then stays hidden. `prev` is the last frame's
       // sample, for the velocity the locomotion blend runs on.
-      this._bodies.push({ group: g, body, nose, model: null, prev: null });
+      this._bodies.push({ group: g, body, nose, model: null, prev: null, lastLive: null });
     }
 
     /** Source-space dots for the match HUD radar. Rewritten every update. */
     this.marks = [];
+    /** Reused by radarFrame() so hold-Q does not allocate ten states a frame. */
+    this._radarStates = [];
     /** Bound once: demoNades.js holds it across frames. See _sampleView. */
     this._povAt = (tick) => this._sampleView(tick);
   }
@@ -157,6 +183,10 @@ export class DemoView {
     this.row = Math.max(0, Math.min(this.ticks.header.tickCount - 1, live));
     this.playing = true;
     this.nades?.setEvents(this.meta.events?.grenades, this.ticks.header.tickRate || 64);
+    this._hurtTick = null;
+    this._hurtRound = i;
+    resetPovFlinch(this._flinch);
+    for (const b of this._bodies) b.lastLive = null;
     this.onChange(this);
   }
 
@@ -216,16 +246,16 @@ export class DemoView {
       activeWeapon: weapon
     });
     const nades = (inv.util || []).filter((x) => x !== 'defuser' && x !== 'c4');
-    const pistol = (inv.items || []).find((x) => isSecondary(x)) || '';
+    const slots = hudLoadout(inv);
     const kills = (this.meta.events?.kills || []).filter((k) => k.attacker === id && k.tick <= tick).length;
     return {
       hp: a.alive ? a.health : 0,
       dead: !a.alive,
       side: a.side || '',
       money: stats.money || 0,
-      held: inv.active || weapon,
-      primary: inv.primary || '',
-      pistol,
+      held: slots.held || weapon,
+      primary: slots.primary,
+      pistol: slots.pistol,
       knife: 'knife',
       nades,
       clip: '',
@@ -237,6 +267,51 @@ export class DemoView {
       z: a.z,
       yaw: a.yaw
     };
+  }
+
+  /**
+   * Visible demo bodies for X-ray: silhouette object, name, HP, loadout.
+   * The followed POV slot is already hidden, so it never appears here.
+   */
+  xraySubjects() {
+    if (!this.ticks) return [];
+    const h = this.ticks.header;
+    const r0 = Math.max(0, Math.min(h.tickCount - 1, Math.floor(this.row)));
+    const tick = h.firstTick + this.row * h.stride;
+    const out = [];
+    for (let slot = 0; slot < (h.playerCount || 10); slot++) {
+      const bodyState = this._bodies[slot];
+      const obj = bodyState.model?.group?.visible
+        ? bodyState.model.group
+        : bodyState.group.visible
+          ? bodyState.group
+          : null;
+      if (!obj) continue;
+      const a = readRecord(this.ticks.view, r0, slot, _a);
+      const duck = a.duckAmount > 0 ? a.duckAmount : (a.flags & FLAG_DUCKING) !== 0 ? 1 : 0;
+      const player = this.meta.players?.find((p) => p.slot === slot);
+      const id = player?.id;
+      const stats = (id && this.meta.stats?.[id]) || {};
+      const weapon = this.meta.weapons?.[a.weapon] || '';
+      const inv = inventoryAt({
+        loadout: stats.loadout || [],
+        grenades: this.meta.events?.grenades,
+        itemEvents: this.meta.events?.items,
+        playerId: id,
+        tick,
+        state: a,
+        activeWeapon: weapon
+      });
+      out.push({
+        id: id || `demo-${slot}`,
+        object: obj,
+        name: player?.name || '',
+        hp: a.alive ? a.health : 0,
+        duck,
+        items: xrayIconList(inv)
+      });
+    }
+    return out;
   }
 
   togglePlay() {
@@ -261,13 +336,29 @@ export class DemoView {
   }
 
   /**
+   * Put the camera in a player's eyes, or `null` for the free camera.
+   * Unlike `setPov`, this does not toggle: clicking the next bot must land
+   * on that bot, not turn POV off.
+   */
+  followSlot(slot) {
+    if (!this.ticks) {
+      this.povSlot = null;
+      return;
+    }
+    const next = slot == null || slot === '' ? null : Number(slot);
+    const resolved = Number.isFinite(next) ? next : null;
+    if (this.povSlot === resolved) return;
+    this.povSlot = resolved;
+    this.onChange(this);
+  }
+
+  /**
    * Enter a player's eyes (slot 0-9), or null for the free camera. Leaving
    * hands the fly camera the POV's view so there is no snap.
    */
   setPov(slot) {
     if (!this.ticks) return;
-    this.povSlot = slot === this.povSlot ? null : slot;
-    this.onChange(this);
+    this.followSlot(slot === this.povSlot ? null : slot);
   }
 
   /**
@@ -322,6 +413,109 @@ export class DemoView {
     return n;
   }
 
+  _applyHurts(tick, rate, demoDt) {
+    const from = this._hurtTick;
+    this._hurtTick = tick;
+    this._pendingHits.length = 0;
+    if (from != null && (tick < from || tick - from > rate)) resetPovFlinch(this._flinch);
+    const roundKey = this.roundIndex;
+    if (roundKey !== this._hurtRound) {
+      this._hurtRound = roundKey;
+      resetPovFlinch(this._flinch);
+      decayPovFlinch(this._flinch, demoDt);
+      return;
+    }
+    const hurts = consumeForward(this.meta?.events?.damage, from, tick, rate);
+    const h = this.ticks.header;
+    const r0 = Math.max(0, Math.min(h.tickCount - 1, Math.floor(this.row)));
+    const n = h.playerCount || 10;
+    const states = this._hitStates;
+    for (let slot = 0; slot < n; slot++) readRecord(this.ticks.view, r0, slot, states[slot]);
+    const kills = this.meta.events?.kills || [];
+    for (const ev of hurts) {
+      const hit = resolveDemoHit(ev, {
+        players: this.meta.players,
+        states,
+        shots: this.meta.events?.shots,
+        grenades: this.meta.events?.grenades
+      });
+      if (hit.slot < 0) continue;
+      this._pendingHits.push({
+        ...hit,
+        kill: killedOnTick(kills, ev.victim, ev.tick)
+      });
+    }
+    decayPovFlinch(this._flinch, demoDt);
+  }
+
+  _deliverHits(slot, body) {
+    for (const hit of this._pendingHits) {
+      if (hit.slot !== slot) continue;
+      const punch = applyTraceHit({
+        body,
+        blood: this.blood,
+        damage: hit.damage,
+        hitgroup: hit.group,
+        armor: hit.armor,
+        helmet: hit.helmet,
+        blast: hit.blast,
+        point: hit.point,
+        dir: hit.dir,
+        kill: hit.kill
+      });
+      if (slot === this.povSlot) addPovFlinch(this._flinch, punch, { replacePitch: hit.blast });
+    }
+  }
+
+  /**
+   * The same numbers the 2D timeline radar draws: interpolated tick states,
+   * the round's grenades, and the roster. Hold-Q in Map Practice uses this
+   * so an imported round matches the timeline viewer.
+   */
+  radarFrame() {
+    if (!this.ticks || !this.meta) return null;
+    const h = this.ticks.header;
+    const tick = h.firstTick + this.row * (h.stride || 1);
+    const r0 = Math.floor(this.row);
+    const r1 = Math.min(h.tickCount - 1, r0 + 1);
+    const f = this.row - r0;
+    const states = this._radarStates;
+    const n = h.playerCount || PLAYER_SLOTS;
+    for (let slot = 0; slot < PLAYER_SLOTS; slot++) {
+      const s = states[slot] || (states[slot] = {});
+      if (slot >= n) {
+        s.alive = false;
+        s.flags = 0;
+        continue;
+      }
+      readRecord(this.ticks.view, r0, slot, s);
+      if (f > 0 && s.alive) {
+        const b = readRecord(this.ticks.view, r1, slot, _radarNext);
+        if (b.alive) {
+          s.x += (b.x - s.x) * f;
+          s.y += (b.y - s.y) * f;
+          s.z += (b.z - s.z) * f;
+          s.yaw = lerpAngle(s.yaw, b.yaw, f);
+          s.pitch += (b.pitch - s.pitch) * f;
+        }
+      }
+    }
+    const players = this.meta.players || [];
+    return {
+      tick,
+      tickRate: h.tickRate || 64,
+      states,
+      players,
+      allPlayers: players,
+      events: this.meta.events || { kills: [], shots: [], grenades: [], bomb: [] },
+      weapons: this.meta.weapons || [],
+      teamSides: { 1: this.meta.team1Side, 2: this.meta.team2Side },
+      highlight: this.povSlot != null ? players.find((p) => p.slot === this.povSlot)?.id : undefined,
+      hideDeaths: false,
+      mapAlpha: 0.85
+    };
+  }
+
   /** Everything the HUD strip shows, cheap enough to poll per frame. */
   status() {
     if (!this.ticks || !this.meta) return null;
@@ -372,15 +566,73 @@ export class DemoView {
     this._lastRow = this.row;
     const rowsPerSecond = (h.tickRate || 64) / (h.stride || 1);
     const useModels = !!this.playerModels?.ready;
+    const tick = h.firstTick + this.row * h.stride;
+    this._applyHurts(tick, h.tickRate || 64, demoDt);
     this.marks = [];
 
     for (let slot = 0; slot < (h.playerCount || 10); slot++) {
       const a = readRecord(this.ticks.view, r0, slot, _a);
       const bodyState = this._bodies[slot];
       if (!a.alive) {
-        bodyState.group.visible = false;
-        if (bodyState.model) bodyState.model.group.visible = false;
+        const pose = bodyState.lastLive;
+        if (!pose) {
+          bodyState.group.visible = false;
+          if (bodyState.model) bodyState.model.group.visible = false;
+          bodyState.prev = null;
+          continue;
+        }
+        const duck = pose.duckAmount > 0 ? pose.duckAmount : (pose.flags & FLAG_DUCKING) !== 0 ? 1 : 0;
+        const eye = EYE_STAND + (EYE_DUCK - EYE_STAND) * duck;
+        const visible = slot !== this.povSlot;
+        if (useModels && (pose.side === 'T' || pose.side === 'CT')) {
+          let m = bodyState.model;
+          if (!m) {
+            m = bodyState.model = this.playerModels.createBody(pose.side);
+            this.root.add(m.group);
+          } else if (m.side !== pose.side) m.setSide(pose.side);
+          bodyState.group.visible = false;
+          this._deliverHits(slot, m);
+          m.set({
+            speed: 0,
+            moveYaw: pose.yaw || 0,
+            viewYaw: pose.yaw || 0,
+            pitch: pose.pitch || 0,
+            duck,
+            airborne: false,
+            weapon: this.meta.weapons?.[pose.weapon] || '',
+            alive: false
+          });
+          m.group.position.set(pose.x, pose.z, -pose.y);
+          m.update(demoDt);
+          m.group.visible = visible;
+        } else {
+          if (bodyState.model) bodyState.model.group.visible = false;
+          bodyState.group.visible = visible;
+          bodyState.group.position.set(pose.x, pose.z, -pose.y);
+          bodyState.group.rotation.y = (pose.yaw || 0) * DEG;
+        }
         bodyState.prev = null;
+        if (slot === this.povSlot) {
+          scaledCameraPunch(this._flinch, this._camPunch);
+          this.camera.position.set(pose.x, pose.z + eye, -pose.y);
+          this.camera.rotation.set(
+            -((pose.pitch || 0) + this._camPunch[0]) * DEG,
+            cameraYawFromSource(pose.yaw || 0) + this._camPunch[1] * DEG,
+            this._camPunch[2] * DEG,
+            'YXZ'
+          );
+          this._pov = {
+            side: pose.side,
+            weapon: this.meta.weapons?.[pose.weapon] || '',
+            speed: 0,
+            airborne: false,
+            yaw: pose.yaw || 0,
+            pitch: pose.pitch || 0,
+            eye: this.camera.position,
+            shots: 0,
+            punch: scaledAimPunch(this._flinch, this._aimPunch)
+          };
+        }
         continue;
       }
       const b = readRecord(this.ticks.view, r1, slot, _b);
@@ -416,6 +668,17 @@ export class DemoView {
         }
       }
       bodyState.prev = { row: this.row, x, y, z };
+      bodyState.lastLive = {
+        x,
+        y,
+        z,
+        yaw,
+        pitch,
+        duckAmount: amount,
+        flags: a.flags,
+        weapon: a.weapon,
+        side: a.side
+      };
       this.marks.push({ x, y, z, yaw, side: a.side, slot, self: slot === this.povSlot });
       if (useModels && (a.side === 'T' || a.side === 'CT')) {
         // The agent model. Velocity from the row-to-row delta (¼-unit
@@ -428,6 +691,7 @@ export class DemoView {
           this.root.add(m.group);
         } else if (m.side !== a.side) m.setSide(a.side);
         bodyState.group.visible = false;
+        this._deliverHits(slot, m);
         m.set({
           speed,
           moveYaw,
@@ -460,11 +724,14 @@ export class DemoView {
         // game's own curve; without one, ease so the fallback boolean does not
         // snap the view 18 units.
         this._eye = amount > 0 ? eye : this._eye + (eye - this._eye) * Math.min(1, dt * 14);
+        scaledCameraPunch(this._flinch, this._camPunch);
         this.camera.position.set(x, z + this._eye, -y);
-        this.camera.rotation.set(-pitch * DEG, cameraYawFromSource(yaw), 0, 'YXZ');
-        // For the viewmodel: what this player is holding and how they move.
-        // Speed comes from the same row delta the body's legs run on, so the
-        // hands bob in step with the feet.
+        this.camera.rotation.set(
+          -(pitch + this._camPunch[0]) * DEG,
+          cameraYawFromSource(yaw) + this._camPunch[1] * DEG,
+          this._camPunch[2] * DEG,
+          'YXZ'
+        );
         this._pov = {
           side: a.side,
           weapon: this.meta.weapons?.[a.weapon] || '',
@@ -473,10 +740,8 @@ export class DemoView {
           yaw,
           pitch,
           eye: this.camera.position,
-          // Shots this player fired in the ticks the clock just crossed, so
-          // the viewmodel kicks on the demo's own trigger pulls rather than
-          // on a guess from the animation.
-          shots: this._shotsCrossed(slot)
+          shots: this._shotsCrossed(slot),
+          punch: scaledAimPunch(this._flinch, this._aimPunch)
         };
       }
     }

@@ -2314,25 +2314,35 @@ body.rv-open {
 }
 
 /* One bar: who is playing, what the model gives them, the score and the
-   clock. The three used to be read in three different places on screen. */
+   clock. Two equal sides around a fixed clock, so a long name cannot shove
+   the time off center. Odds sit on the outer edges. */
 .rv-clock-row {
   position: absolute;
   top: 10px;
   left: 50%;
   transform: translateX(-50%);
   z-index: 5;
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
-  gap: 14px;
-  max-width: calc(100% - 32px);
+  column-gap: 14px;
+  width: min(560px, calc(100% - 32px));
   padding: 6px 18px;
   border-radius: var(--radius-sm);
   background: rgba(0, 0, 0, 0.9);
   pointer-events: none;
 }
 
+.rv-clock-side {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
 .rv-clock-team {
-  max-width: 12ch;
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
   color: var(--rv-ink);
   font-family: var(--font-display);
@@ -2344,6 +2354,14 @@ body.rv-open {
   white-space: nowrap;
 }
 
+.rv-clock-side.is-left .rv-clock-team {
+  text-align: right;
+}
+
+.rv-clock-side.is-right .rv-clock-team {
+  text-align: left;
+}
+
 .rv-clock-team[data-side='T'] {
   color: var(--rv-t);
 }
@@ -2353,6 +2371,8 @@ body.rv-open {
 }
 
 .rv-clock-odds {
+  flex: 0 0 4ch;
+  width: 4ch;
   font-size: 12px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
@@ -2369,6 +2389,14 @@ body.rv-open {
 
 .rv-clock-odds[data-side='CT'] {
   color: var(--rv-ct);
+}
+
+.rv-clock-side.is-left .rv-clock-odds {
+  text-align: left;
+}
+
+.rv-clock-side.is-right .rv-clock-odds {
+  text-align: right;
 }
 
 .rv-clock {
@@ -2398,6 +2426,7 @@ body.rv-open {
 }
 
 .rv-match-score {
+  flex: 0 0 auto;
   min-width: 1.25em;
   color: var(--text);
   font-size: 20px;
@@ -2499,7 +2528,7 @@ body.rv-open {
 }
 
 .rv-map.is-3d {
-  cursor: none;
+  cursor: default;
 }
 
 .rv-player-hp-row {
@@ -4779,7 +4808,7 @@ body.rv-open {
   position: absolute;
   left: 50%;
   top: calc(50% - 36px);
-  z-index: 12;
+  z-index: 40;
   display: flex;
   flex-direction: column;
   width: min(1100px, calc(100% - 40px));
@@ -10866,12 +10895,16 @@ th.tm-rl-name,
   }
 
   .rv-clock-row {
-    gap: 8px;
+    column-gap: 8px;
+    width: min(420px, calc(100% - 16px));
     padding: 5px 12px;
   }
 
+  .rv-clock-side {
+    gap: 6px;
+  }
+
   .rv-clock-team {
-    max-width: 8ch;
     font-size: 12px;
   }
 
@@ -11545,6 +11578,11 @@ th.tm-rl-name,
   height: 100%;
   display: block;
   z-index: 2;
+  cursor: default;
+}
+
+.rv-map.is-3d.is-pointer-lock,
+.rv-map.is-3d.is-pointer-lock .rv-3d-canvas {
   cursor: none;
 }
 
@@ -11560,8 +11598,57 @@ th.tm-rl-name,
 .rv-map.is-3d .rv-canvas {
   visibility: hidden;
 }
+.rv-map.is-3d.is-radar-overview .rv-3d-canvas {
+  z-index: 1;
+  filter: blur(18px);
+  transform: scale(1.08);
+}
+.rv-map.is-3d.is-radar-overview::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  background: rgba(0, 0, 0, 0.22);
+  pointer-events: none;
+}
+.rv-map.is-3d.is-radar-overview .rv-canvas {
+  visibility: visible;
+  z-index: 3;
+  pointer-events: none;
+  inset: auto;
+  top: 50%;
+  left: 50%;
+  width: min(72vmin, 680px);
+  height: min(72vmin, 680px);
+  max-width: calc(100% - 48px);
+  max-height: calc(100% - 48px);
+  transform: translate(-50%, -50%);
+  background: #1a1a18;
+  border-radius: 0;
+  box-shadow: 0 0 0 1px rgba(200, 220, 245, 0.55);
+}
+.rv-map.is-3d.is-radar-overview .c3-crosshair-canvas {
+  visibility: hidden;
+}
+.rv-map.is-3d.is-radar-overview .c3-xray-labels {
+  visibility: hidden;
+}
+.rv-map.is-3d.is-radar-overview .rv-clock-row,
+.rv-map.is-3d.is-radar-overview .rv-killfeed,
+.rv-map.is-3d.is-radar-overview .rv-duel-feed,
+.rv-map.is-3d.is-radar-overview .rv-feed-stack,
+.rv-map.is-3d.is-radar-overview .rv-viewmode {
+  visibility: hidden;
+}
 .rv-map.is-3d .rv-3d-canvas {
   z-index: 2;
+}
+.rv-map.is-3d .c3-flash {
+  z-index: 5;
+}
+.rv-map.is-3d.is-radar-overview .c3-flash,
+.rv-map.is-3d .c3-flash[hidden] {
+  visibility: hidden;
 }
 
 .rv-viewmode {

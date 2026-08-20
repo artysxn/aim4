@@ -136,8 +136,10 @@ export class Controls {
   }
 
   _releaseAll() {
+    const qHeld = this.pageKeys && this.keys.has('KeyQ');
     this.keys.clear();
     this._applyKeys();
+    if (qHeld) this.hooks.onWeaponHold?.(false, { cancel: true });
   }
 
   _onKey(e) {
@@ -152,7 +154,7 @@ export class Controls {
     if (down) {
       if (!this.pageKeys) {
         if (code === 'Space' && this.locked) this.player.input.jump = true;
-        if (this.locked && /^(Space|Key[WASDC]|ShiftLeft|ControlLeft)$/.test(code)) e.preventDefault();
+        if (this.locked && /^(Space|Tab|Key[WASDCQ]|ShiftLeft|ControlLeft)$/.test(code)) e.preventDefault();
         this._applyKeys();
         return;
       }
@@ -168,7 +170,7 @@ export class Controls {
           this.hooks.onSpawn?.(null);
           break;
         case 'KeyQ':
-          this.hooks.onWeapon?.();
+          this.hooks.onWeaponHold?.(true);
           break;
         case 'KeyB':
           this.hooks.onBuy?.();
@@ -219,7 +221,7 @@ export class Controls {
           this.hooks.onSkipNades?.();
           break;
         case 'KeyX':
-          this.hooks.onPovExit?.();
+          this.hooks.onXray?.();
           break;
         case 'KeyY':
           e.preventDefault();
@@ -231,9 +233,11 @@ export class Controls {
         default:
           break;
       }
-      if (this.locked && /^(Space|Key[WASDCQBNEGJHKOR]|Digit[1-4]|ShiftLeft|ControlLeft|CapsLock)$/.test(code)) e.preventDefault();
+      if (this.locked && /^(Space|Key[WASDCQBNEGJHKORX]|Digit[1-4]|ShiftLeft|ControlLeft|CapsLock)$/.test(code)) e.preventDefault();
     } else if (code === 'Space') {
       this.player.input.jump = false;
+    } else if (code === 'KeyQ' && this.pageKeys) {
+      this.hooks.onWeaponHold?.(false);
     }
     this._applyKeys();
   }

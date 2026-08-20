@@ -28,6 +28,7 @@ import {
   aimPunch,
   cameraPunch,
   sprayPattern,
+  applyHitFlinch,
   RECOIL_TABLE_SIZE,
   RECOIL_SCALE,
   VIEW_RECOIL_TRACKING
@@ -237,7 +238,19 @@ test('the read scale is the only place ×2 happens', () => {
   const s = createRecoilState();
   s.punch[0] = -1;
   s.punch[1] = 0.5;
-  assert.deepEqual(aimPunch(s), [-RECOIL_SCALE, 0.5 * RECOIL_SCALE]);
+  assert.deepEqual(aimPunch(s), [-RECOIL_SCALE, 0.5 * RECOIL_SCALE, 0]);
+});
+
+test('TraceAttack writes raw punch the camera still scales', () => {
+  const s = createRecoilState();
+  applyHitFlinch(s, { pitch: -6, yaw: 0, roll: 4 });
+  assert.equal(s.punch[0], -6);
+  assert.equal(s.punchRoll, 4);
+  const cam = cameraPunch(s);
+  assert.equal(cam[0], -6 * RECOIL_SCALE * VIEW_RECOIL_TRACKING);
+  assert.equal(cam[2], 4 * RECOIL_SCALE * VIEW_RECOIL_TRACKING);
+  applyHitFlinch(s, { pitch: -3, yaw: 0, roll: 0 }, { replacePitch: true });
+  assert.equal(s.punch[0], -3, 'blast replaces pitch');
 });
 
 test('the index holds through a spray and falls after it', () => {

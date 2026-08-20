@@ -8,7 +8,7 @@
 // matched by luck, which is what made the symptom look like "only shows the
 // grenades a player has held".
 
-import { inventoryAt, normalizeLoadout } from './equipmentIcons.js';
+import { inventoryAt, normalizeLoadout, hudLoadout } from './equipmentIcons.js';
 
 function assert(cond, msg) {
   if (!cond) throw new Error(msg || 'assert failed');
@@ -118,6 +118,39 @@ const FULL_T_BUY = [
     activeWeapon: 'weapon_ak47'
   });
   assert(inv.util.includes('smokegrenade'), 'picked-up smoke is shown');
+}
+
+{
+  // Pistol-only: do not also put that pistol in the rifle slot.
+  const inv = inventoryAt({
+    loadout: ['USP-S', 'Glock-18'],
+    grenades: [],
+    itemEvents: [],
+    playerId: 'p1',
+    tick: 10,
+    state: { armor: 0, flags: 0 },
+    activeWeapon: 'weapon_usp_silencer'
+  });
+  const slots = hudLoadout(inv);
+  assert(!slots.primary, 'no rifle slot for a pistol-only loadout');
+  assert(slots.pistol === 'usp_silencer', 'held pistol is the sidearm');
+  assert(slots.held === 'usp_silencer', 'held matches the tick weapon');
+}
+
+{
+  const inv = inventoryAt({
+    loadout: ['AK-47', 'Glock-18'],
+    grenades: [],
+    itemEvents: [],
+    playerId: 'p1',
+    tick: 10,
+    state: { armor: 0, flags: 0 },
+    activeWeapon: 'weapon_ak47'
+  });
+  const slots = hudLoadout(inv);
+  assert(slots.primary === 'ak47', 'rifle stays in the rifle slot');
+  assert(slots.pistol === 'glock', 'glock stays in the pistol slot');
+  assert(slots.held === 'ak47', 'held is the rifle');
 }
 
 console.log('equipmentIcons: all assertions passed');

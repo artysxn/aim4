@@ -35,6 +35,7 @@ import {
 import { PARSER_REVISION, SCHEMA_VERSION } from '../schema.js';
 import { classifyEconomy, isPistolRoundNumber } from '../economy.js';
 import { bareWeapon } from '../../../src/replays/viewer/equipmentIcons.js';
+import { hurtHitgroup } from '../../../shared/sim3d/flinch.js';
 
 const require = createRequire(import.meta.url);
 
@@ -1413,7 +1414,8 @@ export async function parseDemo(file, opts = {}) {
         attacker,
         victim,
         hp,
-        weapon: String(e.weapon || '').replace(/^weapon_/, '')
+        weapon: String(e.weapon || '').replace(/^weapon_/, ''),
+        hitgroup: hurtHitgroup(e.hitgroup) || undefined
       });
     }
     damage.sort((a, b) => a.tick - b.tick);

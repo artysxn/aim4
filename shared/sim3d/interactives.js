@@ -98,7 +98,9 @@ export function createInteractive(row) {
       speed: Number.isFinite(d.speed) ? d.speed : 100,
       openDir: d.openDir || 0,
       forceClosed: !!d.forceClosed,
-      slave: d.slave || ''
+      slave: d.slave || '',
+      /** +1 / −1, picked when the door starts opening. Both-ways uses the player. */
+      swingDir: d.openDir === 1 ? -1 : 1
     };
     o.state = DOOR.CLOSED;
     /** 0 at closed, 1 at fully open. */
@@ -142,8 +144,7 @@ export function linkDoors(list) {
 /** How far this door has swung from SHUT, in degrees. */
 export function doorAngle(o) {
   if (o.role !== 'door') return 0;
-  const dir = o.door.openDir === 1 ? -1 : 1;
-  return o.frac * o.door.distance * dir;
+  return o.frac * o.door.distance * (o.door.swingDir || 1);
 }
 
 /**
@@ -169,7 +170,8 @@ export function doorAngle(o) {
 export function poseAngle(o) {
   if (o.role !== 'door') return 0;
   if (o.bakedOpen === false) return doorAngle(o);
-  return o.door.distance * (o.door.openDir === 1 ? -1 : 1) - doorAngle(o);
+  const bakeDir = o.door.openDir === 1 ? -1 : 1;
+  return o.door.distance * bakeDir - doorAngle(o);
 }
 
 /**
@@ -187,11 +189,44 @@ export function doorSwingSeconds(o) {
  *
  * `spread` stops a slave door recursing back into its master.
  */
-export function openDoor(o, spread = true) {
+/**
+ * Which way a both-ways door should swing so the leaf moves away from `from`.
+ *
+ * `prop_door_rotating` `opendir` 0 is "both directions": the activator's side
+ * of the closed leaf picks the sign. 1 is forward only, 2 is back only.
+ */
+export function swingDirFromPlayer(o, from) {
+  if (!from || !o.bounds) return o.door.swingDir || 1;
+  const c = boxCorners(o);
+  if (!c) return o.door.swingDir || 1;
+  let lx = 0;
+  let ly = 0;
+  for (let i = 0; i < 8; i++) {
+    lx += c[i * 3];
+    ly += c[i * 3 + 1];
+  }
+  lx = lx / 8 - o.origin[0];
+  ly = ly / 8 - o.origin[1];
+  const px = from.x - o.origin[0];
+  const py = from.y - o.origin[1];
+  // Leaf × player in XY. Positive means the player is on the CCW side of the
+  // leaf, so opening CCW would swing into them — go the other way.
+  return lx * py - ly * px > 0 ? -1 : 1;
+}
+
+function pickSwingDir(o, from) {
+  const d = o.door;
+  if (d.openDir === 1) d.swingDir = -1;
+  else if (d.openDir === 2) d.swingDir = 1;
+  else if (from) d.swingDir = swingDirFromPlayer(o, from);
+}
+
+export function openDoor(o, spread = true, from = null) {
   if (o.role !== 'door' || o.broken) return false;
   if (o.state === DOOR.OPEN || o.state === DOOR.OPENING) return false;
+  if (o.state === DOOR.CLOSED) pickSwingDir(o, from);
   o.state = DOOR.OPENING;
-  if (spread && o.linked) openDoor(o.linked, false);
+  if (spread && o.linked) openDoor(o.linked, false, from);
   return true;
 }
 
@@ -285,7 +320,7 @@ export function holeRadius(o) {
  * @returns {boolean} true if the hole changed
  */
 export function carveDoor(o, damage, u = 0, v = 0) {
-  if (o.role !== 'door' || o.broken || !(damage > 0)) return false;
+  if (o.role !== 'door' || o.broken || !(o.health > 0) || !(damage > 0)) return false;
   if (!o.hole) o.hole = { damage: 0, u, v };
   const before = holeStage(o);
   // The centre is the damage-weighted average of every round put through it, so
@@ -306,9 +341,9 @@ export function inHole(o, u, v) {
   return Math.hypot(u - o.hole.u, v - o.hole.v) < r;
 }
 
-/** Open if closed, close if open. What `+E` does. */
-export function toggleDoor(o) {
-  return o.state === DOOR.CLOSED || o.state === DOOR.CLOSING ? openDoor(o) : closeDoor(o);
+/** Open if closed, close if open. What `+E` does. `from` is the activator. */
+export function toggleDoor(o, from = null) {
+  return o.state === DOOR.CLOSED || o.state === DOOR.CLOSING ? openDoor(o, true, from) : closeDoor(o);
 }
 
 /**
@@ -401,6 +436,22 @@ export function applyBlast(list, at, radius, damage) {
 
 /** [guessed] How far a player can reach to open a door. CS2 does not say. */
 export const USE_RANGE = 80;
+
+/**
+ * How far from the hinge a door leaf's geometry may sit.
+ *
+ * Measured on Nuke: the leaf reaches 107 units. 110 cut the top corners off.
+ * 256, which the split used next, is a corridor: Mirage's static apartment and
+ * palace doors share the swinging door's model, sit 150–250 units away, and
+ * got claimed, cut out of the world, and rotated with the wrong hinge. The
+ * hole through the building is those doors, gone.
+ */
+export const DOOR_LEAF_RADIUS = 140;
+/**
+ * Longest edge of a single door leaf's AABB. A Nuke leaf is ~60×12×110. A
+ * claim larger than this ate a wall, a neighbouring door, or both.
+ */
+export const DOOR_LEAF_SPAN = 168;
 
 /**
  * The eight corners of an interactive's box in the SOURCE frame, at its

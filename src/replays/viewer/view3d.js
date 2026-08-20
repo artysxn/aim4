@@ -2,13 +2,11 @@
 // src/replays/viewer/view3d.js
 // The 3D map inside the timeline viewer, in place of the radar canvas.
 //
-// This is deliberately NOT the standalone explorer (src/cs3d/main.js). That
-// page owns a clock, a HUD and a key map; here the timeline already owns all
-// three, and the 3D view is a renderer that gets told what to show. One
-// direction of data: the viewer samples a tick, hands over the same `states`
-// array the radar draws from, and this positions bodies against it. Nothing
-// here reads a demo file, so 3D and 2D can never disagree about the moment
-// being watched — they are the same numbers.
+// The timeline still owns the clock: it samples a tick, hands over the same
+// `states` array the radar draws from, and this positions bodies against it.
+// Utility, dropped weapons, viewmodels and shooting are not reimplemented
+// here — they are the map-practice systems (DemoNades, NadeEffects, ViewModel,
+// DroppedWeapons, Shooting / Tracers / Decals), driven by that same playhead.
 //
 // It stays mounted once created. Switching back to 2D hides the canvas and
 // stops the render loop; switching in again is a class toggle, not a reload,
@@ -26,13 +24,30 @@
 
 import * as THREE from 'three/webgpu';
 import '../../cs3d/cs3d.css';
-import { MapPack } from '../../cs3d/mapLoader.js';
+import { MapPack, assetBase } from '../../cs3d/mapLoader.js';
 import { MapLighting } from '../../cs3d/sky.js';
-import { patchWebGPUPartialAttributeUpload } from '../../cs3d/threePatches.js';
+import { patchWebGPUPartialAttributeUpload, patchNodeMaterialTypeLookup } from '../../cs3d/threePatches.js';
 import { createLook, createMapRenderer, loadPostLut, installMapGrade, setupBloom } from '../../cs3d/look.js';
 import { createBootScreen } from '../../cs3d/bootScreen.js';
 import { sharedPlayerModels } from '../../cs3d/playerModels.js';
-import { ViewModelAssets, ViewModel, createViewModelPass } from '../../cs3d/viewModel.js';
+import {
+  ViewModelAssets,
+  ViewModel,
+  createViewModelPass,
+  VIEWMODEL_ENV_INTENSITY,
+  VIEWMODEL_SUN
+} from '../../cs3d/viewModel.js';
+import { DemoNades } from '../../cs3d/demoNades.js';
+import { NadeEffects, HE_RADIUS, HE_DAMAGE } from '../../cs3d/nadeEffects.js';
+import { DroppedWeapons } from '../../cs3d/droppedWeapons.js';
+import { Interactives } from '../../cs3d/interactives.js';
+import { Shooting } from '../../cs3d/shooting.js';
+import { BulletAssets } from '../../cs3d/bulletPack.js';
+import { Decals } from '../../cs3d/decals.js';
+import { Tracers } from '../../cs3d/tracers.js';
+import { SunTracker, loadShadowMask } from '../../cs3d/sunlight.js';
+import { SettingsManager, VIEWMODEL_FOV_MIN, VIEWMODEL_FOV_MAX } from '../../core/SettingsManager.js';
+import { bulletDirection } from '../../../shared/sim3d/inaccuracy.js';
 import { cs3dMap } from '../../../shared/cs3d/maps.js';
 import { cameraYawFromSource } from '../../../shared/sim3d/units.js';
 import { sourceVFovFromHFov } from '../../utils/MathUtils.js';
@@ -43,34 +58,46 @@ import {
   EYE_DUCK,
   HULL_HALF_WIDE
 } from '../../../shared/sim3d/constants.js';
-import { FLAG_DUCKING, FLAG_AIRBORNE } from '../shared/tickFormat.js';
+import { FLAG_DUCKING, FLAG_AIRBORNE, FLAG_HAS_HELMET, PLAYER_SLOTS } from '../shared/tickFormat.js';
 import { Player } from '../../cs3d/player.js';
 import { Controls } from '../../cs3d/controls.js';
 import { placeThirdPersonCamera, THIRD_PERSON_BACK } from '../../cs3d/thirdPerson.js';
 import { mountCrosshair } from '../../cs3d/crosshairOverlay.js';
+import { rayAabb, botBox, hitgroupFromHeight } from '../../cs3d/practiceBots.js';
+import { isGun, isGrenade, bareWeapon, inventoryAt } from './equipmentIcons.js';
+import { createXrayPass, markXrayObject, xrayIconList } from '../../cs3d/xray.js';
+import { BloodSpray } from '../../cs3d/blood.js';
+import {
+  consumeForward,
+  resolveDemoHit,
+  applyTraceHit,
+  killedOnTick,
+  createPovFlinch,
+  addPovFlinch,
+  decayPovFlinch,
+  resetPovFlinch,
+  scaledAimPunch,
+  scaledCameraPunch
+} from '../../cs3d/demoHits.js';
 import { DEATH_FOLLOW_SECONDS, deathFollowShouldSnap, nextFollowSlot } from './view3dFollow.js';
 
 const DEG = Math.PI / 180;
 const RAD = 180 / Math.PI;
 
 const TEAM_COLOR = { T: 0xd9a24a, CT: 0x5b87e0 };
-const NADE_COLOR = {
-  smokegrenade: 0xc8ccd0,
-  flashbang: 0xfff0a8,
-  hegrenade: 0xd8503a,
-  molotov: 0xe87a28,
-  incgrenade: 0xe87a28,
-  decoy: 0x7fc46a
-};
-const SMOKE_SECONDS = 18;
-const FIRE_SECONDS = 7;
-const POP_SECONDS = 0.3;
-const SMOKE_RADIUS = 144;
-const FIRE_RADIUS = 110;
 
 /** Scratch for the viewmodel's ambient sample; see updateViewModel. */
 const _vmCube = new Float32Array(18);
 const _vmColor = new THREE.Color();
+const _toSunView = new THREE.Vector3();
+const _invView = new THREE.Quaternion();
+const _sample = {};
+const _euler = new THREE.Euler();
+const _quat = new THREE.Quaternion();
+const _fwd = new THREE.Vector3();
+const _povFeet = new THREE.Vector3();
+const _camPunch = [0, 0, 0];
+const _aimPunch = [0, 0, 0];
 
 // CS2 / Source horizontal FOV (4:3). Three.js cameras take the matching
 // vertical; passing 90 through raw was much wider than the game.
@@ -80,7 +107,7 @@ const FOV_MAX = 90;
 const ORBIT_MIN = 40;
 const ORBIT_MAX = 500;
 
-export function createView3d({ slug, onModeChange }) {
+export function createView3d({ slug, onModeChange, sampleSlot, tickRange }) {
   const canvas = document.createElement('canvas');
   canvas.className = 'rv-3d-canvas';
 
@@ -99,6 +126,8 @@ export function createView3d({ slug, onModeChange }) {
   let controls = null;
   let crosshair = null;
   let lastNow = 0;
+  let altHeld = false;
+  let corpseRound = '';
 
   // Camera state. 'pov' | 'third' | 'fly' | 'walk'
   let mode = 'pov';
@@ -134,27 +163,55 @@ export function createView3d({ slug, onModeChange }) {
   // and it kicks on the ticks that player actually pulled the trigger.
   const vmAssets = new ViewModelAssets();
   const viewModel = new ViewModel(vmAssets);
+  const vmSettings = new SettingsManager();
+  const bulletAssets = new BulletAssets();
+  const sunTracker = new SunTracker();
   let vmPass = null;
+  let xray = null;
+  let xrayWanted = false;
+  let _xraySubjects = [];
   /** The POV player's state for the viewmodel, rebuilt by applyFrame(). */
   let povState = null;
   /** Tick the shot scan last ran to, so each shot kicks the gun exactly once. */
-  let shotTick = null;
+  let lastShotTick = null;
+  let lastShotRound = '';
+  let lastHurtTick = null;
+  let lastHurtRound = '';
+  const povFlinch = createPovFlinch();
+  let blood = null;
   /** One line the first time the gun actually draws, so "no hands" is answerable. */
   let vmDrew = false;
 
+  // Map-practice systems. Built in bootScene once the camera exists; until
+  // then every call site that uses them is a no-op.
+  let nadeEffects = null;
+  let demoNades = null;
+  let interactives = null;
+  let dropped = null;
+  let shooting = null;
+  let worldShots = null;
+  let decals = null;
+  let tracers = null;
+  let flashOverlay = null;
+  let _flashShown = 0;
+  let demoFireWeapon = '';
+  let shotShooterSlot = -1;
+  let nadeRound = null;
+  let dropSig = '';
+  const dropPosCache = new Map();
+  let doorOpenAt = new Map();
+  let doorScanKey = '';
+  let ixTick = null;
+  let ixRound = null;
+
   const bodies = [];
-  const nades = new Map();
   let geo = null;
   let mats = null;
 
   function buildActors() {
     geo = {
       body: new THREE.CylinderGeometry(HULL_HALF_WIDE, HULL_HALF_WIDE, 1, 12),
-      nose: new THREE.BoxGeometry(18, 9, 9),
-      nade: new THREE.SphereGeometry(5, 10, 8),
-      smoke: new THREE.SphereGeometry(SMOKE_RADIUS, 20, 14),
-      fire: new THREE.CylinderGeometry(FIRE_RADIUS, FIRE_RADIUS, 6, 20),
-      pop: new THREE.SphereGeometry(30, 12, 8)
+      nose: new THREE.BoxGeometry(18, 9, 9)
     };
     geo.body.translate(0, 0.5, 0); // origin at the feet; scale.y is the hull
     mats = {
@@ -170,10 +227,11 @@ export function createView3d({ slug, onModeChange }) {
       const nose = new THREE.Mesh(geo.nose, mats.nose);
       nose.position.set(HULL_HALF_WIDE + 6, EYE_STAND - 4, 0);
       group.add(body, nose);
+      markXrayObject(group);
       group.visible = false;
       // `model` is the animated agent once the pack is in; `prev` the last
       // sample this slot was drawn at, for the velocity the blend runs on.
-      bodies.push({ group, body, nose, model: null, prev: null });
+      bodies.push({ group, body, nose, model: null, prev: null, lastLive: null });
     }
   }
 
@@ -192,7 +250,11 @@ export function createView3d({ slug, onModeChange }) {
     camera.fov = sourceVFovFromHFov(fov);
     scene.add(camera);
     player = new Player(camera);
-    controls = new Controls(canvas, player, { pageKeys: false, lockOnClick: false });
+    controls = new Controls(canvas, player, {
+      pageKeys: false,
+      lockOnClick: false,
+      onLock: () => syncPointerCursor()
+    });
     controls.setEnabled(false);
     const _look = player.look.bind(player);
     player.look = (dx, dy, rpc) => {
@@ -200,8 +262,53 @@ export function createView3d({ slug, onModeChange }) {
       if (mode === 'third') applyThirdOrbit();
     };
 
+    nadeEffects = new NadeEffects({
+      getCollider: () => pack?.collider || null,
+      getMovers: () => interactives?.movers || null,
+      getSide: () => 'T',
+      camera
+    });
+    nadeEffects
+      .loadFx(`${assetBase()}/fx`)
+      .catch((e) => console.warn('cs3d: grenade fx pack unavailable, utility will not draw', e));
+    interactives = new Interactives({
+      getPack: () => pack,
+      onWorldChanged: () => lighting?.markShadowDirty()
+    });
+    demoNades = new DemoNades({
+      effects: nadeEffects,
+      assets: vmAssets,
+      sideOf: (playerId) => {
+        const p = (frame?.players || []).find((q) => q.id === playerId);
+        if (!p) return '';
+        const sides = frame?.teamSides || {};
+        return (p.team === 1 ? sides[1] : sides[2]) || '';
+      }
+    });
+    dropped = new DroppedWeapons({ assets: vmAssets });
+    shooting = new Shooting({
+      getWeapon: () => vmAssets.stats?.(demoFireWeapon) || null,
+      interactives: null,
+      traces: false,
+      hitTargets: (from, to) => hitTargets(from, to),
+      onImpact: ({ point, normal, surface, dir }) => decals?.add({ point, normal, surface, dir })
+    });
+    worldShots = new Shooting({
+      getWeapon: () => vmAssets.stats?.(demoFireWeapon) || null,
+      interactives,
+      traces: false
+    });
+    decals = new Decals({ assets: bulletAssets, getPack: () => pack });
+    tracers = new Tracers({ assets: bulletAssets, camera });
+    blood = new BloodSpray({ camera });
+    bulletAssets.load();
+
     await renderer.init();
     patchWebGPUPartialAttributeUpload(renderer);
+    const repaired = patchNodeMaterialTypeLookup(renderer, THREE);
+    if (repaired) {
+      console.log(`cs3d: node material lookup repaired for ${repaired} material types (minified build)`);
+    }
 
     const mapName = cs3dMap(slug)?.name || slug;
     boot = createBootScreen(container, mapName);
@@ -211,8 +318,18 @@ export function createView3d({ slug, onModeChange }) {
       scene,
       renderer,
       onProgress: (p) => boot.setProgress(p),
-      onPhys: (collider) => player.setCollider(collider),
-      onWorldChanged: () => lighting?.markShadowDirty()
+      onPhys: (collider) => {
+        interactives?.setCollider(collider);
+        player.setCollider(collider, interactives?.movers);
+        dropped?.setCollider(collider, interactives?.movers);
+        shooting?.setCollider(collider, interactives?.movers);
+        worldShots?.setCollider(collider, interactives?.movers);
+      },
+      onWorldChanged: () => {
+        lighting?.markShadowDirty();
+        sunTracker.setWorld(pack?.world || null);
+        attachWorld();
+      }
     });
     // From here on this is src/cs3d/main.js boot(), step for step: the same
     // look controller with the same knobs applied at the same points, so the
@@ -225,6 +342,10 @@ export function createView3d({ slug, onModeChange }) {
     const bloomPass = setupBloom(renderer, manifest, new URLSearchParams());
     vmPass = createViewModelPass(renderer);
     vmPass.scene.add(viewModel.group);
+    applyVmSettings();
+    vmSettings.onChange(applyVmSettings);
+    xray = createXrayPass({ renderer, scene, parent: canvas.parentElement || container });
+    xray.enabled = xrayWanted;
     mapRenderer = createMapRenderer({
       renderer,
       scene,
@@ -234,24 +355,52 @@ export function createView3d({ slug, onModeChange }) {
       overlayAfter: new URLSearchParams(location.search).get('vm') === 'after',
       // Inside the scene pass, never after it — see createMapRenderer.
       overlay: () => {
-        if (!viewModel.visible || !viewModel.ready) return false;
-        vmPass.render();
-        return true;
+        let drew = false;
+        if (xray?.enabled) {
+          xray.render(camera, _xraySubjects);
+          drew = true;
+        }
+        if (mode === 'pov' && viewModel.ready) {
+          viewModel.visible = true;
+          viewModel.group.visible = true;
+          vmPass.render();
+          drew = true;
+        }
+        return drew;
       }
     });
     lighting = new MapLighting(scene, camera, manifest, { shadows: true, renderer });
+    vmPass.setEnvironment(scene.environment);
+    sunTracker.setWorld(pack.world);
+    nadeEffects.setProbeGrid(() => pack?.probeGrid || null);
     pack.lightmapIntensity = lighting.lightmapIntensity;
     pack.sun = lighting.worldSun();
     pack.skyAmbient = lighting.skyAmbient;
+    nadeEffects.setLight(pack.sun ? { ...pack.sun, ambient: lighting.skyAmbient } : null);
     if (manifest.sky?.equirect) {
       lighting
         .loadSkybox(pack.base, manifest.sky, pack.v)
         .then(() => {
           pack.materials?.setSkyAmbient(lighting.skyAmbient);
           look.apply('sky');
+          vmPass.setEnvironment(scene.environment);
+          nadeEffects.setLight(pack.sun ? { ...pack.sun, ambient: lighting.skyAmbient } : null);
         })
         .catch(() => {});
     }
+    interactives
+      .load(pack.base, pack.v)
+      .then((ok) => {
+        if (!ok) return;
+        console.log(`cs3d: ${interactives.count} interactives`);
+        doorScanKey = '';
+        ixTick = null;
+        applyFrame();
+      })
+      .catch((e) => console.warn('cs3d: interactives failed', e));
+    loadShadowMask(pack.base, manifest.shadowMask, pack.v)
+      .then((mask) => sunTracker.setMask(mask))
+      .catch((e) => console.warn('cs3d: shadow mask unavailable, viewmodel keeps full sun', e));
 
     buildActors();
     for (const b of bodies) (pack.world || scene).add(b.group);
@@ -263,16 +412,17 @@ export function createView3d({ slug, onModeChange }) {
     // by setSide — so without this call the viewmodel would never become ready
     // and updateViewModel would never reach the setSide that would have made it.
     vmAssets.load().then((ok) => {
-      if (ok === false) return; // ViewModelAssets already logged why
-      // Hands first, then something in them, so the first POV frame is armed
-      // rather than waiting for the tick's weapon to resolve.
+      if (ok === false) return;
       viewModel.setSide('T');
       viewModel.setWeapon('knife', { draw: false });
       console.log(`cs3d: viewmodel ready (${Object.keys(vmAssets.manifest?.weapons || {}).length} weapons)`);
+      applyFrame();
     });
 
     await pack.load(manifest);
     look.applyAll();
+    attachWorld();
+    if (pack.sun) nadeEffects.setLight({ ...pack.sun, ambient: lighting.skyAmbient });
     boot.finish();
     ready = true;
     resize();
@@ -287,6 +437,7 @@ export function createView3d({ slug, onModeChange }) {
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
     mapRenderer?.resize();
+    xray?.resize();
     vmPass?.resize(w, h);
     lighting?.resize?.();
   }
@@ -319,17 +470,263 @@ export function createView3d({ slug, onModeChange }) {
    * pause returns 0 — a rewind must not fire the gun, and a held frame must not
    * fire it again.
    */
-  function shotsCrossed(slot, tick, rate) {
+  function consumeShots(tick, rate) {
     const shots = frame?.events?.shots;
-    const from = shotTick;
-    shotTick = tick;
-    if (!shots?.length || from === null || !(tick > from) || tick - from > rate) return 0;
+    const from = lastShotTick;
+    lastShotTick = tick;
+    const roundKey = frame?.roundKey || '';
+    if (roundKey !== lastShotRound) {
+      lastShotRound = roundKey;
+      return [];
+    }
+    if (!shots?.length || from === null || !(tick > from) || tick - from > rate) return [];
+    const out = [];
+    for (const sh of shots) {
+      if (sh.tick > from && sh.tick <= tick) out.push(sh);
+    }
+    return out;
+  }
+
+  function consumeHurts(tick, rate) {
+    const from = lastHurtTick;
+    lastHurtTick = tick;
+    const roundKey = frame?.roundKey || '';
+    if (roundKey !== lastHurtRound) {
+      lastHurtRound = roundKey;
+      resetPovFlinch(povFlinch);
+      return [];
+    }
+    return consumeForward(frame?.events?.damage, from, tick, rate);
+  }
+
+  function shotsForSlot(crossed, slot) {
     const who = (frame.players || []).find((x) => x.slot === slot)?.id;
     let n = 0;
-    for (const sh of shots) {
-      if (sh.tick > from && sh.tick <= tick && (sh.slot === slot || (who !== undefined && sh.player === who))) n++;
+    for (const sh of crossed) {
+      if (sh.slot === slot || (who !== undefined && sh.player === who)) n++;
     }
     return n;
+  }
+
+  function applyVmSettings() {
+    if (!vmPass) return;
+    const vm = vmSettings.data.viewmodel || {};
+    viewModel.applySettings(vm);
+    vmPass.setFov(Math.min(VIEWMODEL_FOV_MAX, Math.max(VIEWMODEL_FOV_MIN, Number(vm.fov) || VIEWMODEL_FOV_MAX)));
+  }
+
+  function attachWorld() {
+    const world = pack?.world || null;
+    if (!world) return;
+    dropped?.attach(world);
+    nadeEffects?.attach(world);
+    demoNades?.attach(world);
+    interactives?.attach(world);
+    shooting?.attach(world);
+    worldShots?.attach(world);
+    decals?.attach(world);
+    tracers?.attach(world);
+    blood?.attach(world);
+  }
+
+  function muzzleOf(eye, pitchDeg, yawDeg) {
+    const p = (pitchDeg * Math.PI) / 180;
+    const y = (yawDeg * Math.PI) / 180;
+    const f = [Math.cos(p) * Math.cos(y), Math.cos(p) * Math.sin(y), -Math.sin(p)];
+    const r = [Math.sin(y), -Math.cos(y), 0];
+    const FORWARD = 20;
+    const RIGHT = 5;
+    const DOWN = 4;
+    return {
+      x: eye.x + f[0] * FORWARD + r[0] * RIGHT,
+      y: eye.y + f[1] * FORWARD + r[1] * RIGHT,
+      z: eye.z + f[2] * FORWARD - DOWN
+    };
+  }
+
+  function samplePovAt(tick) {
+    if (povSlot < 0) return null;
+    let s = null;
+    if (sampleSlot) s = sampleSlot(povSlot, tick, _sample);
+    if (!s?.alive) {
+      s = frame?.states?.[povSlot];
+      if (!s?.alive) return null;
+    }
+    const duck = s.duckAmount > 0 ? s.duckAmount : (s.flags & FLAG_DUCKING) !== 0 ? 1 : 0;
+    const eyeH = EYE_STAND + (EYE_DUCK - EYE_STAND) * duck;
+    _euler.set(-(s.pitch || 0) * DEG, cameraYawFromSource(s.yaw || 0), 0, 'YXZ');
+    _quat.setFromEuler(_euler);
+    _fwd.set(0, 0, -1).applyQuaternion(_quat);
+    return {
+      eye: { x: s.x, y: s.z + eyeH, z: -s.y },
+      forward: { x: _fwd.x, y: _fwd.y, z: _fwd.z }
+    };
+  }
+
+  function hitTargets(from, to) {
+    if (!frame) return null;
+    let best = null;
+    for (let i = 0; i < frame.states.length; i++) {
+      if (i === shotShooterSlot) continue;
+      const s = frame.states[i];
+      if (!s?.alive) continue;
+      const box = botBox({ x: s.x, y: s.y, z: s.z });
+      const hit = rayAabb(from, to, box.min, box.max);
+      if (hit && (!best || hit.distance < best.distance)) {
+        best = {
+          ...hit,
+          id: i,
+          group: hitgroupFromHeight(hit.point.z - s.z),
+          armor: s.armor || 0,
+          helmet: !!(s.flags & FLAG_HAS_HELMET)
+        };
+      }
+    }
+    return best;
+  }
+
+  function fireDemoShot(sh) {
+    if (!shooting) return;
+    const weaponName = bareWeapon(sh.weapon) || String(sh.weapon || '').replace(/^weapon_/, '');
+    const stats = vmAssets.stats?.(weaponName);
+    if (!stats || stats.grenade || stats.melee) return;
+    const who = (frame.players || []).find((p) => p.id === sh.player);
+    shotShooterSlot = who?.slot ?? sh.slot ?? -1;
+    demoFireWeapon = weaponName;
+    let duck = 0;
+    if (who != null) {
+      const s = sampleSlot ? sampleSlot(who.slot, sh.tick, _sample) : frame.states?.[who.slot];
+      if (s) duck = s.duckAmount > 0 ? s.duckAmount : (s.flags & FLAG_DUCKING) !== 0 ? 1 : 0;
+    }
+    const eyeH = EYE_STAND + (EYE_DUCK - EYE_STAND) * duck;
+    const eye = { x: sh.x, y: sh.y, z: (sh.z || 0) + eyeH };
+    const pitch = sh.pitch || 0;
+    const yaw = sh.yaw || 0;
+    const result = shooting.fire(eye, bulletDirection(pitch, yaw));
+    if (result?.end) tracers?.fire({ from: muzzleOf(eye, pitch, yaw), to: result.end, weapon: stats });
+    shotShooterSlot = -1;
+    demoFireWeapon = '';
+    return result;
+  }
+
+  function fireWorldShot(sh) {
+    if (!worldShots?.world) return;
+    const weaponName = bareWeapon(sh.weapon) || String(sh.weapon || '').replace(/^weapon_/, '');
+    const stats = vmAssets.stats?.(weaponName);
+    if (!stats || stats.grenade || stats.melee) return;
+    demoFireWeapon = weaponName;
+    let duck = 0;
+    const who = (frame.players || []).find((p) => p.id === sh.player);
+    if (who != null) {
+      const s = sampleSlot ? sampleSlot(who.slot, sh.tick, _sample) : frame.states?.[who.slot];
+      if (s) duck = s.duckAmount > 0 ? s.duckAmount : (s.flags & FLAG_DUCKING) !== 0 ? 1 : 0;
+    }
+    const eyeH = EYE_STAND + (EYE_DUCK - EYE_STAND) * duck;
+    worldShots.fire({ x: sh.x, y: sh.y, z: (sh.z || 0) + eyeH }, bulletDirection(sh.pitch || 0, sh.yaw || 0));
+    demoFireWeapon = '';
+  }
+
+  function playerTouchesDoor(o, s) {
+    if (!s?.alive) return false;
+    const pad = 40;
+    const b = o.bounds;
+    if (b?.min && b?.max) {
+      return (
+        s.x >= o.origin[0] + b.min[0] - pad &&
+        s.x <= o.origin[0] + b.max[0] + pad &&
+        s.y >= o.origin[1] + b.min[1] - pad &&
+        s.y <= o.origin[1] + b.max[1] + pad &&
+        s.z >= o.origin[2] + b.min[2] - pad &&
+        s.z <= o.origin[2] + b.max[2] + pad
+      );
+    }
+    const dx = s.x - o.origin[0];
+    const dy = s.y - o.origin[1];
+    const dz = s.z - o.origin[2];
+    const r = 96 + pad;
+    return dx * dx + dy * dy + dz * dz <= r * r;
+  }
+
+  function ensureDoorScan(key) {
+    if (doorScanKey === key) return;
+    doorOpenAt = new Map();
+    const range = tickRange?.();
+    if (!range || !sampleSlot || !interactives?.list.length) {
+      doorScanKey = '';
+      return;
+    }
+    doorScanKey = key;
+    const doors = interactives.list.filter((o) => o.role === 'door');
+    if (!doors.length) return;
+    const step = Math.max(range.stride || 1, 1);
+    const scratch = {};
+    for (let t = range.first; t <= range.last; t += step) {
+      if (doorOpenAt.size >= doors.length) break;
+      for (let slot = 0; slot < PLAYER_SLOTS; slot++) {
+        const s = sampleSlot(slot, t, scratch);
+        if (!s?.alive) continue;
+        for (const o of doors) {
+          if (doorOpenAt.has(o.id)) continue;
+          if (!playerTouchesDoor(o, s)) continue;
+          doorOpenAt.set(o.id, t);
+          if (o.linked) doorOpenAt.set(o.linked.id, t);
+        }
+      }
+    }
+  }
+
+  function snapDoorsAt(tick) {
+    for (const o of interactives.list) {
+      if (o.role !== 'door') continue;
+      const openAt = doorOpenAt.get(o.id);
+      const linkedAt = o.linked ? doorOpenAt.get(o.linked.id) : null;
+      const t0 = openAt ?? linkedAt;
+      interactives.snapDoor(o, t0 != null && tick >= t0);
+    }
+  }
+
+  function applyBreakablesFromTo(from, to) {
+    const shots = frame.events?.shots || [];
+    for (const sh of shots) {
+      if (sh.tick > from && sh.tick <= to) fireWorldShot(sh);
+    }
+    const nades = frame.events?.grenades || [];
+    for (const g of nades) {
+      if (g.type !== 'hegrenade') continue;
+      const det = g.detonateTick;
+      if (det == null || !(det > from && det <= to)) continue;
+      const at = g.at;
+      if (at && Number.isFinite(at.x)) interactives.blast(at, HE_RADIUS, HE_DAMAGE);
+    }
+  }
+
+  function applyInteractives() {
+    if (!interactives?.loaded || !frame) return;
+    const tick = frame.tick;
+    const rate = frame.tickRate || 64;
+    const key = frame.roundKey || '';
+    ensureDoorScan(key);
+    snapDoorsAt(tick);
+    if (!worldShots?.world || !vmAssets.ready) return;
+    const seek = ixTick == null || key !== ixRound || tick < ixTick || tick - ixTick > rate;
+    if (seek) {
+      interactives.reset();
+      snapDoorsAt(tick);
+      const start = (tickRange?.()?.first ?? 0) - 1;
+      applyBreakablesFromTo(start, tick);
+      ixTick = tick;
+      ixRound = key;
+      return;
+    }
+    applyBreakablesFromTo(ixTick, tick);
+    ixTick = tick;
+    ixRound = key;
+  }
+
+  function heldWeapon(raw) {
+    const name = bareWeapon(raw);
+    if (!name || name === 'none') return 'knife';
+    return vmAssets.stats?.(name) ? name : 'knife';
   }
 
   /**
@@ -341,34 +738,143 @@ export function createView3d({ slug, onModeChange }) {
    * angles, the speed, the trigger — comes from `povState`.
    */
   function updateViewModel(dt) {
+    if (vmAssets.ready && !viewModel.ready) viewModel.setSide('T');
     if (!viewModel.ready) return;
-    const pov = mode === 'pov' ? povState : null;
+    let pov = mode === 'pov' ? povState : null;
+    if (!pov && mode === 'pov' && frame && povSlot >= 0) {
+      const s = frame.states[povSlot];
+      if (s?.alive) {
+        pov = {
+          side: s.side || sideOf(povSlot),
+          weapon: frame.weapons?.[s.weapon] || '',
+          speed: 0,
+          airborne: (s.flags & FLAG_AIRBORNE) !== 0,
+          yaw: s.yaw || 0,
+          pitch: s.pitch || 0,
+          eye: camera.position,
+          shots: 0
+        };
+      }
+    }
     viewModel.visible = !!pov;
     if (!pov) return;
     if (!vmDrew) {
       vmDrew = true;
       console.log(`cs3d: viewmodel drawing — ${pov.side || '?'} hands, ${pov.weapon || 'no weapon in the tick'}`);
     }
-    // Only a real side. `sideOf` falls back to '' when the round has no team
-    // record for a slot, and `setSide('')` is not a no-op: it rebuilds the arms
-    // and the mixer and clears every action. One '' frame between two 'CT'
-    // frames would rebuild the rig twice a frame and leave the hands in bind
-    // pose with no animation ever running.
     if (pov.side === 'T' || pov.side === 'CT') viewModel.setSide(pov.side);
-    viewModel.setWeapon(pov.weapon || 'knife', { draw: false });
-    for (let i = 0; i < pov.shots; i++) viewModel.attack('primary', 0);
-    viewModel.update(dt, { speed: pov.speed, onGround: !pov.airborne, viewYaw: pov.yaw, viewPitch: pov.pitch });
-    // The gun stands in the map's own light where that player stands, the same
-    // ambient cube their body takes (mapLoader.js ProbeGrid).
+    viewModel.setWeapon(heldWeapon(pov.weapon), { draw: false });
+    for (let i = 0; i < pov.shots; i++) viewModel.attack('primary', performance.now() / 1000 + i * 1e-4);
+    viewModel.update(dt, {
+      speed: pov.speed,
+      onGround: !pov.airborne,
+      viewYaw: pov.yaw,
+      viewPitch: pov.pitch,
+      punch: scaledAimPunch(povFlinch, _aimPunch),
+      viewPunch: [0, 0]
+    });
+    const eye = pov.eye;
     const grid = pack?.probeGrid;
-    if (!grid) return;
-    const cube = grid.sample(pov.eye.x, pov.eye.y, pov.eye.z, _vmCube);
-    _vmColor.setRGB(
-      (cube[6] + cube[0] + cube[3]) / 3,
-      (cube[7] + cube[1] + cube[4]) / 3,
-      (cube[8] + cube[2] + cube[5]) / 3
-    );
-    vmPass.setAmbient(_vmColor, 1.6);
+    if (grid && eye) {
+      const cube = grid.sample(eye.x, eye.y, eye.z, _vmCube);
+      _vmColor.setRGB(
+        (cube[6] + cube[0] + cube[3]) / 3,
+        (cube[7] + cube[1] + cube[4]) / 3,
+        (cube[8] + cube[2] + cube[5]) / 3
+      );
+      vmPass.setAmbient(_vmColor, 1.6);
+    }
+    if (lighting?.sun) {
+      _povFeet.copy(eye);
+      _povFeet.y = eye.y - EYE_STAND;
+      const shade = sunTracker.update(dt, _povFeet);
+      _toSunView.copy(lighting.toSun).applyQuaternion(_invView.copy(camera.quaternion).invert());
+      vmPass.setSun(_toSunView, lighting.sunColor, VIEWMODEL_SUN * shade);
+      vmPass.setViewRotation(camera.quaternion);
+      vmPass.setEnvironment(vmPass.scene.environment, VIEWMODEL_ENV_INTENSITY * shade);
+    }
+  }
+
+  function duckOf(s) {
+    if (!s) return 0;
+    return s.duckAmount > 0 ? s.duckAmount : (s.flags & FLAG_DUCKING) !== 0 ? 1 : 0;
+  }
+
+  function rememberLive(slot, s) {
+    if (!s || !Number.isFinite(s.x) || !Number.isFinite(s.y)) return;
+    bodies[slot].lastLive = {
+      x: s.x,
+      y: s.y,
+      z: s.z,
+      yaw: s.yaw || 0,
+      pitch: s.pitch || 0,
+      duckAmount: s.duckAmount || 0,
+      flags: s.flags || 0,
+      weapon: s.weapon,
+      side: s.side
+    };
+  }
+
+  function corpseOf(slot, s) {
+    if (s && Number.isFinite(s.x) && Number.isFinite(s.y)) return s;
+    return bodies[slot].lastLive || null;
+  }
+
+  function collectXraySubjects() {
+    if (!frame) return [];
+    const out = [];
+    for (let slot = 0; slot < bodies.length; slot++) {
+      if (mode === 'pov' && slot === povSlot) continue;
+      const b = bodies[slot];
+      const obj = b.model?.group?.visible ? b.model.group : b.group.visible ? b.group : null;
+      if (!obj) continue;
+      const s = frame.states[slot];
+      const pose = s?.alive ? s : corpseOf(slot, s);
+      const p = (frame.players || []).find((x) => x.slot === slot);
+      const id = p?.id;
+      const st = (id && frame.stats?.[id]) || {};
+      const weapon = frame.weapons?.[pose?.weapon ?? s?.weapon] || '';
+      const inv = inventoryAt({
+        loadout: st.loadout || [],
+        grenades: frame.events?.grenades,
+        itemEvents: frame.events?.items,
+        playerId: id,
+        tick: frame.tick,
+        state: s || pose,
+        activeWeapon: weapon
+      });
+      out.push({
+        id: id || `slot-${slot}`,
+        object: obj,
+        name: p?.name || '',
+        hp: s?.alive ? Math.max(0, Math.min(100, s.health | 0)) : 0,
+        duck: duckOf(s?.alive ? s : pose || {}),
+        items: xrayIconList(inv)
+      });
+    }
+    return out;
+  }
+
+  function syncPointerCursor() {
+    const hide = isFree() && !!controls?.locked && !altHeld;
+    canvas.classList.toggle('is-pointer-lock', hide);
+    canvas.parentElement?.classList.toggle('is-pointer-lock', hide);
+  }
+
+  function onAlt(e) {
+    if (e.code !== 'AltLeft' && e.code !== 'AltRight' && e.key !== 'Alt') return;
+    const down = e.type === 'keydown';
+    if (down === altHeld) return;
+    altHeld = down;
+    if (down) controls?.exitLock();
+    else if (isFree() && visible && document.hasFocus()) controls?.requestLock();
+    syncPointerCursor();
+  }
+
+  function onAltBlur() {
+    if (!altHeld) return;
+    altHeld = false;
+    syncPointerCursor();
   }
 
   function cancelDeathFollow() {
@@ -419,27 +925,115 @@ export function createView3d({ slug, onModeChange }) {
     lastTick = tick;
     const useModels = models.ready;
     povState = null;
+    const crossed = consumeShots(tick, rate);
+    const hitFx = new Map();
+    for (const sh of crossed) {
+      const result = fireDemoShot(sh);
+      const dir = bulletDirection(sh.pitch || 0, sh.yaw || 0);
+      for (const h of result?.hits || []) hitFx.set(h.id, { point: h.point, dir, group: h.group });
+    }
+    const hurts = consumeHurts(tick, rate);
+    if (dTicks < 0 || dTicks > rate) resetPovFlinch(povFlinch);
+    else decayPovFlinch(povFlinch, animDt);
+    const kills = frame.events?.kills || [];
+    for (const ev of hurts) {
+      const victimSlot = (frame.players || []).find((p) => p.id === ev.victim)?.slot;
+      const hit = resolveDemoHit(ev, {
+        players: frame.players,
+        states: frame.states,
+        shots: frame.events?.shots,
+        grenades: frame.events?.grenades,
+        fx: victimSlot != null ? hitFx.get(victimSlot) || null : null
+      });
+      if (hit.slot < 0) continue;
+      const punch = applyTraceHit({
+        body: bodies[hit.slot]?.model,
+        blood,
+        damage: hit.damage,
+        hitgroup: hit.group,
+        armor: hit.armor,
+        helmet: hit.helmet,
+        blast: hit.blast,
+        point: hit.point,
+        dir: hit.dir,
+        kill: killedOnTick(kills, ev.victim, ev.tick)
+      });
+      if (hit.slot === povSlot) addPovFlinch(povFlinch, punch, { replacePitch: hit.blast });
+    }
+    scaledCameraPunch(povFlinch, _camPunch);
+
+    const roundKey = frame.roundKey || '';
+    if (roundKey !== corpseRound) {
+      corpseRound = roundKey;
+      for (const body of bodies) body.lastLive = null;
+    }
 
     for (let slot = 0; slot < bodies.length; slot++) {
       const s = frame.states[slot];
       const b = bodies[slot];
       if (!s || !s.alive) {
-        b.group.visible = false;
-        if (b.model) b.model.group.visible = false;
-        b.prev = null;
         if (holdingDeath && slot === povSlot && s) {
-          const duck = s.duckAmount > 0 ? s.duckAmount : (s.flags & FLAG_DUCKING) !== 0 ? 1 : 0;
+          const duck = duckOf(s);
           const eye = EYE_STAND + (EYE_DUCK - EYE_STAND) * duck;
           orbit.target.set(s.x, s.z + eye, -s.y);
           if (mode === 'pov') {
             camera.position.copy(orbit.target);
-            camera.rotation.set(-(s.pitch || 0) * DEG, cameraYawFromSource(s.yaw || 0), 0, 'YXZ');
+            camera.rotation.set(
+              -((s.pitch || 0) + _camPunch[0]) * DEG,
+              cameraYawFromSource(s.yaw || 0) + _camPunch[1] * DEG,
+              _camPunch[2] * DEG,
+              'YXZ'
+            );
           } else {
             applyThirdOrbit();
           }
         }
+        const pose = corpseOf(slot, s);
+        if (!pose) {
+          b.group.visible = false;
+          if (b.model) b.model.group.visible = false;
+          b.prev = null;
+          continue;
+        }
+        const visibleBody = !(mode === 'pov' && slot === povSlot);
+        const duck = duckOf(pose);
+        const eye = EYE_STAND + (EYE_DUCK - EYE_STAND) * duck;
+        const side = pose.side === 'T' || pose.side === 'CT' ? pose.side : sideOf(slot);
+        if (useModels && (side === 'T' || side === 'CT')) {
+          let m = b.model;
+          if (!m) {
+            m = b.model = models.createBody(side);
+            (pack.world || scene).add(m.group);
+          } else if (m.side !== side) m.setSide(side);
+          b.group.visible = false;
+          m.set({
+            speed: 0,
+            moveYaw: pose.yaw || 0,
+            viewYaw: pose.yaw || 0,
+            pitch: pose.pitch || 0,
+            duck,
+            airborne: false,
+            weapon: frame.weapons?.[pose.weapon] || '',
+            alive: false
+          });
+          m.group.position.set(pose.x, pose.z, -pose.y);
+          m.update(animDt);
+          m.group.visible = visibleBody;
+        } else {
+          if (b.model) b.model.group.visible = false;
+          b.group.visible = visibleBody;
+          b.group.position.set(pose.x, pose.z, -pose.y);
+          b.group.rotation.y = (pose.yaw || 0) * DEG;
+          const hull = HULL_STAND + (HULL_DUCK - HULL_STAND) * duck;
+          b.body.scale.y = hull;
+          b.nose.position.y = eye - 4;
+          const mm = mats[side] || mats.unknown;
+          if (b.body.material !== mm) b.body.material = mm;
+        }
+        b.prev = null;
         continue;
       }
+      rememberLive(slot, s);
       // Hide the body you are looking through, or you see the inside of it.
       const visible = !(mode === 'pov' && slot === povSlot);
       const duck = s.duckAmount > 0 ? s.duckAmount : (s.flags & FLAG_DUCKING) !== 0 ? 1 : 0;
@@ -502,16 +1096,21 @@ export function createView3d({ slug, onModeChange }) {
         orbit.target.set(s.x, s.z + eyeSmooth, -s.y);
         if (mode === 'pov') {
           camera.position.copy(orbit.target);
-          camera.rotation.set(-(s.pitch || 0) * DEG, cameraYawFromSource(s.yaw || 0), 0, 'YXZ');
+          camera.rotation.set(
+            -((s.pitch || 0) + _camPunch[0]) * DEG,
+            cameraYawFromSource(s.yaw || 0) + _camPunch[1] * DEG,
+            _camPunch[2] * DEG,
+            'YXZ'
+          );
           povState = {
-            side,
+            side: s.side || side,
             weapon: frame.weapons?.[s.weapon] || '',
             speed,
             airborne: (s.flags & FLAG_AIRBORNE) !== 0,
             yaw: s.yaw || 0,
             pitch: s.pitch || 0,
             eye: camera.position,
-            shots: shotsCrossed(slot, tick, rate)
+            shots: shotsForSlot(crossed, slot)
           };
         } else {
           if (!orbit.seeded) seedOrbitFromPlayer(s);
@@ -521,76 +1120,98 @@ export function createView3d({ slug, onModeChange }) {
     }
 
     applyNades();
+    applyDrops();
+    applyInteractives();
   }
 
-  function nadeMesh(key, g, color, opacity) {
-    let n = nades.get(key);
-    if (n?.geo === g) return n.mesh;
-    if (n) {
-      n.mesh.removeFromParent();
-      n.mesh.material.dispose();
+  function posAtEvent(playerId, tick) {
+    const p = (frame.players || []).find((x) => x.id === playerId);
+    if (!p) return null;
+    let s = null;
+    if (sampleSlot) s = sampleSlot(p.slot, tick, _sample);
+    if (!s || !Number.isFinite(s.x)) s = frame.states?.[p.slot];
+    if (!s || !Number.isFinite(s.x)) return null;
+    return { x: s.x, y: s.y, z: s.z, yaw: s.yaw || 0 };
+  }
+
+  function desiredDrops(tick) {
+    const floor = [];
+    const items = frame.events?.items || [];
+    const ordered = items.length
+      ? items
+          .map((e, i) => ({ e, i }))
+          .filter(({ e }) => e.tick <= tick)
+          .sort((a, b) => a.e.tick - b.e.tick || a.i - b.i)
+      : [];
+    for (const { e, i } of ordered) {
+      const name = bareWeapon(e.item) || e.item;
+      if (!name || isGrenade(name) || name === 'c4') continue;
+      if (e.op === 'remove' && (isGun(name) || name === 'taser')) {
+        const key = `${e.tick}:${e.player}:${name}:${i}`;
+        let pos = dropPosCache.get(key);
+        if (!pos) {
+          pos = posAtEvent(e.player, e.tick);
+          if (pos) dropPosCache.set(key, { x: pos.x, y: pos.y, z: pos.z, yaw: pos.yaw || 0 });
+        }
+        if (pos) floor.push({ key, name, pos, yaw: pos.yaw || 0 });
+      } else if (e.op === 'pickup') {
+        let idx = -1;
+        for (let j = floor.length - 1; j >= 0; j--) {
+          if (floor[j].name === name) {
+            idx = j;
+            break;
+          }
+        }
+        if (idx >= 0) floor.splice(idx, 1);
+      }
     }
-    const mesh = new THREE.Mesh(
-      g,
-      new THREE.MeshBasicMaterial({ color, transparent: opacity < 1, opacity, depthWrite: opacity >= 1 })
-    );
-    (pack.world || scene).add(mesh);
-    nades.set(key, { mesh, geo: g });
-    return mesh;
+    const bomb = frame.events?.bomb || [];
+    let bombDrop = null;
+    for (const b of bomb) {
+      if (b.tick > tick) continue;
+      if (b.type === 'dropped' && Number.isFinite(b.x)) {
+        bombDrop = { key: `bomb:${b.tick}`, name: 'c4', pos: { x: b.x, y: b.y, z: b.z || 0 }, yaw: 0 };
+      } else if (b.type === 'pickup' || b.type === 'planted') {
+        bombDrop = null;
+      }
+    }
+    if (bombDrop) floor.push(bombDrop);
+    return floor;
   }
 
-  function dropNade(key) {
-    const n = nades.get(key);
-    if (!n) return;
-    n.mesh.removeFromParent();
-    n.mesh.material.dispose();
-    nades.delete(key);
+  function applyDrops() {
+    if (!dropped || !frame) return;
+    const want = desiredDrops(frame.tick);
+    const sig = want.map((d) => d.key).join('|');
+    if (sig === dropSig) return;
+    dropSig = sig;
+    dropped.clear();
+    for (const d of want) {
+      const spawned = dropped.spawn({ name: d.name }, { pos: d.pos, vel: { x: 0, y: 0, z: 0 }, yaw: d.yaw });
+      if (spawned) {
+        spawned.resting = true;
+        spawned.vel.x = spawned.vel.y = spawned.vel.z = 0;
+      }
+    }
   }
 
-  /** Derived fresh each frame, so scrubbing backwards needs no undo log. */
+  /** The round's utility, drawn with the practice engine rather than placeholders. */
   function applyNades() {
+    if (!demoNades || !frame) return;
     const list = frame.events?.grenades || [];
-    const tick = frame.tick;
-    const rate = frame.tickRate || 64;
-    for (let i = 0; i < list.length; i++) {
-      const g = list[i];
-      const color = NADE_COLOR[g.type] ?? 0xffffff;
-      const path = Array.isArray(g.path) ? g.path : [];
-      const det = g.detonateTick ?? (path.length ? path[path.length - 1].tick : g.throwTick);
-
-      if (tick >= g.throwTick && tick < det && path.length >= 2) {
-        let k = 0;
-        while (k + 2 < path.length && path[k + 1].tick <= tick) k++;
-        const p0 = path[k];
-        const p1 = path[Math.min(k + 1, path.length - 1)];
-        const span = Math.max(1, p1.tick - p0.tick);
-        const t = Math.max(0, Math.min(1, (tick - p0.tick) / span));
-        const mesh = nadeMesh(i, geo.nade, color, 1);
-        mesh.position.set(
-          p0.x + (p1.x - p0.x) * t,
-          p0.z + (p1.z - p0.z) * t,
-          -(p0.y + (p1.y - p0.y) * t)
-        );
-        continue;
-      }
-      const at = g.at || (path.length ? path[path.length - 1] : null);
-      const since = Number.isFinite(g.detonateTick) ? (tick - g.detonateTick) / rate : -1;
-      if (at && since >= 0) {
-        if (g.type === 'smokegrenade' && since < SMOKE_SECONDS) {
-          nadeMesh(i, geo.smoke, 0xb8bcc0, 0.72).position.set(at.x, at.z + 30, -at.y);
-          continue;
-        }
-        if ((g.type === 'molotov' || g.type === 'incgrenade') && since < FIRE_SECONDS) {
-          nadeMesh(i, geo.fire, 0xe06818, 0.5).position.set(at.x, at.z + 4, -at.y);
-          continue;
-        }
-        if ((g.type === 'flashbang' || g.type === 'hegrenade') && since < POP_SECONDS) {
-          nadeMesh(i, geo.pop, color, 0.8 * (1 - since / POP_SECONDS)).position.set(at.x, at.z + 8, -at.y);
-          continue;
-        }
-      }
-      dropNade(i);
+    const key = frame.roundKey || '';
+    if (key !== nadeRound) {
+      nadeRound = key;
+      demoNades.setEvents(list, frame.tickRate || 64);
+      dropPosCache.clear();
+      dropSig = '';
+      dropped?.clear();
     }
+    attachWorld();
+    demoNades.update(frame.tick, {
+      povSlot: mode === 'pov' && povSlot >= 0 ? povSlot : null,
+      povAt: samplePovAt
+    });
   }
 
   function isFree() {
@@ -627,12 +1248,10 @@ export function createView3d({ slug, onModeChange }) {
       player.pitch = camera.rotation.x;
       player.setMode(next === 'walk' ? 'walk' : 'fly');
       controls.setEnabled(true);
-    } else if (next === 'third') {
-      controls.setEnabled(true);
-      controls.requestLock();
     } else {
       controls.setEnabled(false);
     }
+    syncPointerCursor();
     applyFrame();
     onModeChange?.(mode);
   }
@@ -646,8 +1265,22 @@ export function createView3d({ slug, onModeChange }) {
     if (isFree() && player) player.update(dt);
     else if (mode === 'third') applyThirdOrbit();
     updateViewModel(dt);
+    nadeEffects?.update(dt, t / 1000, camera);
+    interactives?.update(dt);
+    shooting?.update(dt);
+    dropped?.update(dt, null, () => false);
+    decals?.update(dt);
+    tracers?.update(dt);
+    blood?.update(dt, camera);
+    const flashNow = Math.max(nadeEffects?.flash || 0, demoNades?.flash || 0);
+    if (flashNow !== _flashShown && flashOverlay) {
+      _flashShown = flashNow;
+      flashOverlay.style.opacity = _flashShown > 0.002 ? String(_flashShown) : '0';
+    }
     pack?.materials?.setTime(t / 1000);
     lighting?.update();
+    _xraySubjects = xray?.enabled ? collectXraySubjects() : [];
+    xray?.updateLabels(camera, _xraySubjects);
     if (mapRenderer) mapRenderer.render(camera);
     else renderer.render(scene, camera);
   }
@@ -672,6 +1305,15 @@ export function createView3d({ slug, onModeChange }) {
     get povSlot() {
       return povSlot;
     },
+    get xray() {
+      return !!(xray?.enabled ?? xrayWanted);
+    },
+    toggleXray() {
+      xrayWanted = !xrayWanted;
+      if (xray) xray.enabled = xrayWanted;
+      if (!xrayWanted) xray?.updateLabels(camera, []);
+      return xrayWanted;
+    },
     get povName() {
       if (povSlot < 0 || !frame) return null;
       const p = (frame.players || []).find((x) => x.slot === povSlot);
@@ -683,7 +1325,13 @@ export function createView3d({ slug, onModeChange }) {
     async start(container) {
       if (renderer || failed) return;
       container.appendChild(canvas);
+      flashOverlay = document.createElement('div');
+      flashOverlay.className = 'c3-flash';
+      container.appendChild(flashOverlay);
       crosshair = mountCrosshair(container, { scaleToResolution: false }).canvas;
+      window.addEventListener('keydown', onAlt);
+      window.addEventListener('keyup', onAlt);
+      window.addEventListener('blur', onAltBlur);
       try {
         await bootScene(container);
         applyFrame();
@@ -708,15 +1356,20 @@ export function createView3d({ slug, onModeChange }) {
     show() {
       visible = true;
       canvas.hidden = false;
+      if (flashOverlay) flashOverlay.hidden = false;
       if (crosshair) crosshair.hidden = false;
-      if (isFree() || mode === 'third') controls.setEnabled(true);
+      if (isFree()) controls.setEnabled(true);
+      syncPointerCursor();
       resize();
     },
     hide() {
       visible = false;
       canvas.hidden = true;
+      if (flashOverlay) flashOverlay.hidden = true;
       if (crosshair) crosshair.hidden = true;
+      xray?.updateLabels(camera, []);
       controls?.setEnabled(false);
+      syncPointerCursor();
     },
     resize,
 
@@ -753,11 +1406,11 @@ export function createView3d({ slug, onModeChange }) {
     },
 
     /**
-     * Unlocked fly/walk/third: click grabs the mouse. Else: cycle.
+     * Unlocked fly/walk: click grabs the mouse. Else: cycle the followed player.
      * @returns {boolean}
      */
     pointerDown(button) {
-      if ((mode === 'third' || isFree()) && controls && !controls.locked) {
+      if (isFree() && !altHeld && controls && !controls.locked) {
         controls.requestLock();
         return true;
       }
@@ -790,11 +1443,23 @@ export function createView3d({ slug, onModeChange }) {
     dispose() {
       cancelDeathFollow();
       cancelAnimationFrame(raf);
+      window.removeEventListener('keydown', onAlt);
+      window.removeEventListener('keyup', onAlt);
+      window.removeEventListener('blur', onAltBlur);
       controls?.dispose();
       crosshair?.remove();
-      for (const key of [...nades.keys()]) dropNade(key);
+      flashOverlay?.remove();
       for (const b of bodies) b.model?.dispose();
+      xray?.dispose();
       viewModel.dispose();
+      demoNades?.dispose();
+      nadeEffects?.dispose();
+      dropped?.dispose();
+      interactives?.dispose();
+      shooting?.dispose();
+      worldShots?.dispose();
+      decals?.dispose();
+      tracers?.dispose();
       pack?.dispose?.();
       renderer?.dispose?.();
       boot?.remove();

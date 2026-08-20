@@ -309,7 +309,10 @@ async function doMap(vrf, pak, entry) {
       if (dmg) {
         const entHealth = num(e.health, 0);
         row.break = {
-          health: entHealth > 0 ? entHealth : pieceHealth(dmg.pieces) || dmg.health || 1,
+          // Piece health is what the game uses (Nuke 100). Entity 0 and a
+          // Metal.Medium base of 1 are not a breakable door — Cache's A door
+          // only opens.
+          health: entHealth > 0 ? entHealth : pieceHealth(dmg.pieces),
           mult: dmg.mult,
           base: dmg.base,
           pieces: dmg.pieces

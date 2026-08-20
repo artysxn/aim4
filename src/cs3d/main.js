@@ -10,6 +10,7 @@ import './cs3d.css';
 import * as THREE from 'three/webgpu';
 import { cs3dMapForPath, cs3dMap, CS3D_MAPS } from '../../shared/cs3d/maps.js';
 import { cameraYawFromSource, sceneToSource, sourceToScene, sourceYawFromCamera } from '../../shared/sim3d/units.js';
+import { EYE_STAND } from '../../shared/sim3d/constants.js';
 import { MapPack, assetBase } from './mapLoader.js';
 import { MapLighting } from './sky.js';
 import { installGrade } from './grade.js';
@@ -20,6 +21,7 @@ import { Controls } from './controls.js';
 import { Hud } from './hud.js';
 import { createPracticeMatch } from './practiceMatch.js';
 import { createMatchHud } from './matchHud.js';
+import { practiceRadarFrame } from './practiceRadarFrame.js';
 import { FpsView } from './fpsView.js';
 import { DemoView } from './demoView.js';
 import { DemoNades } from './demoNades.js';
@@ -49,7 +51,8 @@ import {
   updateRecoilIndex,
   aimPunch,
   cameraPunch,
-  resetRecoil
+  resetRecoil,
+  applyHitFlinch
 } from '../../shared/sim3d/recoil.js';
 import {
   createAccuracyState,
@@ -69,9 +72,12 @@ import { cycleSpawnIndex, formatSpawnChat } from './practiceSpawn.js';
 import { sourceVFovFromHFov } from '../utils/MathUtils.js';
 import { loadDemoBytes, loadDemoFile } from './demoData.js';
 import { PracticeBots } from './practiceBots.js';
+import { BloodSpray } from './blood.js';
+import { flinchPunch, bloodMagnitude, ragdollImpulse } from '../../shared/sim3d/flinch.js';
 import { bindImportRound } from './practiceImport.js';
 import { nextCamMode, cycleLive, spectateTargetId, parseSpectateTarget } from './practiceCam.js';
-import { fetchDemos, apiBase } from '../replays/api.js';
+import { fetchDemos, fetchDemoPackage } from '../replays/api.js';
+import { createXrayPass, xrayIconList } from './xray.js';
 
 const params = new URLSearchParams(location.search);
 const map = cs3dMapForPath(location.pathname) || cs3dMap(params.get('map')) || null;
@@ -87,6 +93,8 @@ document.title = `${map.name} - AIM4.io`;
 const importUis = [];
 let camMode = 'T';
 let spectateKey = null;
+/** Spectate follows the selected player's eyes until you leave spectate. */
+let spectateEyes = true;
 let skipNadeHurt = false;
 
 // ---- renderer / scene ------------------------------------------------------
@@ -151,9 +159,9 @@ const accuracyState = createAccuracyState();
  * byte is used either way (shared/sim3d/inaccuracy.js).
  */
 let shotSeed = 0;
-/** Degrees, [pitch, yaw]: what the bullets take, and what the camera takes. */
-const _aim = [0, 0];
-const _cam = [0, 0];
+/** Degrees, [pitch, yaw, roll]: what the bullets take, and what the camera takes. */
+const _aim = [0, 0, 0];
+const _cam = [0, 0, 0];
 
 // What a bullet leaves behind: the game's own impact decals and its tracer
 // streak, one pack for both (scripts/cs3d-decals.mjs).
@@ -167,6 +175,8 @@ let mapRenderer = null;
 let bloomPass = { render: (d) => d(), resize() {}, enabled: false, setActive() {} };
 let pauseMenu = null;
 let perf = null;
+let xray = null;
+let _xraySubjects = [];
 const passStamp = { sky: 0, world: 0, bloom: 0, vm: 0, shadowDirty: 0 };
 // ---- UI --------------------------------------------------------------------
 const controls = new Controls(canvas, player, {
@@ -198,7 +208,11 @@ const controls = new Controls(canvas, player, {
   onDigit: (n) => {
     if (camMode === 'spectate' && demoView.active) {
       const slot = (n + 9) % 10;
-      if (demoView.liveSlots().includes(slot)) spectateKey = spectateTargetId('demo', slot);
+      if (demoView.liveSlots().includes(slot)) {
+        spectateKey = spectateTargetId('demo', slot);
+        spectateEyes = true;
+        followSpectateTarget();
+      }
       return;
     }
     if (n >= 1 && n <= 4) equipSlot(n);
@@ -227,13 +241,9 @@ const controls = new Controls(canvas, player, {
   onBoostBot: () => placePracticeBot(true),
   onDeleteBot: () => deleteAimedBot(),
   onSkipNades: () => skipThrownNades(),
-  onPovExit: () => demoView.active && demoView.povSlot !== null && demoView.setPov(demoView.povSlot),
-  // Q: the next weapon in the explorer's pocket — the run-speed cap and the
-  // hands both follow it.
-  onWeapon: () => {
-    const next = match.cycleHeld();
-    if (next) equipWeapon(next);
-  },
+  onXray: () => xray?.toggle(),
+  // Tap Q: next weapon in the explorer's pocket. Hold Q: full radar overview.
+  onWeaponHold: (down) => handleWeaponHold(down),
   // B: the buy menu. It needs the mouse, so opening it gives the pointer back
   // and closing it takes the lock again.
   onBuy: () => buyMenu.toggle(),
@@ -288,6 +298,7 @@ const hud = new Hud(uiRoot, {
   onSensitivity: (v) => controls.setSensitivity(v),
   onImportMount: mountImport
 });
+xray = createXrayPass({ renderer, scene, parent: uiRoot });
 const buyMenu = createBuyMenu({
   root: uiRoot,
   getSide: () => lastSide,
@@ -421,10 +432,21 @@ const fpsView = new FpsView({
 // manifest is in, so it never competes with the first tiles; a body created
 // before it lands is a placeholder until the next frame after it does.
 const playerModels = sharedPlayerModels();
+const blood = new BloodSpray({ camera });
 const practiceBots = new PracticeBots({
   playerModels,
   getRoot: () => pack?.world || null,
-  onDied: (bot) => dropBotGear(bot)
+  onDied: (bot) => dropBotGear(bot),
+  onHit: ({ point, dir, damage, group, armor, helmet, blast }) => {
+    if (blast && (Number(armor) || 0) > 0) return;
+    if (!point) return;
+    blood.spawn({
+      point,
+      dir,
+      magnitude: bloodMagnitude({ damage, armor, hitgroup: group, helmet }),
+      damage
+    });
+  }
 });
 
 // ---- viewmodel -------------------------------------------------------------
@@ -470,6 +492,7 @@ function applyPracticeDisplay() {
   camera.fov = sourceVFovFromHFov(s.hFov ?? 90);
   camera.updateProjectionMatrix();
   mapRenderer?.resize();
+  xray?.resize();
   vmPass.resize(w, h);
   lighting?.resize();
 }
@@ -609,7 +632,17 @@ const shooting = new Shooting({
   onShot: (shot) => {
     hud.setShot(shot);
     _shotClearAt = performance.now() + 2500;
-    for (const h of shot.hits || []) practiceBots.hurt(h.id, h.damage);
+    for (const h of shot.hits || []) {
+      practiceBots.takeHit({
+        id: h.id,
+        damage: h.damage,
+        group: h.group,
+        point: h.point,
+        dir: shot.dir,
+        armor: h.armor || 0,
+        helmet: !!h.helmet
+      });
+    }
   }
 });
 
@@ -632,8 +665,25 @@ const projectiles = new Projectiles({
       const eye = player.mode === 'walk' ? player.eye(_heEye) : _heEye.copy(camera.position);
       const src = sceneToSource(eye.x, eye.y, eye.z);
       const dist = Math.hypot(pos.x - src[0], pos.y - src[1], pos.z - src[2]);
-      if (dist < radius && match.hurt(maxDmg * (1 - dist / radius)) <= 0) {
-        onLocalDeath();
+      if (dist < radius && !match.god && !match.dead) {
+        const dmg = maxDmg * (1 - dist / radius);
+        const punch = flinchPunch({ blast: true, damage: dmg, armor: 0 });
+        applyHitFlinch(recoilState, punch, { replacePitch: true });
+        liveBody.applyFlinch(punch);
+        const dir = { x: src[0] - pos.x, y: src[1] - pos.y, z: src[2] - pos.z };
+        blood.spawn({
+          point: { x: src[0], y: src[1], z: src[2] },
+          dir,
+          magnitude: bloodMagnitude({ damage: dmg }),
+          damage: dmg
+        });
+        if (match.hurt(dmg) <= 0) {
+          const impulse = ragdollImpulse(dir, dmg);
+          const [fx, fy, fz] = sourceToScene(impulse.x, impulse.y, impulse.z);
+          const [hx, hy, hz] = sourceToScene(src[0], src[1], src[2]);
+          liveBody.startRagdoll({ force: { x: fx, y: fy, z: fz }, hitPos: { x: hx, y: hy, z: hz } });
+          onLocalDeath();
+        }
       }
     }
     // A flashbang you can see blinds you. The eye and the look direction are
@@ -684,9 +734,50 @@ const throwControl = new ThrowControl({
 const _throwEye = new THREE.Vector3();
 const _heEye = new THREE.Vector3();
 
+const Q_HOLD_MS = 160;
+let qHoldTimer = 0;
+let qOverview = false;
+
+function qUiBusy() {
+  return Boolean(matchHud?.chatOpen || buyMenu?.open || pauseMenu?.open || vmTuner?.open);
+}
+
+function clearQHold() {
+  if (qHoldTimer) {
+    clearTimeout(qHoldTimer);
+    qHoldTimer = 0;
+  }
+}
+
+function setQOverview(on) {
+  qOverview = Boolean(on);
+  matchHud?.setOverview(qOverview);
+}
+
+function handleWeaponHold(down, opts = {}) {
+  if (down) {
+    if (qUiBusy()) return;
+    clearQHold();
+    qHoldTimer = window.setTimeout(() => {
+      qHoldTimer = 0;
+      setQOverview(true);
+    }, Q_HOLD_MS);
+    return;
+  }
+  const tapped = Boolean(qHoldTimer);
+  clearQHold();
+  if (qOverview) {
+    setQOverview(false);
+    return;
+  }
+  if (opts.cancel || !tapped) return;
+  const next = match.cycleHeld();
+  if (next) equipWeapon(next);
+}
+
 /**
- * Hold a weapon by name — the slot keys, Q, and every row of the buy menu all
- * come through here.
+ * Hands, HUD, and the walking speed cap all follow the same name. Buy, the
+ * loadout keys, and picking a gun up off the floor all come through here.
  *
  * The speed cap applies whether or not the weapons pack is in: it is the
  * movement sim's business, not the viewmodel's, and without the pack the
@@ -929,6 +1020,7 @@ const demoView = new DemoView({
   getPack: () => pack,
   playerModels,
   nades: demoNades,
+  blood,
   onChange: (dv) => {
     hud.setRoster(dv.active ? dv.roster() : null);
     hud.setDemoStatus(dv.status());
@@ -985,20 +1077,20 @@ if (params.get('demo')) {
   // resolved against the site, where the SPA catch-all rewrite answers 200
   // with train.html — so the 2D viewer's "watch in 3D" link handed the demo
   // loader a page of HTML instead of a package on aim4.io.
-  const src = isId ? `${apiBase()}/api/replays/demos/${ref}/package` : ref;
-  fetch(src, isId ? { credentials: 'include' } : undefined)
-    .then(async (res) => {
-      if (!res.ok) {
-        // The API answers JSON on failure; a package is bytes.
-        const detail = await res.json().catch(() => null);
-        throw new Error(detail?.error || `HTTP ${res.status}`);
-      }
-      acceptDemo(loadDemoBytes(await res.arrayBuffer(), isId ? ref : ref.split('/').pop()));
-    })
-    .catch((err) => {
-      console.error('cs3d: ?demo= failed', err);
-      hud.showError(`Could not open that demo: ${err.message}`);
-    });
+  const src = isId ? null : ref;
+  const load = isId
+    ? fetchDemoPackage(ref).then((buf) => acceptDemo(loadDemoBytes(buf, ref)))
+    : fetch(src).then(async (res) => {
+        if (!res.ok) {
+          const detail = await res.json().catch(() => null);
+          throw new Error(detail?.error || `HTTP ${res.status}`);
+        }
+        acceptDemo(loadDemoBytes(await res.arrayBuffer(), ref.split('/').pop()));
+      });
+  load.catch((err) => {
+    console.error('cs3d: ?demo= failed', err);
+    hud.showError(`Could not open that demo: ${err.message}`);
+  });
 }
 
 // ---- pack ------------------------------------------------------------------
@@ -1057,7 +1149,9 @@ function spectateIds() {
 }
 
 function cycleSpectate(dir) {
+  spectateEyes = true;
   spectateKey = cycleLive(spectateIds(), spectateKey, dir);
+  followSpectateTarget();
   syncSpectateHud();
 }
 
@@ -1068,9 +1162,35 @@ function spectateOverlay() {
   return practiceBots.overlay(t.id);
 }
 
+function followSpectateTarget() {
+  if (camMode !== 'spectate' || !spectateEyes) {
+    demoView.followSlot(null);
+    return;
+  }
+  const t = parseSpectateTarget(spectateKey);
+  if (t?.kind === 'demo') demoView.followSlot(t.id);
+  else demoView.followSlot(null);
+}
+
+function applySpectateEyes() {
+  const t = camMode === 'spectate' && spectateEyes ? parseSpectateTarget(spectateKey) : null;
+  for (const b of practiceBots.list) {
+    if (b.body?.group) b.body.group.visible = !!b.alive && !(t?.kind === 'bot' && t.id === b.id);
+  }
+  if (t?.kind !== 'bot') return;
+  const b = practiceBots.list.find((x) => x.id === t.id);
+  if (!b) return;
+  const [x, y, z] = sourceToScene(b.origin.x, b.origin.y, b.origin.z + EYE_STAND);
+  camera.position.set(x, y, z);
+  camera.rotation.set(-b.pitch * (Math.PI / 180), cameraYawFromSource(b.yaw), 0, 'YXZ');
+}
+
 function syncSpectateHud() {
   const ids = spectateIds();
-  if (camMode === 'spectate' && ids.length && !ids.includes(spectateKey)) spectateKey = ids[0];
+  if (camMode === 'spectate' && ids.length && !ids.includes(spectateKey)) {
+    spectateKey = ids[0];
+    followSpectateTarget();
+  }
   const over = camMode === 'spectate' ? spectateOverlay() : null;
   matchHud.setCamMode(camMode);
   matchHud.setSpectateName(over?.name || (camMode === 'spectate' ? 'Bot' : ''));
@@ -1085,8 +1205,10 @@ function setCamMode(mode) {
     hud.setMode('fly', thirdPerson);
     const ids = spectateIds();
     if (!ids.includes(spectateKey)) spectateKey = ids[0] || null;
-    demoView.povSlot = null;
+    spectateEyes = true;
+    followSpectateTarget();
   } else if (prev === 'spectate' || lastSide !== mode) {
+    demoView.followSlot(null);
     spawnCursor = -1;
     spawnAt(mode);
   } else {
@@ -1115,20 +1237,15 @@ function onPlayback(act) {
 }
 
 async function loadLibraryDemo(id) {
-  const res = await fetch(`${apiBase()}/api/replays/demos/${encodeURIComponent(id)}/package`, {
-    credentials: 'include'
-  });
-  if (!res.ok) {
-    const detail = await res.json().catch(() => null);
-    throw new Error(detail?.error || `HTTP ${res.status}`);
-  }
-  return loadDemoBytes(await res.arrayBuffer(), id);
+  return loadDemoBytes(await fetchDemoPackage(id), id);
 }
 
 function importRound(demo, roundIndex) {
   acceptDemo(demo);
   demoView.setRound(roundIndex);
-  demoView.povSlot = null;
+  setCamMode('spectate');
+  pauseMenu?.close();
+  controls.requestLock();
   syncPlaybackUi();
 }
 
@@ -1216,6 +1333,7 @@ async function boot() {
       shooting.attach(pack?.world || null);
       decals.attach(pack?.world || null);
       tracers.attach(pack?.world || null);
+      blood.attach(pack?.world || null);
     }
   });
   try {
@@ -1256,11 +1374,18 @@ async function boot() {
       overlayAfter: params.get('vm') === 'after',
       getTwoPass: () => perf.flags.skyPass,
       stamp: passStamp,
-      // The gun, in the same target as the world (see createMapRenderer).
+      // Silhouettes first, then the gun, both inside the scene pass.
       overlay: () => {
-        if (!viewModel.visible || !viewModel.ready) return false;
-        vmPass.render();
-        return true;
+        let drew = false;
+        if (xray?.enabled) {
+          xray.render(camera, _xraySubjects);
+          drew = true;
+        }
+        if (viewModel.visible && viewModel.ready) {
+          vmPass.render();
+          drew = true;
+        }
+        return drew;
       }
     });
     lighting = new MapLighting(scene, camera, manifest, { shadows: perf.flags.shadows, renderer });
@@ -1282,6 +1407,7 @@ async function boot() {
     // pass render and the flat view treat them as map geometry.
     decals.attach(pack.world);
     tracers.attach(pack.world);
+    blood.attach(pack.world);
     // The map's doors and breakables, alongside the tiles. Optional: a pack
     // without interactives.json simply has none, and nothing waits on it.
     interactives
@@ -1578,7 +1704,14 @@ function updateViewModel(dt, inThird) {
     // that player fired on, so the gate is not wanted here at all — hand it a
     // time it cannot refuse.
     for (let i = 0; i < pov.shots; i++) viewModel.attack('primary', performance.now() / 1000 + i * 1e-4);
-    viewModel.update(dt, { speed: pov.speed, onGround: !pov.airborne, viewYaw: pov.yaw, viewPitch: pov.pitch });
+    viewModel.update(dt, {
+      speed: pov.speed,
+      onGround: !pov.airborne,
+      viewYaw: pov.yaw,
+      viewPitch: pov.pitch,
+      punch: pov.punch || [0, 0, 0],
+      viewPunch: [0, 0]
+    });
   } else {
     viewModel.setSide(lastSide);
     // The punch goes to the gun as well as to the camera, and the two take
@@ -1665,6 +1798,47 @@ function renderFrame() {
 // the path a bot's body will take.
 const liveBody = new LiveBody(playerModels, () => pack?.world || null);
 
+function collectPracticeXraySubjects() {
+  const out = [];
+  if (demoView.active) out.push(...demoView.xraySubjects());
+  for (const b of practiceBots.list) {
+    const obj = b.body?.group;
+    if (!obj || !obj.visible) continue;
+    const snap = practiceBots.overlay(b.id);
+    out.push({
+      id: `bot-${b.id}`,
+      object: obj,
+      name: snap?.name || 'Bot',
+      hp: snap?.hp ?? b.hp,
+      duck: 0,
+      items: xrayIconList({
+        util: snap?.nades || [],
+        primary: snap?.primary || b.weapon,
+        items: [snap?.primary, snap?.pistol, snap?.held, b.weapon].filter(Boolean),
+        active: snap?.held || b.weapon
+      })
+    });
+  }
+  const live = liveBody.body?.group;
+  if (live?.visible) {
+    const snap = match.snapshot();
+    out.push({
+      id: 'you',
+      object: live,
+      name: snap.name || 'You',
+      hp: snap.dead ? 0 : snap.hp,
+      duck: liveBody.body.duck || 0,
+      items: xrayIconList({
+        util: snap.nades || [],
+        primary: snap.primary,
+        items: [snap.primary, snap.pistol, snap.held].filter(Boolean),
+        active: snap.held
+      })
+    });
+  }
+  return out;
+}
+
 // ---- loop ------------------------------------------------------------------
 let last = performance.now();
 let lastPresent = 0;
@@ -1733,7 +1907,9 @@ function frame(now) {
   requestAnimationFrame(frame);
   const dt = Math.min(0.1, (now - last) / 1000);
   last = now;
-  player.update(dt);
+  const lockEyes = camMode === 'spectate' && spectateEyes && spectateKey;
+  if (!lockEyes) player.update(dt);
+  else player.flyVel.set(0, 0, 0);
   // Recoil, after the body and before anything reads the camera.
   //
   // The punch is NOT fed back into the player's own yaw and pitch: it is a
@@ -1768,15 +1944,20 @@ function frame(now) {
     if (player.mode === 'walk' && !thirdPerson && demoView.povSlot === null) {
       cameraPunch(recoilState, _cam);
       // Source QAngle into three's camera: pitch is positive DOWN there and up
-      // here, and yaw is positive LEFT in both.
-      camera.rotation.set(player.pitch - _cam[0] * (Math.PI / 180), player.yaw + _cam[1] * (Math.PI / 180), 0, 'YXZ');
+      // here, and yaw is positive LEFT in both. Roll is Source z.
+      camera.rotation.set(
+        player.pitch - _cam[0] * (Math.PI / 180),
+        player.yaw + _cam[1] * (Math.PI / 180),
+        (_cam[2] || 0) * (Math.PI / 180),
+        'YXZ'
+      );
     }
   }
   // The walking body's own agent model, posed from the sim every frame; shown
   // in third person, kept in step (hidden) in first.
   const inThird = thirdPerson && player.mode === 'walk';
   liveBody.setSide(lastSide);
-  liveBody.update(player, dt, { visible: inThird && camMode !== 'spectate' });
+  liveBody.update(player, dt, { visible: inThird && camMode !== 'spectate', alive: !match.dead });
   practiceBots.update(dt);
   if (inThird) placeThirdPersonCamera(camera, player.world);
   updateViewModel(dt, inThird);
@@ -1793,6 +1974,7 @@ function frame(now) {
     (d) => takeDropped(d, { replace: false })
   );
   nadeEffects.update(dt, now / 1000);
+  blood.update(dt, camera);
   // The doors swing here, which moves both what is drawn and what the tracer
   // sees — they are the same box (src/cs3d/interactives.js).
   interactives.update(dt);
@@ -1808,6 +1990,7 @@ function frame(now) {
   }
   // After the player: in POV the demo owns the camera, and writing second wins.
   demoView.update(now);
+  applySpectateEyes();
   // The overlay is the worse of the two blinds: one you walked into yourself,
   // and one the player whose eyes you are borrowing walked into. Read AFTER
   // demoView.update, which is what recomputes the demo's.
@@ -1839,6 +2022,8 @@ function frame(now) {
   lighting?.update();
   passStamp.shadowDirty = lighting?.sun?.shadow?.needsUpdate ? 1 : 0;
   pack?.materials?.setTime(now / 1000);
+  _xraySubjects = xray?.enabled ? collectPracticeXraySubjects() : [];
+  xray?.updateLabels(camera, _xraySubjects);
   const presented = !renderer.backend || shouldPresent(now);
   if (renderer.backend && presented) renderFrame();
   updateInspector(now);
@@ -1878,6 +2063,19 @@ function frame(now) {
   const hudSrc = overlay && Number.isFinite(overlay.x) ? [overlay.x, overlay.y, overlay.z] : _src;
   const hudYaw = overlay && overlay.yaw != null ? overlay.yaw : sourceYawFromCamera(player.yaw);
   if (camMode === 'spectate') syncSpectateHud();
+  const radarFrame = demoView.active
+    ? demoView.radarFrame()
+    : practiceRadarFrame({
+        match,
+        player,
+        src: hudSrc,
+        yaw: hudYaw,
+        pitch: overlay?.pitch ?? -player.pitch * (180 / Math.PI),
+        bots: practiceBots,
+        projectiles,
+        nadeEffects,
+        overlay
+      });
   matchHud.update({
     src: hudSrc,
     yaw: hudYaw,
@@ -1885,7 +2083,8 @@ function frame(now) {
     clock: demo ? demo.clock : undefined,
     ctAlive,
     tAlive,
-    overlay: overlay || undefined
+    overlay: overlay || undefined,
+    radarFrame
   });
 }
 

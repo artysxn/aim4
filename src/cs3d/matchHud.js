@@ -8,6 +8,7 @@
 import { worldToRadar, isLowerLevel, RADAR_SIZE } from '../replays/viewer/mapCalibration.js';
 import { hudRadarRotation, hudRadarScale, worldToHudRadar } from './hudRadar.js';
 import { radarImage } from '../replays/shared/roundId.js';
+import { RadarRenderer } from '../replays/viewer/radarRenderer.js';
 import {
   iconImgHtml,
   isGrenade,
@@ -90,6 +91,9 @@ export function createMatchHud({ root, map, match, hooks = {} }) {
   const el = document.createElement('div');
   el.className = 'c3-mh';
   el.innerHTML = `
+    <div class="c3-mh-overview" data-k="overview" hidden>
+      <canvas></canvas>
+    </div>
     <div class="c3-mh-radar" data-k="radar">
       <canvas width="256" height="256"></canvas>
     </div>
@@ -143,6 +147,15 @@ export function createMatchHud({ root, map, match, hooks = {} }) {
   el.querySelectorAll('[data-k]').forEach((n) => (node[n.dataset.k] = n));
   const canvas = node.radar.querySelector('canvas');
   const ctx = canvas.getContext('2d');
+  const overviewCanvas = node.overview.querySelector('canvas');
+  const overviewRenderer = new RadarRenderer(overviewCanvas);
+  overviewRenderer.viewInset = { top: 0, right: 0, bottom: 0, left: 0 };
+  overviewRenderer.setMap(map.code).then(() => {
+    if (overviewOn && lastRadarFrame) overviewRenderer.render(lastRadarFrame);
+  });
+  overviewRenderer.onIconLoad = () => {
+    if (overviewOn && lastRadarFrame) overviewRenderer.render(lastRadarFrame);
+  };
   const input = node.input;
   const form = node.form;
 
@@ -153,9 +166,14 @@ export function createMatchHud({ root, map, match, hooks = {} }) {
   if (lowerSrc && lowerSrc !== defaultSrc) radarImgs.lower.src = lowerSrc;
 
   let chatOpen = false;
+  let overviewOn = false;
   let lastGen = -1;
   let lastClock = '';
   let lastOverlayKey = '';
+  let lastSrc = null;
+  let lastYaw = 0;
+  let lastMarks = [];
+  let lastRadarFrame = null;
   const _pt = {};
   let peekTimer = 0;
   let camMode = 'T';
@@ -357,6 +375,34 @@ export function createMatchHud({ root, map, match, hooks = {} }) {
     ctx.strokeStyle = '#c4a43a';
     ctx.lineWidth = 2;
     ctx.stroke();
+  }
+
+  function syncOverviewFloor(frame) {
+    const players = frame?.players || [];
+    const id = frame?.highlight;
+    const p = (id && players.find((x) => x.id === id)) || players[0];
+    const z = p ? frame.states?.[p.slot]?.z : lastSrc?.[2];
+    const wantLower = isLowerLevel(map.code, z);
+    const next = wantLower && overviewRenderer.lowerImage ? 'lower' : 'default';
+    if (overviewRenderer.radarLevel === next) return;
+    overviewRenderer.radarLevel = next;
+    overviewRenderer.image =
+      next === 'lower' ? overviewRenderer.lowerImage : overviewRenderer.defaultImage;
+    overviewRenderer.invalidateMapCache();
+  }
+
+  function drawOverview(frame) {
+    if (!frame) return;
+    syncOverviewFloor(frame);
+    overviewRenderer.render(frame);
+  }
+
+  function setOverview(on) {
+    overviewOn = Boolean(on);
+    node.overview.hidden = !overviewOn;
+    el.classList.toggle('is-overview', overviewOn);
+    root.classList.toggle('is-radar-overview', overviewOn);
+    if (overviewOn) drawOverview(lastRadarFrame);
   }
 
   function runLine(line) {
@@ -579,15 +625,21 @@ export function createMatchHud({ root, map, match, hooks = {} }) {
         node.clock.textContent = clock;
       }
       const overlayKey = frame.overlay
-        ? `${snap.hp}|${snap.held}|${snap.money}|${snap.dead}|${snap.side}|${(snap.nades || []).join(',')}`
+        ? `${snap.hp}|${snap.held}|${snap.primary}|${snap.pistol}|${snap.money}|${snap.dead}|${snap.side}|${(snap.nades || []).join(',')}`
         : '';
       if (snap.gen !== lastGen || overlayKey !== lastOverlayKey) {
         lastGen = snap.gen;
         lastOverlayKey = overlayKey;
         syncStatic(snap, frame);
       }
-      drawRadar(frame.src, frame.yaw, frame.marks);
+      lastSrc = frame.src || null;
+      lastYaw = frame.yaw || 0;
+      lastMarks = frame.marks || [];
+      lastRadarFrame = frame.radarFrame || null;
+      drawRadar(lastSrc, lastYaw, lastMarks);
+      if (overviewOn) drawOverview(lastRadarFrame);
     },
+    setOverview,
     setCamMode,
     setSpectateName,
     setPlayback

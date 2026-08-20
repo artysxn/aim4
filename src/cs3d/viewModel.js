@@ -35,7 +35,7 @@ import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.j
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { AnimationMixer, LoopOnce, LoopRepeat } from 'three';
 import { assetBase } from './mapLoader.js';
-import { packFetch, loadWithRetry } from './packFetch.js';
+import { packFetch, loadWithRetry, PACK_CDN } from './packFetch.js';
 import { UNIT_M } from '../../shared/sim3d/units.js';
 import { VIEW_RECOIL_TRACKING } from '../../shared/sim3d/recoil.js';
 import { reloadClipAliases } from './viewModelClips.js';
@@ -54,10 +54,11 @@ export const VIEWMODEL_FOV = 68;
  * hundredth (sky.js SKY_PROBE_SCALE) because every lightmapped surface already
  * carries baked light and a second, unoccluded environment on top would wash it
  * out. The viewmodel has no bake — a key light, a fill, and this — so it wants
- * the probe at something like full strength, and inheriting the world's 0.1
- * leaves metal exactly as black as having no environment at all. `[verify]`
+ * more than the world's 0.1. Full strength (1) turned metal cyan-white on
+ * Anubis: the gun was mirroring a sky whose upper quartile is already near the
+ * exposure target. A quarter keeps the reflection without the flood.
  */
-export const VIEWMODEL_ENV_INTENSITY = 1;
+export const VIEWMODEL_ENV_INTENSITY = 0.28;
 /**
  * The pass's sun, in irradiance.
  *
@@ -293,8 +294,21 @@ export class ViewModelAssets {
   }
 
   async _load() {
-    const res = await packFetch(`${this.base}/manifest.json`, { cache: 'no-cache' });
-    if (!res.ok) throw new Error(`no weapons pack (${res.status} from ${this.base}/manifest.json)`);
+    try {
+      await this._loadFrom(this.base);
+    } catch (e) {
+      const cdn = `${PACK_CDN}/weapons`;
+      if (this.base.replace(/\/$/, '') === cdn) throw e;
+      console.warn('cs3d: weapons pack missed at', this.base, '— trying the public bucket');
+      this.base = cdn;
+      await this._loadFrom(this.base);
+    }
+  }
+
+  async _loadFrom(base) {
+    this.base = base;
+    const res = await packFetch(`${base}/manifest.json`, { cache: 'no-cache' });
+    if (!res.ok) throw new Error(`no weapons pack (${res.status} from ${base}/manifest.json)`);
     const manifest = await res.json();
     if (manifest.version !== WEAPONS_PACK_VERSION) {
       throw new Error(`weapons pack is v${manifest.version}; this build reads v${WEAPONS_PACK_VERSION}. Re-run cs3d-weapons.`);
@@ -858,7 +872,7 @@ export class ViewModel {
    * @param {number} state.viewYaw   degrees, Source (positive LEFT)
    * @param {number} state.viewPitch degrees, Source (positive DOWN)
    * @param {number[]} [state.punch] the aim punch the BULLETS take, degrees
-   *   [pitch, yaw] — already scaled by `weapon_recoil_scale`
+   *   [pitch, yaw, roll] — already scaled by `weapon_recoil_scale`
    * @param {number[]} [state.viewPunch] the cosmetic shake the CAMERA has
    * @param {number} [state.now]     seconds, for the sway history
    */
@@ -940,12 +954,16 @@ export class ViewModel {
     // follow it all the way.
     let risePitch = 0;
     let riseYaw = 0;
+    let riseRoll = 0;
     if (punch) {
-      risePitch = punch[0] * (VIEWMODEL_RECOIL - VIEW_RECOIL_TRACKING) - (viewPunch ? viewPunch[0] : 0);
-      riseYaw = punch[1] * (VIEWMODEL_RECOIL - VIEW_RECOIL_TRACKING) - (viewPunch ? viewPunch[1] : 0);
+      const k = VIEWMODEL_RECOIL - VIEW_RECOIL_TRACKING;
+      risePitch = punch[0] * k - (viewPunch ? viewPunch[0] : 0);
+      riseYaw = punch[1] * k - (viewPunch ? viewPunch[1] : 0);
+      riseRoll = (punch[2] || 0) * k;
     }
     // Source pitch is positive DOWN, three's rotation.x positive is up.
-    this.group.rotation.set(-risePitch * DEG, riseYaw * DEG, 0, 'YXZ');
+    // Roll is Source z; the camera already took VIEW_RECOIL_TRACKING of it.
+    this.group.rotation.set(-risePitch * DEG, riseYaw * DEG, riseRoll * DEG, 'YXZ');
 
     // Bob tilts the gun as well as moving it: roll with the vertical, pitch
     // against it, yaw against the lateral.

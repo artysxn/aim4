@@ -47,6 +47,9 @@ import { WALK_SPEED_SCALE } from '../../shared/sim3d/constants.js';
 import { assetBase } from './mapLoader.js';
 import { packFetch } from './packFetch.js';
 import { SpecularOnlyEnvironmentNode } from './materials.js';
+import { markXrayObject } from './xray.js';
+import { createBoneRagdoll } from './ragdoll.js';
+import { PUNCH_DECAY_EXP, PUNCH_DECAY_LIN } from '../../shared/sim3d/recoil.js';
 
 export const PLAYERS_PACK_VERSION = 1;
 
@@ -619,7 +622,12 @@ export class PlayerBody {
     this.mixer = null;
     this.actions = new Map(); // `${set}/${name}` → AnimationAction
     this.aimBones = [];
-    this.oneShot = null; // { action, until }
+    this.oneShot = null; // { action, fade }
+    this._deadHold = null;
+    this._wasAlive = true;
+    this._flinch = [0, 0, 0];
+    this._ragdoll = null;
+    this._ragdollWanted = null;
     /** Blend inputs, smoothed. */
     this.speed = 0;
     this.relYaw = 0;
@@ -667,11 +675,15 @@ export class PlayerBody {
       o.material = m;
     });
     this._ownMaterials = [...mine.values()];
+    markXrayObject(this.model);
     this.group.add(this.model);
     this.mixer = new AnimationMixer(this.model);
     this.actions.clear();
     this.setWeights.clear();
     this.oneShot = null;
+    this._deadHold = null;
+    this._flinch[0] = this._flinch[1] = this._flinch[2] = 0;
+    this._stopRagdoll();
     // The packed model root (rotated −90° about x): under it everything is in
     // Source's frame, which is where the aim tilt is expressed.
     const rootMotion = this.model.getObjectByName('root_motion');
@@ -683,6 +695,70 @@ export class PlayerBody {
     }
     this._tilted = false;
     this.hitboxes = tmpl.hitboxes;
+  }
+
+  /**
+   * TraceAttack's aim punch, as extra spine tilt so other players (and third
+   * person) see the same snap the camera takes.
+   */
+  applyFlinch(delta) {
+    if (!delta) return;
+    this._flinch[0] += delta.pitch || 0;
+    this._flinch[1] += delta.yaw || 0;
+    this._flinch[2] += delta.roll || 0;
+  }
+
+  /**
+   * Become a ragdoll with the bullet force from this hit. Called on the
+   * death transition; no-ops if the skeleton is too thin to simulate.
+   */
+  startRagdoll(opts = {}) {
+    this._ragdollWanted = opts;
+  }
+
+  _stopRagdoll() {
+    this._ragdoll?.restore();
+    this._ragdoll = null;
+    this._ragdollWanted = null;
+  }
+
+  _beginRagdoll() {
+    if (!this.model) return false;
+    // Capture the live pose, including this frame's flinch, before the mixer
+    // is stopped: C_CSRagdoll::InitAsClientRagdoll copies the current bones.
+    this.group.updateWorldMatrix(true, true);
+    const force = this._ragdollWanted?.force || null;
+    const hitPos = this._ragdollWanted?.hitPos || null;
+    const rag = createBoneRagdoll(this.model, {
+      groundY: this.group.position.y,
+      force,
+      hitPos
+    });
+    this._ragdollWanted = null;
+    if (!rag) return false;
+    this.mixer?.stopAllAction();
+    this._ragdoll = rag;
+    this._deadHold = null;
+    return true;
+  }
+
+  _decayFlinch(dt) {
+    const h = Math.abs(dt);
+    if (!(h > 0)) return;
+    const e = Math.exp(-PUNCH_DECAY_EXP * h);
+    this._flinch[0] *= e;
+    this._flinch[1] *= e;
+    this._flinch[2] *= e;
+    const lin = PUNCH_DECAY_LIN * h;
+    const mag = Math.hypot(this._flinch[0], this._flinch[1], this._flinch[2]);
+    if (mag > lin) {
+      const k = 1 - lin / mag;
+      this._flinch[0] *= k;
+      this._flinch[1] *= k;
+      this._flinch[2] *= k;
+    } else {
+      this._flinch[0] = this._flinch[1] = this._flinch[2] = 0;
+    }
   }
 
   /** Per-frame inputs. Angles in Source degrees; speed u/s; duck 0..1. */
@@ -722,6 +798,64 @@ export class PlayerBody {
     return a;
   }
 
+  /** First packed death clip, preferring a forward fall. */
+  _deathClipName() {
+    const map = this.models.clips?.shared;
+    if (!map) return null;
+    if (map.has('death_front')) return 'death_front';
+    for (const name of map.keys()) {
+      if (String(name).startsWith('death_')) return name;
+    }
+    return null;
+  }
+
+  /**
+   * Fall over and stay down. `snap` jumps to the last frame so a seek onto a
+   * corpse is a body on the floor, not a replay of the fall.
+   */
+  _playDeath(snap = false) {
+    this.oneShot = null;
+    for (const a of this.actions.values()) {
+      if (a.timeScale === 0) a.weight = 0;
+    }
+    const name = this._deathClipName();
+    if (!name || !this.mixer) return;
+    const a = this._action('shared', name, false);
+    if (!a) return;
+    a.reset();
+    a.setLoop(LoopOnce, 1);
+    a.clampWhenFinished = true;
+    a.weight = 1;
+    a.enabled = true;
+    a.paused = false;
+    a.play();
+    if (snap) {
+      a.time = a.getClip().duration;
+      a.paused = true;
+    }
+    this._deadHold = a;
+  }
+
+  _stopDeath() {
+    if (this._deadHold) {
+      this._deadHold.stop();
+      this._deadHold.weight = 0;
+      this._deadHold = null;
+    }
+  }
+
+  _stepDeath(dt) {
+    if (!this.mixer || !this._deadHold) return;
+    if (this._deadHold) {
+      const clip = this._deadHold.getClip();
+      const dur = clip.duration;
+      if (this._deadHold.time >= dur - 1e-3 && dt >= 0) this._deadHold.paused = true;
+      else if (this._deadHold.time <= 1e-3 && dt < 0) this._deadHold.paused = true;
+      else this._deadHold.paused = false;
+    }
+    this.mixer.update(dt);
+  }
+
   /**
    * Advance the blend and the mixer. `dt` seconds of wall time (or demo time,
    * when scrubbing).
@@ -730,9 +864,31 @@ export class PlayerBody {
     if (!this.model) return;
     const s = this.state;
     const g = this.group;
-    g.visible = !!s.alive;
-    if (!s.alive) return;
+    const alive = s.alive !== false;
+    if (!alive) {
+      g.visible = true;
+      g.rotation.y = s.viewYaw * DEG;
+      if (this._wasAlive) {
+        if (this._ragdollWanted && this._beginRagdoll()) {
+          /* ragdoll owns the pose */
+        } else this._playDeath(!(dt > 0));
+      }
+      this._wasAlive = false;
+      this._unaim();
+      if (this._ragdoll?.active) this._ragdoll.step(dt);
+      else this._stepDeath(dt);
+      this._light();
+      return;
+    }
+    if (!this._wasAlive) {
+      this._stopDeath();
+      this._stopRagdoll();
+      this._flinch[0] = this._flinch[1] = this._flinch[2] = 0;
+    }
+    this._wasAlive = true;
+    g.visible = true;
     g.rotation.y = s.viewYaw * DEG;
+    this._decayFlinch(dt);
 
     // Smooth the blend inputs: a demo's per-tick velocity is quantised to
     // ¼ u / tick, and the direction of a nearly-still body is noise.
@@ -962,10 +1118,16 @@ export class PlayerBody {
     // that has been tilted for one frame and not the other.
     for (const b of this.aimBones) b.base.copy(b.bone.quaternion);
     // Clamped: the view goes to ±89°, the body does not follow it there.
-    const total = Math.max(-AIM_PITCH_LIMIT, Math.min(AIM_PITCH_LIMIT, this.pitch)) * DEG;
-    if (Math.abs(total) < 1e-4) return;
+    const total =
+      Math.max(-AIM_PITCH_LIMIT, Math.min(AIM_PITCH_LIMIT, this.pitch + this._flinch[0])) * DEG;
+    const roll = this._flinch[2] * DEG;
+    if (Math.abs(total) < 1e-4 && Math.abs(roll) < 1e-4) return;
     for (const { bone, w } of this.aimBones) {
       _qDelta.setFromAxisAngle(_yAxis, total * w);
+      if (Math.abs(roll) > 1e-4) {
+        _qRoll.setFromAxisAngle(_xAxis, roll * w);
+        _qDelta.multiply(_qRoll);
+      }
       // Parent's orientation in the model root frame (Source axes), from live
       // local values — the chain stops under the −90° root, so +y is lateral.
       _qParent.identity();
@@ -985,6 +1147,7 @@ export class PlayerBody {
     this._ownMaterials = [];
     this.group.removeFromParent();
     liveBodies.delete(this);
+    this._stopRagdoll();
   }
 }
 
@@ -999,7 +1162,9 @@ export class PlayerBody {
 export const liveBodies = new Set();
 
 const _yAxis = new THREE.Vector3(0, 1, 0);
+const _xAxis = new THREE.Vector3(1, 0, 0);
 const _qDelta = new THREE.Quaternion();
+const _qRoll = new THREE.Quaternion();
 const _qParent = new THREE.Quaternion();
 const _qTmp = new THREE.Quaternion();
 

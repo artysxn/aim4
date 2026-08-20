@@ -37,6 +37,29 @@
 // drops connections occasionally whatever the domain.
 // ---------------------------------------------------------------------------
 
+/** Public pack bucket. Same origin as scripts/cs3d-fetch.mjs and the API fill. */
+export const PACK_CDN = 'https://pub-2cbbca6c60604cc7a9fde25f012821d9.r2.dev';
+
+/**
+ * The CDN twin of an `/api/cs3d/...` pack URL.
+ *
+ * Localhost often 404s these: Vite's pack middleware serves only what is on
+ * disk and does not fill from the bucket, and a host with only one map still
+ * lacks `weapons/`, `fx/`, and other maps' `interactives.json`. The website
+ * already reads this bucket; falling back here makes the 3D viewer match.
+ *
+ * @param {string} url
+ * @returns {string|null}
+ */
+export function packCdnUrl(url) {
+  const s = String(url || '');
+  if (!s || s.startsWith(PACK_CDN)) return null;
+  const marker = '/api/cs3d/';
+  const i = s.indexOf(marker);
+  if (i < 0) return null;
+  return `${PACK_CDN}/${s.slice(i + marker.length)}`;
+}
+
 /** Total pack requests allowed in flight at once, across every subsystem. */
 const MAX_INFLIGHT = 6;
 /** Tries per request, so four retries after the first attempt. */
@@ -128,7 +151,39 @@ export async function packFetch(url, init) {
     } finally {
       release();
     }
-    if (res && !retryableStatus(res.status)) return res;
+    if (!res && lastError) {
+      const alt = packCdnUrl(url);
+      if (alt) {
+        packFetchStats.requests++;
+        await acquire();
+        try {
+          res = await fetch(alt, init);
+          if (res?.ok) return res;
+        } catch {
+          /* keep lastError and retry the original */
+        } finally {
+          release();
+        }
+      }
+    }
+    if (res && !retryableStatus(res.status)) {
+      if (res.status === 404) {
+        const alt = packCdnUrl(url);
+        if (alt) {
+          packFetchStats.requests++;
+          await acquire();
+          try {
+            const cdnRes = await fetch(alt, init);
+            if (cdnRes?.ok) return cdnRes;
+          } catch {
+            /* keep the original 404 */
+          } finally {
+            release();
+          }
+        }
+      }
+      return res;
+    }
     if (res?.status === 429) {
       packFetchStats.rateLimited++;
       holdOff(res);
@@ -175,14 +230,23 @@ export async function packFetchOk(url, what, init) {
  * @returns {Promise<any>}
  */
 export async function loadWithRetry(loader, url) {
+  const tryLoad = (u) => new Promise((resolve, reject) => loader.load(u, resolve, undefined, reject));
+  const alt = packCdnUrl(url);
   let lastError = null;
   for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
     const wait = cooldownUntil - now();
     if (wait > 0) await sleep(wait);
     try {
-      return await new Promise((resolve, reject) => loader.load(url, resolve, undefined, reject));
+      return await tryLoad(url);
     } catch (e) {
       lastError = e;
+      if (alt && attempt === 1) {
+        try {
+          return await tryLoad(alt);
+        } catch (cdnErr) {
+          lastError = cdnErr;
+        }
+      }
       if (attempt === ATTEMPTS) break;
       packFetchStats.retries++;
       await sleep(BASE_MS * 2 ** (attempt - 1) * (0.5 + Math.random()));

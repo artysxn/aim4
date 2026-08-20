@@ -1224,6 +1224,7 @@ export class NadeEffects {
     fx.disposed = true;
     for (const l of fx.layers || []) l.dispose();
     fx.layers = null;
+    fx.smoke?.mesh?.removeFromParent();
     fx.smoke?.dispose();
     fx.smoke = null;
     fx.lpv = null;

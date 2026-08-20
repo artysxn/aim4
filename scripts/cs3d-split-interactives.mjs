@@ -3,7 +3,7 @@
 // Cut the doors, vents and glass out of the packed world geometry so they can
 // move and disappear.
 //
-//   node scripts/cs3d-split-interactives.mjs [--map nuke] [--dry] [--restore]
+//   node scripts/cs3d-split-interactives.mjs [--map nuke] [--dry] [--restore] [--fill]
 //
 // The problem this solves: the packer bakes entity geometry into the world
 // groups, so nothing at runtime can hide one window or swing one door. What it
@@ -35,6 +35,20 @@
 //   the same box. So it only runs for an interactive the model-node rule
 //   failed to find.
 //
+//   The primitive that holds those triangles is often a whole wall tile, not a
+//   hull-sized mesh. Cache `newvent` and Anubis `anubis_window_42x80` live in
+//   world groups hundreds of units across; requiring the primitive itself to
+//   fit the hull skipped the tile and left those interactives at 0 triangles.
+//   Overlap is enough to look; the three-corner test plus claimFitsHull on the
+//   claimed bounds are what keep a wall from coming with the pane.
+//
+//   `--fill` (also automatic when the pack is already split and geo.orig is
+//   missing) only cuts interactives that still have 0 triangles, reading the
+//   live geo/ rather than a pristine backup, and appends to interactives.glb
+//   instead of rebuilding it. Re-running a full split on already-cut geo would
+//   copy the holes into geo.orig and drop every door that had already been
+//   extracted.
+//
 // The hull is read either way, because it is also where the runtime's collision
 // box and surface type come from.
 //
@@ -59,6 +73,7 @@ import { ALL_EXTENSIONS, EXTMeshoptCompression, KHRMeshQuantization } from '@glt
 import { MeshoptEncoder, MeshoptDecoder } from 'meshoptimizer';
 import { pathToFileURL } from 'node:url';
 import { ROOT, fail } from './lib/vrf.mjs';
+import { DOOR_LEAF_RADIUS, DOOR_LEAF_SPAN } from '../shared/sim3d/interactives.js';
 
 const TAG = 'cs3d-split-interactives';
 
@@ -66,27 +81,34 @@ const args = process.argv.slice(2);
 let slug = 'nuke';
 let dry = false;
 let restore = false;
+let fill = false;
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--map') slug = args[++i];
   else if (args[i] === '--dry') dry = true;
   else if (args[i] === '--restore') restore = true;
+  else if (args[i] === '--fill') fill = true;
 }
 
-const PACK = path.join(ROOT, 'server', 'data', 'cs3d', 'pack', slug);
+const PACK_ROOT = path.resolve(process.env.CS3D_PACK_DIR || path.join(ROOT, 'server', 'data', 'cs3d', 'pack'));
+const PACK = path.join(PACK_ROOT, slug);
 const GEO = path.join(PACK, 'geo');
 const BACKUP = path.join(PACK, 'geo.orig');
 
 /**
  * Outer bound on how far from its origin a triangle may sit and still belong to
- * an interactive found by the model-node rule.
+ * a breakable found by the model-node rule.
  *
  * Nearest-wins does the real work — two windows in one wall cannot both take a
  * pane — so this only has to be loose enough for the largest interactive and
- * tight enough to notice when a model node also holds a distant static copy. A
- * Nuke door leaf reaches 107 units from its hinge, which is what killed the 110
- * this started at: it cut the top corners off every door.
+ * tight enough to notice when a model node also holds a distant static copy.
+ *
+ * Doors use `DOOR_LEAF_RADIUS` (140) instead. 256 around a hinge is a corridor:
+ * Mirage's static apartment and palace doors share the swinging model's node,
+ * sit 150–250 units away, and got cut out of the building. A Nuke door leaf
+ * reaches 107 from its hinge; 110 cut the top corners, which is why this used
+ * to be 256 for everything.
  */
-const CLAIM_RADIUS = 256;
+const BREAKABLE_CLAIM_RADIUS = 256;
 
 /**
  * How far outside its collision hull an entity's render geometry may sit.
@@ -110,19 +132,41 @@ export function nodeMatchesModel(nm, model) {
   return false;
 }
 
-function hullSlack(box) {
+export function hullSlack(box) {
   const thick = Math.min(box.max[0] - box.min[0], box.max[1] - box.min[1], box.max[2] - box.min[2]);
-  if (!(thick > 0)) return 1;
+  // A pane of glass is often a zero-thickness hull with the mesh a few units
+  // proud of it. Slack 1 missed those; 6 is PHYS_SLACK, still thinner than a
+  // wall. A 3u sheet-metal cover keeps the tighter cap so it cannot grow into
+  // the wall it sits in.
+  if (!(thick > 0) || thick < 2) return PHYS_SLACK;
   return Math.min(PHYS_SLACK, Math.max(1, thick * 0.25));
 }
 
-/** Hull fallback must not carve a world tile that merely overlaps the box. */
+export function boxesOverlap(a, b, slack = 0) {
+  for (let i = 0; i < 3; i++) {
+    if (a.max[i] < b.min[i] - slack) return false;
+    if (a.min[i] > b.max[i] + slack) return false;
+  }
+  return true;
+}
+
+/** True when a primitive is small enough to BE the hull, not merely overlap it. */
 function primFitsHull(primBox, hull) {
   const dim = (b) => [b.max[0] - b.min[0], b.max[1] - b.min[1], b.max[2] - b.min[2]];
   const p = dim(primBox);
   const h = dim(hull);
   for (let i = 0; i < 3; i++) if (p[i] > h[i] * 1.5 + 24) return false;
   return true;
+}
+
+/**
+ * Whether hull fallback should walk this primitive. A Cache vent or Anubis
+ * 42x80 pane lives inside a wall-sized tile; requiring the tile to fit the
+ * hull skipped it entirely. Overlap is the look-up; claimFitsHull is the guard.
+ */
+export function primMayContainHull(primBox, hull) {
+  if (!hull || !boxValid(primBox)) return false;
+  return boxesOverlap(primBox, hull, hullSlack(hull) + 64);
 }
 
 /**
@@ -133,6 +177,19 @@ function primFitsHull(primBox, hull) {
 export function claimFitsHull(claimed, hull) {
   if (!hull || !boxValid(claimed)) return true;
   return primFitsHull(claimed, hull);
+}
+
+/** A door claim that spans more than a leaf ate a wall or a neighbouring door. */
+export function doorLeafFits(claimed) {
+  if (!claimed || !boxValid(claimed)) return true;
+  for (let i = 0; i < 3; i++) {
+    if (claimed.max[i] - claimed.min[i] > DOOR_LEAF_SPAN) return false;
+  }
+  return true;
+}
+
+export function claimRadiusFor(role) {
+  return role === 'door' ? DOOR_LEAF_RADIUS : BREAKABLE_CLAIM_RADIUS;
 }
 
 /** Every attribute the packer puts on a world tile. */
@@ -270,12 +327,25 @@ async function main() {
   if (!fs.existsSync(interFile)) fail(TAG, 'run scripts/cs3d-interactives.mjs first');
   const doc = JSON.parse(await fsp.readFile(interFile, 'utf8'));
 
+  const existingGlb = path.join(PACK, 'interactives.glb');
+  const haveGeo = doc.interactives.some((i) => (i.triangles || 0) > 0);
+  // Already-split packs have no pristine geo.orig. A full split would copy the
+  // holes into the backup and drop every door that had already been extracted.
+  if (!fill && haveGeo && fs.existsSync(existingGlb) && !fs.existsSync(BACKUP)) {
+    fill = true;
+    console.log('  pack already split (no geo.orig); filling missing interactives only');
+  }
+
   // Work from the pristine copy every run, so re-running is idempotent rather
-  // than cutting a second time out of already-cut geometry.
-  if (!fs.existsSync(BACKUP)) {
+  // than cutting a second time out of already-cut geometry. --fill reads the
+  // live geo instead: the missing panes are still in the world, the extracted
+  // ones are already gone.
+  if (!fill && !fs.existsSync(BACKUP)) {
     await fsp.cp(GEO, BACKUP, { recursive: true });
     console.log(`  kept a pristine copy at ${path.relative(ROOT, BACKUP)}`);
   }
+  const sourceDir = fill ? GEO : BACKUP;
+  if (fill) console.log(`  --fill: cutting 0-triangle interactives out of ${path.relative(ROOT, GEO)}`);
 
   const io = newIO();
 
@@ -287,6 +357,7 @@ async function main() {
       origin: i.origin,
       parts: [],
       phys: null,
+      kept: fill && (i.triangles || 0) > 0,
       /** World bounds of the claimed render geometry, Source frame. */
       bounds: emptyBox()
     }));
@@ -294,7 +365,7 @@ async function main() {
   const physEnts = await readPhysEntities(io);
   matchPhys(targets, physEnts);
 
-  const files = (await fsp.readdir(BACKUP)).filter((f) => f.endsWith('.glb'));
+  const files = (await fsp.readdir(sourceDir)).filter((f) => f.endsWith('.glb'));
   let filesChanged = 0;
   let strays = 0;
 
@@ -309,19 +380,20 @@ async function main() {
     filesChanged = 0;
     strays = 0;
     for (const t of targets) {
+      if (t.kept) continue;
       t.parts = [];
       t.bounds = emptyBox();
     }
 
   for (const file of files) {
-    const gltf = await io.read(path.join(BACKUP, file));
+    const gltf = await io.read(path.join(sourceDir, file));
     let touched = false;
 
     for (const node of gltf.getRoot().listNodes()) {
       const mesh = node.getMesh();
       if (!mesh) continue;
       const nm = (node.getName() || '').toLowerCase();
-      const namedFor = new Set(targets.filter((t) => !t.skipName && nodeMatchesModel(nm, t.model)));
+      const namedFor = new Set(targets.filter((t) => !t.kept && !t.skipName && nodeMatchesModel(nm, t.model)));
       const m = node.getWorldMatrix();
 
       for (const prim of mesh.listPrimitives()) {
@@ -332,15 +404,15 @@ async function main() {
         // Which interactives could possibly want anything in this primitive.
         const box = primBox(prim, m);
         const span = Math.max(box.max[0] - box.min[0], box.max[1] - box.min[1], box.max[2] - box.min[2]);
-        const huge = span > CLAIM_RADIUS * 2;
-        const reach = CLAIM_RADIUS + span;
+        const huge = span > BREAKABLE_CLAIM_RADIUS * 2;
         const mine = targets.filter((t) => {
-          const near = dist3(t.origin, centre(box)) < reach;
+          if (t.kept) return false;
+          const radius = claimRadiusFor(t.row.role);
+          const near = dist3(t.origin, centre(box)) < radius + span;
           if (namedFor.has(t) && near) return true;
           if (!huge && namedFor.size && inBox(box, t.origin, 48)) return true;
           if (!physFor.has(t) || !t.phys) return false;
-          const slack = hullSlack(t.phys.box) + 64;
-          return inBox(box, centre(t.phys.box), slack) && primFitsHull(box, t.phys.box);
+          return primMayContainHull(box, t.phys.box);
         });
         if (!mine.length) continue;
 
@@ -377,14 +449,19 @@ async function main() {
           let bestD = Infinity;
           for (const t of mine) {
             const d = dist3(s, t.origin);
+            const radius = claimRadiusFor(t.row.role);
+            const inLeaf =
+              t.row.role !== 'door' ? d < radius : corners.every((p) => dist3(p, t.origin) < radius);
             const inHull =
               t.phys && corners.every((p) => inBox(t.phys.box, p, hullSlack(t.phys.box)));
             // A named node can still hold the wall around a pane (Anubis
             // windows). If the entity has a collision hull, only triangles
-            // inside that hull belong to it.
+            // inside that hull belong to it. Doors have no hull, so every
+            // corner has to sit inside the leaf radius instead — otherwise a
+            // wall triangle whose centroid is near the hinge still gets cut.
             const wanted = namedFor.has(t)
-              ? d < CLAIM_RADIUS && (!t.phys || inHull)
-              : (!huge && namedFor.size > 0 && inBox(box, t.origin, 48) && d < CLAIM_RADIUS && (!t.phys || inHull)) ||
+              ? inLeaf && (!t.phys || inHull)
+              : (!huge && namedFor.size > 0 && inBox(box, t.origin, 48) && inLeaf && (!t.phys || inHull)) ||
                 (physFor.has(t) && inHull);
             if (wanted && d < bestD) {
               bestD = d;
@@ -476,28 +553,40 @@ async function main() {
   const none = new Set();
   await sweep(none, false);
   for (const t of targets) {
-    if (!t.parts.length || !t.phys || claimFitsHull(t.bounds, t.phys.box)) continue;
-    const span = (b) => b.max.map((v, k) => (v - b.min[k]).toFixed(0)).join('x');
-    console.log(`  skip ${t.row.id}: name claim ${span(t.bounds)} vs hull ${span(t.phys.box)}`);
-    t.parts = [];
-    t.bounds = emptyBox();
-    t.skipName = true;
+    if (t.kept || !t.parts.length) continue;
+    if (t.phys && !claimFitsHull(t.bounds, t.phys.box)) {
+      const span = (b) => b.max.map((v, k) => (v - b.min[k]).toFixed(0)).join('x');
+      console.log(`  skip ${t.row.id}: name claim ${span(t.bounds)} vs hull ${span(t.phys.box)}`);
+      t.parts = [];
+      t.bounds = emptyBox();
+      t.skipName = true;
+      continue;
+    }
+    if (t.row.role === 'door' && !doorLeafFits(t.bounds)) {
+      const span = (b) => b.max.map((v, k) => (v - b.min[k]).toFixed(0)).join('x');
+      console.log(`  skip ${t.row.id}: door claim ${span(t.bounds)} bigger than a leaf`);
+      t.parts = [];
+      t.bounds = emptyBox();
+      t.skipName = true;
+    }
   }
-  const needPhys = new Set(targets.filter((t) => !t.parts.length && t.phys));
+  const needPhys = new Set(targets.filter((t) => !t.kept && !t.parts.length && t.phys));
   if (needPhys.size) {
     console.log(`  ${needPhys.size} interactive(s) not found by model name; trying the collision hull`);
     await sweep(needPhys, false);
     for (const t of [...needPhys]) {
       const n = t.parts.reduce((a, p) => a + p.index.length / 3, 0);
-      const cap = (t.phys.tris || 0) * 4 + 16;
-      if (n > cap) {
-        console.log(`  skip ${t.row.id}: hull claimed ${n} tris, collision is ${t.phys.tris}`);
+      // Render is denser than collision (Cache vents, shop glass). Bounds vs
+      // hull is the real "did we eat a wall" test; the old tris*4 cap skipped
+      // any prop whose mesh had more than a handful of triangles.
+      if (n && !claimFitsHull(t.bounds, t.phys.box)) {
+        const span = (b) => b.max.map((v, k) => (v - b.min[k]).toFixed(0)).join('x');
+        console.log(`  skip ${t.row.id}: hull claim ${span(t.bounds)} vs hull ${span(t.phys.box)}`);
         t.parts = [];
         t.bounds = emptyBox();
         needPhys.delete(t);
-      } else if (n && !claimFitsHull(t.bounds, t.phys.box)) {
-        const span = (b) => b.max.map((v, k) => (v - b.min[k]).toFixed(0)).join('x');
-        console.log(`  skip ${t.row.id}: hull claim ${span(t.bounds)} vs hull ${span(t.phys.box)}`);
+      } else if (n > 8192) {
+        console.log(`  skip ${t.row.id}: hull claimed ${n} tris`);
         t.parts = [];
         t.bounds = emptyBox();
         needPhys.delete(t);
@@ -507,17 +596,34 @@ async function main() {
   await sweep(needPhys, !dry);
 
   // ---- interactives.glb: one node per interactive, at its entity origin -----
-  const outDoc = new Document();
-  outDoc.createBuffer();
-  const outScene = outDoc.createScene('interactives');
+  let outDoc;
+  let outScene;
+  if (fill && fs.existsSync(existingGlb)) {
+    outDoc = await io.read(existingGlb);
+    outScene = outDoc.getRoot().listScenes()[0] || outDoc.createScene('interactives');
+  } else {
+    outDoc = new Document();
+    outDoc.createBuffer();
+    outScene = outDoc.createScene('interactives');
+  }
   const outMat = new Map();
+  for (const mat of outDoc.getRoot().listMaterials()) {
+    const tint = mat.getBaseColorFactor?.() || [1, 1, 1, 1];
+    outMat.set(`${mat.getName()}|${tint.join(',')}`, mat);
+  }
   let built = 0;
+  let filled = 0;
   for (const t of targets) {
     const [ox, oy, oz] = t.origin;
     // Source origin → scene, the offset every vertex is expressed relative to.
     const off = [ox, oz, -oy];
+    if (t.kept) {
+      built++;
+      continue;
+    }
     if (t.parts.length) {
       built++;
+      filled++;
       const mesh = outDoc.createMesh(t.row.id);
       for (const part of t.parts) {
         const prim = outDoc.createPrimitive();
@@ -547,7 +653,7 @@ async function main() {
 
     // Record what the runtime needs: local render bounds (which is where a
     // door's swinging collision box comes from) and the collision hull the map
-    // already had, if any.
+    // already had, if any. Kept rows already have this from the previous split.
     const b = t.bounds;
     if (boxValid(b)) {
       t.row.bounds = {
@@ -566,10 +672,16 @@ async function main() {
     t.row.triangles = t.parts.reduce((a, p) => a + p.index.length / 3, 0);
   }
 
-  const total = targets.reduce((a, t) => a + t.row.triangles, 0);
+  const total = targets.reduce((a, t) => a + (t.row.triangles || 0), 0);
+  const missing = targets.filter((t) => !t.kept && !(t.row.triangles || 0)).length;
   console.log(`\n${TAG}: ${slug}`);
   console.log(`  ${physEnts.length} collision hull(s) in phys.glb, ${physEnts.filter((p) => p.taken).length} matched`);
-  console.log(`  ${built} of ${targets.length} interactives found geometry (${total} triangles)`);
+  console.log(
+    fill
+      ? `  filled ${filled} missing interactive(s); ${built} of ${targets.length} now have geometry (${total} triangles)`
+      : `  ${built} of ${targets.length} interactives found geometry (${total} triangles)`
+  );
+  if (missing) console.log(`  ${missing} still have no render geometry`);
   console.log(`  ${filesChanged} world group file(s) ${dry ? 'would change' : 'rewritten'}`);
   if (strays) console.log(`  ${strays} triangle(s) in a model node claimed by nobody (left in the world)`);
   for (const t of targets) {
@@ -585,6 +697,11 @@ async function main() {
     console.log('\n  --dry: nothing written');
     return;
   }
+  if (fill && filled === 0) {
+    console.log('\n  nothing new to write');
+    return;
+  }
+  if (!outDoc.getRoot().listBuffers().length) outDoc.createBuffer();
   outDoc
     .createExtension(EXTMeshoptCompression)
     .setRequired(true)

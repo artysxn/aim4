@@ -34,6 +34,7 @@ import {
   breakKeep,
   GRENADE_BREAK_KEEP,
   doorSwingSeconds,
+  swingDirFromPlayer,
   DOOR,
   DAMAGE_TYPES,
   boxCorners,
@@ -143,6 +144,40 @@ const GLASS_ROW = {
   // A pack whose geometry really was measured shut needs no offset.
   const plain = createInteractive({ ...DOOR_ROW, bakedOpen: false, door: { ...DOOR_ROW.door, slave: '' } });
   close(poseAngle(plain), doorAngle(plain), 1e-9, 'bakedOpen false means pose is swing');
+}
+
+// opendir 0 is both ways: the leaf swings away from whoever used it.
+{
+  const row = {
+    ...DOOR_ROW,
+    bakedOpen: false,
+    origin: [0, 0, 0],
+    door: { ...DOOR_ROW.door, openDir: 0, slave: '' },
+    bounds: { min: [0, -5, 0], max: [60, 5, 110] }
+  };
+  const fromPos = createInteractive(row);
+  const fromNeg = createInteractive(row);
+  assert(swingDirFromPlayer(fromPos, { x: 30, y: 40, z: 50 }) === -1, '+Y player opens the other way');
+  assert(swingDirFromPlayer(fromNeg, { x: 30, y: -40, z: 50 }) === 1, '−Y player opens toward +Y');
+  toggleDoor(fromPos, { x: 30, y: 40, z: 50 });
+  stepInteractive(fromPos, 1);
+  close(doorAngle(fromPos), -89, 1e-6, 'opened away from +Y');
+  toggleDoor(fromNeg, { x: 30, y: -40, z: 50 });
+  stepInteractive(fromNeg, 1);
+  close(doorAngle(fromNeg), 89, 1e-6, 'opened away from −Y');
+}
+
+// A door with no hit points only opens. Cache's A door is this.
+{
+  const d = createInteractive({
+    ...DOOR_ROW,
+    door: { ...DOOR_ROW.door, slave: '' },
+    break: { health: 0, mult: { bullets: 1, club: 1, explosive: 1 }, pieces: [] }
+  });
+  assert(d.health === 0, 'no hit points');
+  assert(!carveDoor(d, 1000, 30, 55), 'rounds do not carve it');
+  assert(!applyDamage(d, 1000, 'explosive'), 'and an HE does not break it');
+  assert(toggleDoor(d), 'but it still opens');
 }
 
 // ---- shooting a door carves a hole in it ----------------------------------

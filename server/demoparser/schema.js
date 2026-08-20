@@ -105,6 +105,7 @@ export const MOVEMENT_REVISION = 3;
  * @property {string} victim    player id
  * @property {number} hp        health damage dealt
  * @property {string} [weapon]
+ * @property {string} [hitgroup]  TraceAttack group (`head`, `chest`, ...)
  */
 
 /**

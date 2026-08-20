@@ -103,12 +103,31 @@ import { PACKAGE_EXT } from '../../src/replays/shared/replayPackage.js';
 import { clusterTeams } from '../../src/replays/shared/teamClusters.js';
 import { getZones, listZoneMaps, saveZones } from '../zonesStore.js';
 import { getCoachSmokes, listCoachSmokeMaps } from '../coachSmokesStore.js';
+import {
+  sampleLibraryOverlayEnabled,
+  sampleDemosEnabled,
+  listSampleRecords,
+  getSampleRecord,
+  getSamplePackageBytes,
+  getSampleRoundMeta,
+  getSampleRoundTicks,
+  listSampleRoundNames
+} from './sampleDemos.js';
+import { collectRounds } from '../../src/replays/shared/roundFilter.js';
+
+async function readRoundMetaMaybeSample(user, file) {
+  return (await readRoundMeta(user, file)) || (await getSampleRoundMeta(file));
+}
+
+async function readRoundTicksMaybeSample(user, file, stride) {
+  return (await readRoundTicks(user, file, stride)) || (await getSampleRoundTicks(file, stride));
+}
 
 /** What the stats index needs from storage, without importing it back. */
 const statsIo = {
   userDir,
-  readRoundMeta,
-  readRoundTicks,
+  readRoundMeta: readRoundMetaMaybeSample,
+  readRoundTicks: readRoundTicksMaybeSample,
   getZones,
   getCoachUtilities: getCoachSmokes
 };
@@ -472,7 +491,16 @@ export async function handleReplayRequest(req, res, url) {
     if (!readableOnce) {
       readableOnce = (async () => {
         const records = await listDemos(user);
-        return { records, allowed: visibleRecords(records, access) };
+        if (!sampleLibraryOverlayEnabled()) {
+          return { records, allowed: visibleRecords(records, access) };
+        }
+        const samples = await listSampleRecords();
+        if (!samples.length) {
+          return { records, allowed: visibleRecords(records, access) };
+        }
+        const ids = new Set(records.map((r) => r.id));
+        const merged = [...records, ...samples.filter((s) => s.id && !ids.has(s.id))];
+        return { records: merged, allowed: visibleRecords(merged, access) };
       })();
     }
     return readableOnce;
@@ -805,7 +833,9 @@ export async function handleReplayRequest(req, res, url) {
   if (demoMatch) {
     const id = demoMatch[1];
     if (req.method === 'GET') {
-      const record = await readRecord(user, id);
+      const record =
+        (await readRecord(user, id)) ||
+        (sampleDemosEnabled() ? await getSampleRecord(id) : null);
       // Named directly, so this is the link case: unlisted opens, private does not.
       if (!record || !canSee(record, access, { viaLink: true })) {
         json(res, 404, { error: 'Replay not found.' });
@@ -961,15 +991,34 @@ export async function handleReplayRequest(req, res, url) {
   const threeDMatch = p.match(/^\/api\/replays\/demos\/([A-Za-z0-9_-]+)\/3d$/);
   if (threeDMatch && (req.method === 'GET' || req.method === 'POST')) {
     const id = threeDMatch[1];
-    const record = await readRecord(user, id);
+    const stored = await readRecord(user, id);
+    const record = stored || (sampleDemosEnabled() ? await getSampleRecord(id) : null);
     if (!record || !canSee(record, access, { viaLink: true })) {
       json(res, 404, { error: 'Replay not found.' });
       return true;
     }
-    const { statusFor, requestUpgrade } = await import('./reparseQueue.js');
     const { cs3dMapByCode, hasCs3dPack } = await import('../cs3d/availability.js');
     const map = cs3dMapByCode(record.map);
     const mapReady = map ? await hasCs3dPack(map.slug) : false;
+
+    if (!stored) {
+      json(res, 200, {
+        ok: true,
+        demoId: id,
+        dataReady: true,
+        revision: record.parser?.revision || 3,
+        targetRevision: record.parser?.revision || 3,
+        upgradeable: false,
+        mapReady,
+        mapSlug: map?.slug || null,
+        mapName: map?.name || record.mapName || '',
+        job: null,
+        url: map && mapReady ? `/${map.slug}?demo=${encodeURIComponent(id)}` : null
+      });
+      return true;
+    }
+
+    const { statusFor, requestUpgrade } = await import('./reparseQueue.js');
 
     // POST is the request; GET is the poll the button uses while it waits.
     const queue =
@@ -1003,13 +1052,18 @@ export async function handleReplayRequest(req, res, url) {
   const packageMatch = p.match(/^\/api\/replays\/demos\/([A-Za-z0-9_-]+)\/package$/);
   if (req.method === 'GET' && packageMatch) {
     const id = packageMatch[1];
-    const record = await readRecord(user, id);
+    const stored = await readRecord(user, id);
+    const record = stored || (sampleDemosEnabled() ? await getSampleRecord(id) : null);
     if (!record || !canSee(record, access, { viaLink: true })) {
       json(res, 404, { error: 'Replay not found.' });
       return true;
     }
-    const { buildDemoPackage } = await import('./demoStore.js');
-    const bytes = await buildDemoPackage(user, id);
+    let bytes = null;
+    if (stored) {
+      const { buildDemoPackage } = await import('./demoStore.js');
+      bytes = await buildDemoPackage(user, id);
+    }
+    if (!bytes) bytes = await getSamplePackageBytes(id);
     if (!bytes) {
       json(res, 404, { error: 'This demo has no stored rounds.' });
       return true;
@@ -1343,6 +1397,16 @@ export async function handleReplayRequest(req, res, url) {
       // library default (public) as the answer rather than hiding history.
       return !record || seen.has(record.id);
     });
+    if (sampleLibraryOverlayEnabled()) {
+      const extraNames = await listSampleRoundNames();
+      if (extraNames.length) {
+        const have = new Set(rounds.map((r) => r.file || r.name || r));
+        const extra = collectRounds(extraNames, queryFromUrl(url), { limit }).filter(
+          (r) => !have.has(r.file || r.name || r)
+        );
+        rounds.push(...extra);
+      }
+    }
     json(res, 200, { rounds, total: rounds.length, noted });
     return true;
   }
@@ -1367,27 +1431,26 @@ export async function handleReplayRequest(req, res, url) {
         json(res, 400, { error: err.message || 'Bad round name.' });
         return true;
       }
-      if (!body) {
-        json(res, 404, { error: 'Round not found.' });
+      if (body) {
+        res.writeHead(200, {
+          // The magic in the body is what the client actually branches on, so a
+          // proxy that rewrites this header cannot make it decode the wrong way.
+          'Content-Type': 'application/vnd.aim4.ticks-packed',
+          'Content-Encoding': 'gzip',
+          'Content-Length': body.length,
+          'Cache-Control': 'private, max-age=31536000, immutable',
+          Vary: 'Accept-Encoding',
+          ...CORS
+        });
+        res.end(body);
         return true;
       }
-      res.writeHead(200, {
-        // The magic in the body is what the client actually branches on, so a
-        // proxy that rewrites this header cannot make it decode the wrong way.
-        'Content-Type': 'application/vnd.aim4.ticks-packed',
-        'Content-Encoding': 'gzip',
-        'Content-Length': body.length,
-        'Cache-Control': 'private, max-age=31536000, immutable',
-        Vary: 'Accept-Encoding',
-        ...CORS
-      });
-      res.end(body);
-      return true;
     }
 
     let buf;
     try {
       buf = await readRoundTicks(user, ticksMatch[1], stride);
+      if (!buf && sampleDemosEnabled()) buf = await getSampleRoundTicks(ticksMatch[1], stride);
     } catch (err) {
       json(res, 400, { error: err.message || 'Bad round name.' });
       return true;
@@ -1512,6 +1575,7 @@ export async function handleReplayRequest(req, res, url) {
     let meta;
     try {
       meta = await readRoundMeta(user, roundMatch[1]);
+      if (!meta && sampleDemosEnabled()) meta = await getSampleRoundMeta(roundMatch[1]);
     } catch (err) {
       json(res, 400, { error: err.message || 'Bad round name.' });
       return true;

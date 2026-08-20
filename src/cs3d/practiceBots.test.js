@@ -6,8 +6,10 @@ import {
   rayAabb,
   botBox,
   boostFeet,
-  poseFromPlayer
+  poseFromPlayer,
+  PracticeBots
 } from './practiceBots.js';
+import { flinchPunch } from '../../shared/sim3d/flinch.js';
 
 function assert(cond, msg) {
   if (!cond) throw new Error(msg || 'assertion failed');
@@ -45,5 +47,48 @@ const walk = poseFromPlayer({
   camera: { position: { x: 0, y: 0, z: 0 } }
 });
 assert(walk.origin.x === 1 && walk.origin.y === 2 && walk.origin.z === 3, 'walk uses sim feet');
+
+{
+  const bots = new PracticeBots({});
+  const punches = [];
+  const rags = [];
+  bots.list.push({
+    id: 1,
+    alive: true,
+    hp: 100,
+    origin: { x: 0, y: 0, z: 0 },
+    body: {
+      applyFlinch(d) {
+        punches.push(d);
+      },
+      startRagdoll(o) {
+        rags.push(o);
+      },
+      set() {}
+    }
+  });
+  bots.takeHit({
+    id: 1,
+    damage: 30,
+    group: 'chest',
+    point: { x: 0, y: 0, z: 40 },
+    dir: { x: 1, y: 0, z: 0 },
+    armor: 0
+  });
+  const want = flinchPunch({ hitgroup: 'chest', damage: 30, armor: 0 });
+  assert(punches.length === 1 && punches[0].pitch === want.pitch, 'chest hit writes TraceAttack punch');
+  assert(bots.list[0].hp === 70, 'HP drops');
+  assert(rags.length === 0, 'a living dummy is not a ragdoll');
+  bots.takeHit({
+    id: 1,
+    damage: 80,
+    group: 'head',
+    point: { x: 0, y: 0, z: 64 },
+    dir: { x: 1, y: 0, z: 0 },
+    helmet: false
+  });
+  assert(!bots.list[0].alive, 'the kill is recorded');
+  assert(rags.length === 1 && rags[0].force.x > 0, 'the kill carries a scene-frame impulse');
+}
 
 console.log('practiceBots.test.js ok');

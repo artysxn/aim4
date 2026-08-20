@@ -21,7 +21,7 @@ globalThis.setTimeout = (fn, ms) => {
 const realRandom = Math.random;
 Math.random = () => 0.5;
 
-const { packFetch, packFetchOk, packFetchStats, loadWithRetry } = await import('./packFetch.js');
+const { packFetch, packFetchOk, packFetchStats, loadWithRetry, packCdnUrl } = await import('./packFetch.js');
 
 const reset = () => {
   slept = 0;
@@ -37,6 +37,12 @@ const res = (status, headers = {}) => ({
   ok: status >= 200 && status < 300,
   headers: { get: (k) => headers[k.toLowerCase()] ?? null }
 });
+
+assert.equal(
+  packCdnUrl('/api/cs3d/weapons/manifest.json'),
+  'https://pub-2cbbca6c60604cc7a9fde25f012821d9.r2.dev/weapons/manifest.json'
+);
+assert.equal(packCdnUrl('https://cdn/x.glb'), null);
 
 // ---- a 200 goes straight through --------------------------------------------
 reset();
@@ -62,6 +68,34 @@ globalThis.fetch = async () => {
   assert.equal(r.status, 404);
   assert.equal(calls, 1, 'a 404 must be requested exactly once');
   assert.equal(packFetchStats.retries, 0);
+}
+
+// ---- a 404 under /api/cs3d/ falls through to the public bucket --------------
+reset();
+calls = 0;
+globalThis.fetch = async (url) => {
+  calls++;
+  if (String(url).includes('r2.dev')) return res(200);
+  return res(404);
+};
+{
+  const r = await packFetch('/api/cs3d/weapons/manifest.json');
+  assert.equal(r.status, 200, 'a missing local pack file must come from the CDN');
+  assert.equal(calls, 2);
+  assert.equal(packFetchStats.retries, 0, 'a CDN fallback is not a retry');
+}
+
+reset();
+calls = 0;
+globalThis.fetch = async (url) => {
+  calls++;
+  if (String(url).includes('r2.dev')) return res(200);
+  throw new TypeError('Failed to fetch');
+};
+{
+  const r = await packFetch('http://127.0.0.1:5173/api/cs3d/weapons/manifest.json');
+  assert.equal(r.status, 200, 'a dead local API must still load the pack from the CDN');
+  assert.equal(calls, 2);
 }
 
 // ---- a 429 that clears is recovered, not lost -------------------------------

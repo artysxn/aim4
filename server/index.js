@@ -19,6 +19,7 @@ import { MultiplayerServer } from './lobby.js';
 import { FootballServer } from './football.js';
 import { tryServeStatic, distExists } from './static.js';
 import { handleReplayRequest } from './replays/routes.js';
+import { handleSampleDemoRequest } from './replays/sampleDemos.js';
 import { handleTeamRequest } from './replays/teamRoutes.js';
 import { handleAdminRequest } from './admin/routes.js';
 import { handleSimRequest } from './sim/routes.js';
@@ -112,6 +113,10 @@ const server = http.createServer(async (req, res) => {
     // and its 64 KB cap. It must also run ahead of the generic OPTIONS reply
     // below, which allows neither Authorization nor the upload's own headers —
     // answering a replay preflight there makes the browser refuse the upload.
+    if (url.pathname.startsWith('/api/sampledemos') && (await handleSampleDemoRequest(req, res, url))) {
+      return;
+    }
+
     if (url.pathname.startsWith('/api/replays') && (await handleReplayRequest(req, res, url))) {
       return;
     }

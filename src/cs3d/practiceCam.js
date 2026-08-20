@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // src/cs3d/practiceCam.js
-// T / CT / Spectate for the map explorer. Spectate is timeline-style freecam
-// (fly) plus a HUD target; it does not lock the camera to a dummy's eyes.
+// T / CT / Spectate for the map explorer. Spectate follows the selected
+// player's eyes (demo POV or a practice dummy). X drops back to freecam.
 // ---------------------------------------------------------------------------
 
 export const CAM_MODES = ['T', 'CT', 'spectate'];

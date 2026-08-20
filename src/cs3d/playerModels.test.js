@@ -82,7 +82,7 @@ function makeModels() {
       T: { scene: makeRig(), hitboxes: [], bones: CHAIN, name: 'test_t' },
       CT: { scene: makeRig(), hitboxes: [], bones: CHAIN, name: 'test_ct' }
     },
-    clips: { rifle: clips },
+    clips: { rifle: clips, shared: new Map([['death_front', makeClip('death_front', 0.4)]]) },
     gait: { rifle: { run: 224.4, walk: 115, crouch: 93.4 } },
     getProbeGrid: () => null,
     // No meshes in the rig, so this is never reached; present for shape.
@@ -210,6 +210,55 @@ const STATE = {
   const level = snapshot(body);
   for (let i = 0; i < 8; i++) body.update(0);
   compare(level, snapshot(body), 1e-12, 'level view, eight redraws');
+}
+
+// ---- a corpse stays visible and holds the death pose -----------------------
+{
+  const body = new PlayerBody(makeModels(), 'T');
+  body.set(STATE);
+  for (let i = 0; i < 8; i++) body.update(1 / 64);
+  body.set({ ...STATE, alive: false });
+  body.update(0);
+  assert(body.group.visible, 'a dead body is still drawn');
+  assert(body._deadHold, 'death clip is held');
+  body.update(1);
+  assert(body.group.visible, 'the corpse is still there a second later');
+  body.set({ ...STATE, alive: true });
+  body.update(1 / 64);
+  assert(!body._deadHold, 'respawn drops the death clip');
+}
+
+// ---- a kill with a bullet force becomes a ragdoll, not the death clip ------
+{
+  const body = new PlayerBody(makeModels(), 'T');
+  body.set(STATE);
+  for (let i = 0; i < 8; i++) body.update(1 / 64);
+  body.startRagdoll({ force: { x: 80, y: 20, z: 0 }, hitPos: { x: 0, y: 20, z: 0 } });
+  body.set({ ...STATE, alive: false });
+  body.update(1 / 64);
+  assert(body._ragdoll?.active, 'the skeleton is simulating');
+  assert(!body._deadHold, 'ragdoll skips the held death clip');
+  body.update(0.2);
+  assert(body.group.visible, 'the ragdoll stays drawn');
+  body.set({ ...STATE, alive: true });
+  body.update(1 / 64);
+  assert(!body._ragdoll, 'respawn restores the bind pose');
+}
+
+// ---- TraceAttack punch tilts the spine on top of the view pitch ------------
+{
+  const body = new PlayerBody(makeModels(), 'T');
+  body.set(STATE);
+  for (let i = 0; i < 60; i++) body.update(1 / 64);
+  const before = snapshot(body);
+  body.applyFlinch({ pitch: -12, yaw: 0, roll: 0 });
+  body.update(0);
+  let moved = 0;
+  const after = snapshot(body);
+  for (let i = 0; i < before.length; i++) {
+    if (before[i].angleTo(after[i]) > 1e-4) moved++;
+  }
+  assert(moved === before.length, `flinch reaches every aim bone (${moved}/${before.length})`);
 }
 
 console.log('playerModels: aim tilt OK');

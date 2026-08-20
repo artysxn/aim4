@@ -150,6 +150,30 @@ export async function fetchStatus() {
   return asJson(await safeFetch(`${API_BASE}/api/replays/status`, { headers: await headers() }));
 }
 
+async function fetchSampleDemos() {
+  try {
+    const res = await fetch('/api/sampledemos', { credentials: 'include' });
+    const ct = res.headers.get('content-type') || '';
+    if (!res.ok || !ct.includes('json')) return [];
+    const body = await res.json();
+    return Array.isArray(body.demos) ? body.demos : [];
+  } catch {
+    return [];
+  }
+}
+
+function mergeDemoLists(primary, extra) {
+  const seen = new Set((primary || []).map((d) => d.id));
+  const out = [...(primary || [])];
+  for (const d of extra || []) {
+    if (d?.id && !seen.has(d.id)) {
+      seen.add(d.id);
+      out.push(d);
+    }
+  }
+  return out;
+}
+
 /**
  * Library listing. Pass `{ limit, offset }` for a page (used by /replays).
  * Omit them for the full list.
@@ -162,6 +186,10 @@ export async function fetchStatus() {
  * (case-insensitive). Used by Team Overview so it does not download the whole
  * shared library.
  *
+ * Localhost also merges `sampledemos/*.aim4replay` from same-origin
+ * `/api/sampledemos`, so Import round and the 2D library work without a
+ * library import.
+ *
  * @param {{ limit?: number, offset?: number, mine?: boolean, team?: string }} [opts]
  */
 export async function fetchDemos(opts = {}) {
@@ -173,11 +201,88 @@ export async function fetchDemos(opts = {}) {
   }
   if (opts.team) params.set('team', String(opts.team));
   const q = params.toString() ? `?${params}` : '';
-  return asJson(await safeFetch(`${API_BASE}/api/replays/demos${q}`, { headers: await headers() }));
+  let lib;
+  try {
+    lib = await asJson(
+      await safeFetch(`${API_BASE}/api/replays/demos${q}`, { headers: await headers() })
+    );
+  } catch (err) {
+    if (opts.mine) throw err;
+    const samples = await fetchSampleDemos();
+    if (!samples.length) throw err;
+    lib = {
+      demos: [],
+      teams: [],
+      total: 0,
+      offset: 0,
+      limit: 0,
+      hasMore: false,
+      pending: 0,
+      owned: 0
+    };
+    // Fall through so the sample merge below is the listing.
+    return finishSampleMerge(lib, samples, opts);
+  }
+  if (opts.mine) return lib;
+  return finishSampleMerge(lib, await fetchSampleDemos(), opts);
+}
+
+function finishSampleMerge(lib, samples, opts) {
+  let extra = samples;
+  if (opts.team) {
+    const teamQ = String(opts.team).trim().toLowerCase();
+    extra = extra.filter((r) => {
+      const a = String(r.team1?.name || r.team1 || '')
+        .trim()
+        .toLowerCase();
+      const b = String(r.team2?.name || r.team2 || '')
+        .trim()
+        .toLowerCase();
+      return a === teamQ || b === teamQ;
+    });
+  }
+  if (!extra.length) return lib;
+  const demos = mergeDemoLists(lib.demos, extra);
+  const added = demos.length - (lib.demos || []).length;
+  return { ...lib, demos, total: (Number(lib.total) || (lib.demos || []).length) + added };
 }
 
 export async function fetchDemo(id) {
-  return asJson(await safeFetch(`${API_BASE}/api/replays/demos/${id}`, { headers: await headers() }));
+  try {
+    return await asJson(
+      await safeFetch(`${API_BASE}/api/replays/demos/${id}`, { headers: await headers() })
+    );
+  } catch (err) {
+    const res = await fetch(`/api/sampledemos/demos/${encodeURIComponent(id)}`, {
+      credentials: 'include'
+    }).catch(() => null);
+    const ct = res?.headers?.get('content-type') || '';
+    if (res?.ok && ct.includes('json')) return res.json();
+    throw err;
+  }
+}
+
+/** Match package bytes for the 3D explorer. Library first, then sampledemos. */
+export async function fetchDemoPackage(id) {
+  let res = null;
+  try {
+    res = await safeFetch(`${API_BASE}/api/replays/demos/${encodeURIComponent(id)}/package`, {
+      credentials: 'include',
+      headers: await headers()
+    });
+    if (res.ok) return res.arrayBuffer();
+  } catch {
+    res = null;
+  }
+  const sample = await fetch(`/api/sampledemos/demos/${encodeURIComponent(id)}/package`, {
+    credentials: 'include'
+  }).catch(() => null);
+  if (sample?.ok) return sample.arrayBuffer();
+  if (res) {
+    const detail = await res.json().catch(() => null);
+    throw new Error(detail?.error || `HTTP ${res.status}`);
+  }
+  throw new Error('Replay not found.');
 }
 
 export async function deleteDemo(id) {
@@ -374,12 +479,24 @@ export async function findRounds(query = {}, limit = 2000) {
 }
 
 export async function fetchRoundMeta(file) {
-  const body = await asJson(
-    await safeFetch(`${API_BASE}/api/replays/rounds/${encodeURIComponent(file)}`, {
-      headers: await headers()
-    })
-  );
-  return body.round;
+  try {
+    const body = await asJson(
+      await safeFetch(`${API_BASE}/api/replays/rounds/${encodeURIComponent(file)}`, {
+        headers: await headers()
+      })
+    );
+    return body.round;
+  } catch (err) {
+    const res = await fetch(`/api/sampledemos/rounds/${encodeURIComponent(file)}`, {
+      credentials: 'include'
+    }).catch(() => null);
+    const ct = res?.headers?.get('content-type') || '';
+    if (res?.ok && ct.includes('json')) {
+      const body = await res.json();
+      return body.round;
+    }
+    throw err;
+  }
 }
 
 /** Longest text one note will keep; the server truncates to the same length. */
@@ -696,13 +813,27 @@ export async function deletePlaylist(id) {
 export async function fetchRoundTicks(file, stride = 1) {
   const packed = stride === 1;
   const qs = `stride=${stride}${packed ? '&fmt=packed' : ''}`;
-  const res = await safeFetch(
-    `${API_BASE}/api/replays/rounds/${encodeURIComponent(file)}/ticks?${qs}`,
-    { headers: await headers() }
-  );
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body.error || `Could not load round (${res.status})`);
+  let res = null;
+  try {
+    res = await safeFetch(
+      `${API_BASE}/api/replays/rounds/${encodeURIComponent(file)}/ticks?${qs}`,
+      { headers: await headers() }
+    );
+  } catch {
+    res = null;
+  }
+  if (!res?.ok) {
+    const sample = await fetch(
+      `/api/sampledemos/rounds/${encodeURIComponent(file)}/ticks?stride=${stride}`,
+      { credentials: 'include' }
+    ).catch(() => null);
+    if (sample?.ok) res = sample;
+    else if (res) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || `Could not load round (${res.status})`);
+    } else {
+      throw new Error('Could not load round');
+    }
   }
   const buf = await res.arrayBuffer();
   return isPacked(buf) ? decodePacked(buf) : buf;

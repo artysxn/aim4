@@ -56,6 +56,7 @@ export function createPauseMenu({
       <div class="c3-pause-actions">
         <button type="button" class="c3-pause-btn is-primary" data-act="resume">Resume</button>
         <button type="button" class="c3-pause-btn" data-act="settings">Settings</button>
+        <div class="c3-import" data-import></div>
         <a class="c3-pause-btn" data-act="menus" href="${PAUSE_MENUS_HREF}">Return to menus</a>
       </div>
     </div>
@@ -68,7 +69,6 @@ export function createPauseMenu({
         <label class="c3-pause-row"><span>Sensitivity</span>
           <input type="number" data-set="sensitivity" step="0.001" min="0.001">
         </label>
-        <div class="c3-import" data-import></div>
         ${row('hFov', 'Horizontal FOV', 60, 130, 1)}
         <label class="c3-pause-row"><span>Resolution</span>
           <select data-set="resolution">${resolutionSelectHtml()}</select>

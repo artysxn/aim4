@@ -312,6 +312,8 @@ export class SmokeCards {
   }
 
   dispose() {
+    this.mesh.removeFromParent();
+    this.geometry.instanceCount = 0;
     this.geometry.dispose();
     this.material.dispose();
   }

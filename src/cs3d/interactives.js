@@ -47,12 +47,14 @@ import {
   applyBlast,
   applyDamage,
   grenadeThrough,
+  openDoor,
   carveDoor,
   holeRadius,
   inHole,
   boxTriangles,
   boxBounds,
   USE_RANGE,
+  DOOR_LEAF_RADIUS,
   DOOR
 } from '../../shared/sim3d/interactives.js';
 
@@ -271,12 +273,28 @@ export class Interactives {
     const pos = c.geometry.getAttribute('position');
     const idx = c.geometry.index;
     // A hair of slack, so a hull face flush with the leaf's own is included
-    // rather than left behind as an invisible sliver of wall.
-    const boxes = doors.map((o) => ({
-      o,
-      lo: [o.bounds.min[0] + o.origin[0] - 1, o.bounds.min[1] + o.origin[1] - 1, o.bounds.min[2] + o.origin[2] - 1],
-      hi: [o.bounds.max[0] + o.origin[0] + 1, o.bounds.max[1] + o.origin[1] + 1, o.bounds.max[2] + o.origin[2] + 1]
-    }));
+    // rather than left behind as an invisible sliver of wall. Clamped to the
+    // leaf radius so a bloated pack (Mirage static doors claimed onto a
+    // swinging hinge) cannot punch a corridor-sized hole in collision.
+    const boxes = doors.map((o) => {
+      const ox = o.origin[0];
+      const oy = o.origin[1];
+      const oz = o.origin[2];
+      const r = DOOR_LEAF_RADIUS;
+      return {
+        o,
+        lo: [
+          Math.max(o.bounds.min[0] + ox, ox - r) - 1,
+          Math.max(o.bounds.min[1] + oy, oy - r) - 1,
+          Math.max(o.bounds.min[2] + oz, oz - r) - 1
+        ],
+        hi: [
+          Math.min(o.bounds.max[0] + ox, ox + r) + 1,
+          Math.min(o.bounds.max[1] + oy, oy + r) + 1,
+          Math.min(o.bounds.max[2] + oz, oz + r) + 1
+        ]
+      };
+    });
     let n = 0;
     for (let t = 0; t < c.triangles; t++) {
       let sx = 0;
@@ -427,7 +445,7 @@ export class Interactives {
       }
     }
     if (!best) return null;
-    toggleDoor(best);
+    toggleDoor(best, eye);
     this.onWorldChanged();
     return best;
   }
@@ -630,6 +648,39 @@ export class Interactives {
     if (c && o.role === 'breakable' && o.tris) c.mask.fill(1, o.tris[0], o.tris[1]);
   }
 
+  /**
+   * Put a door fully open or fully shut this frame, no swing.
+   * The 3D timeline viewer uses this so a seek lands on the pose the playhead
+   * says, rather than animating from wherever the last tick left the leaf.
+   */
+  snapDoor(o, open, from = null) {
+    if (!o || o.role !== 'door' || o.broken) return;
+    if (open) {
+      if (o.state !== DOOR.OPEN || o.frac !== 1) {
+        openDoor(o, true, from);
+        o.frac = 1;
+        o.state = DOOR.OPEN;
+        if (o.linked) {
+          o.linked.frac = 1;
+          o.linked.state = DOOR.OPEN;
+        }
+      }
+    } else if (o.state !== DOOR.CLOSED || o.frac !== 0) {
+      o.frac = 0;
+      o.state = DOOR.CLOSED;
+      if (o.linked) {
+        o.linked.frac = 0;
+        o.linked.state = DOOR.CLOSED;
+      }
+    }
+    const pose = (obj) => {
+      const body = this.bodies.get(obj.id);
+      if (body?.group) body.group.rotation.y = poseAngle(obj) * DEG2RAD;
+    };
+    pose(o);
+    if (o.linked) pose(o.linked);
+  }
+
   /** Put every door shut and every breakable back — a respawn or a map reset. */
   reset() {
     const c = this.collider;
@@ -637,8 +688,16 @@ export class Interactives {
       if (o.role === 'door') {
         o.state = DOOR.CLOSED;
         o.frac = 0;
+        o.hole = null;
+        o.broken = false;
+        o.brokenAt = null;
+        o.health = o.maxHealth;
         const body = this.bodies.get(o.id);
-        if (body?.group) body.group.rotation.y = poseAngle(o) * DEG2RAD;
+        if (body?.group) {
+          body.group.visible = true;
+          body.group.rotation.y = poseAngle(o) * DEG2RAD;
+        }
+        if (body?.hole) body.hole.radius.value = 0;
       } else if (o.broken) {
         o.broken = false;
         o.brokenAt = null;

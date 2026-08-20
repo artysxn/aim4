@@ -427,6 +427,23 @@ export function isPrimaryGun(name) {
   return isGun(name) && !isSecondary(name);
 }
 
+/**
+ * HUD gun slots from an `inventoryAt` result.
+ *
+ * `inventoryAt.primary` is "best gun", which is the pistol when the player
+ * has no rifle. Drawing that in the rifle slot AND the pistol slot is how
+ * the spectate bar showed two secondaries.
+ */
+export function hudLoadout(inv) {
+  const items = inv?.items || [];
+  const primary = inv?.primary && isPrimaryGun(inv.primary) ? inv.primary : '';
+  const secondaries = items.filter((x) => isSecondary(x) && x !== 'taser');
+  const active = inv?.active || '';
+  const pistol = secondaries.find((x) => x === active) || secondaries[0] || '';
+  const held = active || primary || pistol || '';
+  return { primary, pistol, held };
+}
+
 export function isDefuser(name) {
   const b = bareWeapon(name);
   return b === 'defuser' || b === 'cutters';

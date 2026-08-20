@@ -26,6 +26,7 @@ export class LiveBody {
     this.getRoot = getRoot;
     this.body = null;
     this.side = 'T';
+    this._pendingRagdoll = null;
   }
 
   /** Team model to wear; takes effect on the next update. */
@@ -34,17 +35,34 @@ export class LiveBody {
   }
 
   /**
+   * TraceAttack's aim punch, forwarded to the world model so third person
+   * (and anyone looking at you) sees the same snap the camera takes.
+   */
+  applyFlinch(delta) {
+    this.body?.applyFlinch(delta);
+  }
+
+  startRagdoll(opts) {
+    if (this.body) this.body.startRagdoll(opts);
+    else this._pendingRagdoll = opts || {};
+  }
+
+  /**
    * Read the explorer's Player (its `sim` is Source frame, its camera angles
    * are the view) and pose the body at it. `visible` false keeps it updated
    * but hidden — first person, where your own body would sit in the camera.
    */
-  update(player, dt, { visible = true } = {}) {
+  update(player, dt, { visible = true, alive = true } = {}) {
     if (!this.models.ready) return;
     if (!this.body) {
       const root = this.getRoot();
       if (!root) return;
       this.body = this.models.createBody(this.side);
       root.add(this.body.group);
+      if (this._pendingRagdoll) {
+        this.body.startRagdoll(this._pendingRagdoll);
+        this._pendingRagdoll = null;
+      }
     } else if (this.body.side !== this.side) this.body.setSide(this.side);
     const b = this.body;
     const s = player.sim;
@@ -62,7 +80,7 @@ export class LiveBody {
       duck,
       airborne: !s.onGround,
       weapon: player.weapon,
-      alive: true
+      alive
     });
     b.group.position.set(s.pos.x, s.pos.z, -s.pos.y);
     b.update(dt);
@@ -72,5 +90,6 @@ export class LiveBody {
   dispose() {
     this.body?.dispose();
     this.body = null;
+    this._pendingRagdoll = null;
   }
 }

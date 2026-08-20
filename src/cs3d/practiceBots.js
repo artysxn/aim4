@@ -15,6 +15,7 @@ import { sourceToScene, sceneToSource, sourceYawFromCamera, HULL } from '../../s
 import { HULL_HALF_WIDE, HULL_STAND, TICK_DT } from '../../shared/sim3d/constants.js';
 import { boxTriangles } from '../../shared/sim3d/hullTrace.js';
 import { blastFalloff } from '../../shared/sim3d/interactives.js';
+import { flinchPunch, ragdollImpulse } from '../../shared/sim3d/flinch.js';
 
 const HEAD_Z = 62;
 const CHEST_Z = 40;
@@ -112,11 +113,13 @@ export class PracticeBots {
      * @param {import('./playerModels.js').PlayerModels} o.playerModels
      * @param {() => import('three').Object3D|null} o.getRoot
      * @param {(bot: object) => void} [o.onDied]
+     * @param {(hit: object) => void} [o.onHit]  TraceAttack blood hook
      */
-  constructor({ playerModels, getRoot, onDied } = {}) {
+  constructor({ playerModels, getRoot, onDied, onHit } = {}) {
     this.playerModels = playerModels;
     this.getRoot = getRoot;
     this.onDied = onDied || null;
+    this.onHit = onHit || null;
     this.list = [];
     this._nextId = 1;
     this._tris = [];
@@ -212,12 +215,54 @@ export class PracticeBots {
     return b.hp;
   }
 
+  /**
+   * CCSPlayer::TraceAttack: punch, blood, then HP, then a ragdoll if this
+   * hit killed. `dir` / `point` are Source-frame.
+   */
+  takeHit({
+    id,
+    damage,
+    group = 'chest',
+    point = null,
+    dir = null,
+    blast = false,
+    armor = 0,
+    helmet = false
+  } = {}) {
+    const b = this.list.find((x) => x.id === id);
+    if (!b || !b.alive) return b?.hp ?? 0;
+    const dmg = Math.max(0, Number(damage) || 0);
+    const punch = flinchPunch({ hitgroup: group, damage: dmg, armor, helmet, blast });
+    b.body?.applyFlinch(punch);
+    this.onHit?.({ bot: b, damage: dmg, group, point, dir, blast, armor, helmet, punch });
+    const hp = this.hurt(id, dmg);
+    if (hp <= 0 && dir) {
+      const impulse = ragdollImpulse(dir, dmg, { headshot: String(group).toLowerCase() === 'head' });
+      const [fx, fy, fz] = sourceToScene(impulse.x, impulse.y, impulse.z);
+      const hitPos = point ? scenePoint(point) : null;
+      const opts = { force: { x: fx, y: fy, z: fz }, hitPos };
+      if (b.body) b.body.startRagdoll(opts);
+      else b._pendingRagdoll = opts;
+    }
+    return hp;
+  }
+
   blast(pos, radius, maxDmg) {
     for (const b of this.list) {
       if (!b.alive) continue;
-      const d = Math.hypot(pos.x - b.origin.x, pos.y - b.origin.y, pos.z - (b.origin.z + HULL.standEye));
+      const chest = { x: b.origin.x, y: b.origin.y, z: b.origin.z + HULL.standEye };
+      const d = Math.hypot(pos.x - chest.x, pos.y - chest.y, pos.z - chest.z);
       const fall = blastFalloff(d, radius);
-      if (fall > 0) this.hurt(b.id, maxDmg * fall);
+      if (!(fall > 0)) continue;
+      this.takeHit({
+        id: b.id,
+        damage: maxDmg * fall,
+        group: 'chest',
+        point: chest,
+        dir: { x: chest.x - pos.x, y: chest.y - pos.y, z: chest.z - pos.z },
+        blast: true,
+        armor: 0
+      });
     }
   }
 
@@ -238,6 +283,7 @@ export class PracticeBots {
       reserve: '',
       roundKills: 0,
       name: 'Bot',
+      botId: b.id,
       x: b.origin.x,
       y: b.origin.y,
       z: b.origin.z,
@@ -300,6 +346,10 @@ export class PracticeBots {
     if (!root) return;
     bot.body = this.playerModels.createBody(bot.side);
     root.add(bot.body.group);
+    if (bot._pendingRagdoll) {
+      bot.body.startRagdoll(bot._pendingRagdoll);
+      bot._pendingRagdoll = null;
+    }
   }
 
   _poseBody(bot, dt) {
@@ -317,13 +367,18 @@ export class PracticeBots {
     });
     const [x, y, z] = sourceToScene(bot.origin.x, bot.origin.y, bot.origin.z);
     body.group.position.set(x, y, z);
-    if (bot.alive) body.update(dt);
+    body.update(dt);
   }
 
   dispose() {
     for (const b of this.list) b.body?.dispose();
     this.list.length = 0;
   }
+}
+
+function scenePoint(p) {
+  const [x, y, z] = sourceToScene(p.x, p.y, p.z);
+  return { x, y, z };
 }
 
 export { RESPAWN_MS, BOT_HP, TICK_DT };

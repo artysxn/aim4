@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mapBloomParams } from './lookBloom.js';
+import { mapBloomParams, HDR_BLOOM_FLOOR, BLOOM_STRENGTH_CAP } from './lookBloom.js';
 
 {
   const p = mapBloomParams({
@@ -12,7 +12,7 @@ import { mapBloomParams } from './lookBloom.js';
     skyboxStrength: 0.1557
   });
   assert.equal(p.strength, 0.03, 'inferno uses compute bloom, not the LDR add');
-  assert.equal(p.threshold, 1, 'inferno does not bloom below 1 in linear HDR');
+  assert.equal(p.threshold, HDR_BLOOM_FLOOR, 'inferno does not bloom sky haze');
   assert.equal(p.radius, 0.6);
 }
 
@@ -25,8 +25,8 @@ import { mapBloomParams } from './lookBloom.js';
     computeThreshold: 1,
     computeRadius: 0.6
   });
-  assert.equal(p.strength, 0.0112, 'nuke keeps its screen strength');
-  assert.equal(p.threshold, 1.055);
+  assert.equal(p.strength, 0.0112, 'nuke keeps its small screen strength');
+  assert.equal(p.threshold, HDR_BLOOM_FLOOR, 'nuke does not bloom below the HDR floor');
 }
 
 {
@@ -38,8 +38,21 @@ import { mapBloomParams } from './lookBloom.js';
     computeThreshold: 8,
     computeRadius: 0.34
   });
-  assert.equal(p.strength, 0.163, 'ancient keeps its HDR-safe add bloom');
-  assert.equal(p.threshold, 1.143);
+  assert.equal(p.strength, BLOOM_STRENGTH_CAP, 'ancient add bloom is capped as an HDR add');
+  assert.equal(p.threshold, HDR_BLOOM_FLOOR);
+}
+
+{
+  const p = mapBloomParams({
+    screenStrength: 0.13,
+    strength: 0,
+    threshold: 1,
+    computeStrength: 0.03,
+    computeThreshold: 1,
+    computeRadius: 0.6
+  });
+  assert.equal(p.strength, BLOOM_STRENGTH_CAP, 'mirage screen 0.13 is not used as an HDR add');
+  assert.ok(p.threshold >= 2.5, 'and the sun disc is the only thing that blooms');
 }
 
 {

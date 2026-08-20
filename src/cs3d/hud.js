@@ -45,7 +45,7 @@ export class Hud {
             <div><b>Space</b> up / jump</div>
             <div><b>C</b> down, <b>Ctrl</b> slow / crouch</div>
             <div><b>Shift</b> fast / walk</div>
-            <div><b>Q</b> next weapon (walk speed cap)</div>
+            <div><b>Q</b> next weapon. Hold for radar</div>
             <div><b>1 2 3</b> rifle / pistol / knife, <b>4</b> grenades, <b>Mouse</b> fire</div>
             <div><b>R</b> reload</div>
             <div><b>E</b> open a door</div>
@@ -58,6 +58,7 @@ export class Hud {
             <div><b>H</b> place a bot and stand on it</div>
             <div><b>K</b> delete the bot you are aiming at</div>
             <div><b>O</b> skip thrown grenades</div>
+            <div><b>X</b> X-ray</div>
             <div><b>Esc</b> menu</div>
             <div class="c3-keys-demo"><b>Drop</b> an .aim4replay on the page to watch it here</div>
             <div class="c3-keys-demo"><b>1-0</b> spectate a player</div>
