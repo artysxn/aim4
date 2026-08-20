@@ -9,7 +9,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { buildRoundNotes, buyString, utilityHandovers } from './roundNarrative.js';
+import { buildRoundNotes, buyString, lookTarget, utilityHandovers } from './roundNarrative.js';
 import { foldRoundUtility, TYPE_WORDS } from './utilityImport.js';
 import { seatPlayers } from './roundRoles.js';
 import { sidePlayers } from './addStrategy.js';
@@ -67,8 +67,8 @@ function fakeTrack(plan) {
       for (const p of path) if (p.at <= sec) cur = p;
       out.x = cur.x;
       out.y = cur.y;
-      out.z = 0;
-      out.yaw = 90;
+      out.z = cur.z ?? 0;
+      out.yaw = cur.yaw ?? 90;
       out.pitch = -10;
       out.alive = true;
       out.armor = cur.armor ?? 0;
@@ -417,7 +417,7 @@ test('going somewhere is a zone; staying somewhere is a position', () => {
   }).get('aaa'));
 
   const gos = note.match(/Go [^,]+/g) || [];
-  assert.deepEqual(gos, ['Go Mid on flash from two', 'Go A Site on flash from two']);
+  assert.deepEqual(gos, ['Go Mid', 'Go A Site on flash from two']);
   // …while the spots he sat on inside those zones are named exactly.
   assert.match(note, /Stay Top Mid until \d:\d\d/);
   assert.match(note, /Stay Catwalk until \d:\d\d/);
@@ -512,6 +512,30 @@ test('walking in behind a teammate\'s grenade is an entry; walking in alone is n
   }).get('aaa'));
   assert.match(withCover, /Go Mid on flash from two/);
 
+  const earlySmoke = {
+    type: 'smokegrenade',
+    player: 'bbb',
+    throwTick: T0 + 5 * RATE,
+    detonateTick: T0 + 7 * RATE,
+    at: { ...AT.mid, z: 0 }
+  };
+  const earlyGo = body(
+    buildRoundNotes({
+      meta: roundMeta({ players: FIVE, grenades: [earlySmoke, LATE_NADE] }),
+      track: fakeTrack({
+        0: [{ at: 0, ...AT.spawn }, { at: 6, ...AT.mid }, { at: 40, ...AT.ramp }],
+        1: [{ at: 0, ...AT.spawn }]
+      }),
+      network: NETWORK,
+      mapCode: 'MIR',
+      side: 'T',
+      playerIds: ['aaa'],
+      economy: 'Full buy'
+    }).get('aaa')
+  );
+  assert.match(earlyGo, /Go Mid/);
+  assert.ok(!/on smoke from/i.test(earlyGo), `opening Go named the thrower: "${earlyGo}"`);
+
   const alone = body(buildRoundNotes({
     meta: roundMeta({ players: FIVE, grenades: [LATE_NADE] }),
     track,
@@ -521,8 +545,8 @@ test('walking in behind a teammate\'s grenade is an entry; walking in alone is n
     playerIds: ['aaa'],
     economy: 'Full buy'
   }).get('aaa'));
-  assert.ok(!alone.includes('Go '), `unescorted arrival written: "${alone}"`);
-  assert.match(alone, /Stay A Ramp until \d:\d\d/);
+  assert.ok(!alone.includes('on flash'), `cover-less arrival named a thrower: "${alone}"`);
+  assert.match(alone, /Go Top Mid to A Site\. Stay A Ramp until \d:\d\d/);
 });
 
 test('standing in a smoke is written', () => {
@@ -1510,10 +1534,10 @@ test('two nades from a minority opposite a core of four are a Fake', () => {
   };
   const track = fakeTrack({
     0: [{ at: 0, ...AT.spawn }, { at: 6, ...AT.cat }],
-    1: [{ at: 0, ...AT.spawn }],
-    2: [{ at: 0, ...AT.spawn }],
-    3: [{ at: 0, ...AT.spawn }],
-    4: [{ at: 0, ...AT.spawn }]
+    1: [{ at: 0, x: AT.spawn.x + 80, y: AT.spawn.y }],
+    2: [{ at: 0, x: AT.spawn.x, y: AT.spawn.y + 80 }],
+    3: [{ at: 0, x: AT.spawn.x + 80, y: AT.spawn.y + 80 }],
+    4: [{ at: 0, x: AT.spawn.x - 80, y: AT.spawn.y }]
   });
   const note = body(
     buildRoundNotes({
@@ -1634,4 +1658,236 @@ test('an HE that lands in a smoke is named as nading that smoke', () => {
     }).get('aaa')
   );
   assert.match(note, /Nade the Catwalk smoke/);
+});
+
+function yawTowards(from, to) {
+  return (Math.atan2(to.y - from.y, to.x - from.x) * 180) / Math.PI;
+}
+
+const CT_PLAYERS = [
+  { id: 'aaa', name: 'one', team: 2, slot: 0 },
+  { id: 'bbb', name: 'two', team: 1, slot: 1 },
+  { id: 'ccc', name: 'three', team: 1, slot: 2 },
+  { id: 'ddd', name: 'four', team: 1, slot: 3 },
+  { id: 'eee', name: 'five', team: 1, slot: 4 }
+];
+
+test('Search / Contact in a key zone is T only', () => {
+  const cts = [
+    { id: 'aaa', name: 'one', team: 2, slot: 0 },
+    { id: 'bbb', name: 'two', team: 2, slot: 1 },
+    { id: 'ccc', name: 'three', team: 1, slot: 2 },
+    { id: 'ddd', name: 'four', team: 1, slot: 3 },
+    { id: 'eee', name: 'five', team: 1, slot: 4 }
+  ];
+  const track = fakeTrack({
+    0: [{ at: 0, ...AT.spawn }, { at: 10, ...AT.cat }],
+    1: [{ at: 0, x: 5000, y: 5000 }, { at: 22, ...AT.ramp }],
+    2: [{ at: 0, ...AT.spawn }],
+    3: [{ at: 0, ...AT.spawn }],
+    4: [{ at: 0, ...AT.spawn }]
+  });
+  const note = body(
+    buildRoundNotes({
+      meta: roundMeta({ players: cts }),
+      track,
+      network: KEY_NET,
+      mapCode: 'MIR',
+      side: 'CT',
+      playerIds: ['aaa'],
+      economy: 'Full buy'
+    }).get('aaa')
+  );
+  assert.ok(!/Search |Contact |Rush out/.test(note), note);
+});
+
+test('a CT in a key zone looking at one spot is Go / hold', () => {
+  const yaw = yawTowards(AT.cat, AT.ramp);
+  const note = body(
+    buildRoundNotes({
+      meta: roundMeta({ players: CT_PLAYERS }),
+      track: fakeTrack({
+        0: [{ at: 0, ...AT.spawn }, { at: 10, ...AT.cat, yaw }],
+        1: [{ at: 0, ...AT.spawn }],
+        3: [{ at: 0, ...AT.spawn }],
+        4: [{ at: 0, ...AT.spawn }]
+      }),
+      network: KEY_NET,
+      mapCode: 'MIR',
+      side: 'CT',
+      playerIds: ['aaa'],
+      economy: 'Full buy'
+    }).get('aaa')
+  );
+  assert.match(note, /Go Catwalk, hold A Ramp/);
+  assert.ok(!note.includes('Stay Catwalk'), note);
+});
+
+test('a CT who switches the held angle is marked again with the clock', () => {
+  const yawRamp = yawTowards(AT.cat, AT.ramp);
+  const yawMid = yawTowards(AT.cat, AT.mid);
+  const note = body(
+    buildRoundNotes({
+      meta: roundMeta({ players: CT_PLAYERS }),
+      track: fakeTrack({
+        0: [
+          { at: 0, ...AT.spawn },
+          { at: 10, ...AT.cat, yaw: yawRamp },
+          { at: 20, ...AT.cat, yaw: yawMid }
+        ],
+        1: [{ at: 0, ...AT.spawn }],
+        3: [{ at: 0, ...AT.spawn }],
+        4: [{ at: 0, ...AT.spawn }]
+      }),
+      network: KEY_NET,
+      mapCode: 'MIR',
+      side: 'CT',
+      playerIds: ['aaa'],
+      economy: 'Full buy'
+    }).get('aaa')
+  );
+  assert.match(note, /Go Catwalk, hold A Ramp/);
+  assert.match(note, /At \d:\d\d, hold Top Mid from Catwalk/);
+});
+
+const AT_WIN = { x: 3100, y: 100 };
+const AT_LOW = { x: 2600, y: 100 };
+const BOOST_NET = {
+  ...KEY_NET,
+  positions: [
+    ...KEY_NET.positions,
+    { id: 'p_win', name: 'Window', pieces: [{ type: 'rect', x: 3000, y: 0, w: 200, h: 200 }] },
+    { id: 'p_low', name: 'Lower', pieces: [{ type: 'rect', x: 2500, y: 0, w: 300, h: 200 }] }
+  ],
+  zones: [
+    ...KEY_NET.zones,
+    { id: 'z_win', name: 'Apps', positionIds: ['p_win'] },
+    { id: 'z_low', name: 'Lower', positionIds: ['p_low'] }
+  ]
+};
+
+test('two stacked players and a 60 Z rise that sticks is a boost', () => {
+  const note = body(
+    buildRoundNotes({
+      meta: roundMeta({
+        players: [...CT_PLAYERS, { id: 'ggg', name: 'seven', team: 2, slot: 6 }]
+      }),
+      track: fakeTrack({
+        0: [
+          { at: 0, ...AT.spawn },
+          { at: 6, ...AT_WIN, z: 0 },
+          { at: 8, ...AT_WIN, z: 80 }
+        ],
+        6: [
+          { at: 0, ...AT.spawn },
+          { at: 6, ...AT_WIN, z: 0 }
+        ],
+        3: [{ at: 0, ...AT.spawn }],
+        4: [{ at: 0, ...AT.spawn }]
+      }),
+      network: BOOST_NET,
+      mapCode: 'MIR',
+      side: 'CT',
+      playerIds: ['aaa'],
+      economy: 'Full buy'
+    }).get('aaa')
+  );
+  assert.match(note, /Get boosted Window by seven/);
+});
+
+test('a 60 Z rise that comes back down is not a boost', () => {
+  const note = body(
+    buildRoundNotes({
+      meta: roundMeta({
+        players: [...CT_PLAYERS, { id: 'ggg', name: 'seven', team: 2, slot: 6 }]
+      }),
+      track: fakeTrack({
+        0: [
+          { at: 0, ...AT.spawn },
+          { at: 6, ...AT_WIN, z: 0 },
+          { at: 8, ...AT_WIN, z: 80 },
+          { at: 8.4, ...AT_WIN, z: 0 }
+        ],
+        6: [
+          { at: 0, ...AT.spawn },
+          { at: 6, ...AT_WIN, z: 0 }
+        ],
+        3: [{ at: 0, ...AT.spawn }],
+        4: [{ at: 0, ...AT.spawn }]
+      }),
+      network: BOOST_NET,
+      mapCode: 'MIR',
+      side: 'CT',
+      playerIds: ['aaa'],
+      economy: 'Full buy'
+    }).get('aaa')
+  );
+  assert.ok(!note.includes('Get boosted'), note);
+});
+
+test('leaving a stack then hitting 300 u/s within a second is a runboost', () => {
+  const dash = [];
+  const dist = Math.hypot(AT_LOW.x - AT_WIN.x, AT_LOW.y - AT_WIN.y);
+  const speed = 360;
+  const dt = dist / speed;
+  const n = Math.max(2, Math.round(dt * RATE));
+  for (let i = 0; i <= n; i++) {
+    const u = i / n;
+    dash.push({
+      at: 8 + dt * u,
+      x: AT_WIN.x + (AT_LOW.x - AT_WIN.x) * u,
+      y: AT_WIN.y + (AT_LOW.y - AT_WIN.y) * u
+    });
+  }
+  const note = body(
+    buildRoundNotes({
+      meta: roundMeta({
+        players: [...CT_PLAYERS, { id: 'ggg', name: 'seven', team: 2, slot: 6 }]
+      }),
+      track: fakeTrack({
+        0: [{ at: 0, ...AT.spawn }, { at: 6, ...AT_WIN }, ...dash],
+        6: [{ at: 0, ...AT.spawn }, { at: 6, ...AT_WIN }],
+        3: [{ at: 0, ...AT.spawn }],
+        4: [{ at: 0, ...AT.spawn }]
+      }),
+      network: BOOST_NET,
+      mapCode: 'MIR',
+      side: 'CT',
+      playerIds: ['aaa'],
+      economy: 'Full buy'
+    }).get('aaa')
+  );
+  assert.match(note, /Get runboosted Lower by seven/);
+});
+
+test('300 u/s more than a second after leaving the stack is not a runboost', () => {
+  const walk = [];
+  for (let i = 0; i <= 40; i++) {
+    walk.push({ at: 8 + i * 0.05, x: AT_WIN.x + i, y: AT_WIN.y });
+  }
+  const note = body(
+    buildRoundNotes({
+      meta: roundMeta({
+        players: [...CT_PLAYERS, { id: 'ggg', name: 'seven', team: 2, slot: 6 }]
+      }),
+      track: fakeTrack({
+        0: [{ at: 0, ...AT.spawn }, { at: 6, ...AT_WIN }, ...walk, { at: 12, ...AT.mid }],
+        6: [{ at: 0, ...AT.spawn }, { at: 6, ...AT_WIN }],
+        3: [{ at: 0, ...AT.spawn }],
+        4: [{ at: 0, ...AT.spawn }]
+      }),
+      network: BOOST_NET,
+      mapCode: 'MIR',
+      side: 'CT',
+      playerIds: ['aaa'],
+      economy: 'Full buy'
+    }).get('aaa')
+  );
+  assert.ok(!note.includes('Get runboosted'), note);
+});
+
+test('lookTarget follows yaw onto the next painted position', () => {
+  const namer = createNamer(NETWORK, 'MIR');
+  const yaw = yawTowards(AT.cat, AT.ramp);
+  assert.equal(lookTarget(namer, AT.cat.x, AT.cat.y, 0, yaw, 'Catwalk'), 'A Ramp');
 });

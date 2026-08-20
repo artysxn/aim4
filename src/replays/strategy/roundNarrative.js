@@ -10,9 +10,11 @@
 // Movement is read at two different layers on purpose, because the two
 // questions a strat asks about ground are not the same question:
 //
-//   Go Mid on flash from ropz        arriving is a ZONE. "Go A Site" is a call;
-//                                    "Go Catwalk then Top Mid then Catwalk" is
-//                                    a GPS log of one man crossing mid.
+//   Go Mid on flash from ropz        arriving is a ZONE. After the opening
+//                                    ten seconds a stay also names the last
+//                                    POSITION he left: "Go Underground to
+//                                    Lower Mid". In the first ten seconds a
+//                                    nade in the air is just "Go T A".
 //   Stay Chair until 1:21            holding is a POSITION. The whole value of
 //                                    the line is which exact spot he is on.
 //
@@ -20,9 +22,11 @@
 //
 //   throws            every grenade, named and timed, wrapped in the link tags
 //                     that make it clickable
-//   go                arriving in a new zone while a teammate's grenade is in
-//                     the air. Walking somewhere on your own is movement;
-//                     walking in behind a flash is a call
+//   go                arriving in a new zone. Behind a teammate's grenade
+//                     after 10s: "Go A Site on smoke from ropz". In the first
+//                     10s the nade is omitted. A stay after 10s also writes
+//                     the last position before that zone: "Go Underground
+//                     to Lower Mid"
 //   stay              five seconds or more on one position with a GUN in hand.
 //                     Five seconds holding a smoke is not holding an angle, it
 //                     is lining up a throw, which is the next line instead
@@ -34,10 +38,17 @@
 //   drops / pickups   utility handed between players
 //   smoke             standing inside one
 //   lurk              solo on the far site while a core of three or more
-//                     walks into a key zone
-//   search            walking an a1–a4 / b1–b4 piece that the plant then
+//                     walks into a key zone (T)
+//   search            T walking an a1–a4 / b1–b4 piece that the plant then
 //                     follows. Contact if nobody threw in the last five
 //                     seconds; Rush out if the next five cover 1000 PSDT
+//   hold              CT in a key bombsite zone for 5s, aiming at one named
+//                     spot for 4 of them: "Go short, hold B ramp". A later
+//                     angle is "At 1:29, hold CT from short"
+//   boost             two teammates within 25 units, then one rises 60 Z and
+//                     stays there: "Get boosted Window by ropz"
+//   runboost          the same hug, then 300+ u/s within a second of leaving
+//                     it: "Get runboosted Mid by ropz"
 //   fake              two or more nades from a 40% minority while a core
 //                     of three exists
 //   2x / synced       two pops of the same flash from one man, or a flash
@@ -93,6 +104,8 @@ const MIN_RUN_SECONDS = 1.5;
 const HANDOVER_UNITS = 260;
 /** "Remains in the same position for 5+ seconds". */
 const HOLD_SECONDS = 5;
+/** Opening seconds: no "on smoke from", and no "Go pos to zone" on a stay. */
+const EARLY_SECONDS = 10;
 /** …and it only counts as holding if the gun was out for that whole time. */
 const GUN_HOLD_SECONDS = 5;
 /** A grenade thrown this soon after leaving a spot was lined up on it. */
@@ -161,6 +174,21 @@ const SYNC_THROWERS = 500;
 const SYNC_SECONDS = 0.5;
 /** HE detonating inside a smoke, or this far past its edge. */
 const NADE_IN_SMOKE_PAD = 25;
+/** CT Hold: 4 of the last 5 seconds must look at the same named spot. */
+const HOLD_AIM_SECONDS = 4;
+/** Teammates this close are stacked for a boost or a runboost. */
+const BOOST_NEAR = 25;
+/** Z gain that turns a stack into a boost, and how long it must stick. */
+const BOOST_LIFT = 60;
+const BOOST_STAY_SECONDS = 1.5;
+/** Horizontal speed after leaving the stack that counts as a runboost. */
+const RUNBOOST_SPEED = 300;
+const RUNBOOST_MAX = 600;
+const RUNBOOST_AFTER_SECONDS = 1;
+const RUNBOOST_DEST_SECONDS = 2;
+/** Look-trace for "holding" a named spot. */
+const AIM_STEP = 32;
+const AIM_RANGE = 3600;
 
 /**
  * An execute: this many grenades, from this many players, inside this window,
@@ -264,6 +292,24 @@ function sameFlash(a, b) {
     dist2d(a.nade.ox, a.nade.oy, b.nade.ox, b.nade.oy) <= DOUBLE_FLASH_ORIGIN &&
     dist2d(a.nade.lx, a.nade.ly, b.nade.lx, b.nade.ly) <= DOUBLE_FLASH_LANDING
   );
+}
+
+/**
+ * First painted position along the look direction that is not `skip`.
+ * That is the angle a CT is holding: where he stands is already known.
+ */
+export function lookTarget(namer, x, y, z, yaw, skip = '') {
+  const rad = (Number(yaw) * Math.PI) / 180;
+  if (!namer || !Number.isFinite(rad) || !Number.isFinite(x) || !Number.isFinite(y)) return '';
+  const dx = Math.cos(rad);
+  const dy = Math.sin(rad);
+  const skipName = skip || '';
+  const zz = z || 0;
+  for (let t = AIM_STEP; t <= AIM_RANGE; t += AIM_STEP) {
+    const pos = namer.namesAt(x + dx * t, y + dy * t, zz).position;
+    if (pos && pos !== skipName) return pos;
+  }
+  return '';
 }
 
 /**
@@ -991,7 +1037,7 @@ export function buildRoundNotes({
           const st = track.sample(p.slot, tick, siteScratch);
           if (!st?.alive || !Number.isFinite(st.x)) continue;
           const plantLetter = plantZones.at(st.x, st.y, st.z);
-          if (sideIds.has(p.id)) {
+          if (tIds.has(p.id)) {
             const key = plantZones.keyAt(st.x, st.y, st.z);
             if (key && !key.plant) {
               const sig = `${p.id}|${key.site}|${key.index}`;
@@ -1136,6 +1182,147 @@ export function buildRoundNotes({
     }
   }
 
+  /**
+   * Boost: stacked within 25, then one man rises 60 Z and stays up.
+   * Runboost: the same stack, then 300+ u/s within a second of leaving it.
+   */
+  const boostById = new Map();
+  {
+    const boostEndTick = Math.min(
+      endTick,
+      Number.isFinite(cutoffSec) ? live0 + cutoffSec * rate : endTick
+    );
+    const bodies = [];
+    for (const p of meta.players || []) {
+      if (!sideIds.has(p.id) || p.slot == null || p.slot < 0) continue;
+      bodies.push({ id: p.id, slot: p.slot });
+    }
+    const scratchBoost = {};
+    const prevPos = new Map();
+    const prevClose = new Map();
+    const pairBase = new Map();
+    const liftPending = new Map();
+    const leftClose = new Map();
+    const boostLock = new Map();
+    const runLock = new Map();
+    const pushEv = (id, sec, text) => {
+      const list = boostById.get(id) || [];
+      list.push({ sec, at: sec, text });
+      boostById.set(id, list);
+    };
+    const destAfter = (id, fromTick, origin) => {
+      let dest = '';
+      const until = Math.min(boostEndTick, fromTick + RUNBOOST_DEST_SECONDS * rate);
+      const stride = Math.max(1, Math.round(rate / SAMPLE_HZ));
+      for (let t = fromTick; t <= until; t += stride) {
+        const st = positionAt(id, t);
+        if (!st) continue;
+        const n = namer.namesAt(st.x, st.y, st.z).position;
+        if (n && n !== origin) dest = n;
+      }
+      return dest;
+    };
+
+    for (let tick = t0; tick <= boostEndTick; tick += 1) {
+      const now = new Map();
+      for (const b of bodies) {
+        if ((deadAt.get(b.id) || Infinity) <= tick) continue;
+        const st = track.sample(b.slot, tick, scratchBoost);
+        if (!st?.alive || !Number.isFinite(st.x) || !Number.isFinite(st.y)) continue;
+        now.set(b.id, { x: st.x, y: st.y, z: Number(st.z) || 0 });
+      }
+      const close = new Map();
+      const idsNow = [...now.keys()];
+      for (let i = 0; i < idsNow.length; i++) {
+        for (let j = i + 1; j < idsNow.length; j++) {
+          const ia = idsNow[i];
+          const ib = idsNow[j];
+          const a = now.get(ia);
+          const b = now.get(ib);
+          const d = dist2d(a.x, a.y, b.x, b.y);
+          if (d > BOOST_NEAR) continue;
+          const keep = (id, other, dist) => {
+            const cur = close.get(id);
+            if (!cur || dist < cur.d) close.set(id, { id: other, d: dist });
+          };
+          keep(ia, ib, d);
+          keep(ib, ia, d);
+        }
+      }
+
+      for (const id of idsNow) {
+        const p = now.get(id);
+        const partner = close.get(id)?.id;
+        if (partner) {
+          if (!pairBase.has(id)) pairBase.set(id, { z: p.z, partner });
+        } else {
+          pairBase.delete(id);
+        }
+
+        const wasPartner = prevClose.get(id);
+        if (wasPartner && !partner) leftClose.set(id, { partner: wasPartner, tick });
+
+        const base = pairBase.get(id);
+        if (base && !liftPending.has(id) && !(boostLock.get(id) > tick)) {
+          const other = now.get(base.partner) || prevPos.get(base.partner);
+          const otherLow = !other || other.z <= base.z + 25;
+          if (otherLow && p.z >= base.z + BOOST_LIFT) {
+            liftPending.set(id, { fromZ: base.z, partner: base.partner, fromTick: tick });
+          }
+        }
+
+        const lift = liftPending.get(id);
+        if (lift) {
+          if (p.z >= lift.fromZ + BOOST_LIFT - 10) {
+            if (tick - lift.fromTick >= BOOST_STAY_SECONDS * rate) {
+              const who = nameOf.get(lift.partner) || '';
+              const named = namer.namesAt(p.x, p.y, p.z);
+              const where = named.position || named.zone;
+              pushEv(
+                id,
+                secOf(lift.fromTick),
+                where ? `Get boosted ${where}${who ? ` by ${who}` : ''}` : who ? `Get boosted by ${who}` : 'Get boosted'
+              );
+              liftPending.delete(id);
+              boostLock.set(id, tick + 2 * rate);
+            }
+          } else {
+            liftPending.delete(id);
+          }
+        }
+
+        const pr = prevPos.get(id);
+        const left = leftClose.get(id);
+        if (
+          pr &&
+          left &&
+          !(runLock.get(id) > tick) &&
+          !(boostLock.get(id) > tick) &&
+          tick - left.tick <= RUNBOOST_AFTER_SECONDS * rate
+        ) {
+          const speed = Math.hypot(p.x - pr.x, p.y - pr.y) * rate;
+          if (speed >= RUNBOOST_SPEED && speed < RUNBOOST_MAX) {
+            const origin = namer.namesAt(pr.x, pr.y, pr.z).position;
+            const dest = destAfter(id, tick, origin);
+            const who = nameOf.get(left.partner) || '';
+            pushEv(
+              id,
+              secOf(tick),
+              dest ? `Get runboosted ${dest}${who ? ` by ${who}` : ''}` : who ? `Get runboosted by ${who}` : 'Get runboosted'
+            );
+            leftClose.delete(id);
+            runLock.set(id, tick + 2 * rate);
+          }
+        }
+      }
+
+      prevPos.clear();
+      for (const [id, p] of now) prevPos.set(id, p);
+      prevClose.clear();
+      for (const [id, v] of close) prevClose.set(id, v.id);
+    }
+  }
+
   const syncedFor = new Map();
   {
     const syncables = ourGrenades.filter((g) => syncWord(g.type));
@@ -1232,6 +1419,7 @@ export function buildRoundNotes({
       if (!s.alive || !Number.isFinite(s.x) || !Number.isFinite(s.y)) continue;
       const where = namer.namesAt(s.x, s.y, s.z);
       const inHand = weaponNames[s.weapon] || '';
+      const yaw = Number(s.yaw);
       samples.push({
         sec: secOf(tick),
         tick,
@@ -1240,7 +1428,10 @@ export function buildRoundNotes({
         gun: isGun(inHand),
         nade: normalizeNadeType(inHand),
         x: s.x,
-        y: s.y
+        y: s.y,
+        z: s.z || 0,
+        key: Boolean(plantZones.keyAt(s.x, s.y, s.z)),
+        aim: lookTarget(namer, s.x, s.y, s.z || 0, yaw, where.position)
       });
     }
     const zoneRuns = runsFrom(samples, step, (s) => s.zone);
@@ -1274,15 +1465,36 @@ export function buildRoundNotes({
       stays.push(lastStay);
     }
 
+    const spawnZone = windowed ? '' : zoneRuns[0]?.name || '';
+
     for (const stay of stays) {
       // Five seconds on a spot is only a hold if the gun was out for them. Time
       // spent with a smoke in hand is not holding an angle.
       const gunSecs = stay.samples.filter((s) => s.gun).length * step;
       if (gunSecs >= GUN_HOLD_SECONDS) {
+        const stayZone = stay.samples[0]?.zone || '';
+        const zr = zoneRuns.find(
+          (r) => r.name === stayZone && r.from <= stay.from && stay.from <= r.to
+        );
+        const zoneFrom = zr?.from ?? stay.from;
+        let fromPos = '';
+        let fromZone = '';
+        for (const s of samples) {
+          if (s.sec >= zoneFrom - 1e-9) break;
+          if (s.position) {
+            fromPos = s.position;
+            fromZone = s.zone || '';
+          }
+        }
         events.push({
           sec: stay.from,
           at: stay.to,
           stay: true,
+          stayName: stay.name,
+          stayZone,
+          zoneFrom,
+          fromPos,
+          fromZone,
           text: `Stay ${stay.name} until ${clockAt(stay.to)}`
         });
       }
@@ -1352,7 +1564,6 @@ export function buildRoundNotes({
     // Never back into the spawn zone. A body drifting over that boundary is
     // the same "first zone" the rules already ignore, and "Go T Spawn on flash"
     // is not an instruction anyone would give.
-    const spawnZone = windowed ? '' : zoneRuns[0]?.name || '';
     let lastGo = '';
     for (const run of zoneRuns.slice(1)) {
       if (run.name === spawnZone) continue;
@@ -1364,17 +1575,21 @@ export function buildRoundNotes({
       if (!cover || run.name === lastGo) continue;
       lastGo = run.name;
       const who = nameOf.get(cover.player) || '';
+      const early = run.from < EARLY_SECONDS;
       events.push({
         sec: run.from,
         go: true,
-        text: `Go ${run.name} on ${lower(cover.word)}${who ? ` from ${who}` : ''}`
+        goZone: run.name,
+        text: early
+          ? `Go ${run.name}`
+          : `Go ${run.name} on ${lower(cover.word)}${who ? ` from ${who}` : ''}`
       });
     }
 
-    // ---- a1–a4 / b1–b4: Search, Contact, Rush out, or Go 1st --------------
+    // ---- a1–a4 / b1–b4: Search, Contact, Rush out, or Go 1st (T only) ------
     const keySeen = new Set();
     for (const e of approachEntry) {
-      if (e.id !== id) continue;
+      if (e.id !== id || !tIds.has(id)) continue;
       if (keySeen.has(e.site)) continue;
       keySeen.add(e.site);
       const plantTick = firstPlantTick[e.site];
@@ -1400,9 +1615,81 @@ export function buildRoundNotes({
         events.push({ sec: e.sec, keyMove: true, text: `Go 1st out ${e.site}` });
       }
     }
+
+    // ---- CT Hold: 5s in a key bombsite zone, 4s looking at one spot --------
+    if (!tIds.has(id)) {
+      const winN = Math.max(1, Math.round(HOLD_SECONDS / step));
+      const need = Math.max(1, Math.round(HOLD_AIM_SECONDS / step));
+      const after = samples.filter((s) => s.sec >= spawnEndsAt);
+      const runs = [];
+      let cur = [];
+      const flushRun = () => {
+        if (cur.length * step >= HOLD_SECONDS) runs.push(cur);
+        cur = [];
+      };
+      for (const s of after) {
+        if (s.key) cur.push(s);
+        else flushRun();
+      }
+      flushRun();
+      for (const run of runs) {
+        let last = { stand: '', aim: '' };
+        let first = true;
+        for (let i = 0; i + winN <= run.length; i++) {
+          const win = run.slice(i, i + winN);
+          const aimCount = new Map();
+          const standCount = new Map();
+          for (const s of win) {
+            if (s.gun && s.aim) aimCount.set(s.aim, (aimCount.get(s.aim) || 0) + 1);
+            if (s.position) standCount.set(s.position, (standCount.get(s.position) || 0) + 1);
+          }
+          let aim = '';
+          let ac = 0;
+          for (const [k, v] of aimCount) if (v > ac) { aim = k; ac = v; }
+          let stand = '';
+          let sc = 0;
+          for (const [k, v] of standCount) if (v > sc) { stand = k; sc = v; }
+          if (ac < need || !stand || !aim || stand === aim) continue;
+          if (stand === last.stand && aim === last.aim) continue;
+          const hit = win.find((s) => s.aim === aim && s.position === stand) || win[0];
+          const sec = first ? run[0].sec : hit.sec;
+          events.push({
+            sec,
+            at: first ? undefined : sec,
+            keyMove: true,
+            hold: true,
+            fromPos: stand,
+            text: first
+              ? `Go ${stand}, hold ${aim}`
+              : `At ${clockAt(sec)}, hold ${aim} from ${stand}`
+          });
+          last = { stand, aim };
+          first = false;
+        }
+      }
+    }
     for (let i = events.length - 1; i >= 0; i--) {
       if (!events[i].go || events[i].keyMove) continue;
       if (events.some((e) => e.keyMove && Math.abs(e.sec - events[i].sec) <= 1)) events.splice(i, 1);
+    }
+
+    const pathTold = new Set();
+    for (const e of events) {
+      if (!e.stay || e.zoneFrom < EARLY_SECONDS) continue;
+      if (!e.fromPos || !e.stayZone) continue;
+      if (spawnZone && e.fromZone === spawnZone) continue;
+      if (e.fromPos === e.stayName || e.fromPos === e.stayZone) continue;
+      const key = `${e.stayZone}@${e.zoneFrom}`;
+      if (pathTold.has(key)) continue;
+      if (
+        events.some(
+          (g) => g.go && g.goZone === e.stayZone && Math.abs(g.sec - e.zoneFrom) <= 2.5
+        )
+      ) {
+        continue;
+      }
+      pathTold.add(key);
+      e.text = `Go ${e.fromPos} to ${e.stayZone}. ${e.text}`;
     }
 
     // ---- standing in smoke -----------------------------------------------
@@ -1461,6 +1748,8 @@ export function buildRoundNotes({
       });
     }
 
+    for (const b of boostById.get(id) || []) events.push({ sec: b.sec, at: b.at, text: b.text });
+
     // Ordered by the clock each line SHOWS, not by when its situation began.
     // "Stay Top mid until 1:38" is ordered by 1:38; putting it where the stay
     // started would print 1:38 ahead of a throw at 1:45 and read backwards.
@@ -1472,6 +1761,11 @@ export function buildRoundNotes({
     const live = events.filter((e) => eventClock(e) <= cutoffSec);
     events.length = 0;
     events.push(...live);
+
+    for (let i = events.length - 1; i >= 0; i--) {
+      if (!events[i].stay) continue;
+      if (events.some((e) => e.hold && e.fromPos === events[i].stayName)) events.splice(i, 1);
+    }
 
     // The man who went in first is told so, on the action that took him in.
     if (id === firstIn && !events.some((e) => String(e.text || '').startsWith('Go 1st'))) {
