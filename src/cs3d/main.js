@@ -100,9 +100,8 @@ let skipNadeHurt = false;
 // ---- renderer / scene ------------------------------------------------------
 // WebGPU, with three's built-in WebGL2 fallback when the browser has no
 // adapter (`forceWebGL` also forces it for A/B testing via ?webgl=1). The
-// whole island imports from 'three/webgpu' because that build ships its own
-// copy of the core: mixing it with plain 'three' would give two different
-// Mesh/Vector3 classes and nothing would line up.
+// whole island imports from 'three/webgpu'. GLTF addons are pointed at that
+// same build in vite.config.js so loaders and mixers share one Mesh/Vector3.
 const forceWebGL = params.get('webgl') === '1';
 const msaaBoot = params.get('msaa') !== '0' && localStorage.getItem('cs3d_msaa') !== '0';
 const renderer = new THREE.WebGPURenderer({

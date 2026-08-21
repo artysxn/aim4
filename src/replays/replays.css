@@ -2817,6 +2817,19 @@ body.rv-open {
   visibility: hidden;
 }
 
+.rv-timeline.is-3d-immerse .c3-mh-money {
+  display: none !important;
+}
+
+/* Sit in the band under the 280px mini radar and above the transport. */
+.rv-timeline.is-3d:not(.is-3d-immerse) .rv-team-col {
+  top: 302px;
+  bottom: 72px;
+  transform: none;
+  max-height: none;
+  justify-content: center;
+}
+
 .rv-map .c3-mh {
   z-index: 6;
 }

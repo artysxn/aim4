@@ -8,6 +8,7 @@
 import { worldToRadar, isLowerLevel, RADAR_SIZE } from '../replays/viewer/mapCalibration.js';
 import { hudRadarRotation, hudRadarScale, worldToHudRadar } from './hudRadar.js';
 import { radarImage } from '../replays/shared/roundId.js';
+import { cs3dMap } from '../../shared/cs3d/maps.js';
 import { RadarRenderer } from '../replays/viewer/radarRenderer.js';
 import {
   iconImgHtml,
@@ -80,6 +81,12 @@ function sideClass(side) {
   return side === 'CT' ? 'is-ct' : 'is-t';
 }
 
+/** Round-id map code (`ANU`), even when the caller passed a slug (`anubis`). */
+function hudMapCode(map) {
+  const raw = map?.code || map?.slug || map?.file || '';
+  return cs3dMap(raw)?.code || raw;
+}
+
 /**
  * @param {object} o
  * @param {HTMLElement} o.root
@@ -88,6 +95,7 @@ function sideClass(side) {
  * @param {object} o.hooks
  */
 export function createMatchHud({ root, map, match, hooks = {} }) {
+  const mapCode = hudMapCode(map);
   const el = document.createElement('div');
   el.className = 'c3-mh';
   el.innerHTML = `
@@ -145,7 +153,7 @@ export function createMatchHud({ root, map, match, hooks = {} }) {
   const overviewCanvas = node.overview.querySelector('canvas');
   const overviewRenderer = new RadarRenderer(overviewCanvas);
   overviewRenderer.viewInset = { top: 0, right: 0, bottom: 0, left: 0 };
-  overviewRenderer.setMap(map.code).then(() => {
+  overviewRenderer.setMap(mapCode).then(() => {
     if (overviewOn && lastRadarFrame) overviewRenderer.render(lastRadarFrame);
   });
   overviewRenderer.onIconLoad = () => {
@@ -155,8 +163,8 @@ export function createMatchHud({ root, map, match, hooks = {} }) {
   const form = node.form;
 
   const radarImgs = { default: new Image(), lower: new Image() };
-  const defaultSrc = radarImage(map.code, 'default');
-  const lowerSrc = radarImage(map.code, 'lower');
+  const defaultSrc = radarImage(mapCode, 'default');
+  const lowerSrc = radarImage(mapCode, 'lower');
   if (defaultSrc) radarImgs.default.src = defaultSrc;
   if (lowerSrc && lowerSrc !== defaultSrc) radarImgs.lower.src = lowerSrc;
 
@@ -308,12 +316,12 @@ export function createMatchHud({ root, map, match, hooks = {} }) {
     ctx.clip();
     ctx.fillStyle = 'rgba(8,8,8,0.92)';
     ctx.fillRect(0, 0, size, size);
-    const lower = src && isLowerLevel(map.code, src[2]);
+    const lower = src && isLowerLevel(mapCode, src[2]);
     const img = lower && radarImgs.lower.naturalWidth ? radarImgs.lower : radarImgs.default;
     const origin = { x: 0, y: 0 };
-    if (src) worldToRadar(map.code, src[0], src[1], origin);
+    if (src) worldToRadar(mapCode, src[0], src[1], origin);
     if (img.naturalWidth && src) {
-      const scale = hudRadarScale(map.code, size);
+      const scale = hudRadarScale(mapCode, size);
       ctx.save();
       ctx.translate(cx, cy);
       ctx.rotate(hudRadarRotation(yawDeg));
@@ -338,7 +346,7 @@ export function createMatchHud({ root, map, match, hooks = {} }) {
     const dots = marks && marks.length ? marks : [];
     for (const d of dots) {
       if (d.self) continue;
-      worldToHudRadar(map.code, d.x, d.y, origin, yawDeg, size, _pt);
+      worldToHudRadar(mapCode, d.x, d.y, origin, yawDeg, size, _pt);
       ctx.beginPath();
       ctx.fillStyle = d.side === 'CT' ? '#6ea2f0' : '#e0b15a';
       ctx.arc(_pt.x, _pt.y, 4, 0, Math.PI * 2);
@@ -377,7 +385,7 @@ export function createMatchHud({ root, map, match, hooks = {} }) {
     const id = frame?.highlight;
     const p = (id && players.find((x) => x.id === id)) || players[0];
     const z = p ? frame.states?.[p.slot]?.z : lastSrc?.[2];
-    const wantLower = isLowerLevel(map.code, z);
+    const wantLower = isLowerLevel(mapCode, z);
     const next = wantLower && overviewRenderer.lowerImage ? 'lower' : 'default';
     if (overviewRenderer.radarLevel === next) return;
     overviewRenderer.radarLevel = next;

@@ -254,6 +254,20 @@ function finishSampleMerge(lib, samples, opts) {
   return { ...lib, demos, total: (Number(lib.total) || (lib.demos || []).length) + added };
 }
 
+/**
+ * 3D availability for one library demo: movement data, map pack, reparse job.
+ * Bearer auth, not cookies. `credentials: 'include'` against api.aim4.io is
+ * blocked when the API answers `Access-Control-Allow-Origin: *`.
+ */
+export async function fetchDemo3d(id, method = 'GET') {
+  return asJson(
+    await safeFetch(`${API_BASE}/api/replays/demos/${encodeURIComponent(id)}/3d`, {
+      method,
+      headers: await headers()
+    })
+  );
+}
+
 export async function fetchDemo(id) {
   try {
     return await asJson(
@@ -309,7 +323,6 @@ function isHtmlOrJsonType(res) {
 export async function fetchDemoPackage(id) {
   const tryPackage = async (url) => {
     const res = await safeFetch(url, {
-      credentials: 'include',
       headers: await headers()
     }).catch(() => null);
     if (!res) return { res: null, buf: null };

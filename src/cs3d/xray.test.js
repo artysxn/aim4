@@ -5,7 +5,15 @@ globalThis.window ??= globalThis;
 import assert from 'node:assert/strict';
 import { EYE_DUCK, EYE_STAND } from '../../shared/sim3d/constants.js';
 
-const { xrayFillColor, xrayHeadOffset, xrayIconList, meshBelongsTo, XRAY_FILL_T, XRAY_FILL_CT } = await import('./xray.js');
+const {
+  xrayFillColor,
+  xrayHeadOffset,
+  xrayIconList,
+  xrayLabelVisible,
+  meshBelongsTo,
+  XRAY_FILL_T,
+  XRAY_FILL_CT
+} = await import('./xray.js');
 
 assert.equal(xrayFillColor('T'), XRAY_FILL_T);
 assert.equal(xrayFillColor('CT'), XRAY_FILL_CT);
@@ -52,6 +60,14 @@ assert.equal(xrayHeadOffset(1), EYE_DUCK + 14);
   assert.equal(meshBelongsTo(child, [root]), true);
   assert.equal(meshBelongsTo(root, [root]), true);
   assert.equal(meshBelongsTo(other, [root]), false);
+}
+
+{
+  const scale = 1.2;
+  assert.equal(xrayLabelVisible(-400, 0, 0, 0.4, scale), true, 'nearby in front');
+  assert.equal(xrayLabelVisible(400, 0, 0, 0.4, scale), false, 'behind the camera');
+  assert.equal(xrayLabelVisible(-400, 1.2, 0, 0.4, scale), false, 'off the sides');
+  assert.equal(xrayLabelVisible(-8000, 0, 0, 0.9, scale), false, 'other side of the map');
 }
 
 console.log('xray.test.js ok');

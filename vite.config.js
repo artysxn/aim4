@@ -106,11 +106,43 @@ function sampleDemosDev() {
   };
 }
 
+// The 3D island imports `three/webgpu`. GLTFLoader / SkeletonUtils / RGBELoader
+// still say `from 'three'`, and Vite would otherwise bundle a second copy of
+// the core (the "Multiple instances of Three.js" warning, extra memory, GC
+// hitches). The trainer's EffectComposer path must keep the WebGL build, so
+// only these three addons are redirected.
+function cs3dThreeWebgpu() {
+  const JSM = [
+    '/three/examples/jsm/loaders/GLTFLoader.js',
+    '/three/examples/jsm/loaders/RGBELoader.js',
+    '/three/examples/jsm/utils/SkeletonUtils.js'
+  ];
+  return {
+    name: 'aim4-cs3d-three-webgpu',
+    enforce: 'pre',
+    async resolveId(id, importer) {
+      if (id !== 'three' || !importer) return null;
+      const from = importer.replace(/\\/g, '/');
+      if (!JSM.some((tail) => from.endsWith(tail))) return null;
+      return this.resolve('three/webgpu', importer, { skipSelf: true });
+    }
+  };
+}
+
 // Minimal Vite config. Three.js is bundled from node_modules so the bare
 // "three" specifier resolves cleanly in dev (HMR) and production builds.
 export default defineConfig({
   base: '/',
-  plugins: [gameRouteFallback(), cs3dPackDev(), sampleDemosDev()],
+  plugins: [cs3dThreeWebgpu(), gameRouteFallback(), cs3dPackDev(), sampleDemosDev()],
+  optimizeDeps: {
+    // So esbuild does not pre-bundle those addons against the WebGL `three`
+    // entry before the alias plugin can point them at `three/webgpu`.
+    exclude: [
+      'three/examples/jsm/loaders/GLTFLoader.js',
+      'three/examples/jsm/loaders/RGBELoader.js',
+      'three/examples/jsm/utils/SkeletonUtils.js'
+    ]
+  },
   server: {
     host: true,
     open: false,

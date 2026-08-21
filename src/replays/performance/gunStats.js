@@ -11,7 +11,7 @@ import { aggregatePlayers } from '../shared/statsMath.js';
 import { bareWeapon } from '../viewer/equipmentIcons.js';
 import { kprOf } from './performanceMath.js';
 
-const CACHE_KEY = 'aim4:perf:guns:v2';
+const CACHE_KEY = 'aim4:perf:guns:v4';
 
 const GUN_LABELS = {
   ak47: 'AK-47',
@@ -63,11 +63,12 @@ export function demoSetStamp(demoIds) {
   return `${ids.length}:${h}`;
 }
 
-/** Gun the player held longest this round (`row.hg` from tick hold time). */
+/**
+ * Gun held longest this round (`row.hg` from tick hold time).
+ * Empty when that round was not measured.
+ */
 export function primaryGunFromRow(row, playerId) {
-  const held = row?.hg?.[playerId];
-  if (!held) return '';
-  return bareWeapon(held);
+  return bareWeapon(row?.hg?.[playerId] || '') || '';
 }
 
 /**
@@ -134,9 +135,9 @@ export function writeGunCache(playerId, stamp, files, store = storage()) {
 export function gunMapForPlayer(rows, playerId, demoIds, store = storage()) {
   const stamp = demoSetStamp(demoIds);
   const hit = readGunCache(playerId, stamp, store);
-  if (hit) return hit;
+  if (hit && Object.keys(hit).length) return hit;
   const files = gunMapFromRows(rows, playerId);
-  writeGunCache(playerId, stamp, files, store);
+  if (Object.keys(files).length) writeGunCache(playerId, stamp, files, store);
   return files;
 }
 

@@ -2,10 +2,11 @@
 // src/cs3d/xray.js
 // GOTV-style through-wall outlines: each player is drawn into a mask
 // (their own shape, unlit, no world geometry), then a fullscreen composite
-// paints a T-red or CT-blue halo around its edge. The fill stays in the
-// mask so the edge can be found; it is not composited, so the playermodel
-// is not painted black. Name, health and loadout icons sit in HTML above
-// the head.
+// paints a T-red or CT-blue halo around its edge. Rim pixels sit outside the
+// body, so their own RGB is the clear color; the composite reads the team
+// tint from neighbouring mask pixels. The fill stays in the mask so the
+// playermodel is not painted over. Name, health and loadout icons sit in
+// HTML above the head.
 //
 // Non-player meshes are hidden for the mask pass so the silhouette camera
 // never sees a wall. Viewmodels are a different scene and never enter it.
@@ -58,7 +59,29 @@ const RING = [
 ];
 
 const _proj = new THREE.Vector3();
+const _view = new THREE.Vector3();
 const _size = new THREE.Vector2();
+
+/**
+ * Smallest on-screen body height (NDC) that still gets a nameplate. Below this
+ * the silhouette is a couple of pixels and the HTML tag would float on a wall.
+ */
+const MIN_TAG_NDC_HEIGHT = 0.03;
+
+/**
+ * Whether a projected head should show a nameplate.
+ * `viewZ` is camera space (Three looks down −Z, so in front is negative).
+ * `ndc` is after the projection divide. Far-away bodies fail the height
+ * test: the outline would be invisible, and the tag would still be full size.
+ */
+export function xrayLabelVisible(viewZ, ndcX, ndcY, ndcZ, projYScale) {
+  if (!(viewZ < 0)) return false;
+  if (Math.abs(ndcX) > 1 || Math.abs(ndcY) > 1) return false;
+  if (ndcZ > 1 || ndcZ < -1) return false;
+  const dist = -viewZ;
+  const ndcH = (EYE_STAND * Math.abs(Number(projYScale) || 0)) / dist;
+  return ndcH >= MIN_TAG_NDC_HEIGHT;
+}
 
 export function xrayFillColor(side) {
   return side === 'CT' ? XRAY_FILL_CT : XRAY_FILL_T;
@@ -228,14 +251,16 @@ export function createXrayPass({ renderer, scene, parent }) {
     try {
       const fill = texture(rt.texture, screenUV);
       let halo = fill.a;
+      // Rim pixels sit just outside the body, so fill.rgb is the clear color
+      // (black). Pull the team tint from any neighbour that actually wrote.
+      let tint = fill.rgb.mul(fill.a);
       for (const [x, y] of RING) {
-        const uv = screenUV.add(texel.mul(vec2(x, y)));
-        halo = max(halo, texture(rt.texture, uv).a);
+        const s = texture(rt.texture, screenUV.add(texel.mul(vec2(x, y))));
+        halo = max(halo, s.a);
+        tint = max(tint, s.rgb.mul(s.a));
       }
       const edge = max(halo.sub(fill.a), float(0));
-      // Rim only. Interior alpha stays 0 so the textured body is not covered,
-      // and we never composite the mask's fill (that used to paint players black).
-      glowMat.colorNode = vec4(fill.rgb, edge);
+      glowMat.colorNode = vec4(tint, edge);
       glowReady = true;
     } catch (e) {
       console.warn('cs3d: x-ray glow unavailable, drawing rim from mask alpha', e);
@@ -325,9 +350,11 @@ export function createXrayPass({ renderer, scene, parent }) {
       return;
     }
     labels.hidden = false;
+    camera.updateMatrixWorld();
     const rect = parent.getBoundingClientRect();
     const w = Math.max(1, rect.width);
     const h = Math.max(1, rect.height);
+    const projY = camera.projectionMatrix.elements[5];
     const seen = new Set();
     for (const s of live) {
       const id = String(s.id);
@@ -336,8 +363,9 @@ export function createXrayPass({ renderer, scene, parent }) {
       const duck = s.duck ?? 0;
       _proj.set(0, xrayHeadOffset(duck), 0);
       s.object.localToWorld(_proj);
-      _proj.project(camera);
-      if (_proj.z < 0 || _proj.z > 1 || Math.abs(_proj.x) > 1.15 || Math.abs(_proj.y) > 1.15) {
+      _view.copy(_proj).applyMatrix4(camera.matrixWorldInverse);
+      _proj.copy(_view).applyMatrix4(camera.projectionMatrix);
+      if (!xrayLabelVisible(_view.z, _proj.x, _proj.y, _proj.z, projY)) {
         const el = tags.get(id);
         if (el) el.hidden = true;
         continue;

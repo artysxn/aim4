@@ -214,3 +214,22 @@ export function columnsSatisfy(held, needed) {
   const have = new Set(held);
   return needed.every((g) => have.has(g));
 }
+
+/** True when at least one round carries the held-gun map. */
+export function payloadHasHeldGun(payload) {
+  for (const d of payload?.demos || []) {
+    for (const r of d.rounds || []) {
+      if (r && typeof r.hg === 'object' && r.hg) return true;
+    }
+  }
+  return false;
+}
+
+/** Cached payload is usable for this contract. */
+export function payloadCovers(payload, held, needed) {
+  if (!columnsSatisfy(held, needed)) return false;
+  if (!needed.includes('heldGun')) return true;
+  // Full-library payloads name every group but do not wait for tick hold time.
+  if (held == null || held.length === COLUMN_GROUP_IDS.length) return true;
+  return payloadHasHeldGun(payload);
+}

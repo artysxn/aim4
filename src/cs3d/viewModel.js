@@ -33,7 +33,6 @@ import * as THREE from 'three/webgpu';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
-import { AnimationMixer, LoopOnce, LoopRepeat } from 'three';
 import { assetBase } from './mapLoader.js';
 import { packFetch, loadWithRetry, PACK_CDN } from './packFetch.js';
 import { UNIT_M } from '../../shared/sim3d/units.js';
@@ -416,6 +415,29 @@ export class ViewModelAssets {
   }
 
   /**
+   * Drop clip channels whose nodes are not in the mixer graph. Manifest bone
+   * names (`weapon`, `magazine`, `slide`) often do not match the cloned glb,
+   * and each miss is a PropertyBinding warning plus a failed bind.
+   */
+  _trimClipsToGraph(map, root) {
+    if (!map || !root) return 0;
+    const names = new Set();
+    root.traverse((o) => {
+      if (o.name) names.add(o.name);
+    });
+    let dropped = 0;
+    for (const clip of map.values()) {
+      const kept = clip.tracks.filter((t) => {
+        const i = t.name.lastIndexOf('.');
+        return names.has(i >= 0 ? t.name.slice(0, i) : t.name);
+      });
+      dropped += clip.tracks.length - kept.length;
+      clip.tracks = kept;
+    }
+    return dropped;
+  }
+
+  /**
    * This weapon's own clip set, fetched once, or null when CS2 ships none and
    * the class default has to do.
    *
@@ -545,7 +567,7 @@ export class ViewModel {
     // sibling of the arms in the clip, not a child. Rooting on the arms left
     // every weapon-side track unresolvable, which is why they had to be
     // trimmed away and the gun hung off `wpn` by a solved offset instead.
-    this.mixer = new AnimationMixer(this.rig);
+    this.mixer = new THREE.AnimationMixer(this.rig);
     this.actions.clear();
     // Where the weapon hangs. `wpn` is the viewmodel rig's own weapon bone and
     // the clips animate it (65 nodes a clip, `wpn` among them), so a gun
@@ -706,6 +728,7 @@ export class ViewModel {
       (this.wpnMount || this.rig).add(this.weaponModel);
       this._applyCull(); // a freshly cloned gun starts on the default side
     }
+    if (this.weaponSet) this.assets._trimClipsToGraph(this.weaponSet, this.rig);
     // An absolute time on the same clock `attack()` compares against, not a
     // duration. Storing the duration made the lockout expire the moment
     // `performance.now()/1000` passed it — about one second after the page
@@ -746,7 +769,7 @@ export class ViewModel {
     }
     for (const [, other] of this.actions) if (other !== a) other.fadeOut(fade);
     a.reset();
-    a.setLoop(loop ? LoopRepeat : LoopOnce, Infinity);
+    a.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, Infinity);
     a.clampWhenFinished = !loop;
     a.enabled = true;
     a.fadeIn(fade).play();

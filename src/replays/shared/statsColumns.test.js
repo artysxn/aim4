@@ -7,6 +7,8 @@ import {
   IDENTITY_ROW_KEYS,
   RATING_CORE,
   columnsSatisfy,
+  payloadCovers,
+  payloadHasHeldGun,
   projectEntry,
   resolveColumns
 } from './statsColumns.js';
@@ -119,6 +121,26 @@ assert.throws(() => resolveColumns('scoreboard'), ColumnContractError); // now b
   assert.equal(columnsSatisfy(null, ['phase']), true, 'full payload satisfies anything');
   assert.equal(columnsSatisfy(resolveColumns('full').groups, resolveColumns('shapes').groups), true);
   assert.equal(columnsSatisfy(resolveColumns('shapes').groups, resolveColumns('rating').groups), false);
+  assert.equal(payloadHasHeldGun({ demos: [{ rounds: [{ p: {} }] }] }), false);
+  assert.equal(payloadHasHeldGun({ demos: [{ rounds: [{ hg: { p1: 'ak47' } }] }] }), true);
+  assert.equal(
+    payloadCovers({ demos: [{ rounds: [{ p: {} }] }] }, resolveColumns('rating').groups, resolveColumns('rating').groups),
+    false,
+    'rating cache without hg must refetch'
+  );
+  assert.equal(
+    payloadCovers(
+      { demos: [{ rounds: [{ hg: { p1: 'ak47' } }] }] },
+      resolveColumns('rating').groups,
+      resolveColumns('rating').groups
+    ),
+    true
+  );
+  assert.equal(
+    payloadCovers({ demos: [{ rounds: [{ p: {} }] }] }, resolveColumns('full').groups, resolveColumns('rating').groups),
+    true,
+    'full library cache is not rejected for missing hg'
+  );
 }
 
 // --- every declared group is reachable and costed ---------------------------

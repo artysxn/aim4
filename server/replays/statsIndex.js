@@ -445,6 +445,65 @@ function needsHeldGunEnrichment(entry) {
   return entry.rounds.some((r) => !r.hg || typeof r.hg !== 'object');
 }
 
+/**
+ * Measure longest-held gun from this demo's tick bins. Used on scoped
+ * Performance fetches (a player's 20–30 demos), not the whole library.
+ */
+async function enrichHeldGun(io, user, entry) {
+  if (!needsHeldGunEnrichment(entry)) return entry;
+  if (typeof io.readRoundTicks !== 'function') {
+    for (const row of entry.rounds) row.hg = row.hg || {};
+    return entry;
+  }
+  const rosterFallback = (entry.players || []).map((p) => ({
+    id: p.id,
+    name: p.name,
+    team: p.team,
+    slot: p.slot
+  }));
+  for (const row of entry.rounds) {
+    if (row.hg && typeof row.hg === 'object') {
+      await yieldEventLoop();
+      continue;
+    }
+    let meta = null;
+    try {
+      meta = await io.readRoundMeta(user, row.f);
+    } catch {
+      meta = null;
+    }
+    if (!meta) {
+      row.hg = {};
+      await yieldEventLoop();
+      continue;
+    }
+    meta.map = meta.map || row.m || entry.map || '';
+    const roster =
+      meta.players?.length
+        ? meta.players.map((p) => ({
+            id: p.id,
+            name: p.name,
+            team: p.team,
+            slot: p.slot
+          }))
+        : rosterFallback;
+    let tickBuffer = null;
+    try {
+      tickBuffer = await io.readRoundTicks(user, row.f, 1);
+    } catch {
+      tickBuffer = null;
+    }
+    if (!tickBuffer) {
+      row.hg = {};
+      await yieldEventLoop();
+      continue;
+    }
+    applyAwpHoldFields(row, meta, new TickTrack(tickBuffer), roster);
+    await yieldEventLoop();
+  }
+  return entry;
+}
+
 /** PSDT / distance-travelled bags missing on any round. */
 function needsMovementEnrichment(entry) {
   if (!entry?.rounds?.length) return false;
@@ -1105,16 +1164,6 @@ export async function loadStoredEntry(io, user, demoId) {
   }
 }
 
-/**
- * Ensure the stats index exists. Never re-parses a demo — only reads round
- * JSON / tick bins already on disk.
- *
- * Role assignment is scheduled in the background so GET /stats stays fast.
- * Pass `{ roles: true }` to wait for roles (explicit refresh).
- *
- * @param {object} io  { userDir, readRoundMeta, readRoundTicks? }
- * @param {{ roles?: boolean }} [opts]
- */
 /** Best-effort: a failed stamp must never cost the caller its index. */
 async function stampTopPlayer(user, record, entry) {
   try {
@@ -1124,6 +1173,18 @@ async function stampTopPlayer(user, record, entry) {
   }
 }
 
+/**
+ * Ensure the stats index exists. Never re-parses a demo — only reads round
+ * JSON / tick bins already on disk.
+ *
+ * Role assignment is scheduled in the background so GET /stats stays fast.
+ * Pass `{ roles: true }` to wait for roles (explicit refresh).
+ * Pass `{ heldGun: true }` to wait for longest-held gun from this demo's ticks
+ * (Performance, a player's demos). Full-library pages must not set this.
+ *
+ * @param {object} io  { userDir, readRoundMeta, readRoundTicks? }
+ * @param {{ roles?: boolean, heldGun?: boolean, skipBackgroundEnrichment?: boolean }} [opts]
+ */
 export async function demoIndex(io, user, record, opts = {}) {
   if (!record || record.status !== 'ready') return null;
 
@@ -1158,6 +1219,12 @@ export async function demoIndex(io, user, record, opts = {}) {
     await enrichPhases(io, user, entry, { roles: true });
     await persistEntry(io, user, key, entry);
     return entry;
+  }
+
+  if (opts.heldGun && needsHeldGunEnrichment(entry)) {
+    emit('enriching');
+    await enrichHeldGun(io, user, entry);
+    await persistEntry(io, user, key, entry);
   }
 
   if (needsTickDerivedEnrichment(entry)) {
@@ -1273,6 +1340,7 @@ export async function statsPayload(io, user, records, demoIds = null, opts = {})
     });
     const entry = await demoIndex(io, user, record, {
       skipBackgroundEnrichment: true,
+      heldGun: Boolean(wanted && contract.groups.includes('heldGun') && !contract.all),
       onProgress: (p) =>
         onProgress?.({
           done,

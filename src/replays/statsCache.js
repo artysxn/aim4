@@ -4,7 +4,7 @@
 // ---------------------------------------------------------------------------
 
 import { fetchStats as fetchStatsNetwork, STATS_LIBRARY_PAGE } from './api.js';
-import { columnsSatisfy, resolveColumns } from './shared/statsColumns.js';
+import { payloadCovers, resolveColumns } from './shared/statsColumns.js';
 
 /**
  * @type {{
@@ -60,7 +60,7 @@ export function peekStatsCache(demoIds = null, columns = null) {
     : `demos:${[...demoIds].map(String).sort().join(',')}`;
   if (cache.scope !== scope) return null;
   const needed = resolveColumns(columns ?? null).groups;
-  if (!columnsSatisfy(cache.columns, needed)) return null;
+  if (!payloadCovers(cache.payload, cache.columns, needed)) return null;
   return cache.payload;
 }
 
@@ -217,7 +217,7 @@ export async function getStatsPayload(demoIds = null, opts = {}) {
     cache.payload &&
     cache.complete &&
     cache.scope === scope &&
-    columnsSatisfy(cache.columns, wantGroups);
+    payloadCovers(cache.payload, cache.columns, wantGroups);
   if (reusable) {
     opts.onProgress?.({
       type: 'progress',

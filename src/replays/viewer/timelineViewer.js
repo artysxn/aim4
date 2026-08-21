@@ -10,6 +10,7 @@ import {
   NOTE_MAX,
   apiBase,
   countDemoView,
+  fetchDemo3d,
   fetchPlaylists,
   fetchRoundMeta,
   fetchTeams,
@@ -776,18 +777,10 @@ export function createTimelineViewer({
   async function probe3d(method = 'GET') {
     if (!statsDemoId) return;
     try {
-      // apiBase(), not a bare path: in production the site and the API are on
-      // different hosts, and `/api/...` here resolved against the site, where
-      // the SPA catch-all rewrite answered 200 with train.html. res.ok was
-      // true, res.json() threw on the doctype, and the catch below swallowed
-      // it — so 3D looked unavailable on every demo on aim4.io while working
-      // in dev, where Vite proxies /api to the backend.
-      const res = await fetch(
-        `${apiBase()}/api/replays/demos/${encodeURIComponent(statsDemoId)}/3d`,
-        { method, credentials: 'include' }
-      );
-      if (!res.ok) return;
-      avail3d = await res.json();
+      // Same host + Bearer path as the rest of the library. Cookies plus
+      // Access-Control-Allow-Origin: * is a CORS error in the browser, and
+      // a bare `/api/...` path hits the site rewrite instead of the API.
+      avail3d = await fetchDemo3d(statsDemoId, method);
       map3dSlug = avail3d.mapSlug || resolveMapSlug();
       // The API checks pack files on the API host. /nuke loads the same pack
       // from the asset base the explorer uses, which can be a different disk

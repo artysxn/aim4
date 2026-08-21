@@ -23,24 +23,16 @@
 // replaces the lot with the in-air pose. Pitch is applied after the mixer as
 // a spine-to-head tilt, because every clip is authored looking level.
 //
-// Two build-of-three notes, because the island runs on 'three/webgpu' and
-// GLTFLoader / SkeletonUtils import plain 'three' (a second copy of the core):
-//   - the loaded objects (SkinnedMesh, Bone, Skeleton, AnimationClip) and the
-//     mixer come from that plain copy, and everything between them stays in it;
-//     the WebGPU renderer reads them by duck typing (isSkinnedMesh, skeleton.
-//     boneMatrices, bindMatrix) and renders them fine.
-//   - the loader's MeshStandardMaterial would be converted by the renderer at
-//     first draw; instead it is rebuilt here as an explicit
-//     MeshStandardNodeMaterial so the body takes the scene's sun and probe on
-//     the same terms as any prop, and so a later per-map term (baked shadow
-//     mask, probe volume) has a material of ours to land in.
+// The island and its GLTF addons share the WebGPU three build (see
+// vite.config.js `cs3dThreeWebgpu`). Loaded meshes are converted to
+// MeshStandardNodeMaterial below so they take the scene sun and probe
+// the same way map props do.
 // ---------------------------------------------------------------------------
 
 import * as THREE from 'three/webgpu';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
-import { AnimationMixer, LoopRepeat, LoopOnce } from 'three';
 import { IrradianceNode, PhysicalLightingModel, float, texture, uniform, transformedNormalWorld, vec3 } from 'three/webgpu';
 import { WEAPON_SPEED, DEFAULT_WEAPON_SPEED } from '../../shared/sim/constants.js';
 import { WALK_SPEED_SCALE } from '../../shared/sim3d/constants.js';
@@ -677,7 +669,7 @@ export class PlayerBody {
     this._ownMaterials = [...mine.values()];
     markXrayObject(this.model);
     this.group.add(this.model);
-    this.mixer = new AnimationMixer(this.model);
+    this.mixer = new THREE.AnimationMixer(this.model);
     this.actions.clear();
     this.setWeights.clear();
     this.oneShot = null;
@@ -773,7 +765,7 @@ export class PlayerBody {
     const clip = this.models.clips[set]?.get(name);
     if (!clip) return null;
     a = this.mixer.clipAction(clip);
-    a.setLoop(loop ? LoopRepeat : LoopOnce, Infinity);
+    a.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, Infinity);
     a.clampWhenFinished = !loop;
     a.enabled = true;
     a.weight = 0;
@@ -823,7 +815,7 @@ export class PlayerBody {
     const a = this._action('shared', name, false);
     if (!a) return;
     a.reset();
-    a.setLoop(LoopOnce, 1);
+    a.setLoop(THREE.LoopOnce, 1);
     a.clampWhenFinished = true;
     a.weight = 1;
     a.enabled = true;

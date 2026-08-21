@@ -55,6 +55,7 @@ assert.equal(kprOf({ kills: 15, rounds: 10 }), 1.5);
 
 assert.equal(primaryGunFromRow({ hg: { p1: 'ak47' } }, 'p1'), 'ak47');
 assert.equal(primaryGunFromRow({ hg: {}, kt: [{ a: 'p1', g: 1, w: 'awp' }] }, 'p1'), '');
+assert.equal(primaryGunFromRow({ kt: [{ a: 'p1', g: 1, w: 'ak47' }] }, 'p1'), '');
 assert.equal(gunLabel('ak47'), 'AK-47');
 
 const rows = [
@@ -64,6 +65,10 @@ const rows = [
 const files = gunMapFromRows(rows, 'p1');
 assert.equal(files.r1, 'ak47');
 assert.equal(files.r2, 'awp');
+assert.equal(
+  gunMapFromRows([{ f: 'r3', kt: [{ a: 'p1', g: 1, w: 'deagle' }] }], 'p1').r3,
+  undefined
+);
 
 const store = {
   data: {},
@@ -77,6 +82,18 @@ const store = {
 const first = gunMapForPlayer(rows, 'p1', ['d1'], store);
 const second = gunMapForPlayer([{ f: 'r9', hg: { p1: 'deagle' } }], 'p1', ['d1'], store);
 assert.deepEqual(first, second, 'same demo stamp reuses cache');
+
+const emptyStore = {
+  data: {},
+  getItem(k) {
+    return this.data[k] || null;
+  },
+  setItem(k, v) {
+    this.data[k] = v;
+  }
+};
+gunMapForPlayer([{ f: 'r0' }], 'p1', ['d-empty'], emptyStore);
+assert.equal(emptyStore.data['aim4:perf:guns:v4'], undefined, 'empty maps are not cached');
 assert.equal(demoSetStamp(['b', 'a']), demoSetStamp(['a', 'b']));
 
 const gunRows = [

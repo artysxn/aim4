@@ -1472,9 +1472,10 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange }) {
       flashOverlay = document.createElement('div');
       flashOverlay.className = 'c3-flash';
       container.appendChild(flashOverlay);
+      const mapInfo = cs3dMap(slug);
       matchHud = createMatchHud({
         root: container,
-        map: { code: slug, name: slug },
+        map: { code: mapInfo?.code || slug, name: mapInfo?.name || slug, slug },
         match: hudMatchStub()
       });
       matchHud.el.hidden = !hudOn;

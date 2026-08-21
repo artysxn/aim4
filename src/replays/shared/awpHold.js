@@ -4,16 +4,9 @@
 // ---------------------------------------------------------------------------
 
 import { timingFor } from '../viewer/roundClock.js';
-import { isGun } from '../viewer/equipmentIcons.js';
+import { bareWeapon, isGun } from '../viewer/equipmentIcons.js';
 
 const SCRATCH = {};
-
-function bareWeapon(weapon) {
-  return String(weapon || '')
-    .trim()
-    .toLowerCase()
-    .replace(/^weapon_/, '');
-}
 
 /**
  * Sample live-phase ticks (~4 / s) and count hold ticks per gun plus AWP.

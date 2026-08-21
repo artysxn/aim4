@@ -13,6 +13,8 @@ assert(cam.includes('Restart (K)'), 'restart names K');
 assert(cam.includes('Exit (L)'), 'exit names L');
 assert(!cam.includes('data-cam'), 'no T / CT / Spectate strip');
 assert(cam.includes('hidden'), 'cam starts hidden until a round is on');
+assert(src.includes('hudMapCode'), 'radar map code is resolved from slug');
+assert(src.includes('cs3dMap'), 'slug anubis maps to ANU');
 assert(!src.includes('—'), 'no em dash in match hud');
 
 console.log('matchHud.test.js ok');
