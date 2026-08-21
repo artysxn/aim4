@@ -13,6 +13,8 @@
 
 import { formatApiError } from '../replays/api.js';
 import { getStatsPayload } from '../replays/statsCache.js';
+import { fetchRoster } from '../replays/api.js';
+import { demosForPlayer } from '../replays/shared/rosterQuery.js';
 import { MAPS } from '../replays/shared/roundId.js';
 import { aggregatePlayers, allRows, indexMaps } from '../replays/shared/statsMath.js';
 import { setSpinnerLabel, spinnerHtml, statsProgressLabel } from '../lib/spinner.js';
@@ -60,15 +62,50 @@ function sparklineHtml(points) {
 export function initPlayerProfileView({ escapeHtml }) {
   const host = document.querySelector('.view[data-view="player"] .view-pad');
 
-  /** The whole readable library, fetched once and reused across profiles. */
+  /** Stats for the profile on screen. Scoped to that player's matches. */
   let payload = null;
   let loading = null;
   let currentId = '';
+  /** Which demo ids `payload` covers, so revisiting a profile is free. */
+  let scopedTo = '';
+  /** Roster catalogue, shared across profiles. */
+  let roster = null;
+  let rosterLoading = null;
 
-  async function ensurePayload() {
-    if (payload) return payload;
+  async function ensureRoster() {
+    if (roster) return roster;
+    if (!rosterLoading) {
+      rosterLoading = fetchRoster()
+        .then((res) => {
+          roster = res;
+          return res;
+        })
+        .finally(() => {
+          rosterLoading = null;
+        });
+    }
+    return rosterLoading;
+  }
+
+  /**
+   * The profile already only used the demos this player sat in — it just
+   * downloaded the other four thousand first to find them. The catalogue
+   * answers that up front, so the fetch is the player's matches and nothing
+   * else.
+   */
+  async function ensurePayload(id) {
+    await ensureRoster();
+    const ids = demosForPlayer(roster, id);
+    if (!ids.length) {
+      payload = { demos: [] };
+      scopedTo = '';
+      return payload;
+    }
+    const stamp = ids.join(',');
+    if (payload && scopedTo === stamp) return payload;
     if (!loading) {
-      loading = getStatsPayload(null, {
+      loading = getStatsPayload(ids, {
+        columns: 'rating',
         onProgress: (p) => {
           if (!host) return;
           setSpinnerLabel(host, statsProgressLabel(p));
@@ -76,6 +113,7 @@ export function initPlayerProfileView({ escapeHtml }) {
       })
         .then((res) => {
           payload = res;
+          scopedTo = stamp;
           return res;
         })
         .finally(() => {
@@ -340,7 +378,7 @@ export function initPlayerProfileView({ escapeHtml }) {
       currentId = id;
       host.innerHTML = spinnerHtml('Loading player…');
       try {
-        await ensurePayload();
+        await ensurePayload(id);
       } catch (err) {
         host.innerHTML = `<p class="view-empty">${escapeHtml(formatApiError(err))}</p>`;
         return;

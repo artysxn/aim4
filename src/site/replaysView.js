@@ -2393,7 +2393,8 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     }
     const token = ++roundTagToken;
     try {
-      const payload = await getStatsPayload(demoIds);
+      // Round tags only (row.rl), for the library's round chips.
+      const payload = await getStatsPayload(demoIds, { columns: 'roundLibrary' });
       if (token !== roundTagToken) return;
       const next = new Map();
       for (const d of payload?.demos || []) {

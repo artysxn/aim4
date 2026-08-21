@@ -21,6 +21,7 @@ import {
   aggregatePlayers
 } from '../../src/replays/shared/statsMath.js';
 import { setDemoTopPlayer } from './demoStore.js';
+import { projectEntry, resolveColumns } from '../../src/replays/shared/statsColumns.js';
 import { awpAccuracyFromTicks } from '../../src/replays/shared/awpAccuracy.js';
 import { cappedDamageFromMeta, playerRoundDamage } from '../../src/replays/shared/roundDamage.js';
 import { applyAwpHoldFields } from '../../src/replays/shared/awpHold.js';
@@ -1069,7 +1070,7 @@ export function topPlayerOf(entry) {
   return { id: String(best.id || ''), name: String(best.name || ''), rating: best.rating };
 }
 
-async function loadStoredEntry(io, user, demoId) {
+export async function loadStoredEntry(io, user, demoId) {
   const cached = memory.get(demoId);
   if (cached?.entry) {
     remember(demoId, cached);
@@ -1196,7 +1197,7 @@ export function scheduleStatsIndex(io, user, record, done) {
  *   current: string|null,
  *   phase: string,
  *   id?: string
- * }) => void }} [opts]
+ * }) => void, columns?: string[]|string|null }} [opts]
  * @returns {Promise<{
  *   demos: object[],
  *   total: number,
@@ -1207,6 +1208,9 @@ export function scheduleStatsIndex(io, user, record, done) {
  */
 export async function statsPayload(io, user, records, demoIds = null, opts = {}) {
   const onProgress = typeof opts.onProgress === 'function' ? opts.onProgress : null;
+  // Column contract. Resolved once per request; `projectEntry` is a no-op when
+  // the caller asked for everything, so the admin / charts path is unchanged.
+  const contract = resolveColumns(opts.columns ?? null);
   const wanted = demoIds?.length ? new Set(demoIds) : null;
   const list = [];
   for (const record of records || []) {
@@ -1260,7 +1264,7 @@ export async function statsPayload(io, user, records, demoIds = null, opts = {})
         })
     });
     done += 1;
-    if (entry) demos.push(entry);
+    if (entry) demos.push(projectEntry(entry, contract));
     onProgress?.({
       done,
       total,
@@ -1277,7 +1281,11 @@ export async function statsPayload(io, user, records, demoIds = null, opts = {})
     total: libraryTotal,
     offset,
     count: demos.length,
-    hasMore: next < libraryTotal
+    hasMore: next < libraryTotal,
+    // What the client actually holds. The cache keys reuse off this, and
+    // `ratingReady: false` is the client's signal not to render A4R from it.
+    columns: contract.groups,
+    ratingReady: contract.ratingReady
   };
 }
 

@@ -754,7 +754,9 @@ export function initTeamView({ auth, escapeHtml }) {
       return;
     }
     try {
-      const payload = await getStatsPayload(ids);
+      // Map record + team PRW only. The per-player rating columns (aim, duels)
+      // are four fifths of the payload and nothing here reads them.
+      const payload = await getStatsPayload(ids, { columns: 'team' });
       if (token !== overviewMapsToken) return;
       const want = teamNameKey(team?.name || '');
       /** @type {Map<string, {matches: number, wins: number, losses: number, rounds: number, won: number, prwSum: number, prwN: number}>} */

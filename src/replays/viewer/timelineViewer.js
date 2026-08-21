@@ -3666,7 +3666,9 @@ export function createTimelineViewer({
         side: stratSide,
         playerIds,
         demoRoles: await stratDemoRoles(),
-        libraryDemos: () => getStatsPayload().then((p) => p?.demos || []),
+        // Identity only: this lists matches, it does not measure them.
+        libraryDemos: () =>
+          getStatsPayload(null, { columns: 'identity' }).then((p) => p?.demos || []),
         loadRounds: () => stratScanRounds(mapCode, stratSide, playerIds),
         network
       });

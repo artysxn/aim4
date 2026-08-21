@@ -206,12 +206,76 @@ export function createStatsPanel({
     );
   }
 
+  /**
+   * How much of the library has arrived. The table paints after the first page
+   * and keeps growing, so "is it still going, and how far along" is a real
+   * question the turning ring alone cannot answer.
+   *
+   * @type {{ loaded: number, total: number }}
+   */
+  let libraryProgress = { loaded: 0, total: 0 };
+
+  const countFmt = new Intl.NumberFormat();
+
+  function libraryProgressText() {
+    const { loaded, total } = libraryProgress;
+    if (!total) return 'Loading matches…';
+    const shown = Math.min(loaded, total);
+    return (
+      `${countFmt.format(shown)} of ${countFmt.format(total)} matches loaded\n` +
+      'Tables update as the rest arrive.'
+    );
+  }
+
+  /** Push the current count onto every copy of the spinner. */
+  function paintLibraryProgress() {
+    const roots = [el, pageHeadEl].filter(Boolean);
+    const text = libraryProgressText();
+    for (const root of roots) {
+      root.querySelectorAll('[data-st-library-load]').forEach((mark) => {
+        mark.dataset.tip = text;
+        // One line for assistive tech; the tip's second line is UI hint only.
+        mark.setAttribute(
+          'aria-label',
+          libraryProgress.total
+            ? `Loading matches, ${Math.min(libraryProgress.loaded, libraryProgress.total)} of ${libraryProgress.total} loaded`
+            : 'Loading more matches'
+        );
+      });
+    }
+  }
+
+  /**
+   * Record progress from either signal: `onProgress` ticks demo by demo inside
+   * the page being fetched, `onBatch` lands when a whole page has merged.
+   * Taking the max keeps the count monotonic when both fire.
+   */
+  function noteLibraryProgress({ loaded, total }) {
+    const nextTotal = Number(total) || libraryProgress.total;
+    const nextLoaded = Math.max(0, Number(loaded) || 0);
+    libraryProgress = {
+      loaded: Math.max(libraryProgress.total === nextTotal ? libraryProgress.loaded : 0, nextLoaded),
+      total: nextTotal
+    };
+    paintLibraryProgress();
+  }
+
+  function resetLibraryProgress() {
+    libraryProgress = { loaded: 0, total: 0 };
+    paintLibraryProgress();
+  }
+
   function setLibraryLoading(on) {
-    const root = pageHeadEl || el;
-    root.querySelectorAll('[data-st-library-load]').forEach((mark) => {
-      mark.hidden = !on;
-    });
-    if (on) setLibraryRetry(false);
+    const roots = [el, pageHeadEl].filter(Boolean);
+    for (const root of roots) {
+      root.querySelectorAll('[data-st-library-load]').forEach((mark) => {
+        mark.hidden = !on;
+      });
+    }
+    if (on) {
+      paintLibraryProgress();
+      setLibraryRetry(false);
+    }
   }
 
   function setLibraryRetry(on) {
@@ -288,6 +352,9 @@ export function createStatsPanel({
   };
 
   const detachTips = attachTips(el);
+  // The library spinner sits in the page head, which is a separate subtree from
+  // the panel — without this its tooltip would never fire.
+  const detachHeadTips = pageHeadEl ? attachTips(pageHeadEl) : () => {};
 
   function singleMap() {
     return filter.maps.length === 1 ? filter.maps[0] : '';
@@ -2298,6 +2365,8 @@ export function createStatsPanel({
     lockedTeamName = String(next.teamName || '').trim();
     scopeEl.textContent = next.title || '';
     payload = null;
+    // A re-scoped load counts from zero against a different total.
+    resetLibraryProgress();
     setLibraryLoading(false);
     setLibraryRetry(false);
     bodyEl.innerHTML = spinnerHtml('Loading database…');
@@ -2337,12 +2406,18 @@ export function createStatsPanel({
       let painted = false;
       const res = await getStatsPayload(scope.demos || null, {
         onProgress: (p) => {
-          if (token !== loadToken || painted) return;
+          if (token !== loadToken) return;
+          // Demo-by-demo inside the page in flight, so the hover count moves
+          // continuously instead of jumping a page at a time. statsCache stamps
+          // these as library-wide figures; the raw event is per-page.
+          noteLibraryProgress({ loaded: p?.libraryLoaded, total: p?.libraryTotal });
+          if (painted) return;
           setSpinnerLabel(bodyEl, statsProgressLabel(p));
         },
         onBatch: (batch) => {
           if (token !== loadToken) return;
           payload = batch.payload;
+          noteLibraryProgress({ loaded: batch.loaded, total: batch.total });
           setLibraryLoading(Boolean(batch.hasMore));
           const rounds = (payload.demos || []).reduce((n, d) => n + (d.rounds?.length || 0), 0);
           if (!rounds) {
@@ -2428,9 +2503,14 @@ export function createStatsPanel({
     setLibraryLoading(true);
     try {
       const res = await getStatsPayload(scope.demos || null, {
+        onProgress: (p) => {
+          if (token !== loadToken) return;
+          noteLibraryProgress({ loaded: p?.libraryLoaded, total: p?.libraryTotal });
+        },
         onBatch: (batch) => {
           if (token !== loadToken) return;
           payload = batch.payload;
+          noteLibraryProgress({ loaded: batch.loaded, total: batch.total });
           setLibraryLoading(Boolean(batch.hasMore));
           void scheduleUiJob({
             tokenRef: renderTokenRef,
@@ -2515,6 +2595,7 @@ export function createStatsPanel({
         if (slot?.contains(pageHeadEl)) slot.replaceChildren();
       }
       detachTips();
+      detachHeadTips();
       el.remove();
     }
   };

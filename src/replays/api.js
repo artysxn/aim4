@@ -269,6 +269,37 @@ export async function fetchDemo(id) {
   }
 }
 
+/**
+ * The roster catalogue: which demos feature which players and teams.
+ *
+ * Small (a few hundred KB for a 4100-demo library) and cached for a minute, so
+ * a scoped page resolves its demo ids from this and then asks /stats for only
+ * those — instead of pulling the library to find out who is in it.
+ */
+export async function fetchRoster() {
+  return asJson(
+    await safeFetch(`${API_BASE}/api/replays/roster`, { headers: await headers() })
+  );
+}
+
+/**
+ * Library-wide peer averages for the Performance cards. Computed server-side so
+ * the page can scope itself to one player's matches without the comparison
+ * quietly narrowing to that player's own lobbies.
+ */
+export async function fetchPeerAverages(filter = {}) {
+  const params = new URLSearchParams();
+  if (filter.map) params.set('map', filter.map);
+  if (filter.dateFrom) params.set('from', filter.dateFrom);
+  if (filter.dateTo) params.set('to', filter.dateTo);
+  const q = params.toString();
+  return asJson(
+    await safeFetch(`${API_BASE}/api/replays/peers${q ? `?${q}` : ''}`, {
+      headers: await headers()
+    })
+  );
+}
+
 function isHtmlOrJsonType(res) {
   const ct = (res.headers.get('content-type') || '').toLowerCase();
   return ct.includes('text/html') || ct.includes('application/json') || ct.includes('text/plain');
@@ -583,6 +614,12 @@ export async function fetchStats(demoIds = null, opts = {}) {
   const limit = Math.max(0, Math.floor(Number(opts.limit) || 0));
   if (offset) params.set('offset', String(offset));
   if (limit) params.set('limit', String(limit));
+  // Column contract. Omitted → the server ships every column, which is the
+  // old behaviour and what the admin tools still want.
+  const columns = opts.columns;
+  if (columns) {
+    params.set('fields', Array.isArray(columns) ? columns.join(',') : String(columns));
+  }
   const url = `${API_BASE}/api/replays/stats?${params}`;
   const res = await safeFetch(url, {
     headers: await headers({ Accept: 'application/x-ndjson, application/json' })

@@ -5,17 +5,22 @@
 // ---------------------------------------------------------------------------
 
 import { getStatsPayload } from '../replays/statsCache.js';
-import { formatApiError } from '../replays/api.js';
+import { fetchPeerAverages, fetchRoster, formatApiError } from '../replays/api.js';
+import {
+  demosForPlayer,
+  demosForTeam,
+  rosterPlayers,
+  rosterTeamPlayers,
+  rosterTeams
+} from '../replays/shared/rosterQuery.js';
 import { ECONOMIES, MAPS, economyLabel } from '../replays/shared/roundId.js';
 import { indexMaps } from '../replays/shared/statsMath.js';
-import { listPlayers, listTeams } from '../replays/analytics/analyticsMath.js';
 import {
   CARD_METRICS,
   LAST_MATCH_OPTS,
   PERF_MAPS,
   findPlayerByUsername,
   matchSeries,
-  peerAverages,
   playerDemos,
   playerRows,
   playerStats,
@@ -120,6 +125,13 @@ export function initPerformanceView({ auth, escapeHtml }) {
 
   let payload = null;
   let loading = null;
+  /** Roster catalogue: who is in which demo, without any stats index. */
+  let roster = null;
+  let rosterLoading = null;
+  /** Demo ids the current payload was scoped to, so we refetch only on change. */
+  let scopedTo = '';
+  /** Server-computed library averages for the summary cards. */
+  let peers = { metrics: {}, sample: 0 };
   let playerId = '';
   let playerName = '';
   let teamKey = '';
@@ -140,16 +152,58 @@ export function initPerformanceView({ auth, escapeHtml }) {
 
   const maps = () => indexMaps(payload || { demos: [] });
 
+  /**
+   * The catalogue, not the library. A few hundred KB, and it is all the search
+   * box and the "which matches" question ever needed.
+   */
+  async function ensureRoster() {
+    if (roster) return roster;
+    if (!rosterLoading) {
+      rosterLoading = fetchRoster()
+        .then((res) => {
+          roster = res;
+          return res;
+        })
+        .finally(() => {
+          rosterLoading = null;
+        });
+    }
+    return rosterLoading;
+  }
+
+  /**
+   * Stats for the selected player only.
+   *
+   * Was `getStatsPayload(null)` — every column of every round of all 4100
+   * demos, to draw six cards for one person. The roster resolves the matches
+   * first, and the `rating` contract drops the columns this page never reads.
+   */
   async function ensurePayload() {
-    if (payload) return payload;
+    await ensureRoster();
+    const ids = playerId
+      ? demosForPlayer(roster, playerId)
+      : teamKey
+        ? demosForTeam(roster, teamKey)
+        : [];
+    // Nothing selected yet: the search box runs off the catalogue, so there is
+    // no reason to fetch a single index.
+    if (!ids.length) {
+      payload = { demos: [] };
+      scopedTo = '';
+      return payload;
+    }
+    const stamp = ids.join(',');
+    if (payload && scopedTo === stamp) return payload;
     if (!loading) {
-      loading = getStatsPayload(null, {
+      loading = getStatsPayload(ids, {
+        columns: 'rating',
         onProgress: (p) => {
           if (host) setSpinnerLabel(host, statsProgressLabel(p));
         }
       })
         .then((res) => {
           payload = res;
+          scopedTo = stamp;
           return res;
         })
         .finally(() => {
@@ -157,6 +211,20 @@ export function initPerformanceView({ auth, escapeHtml }) {
         });
     }
     return loading;
+  }
+
+  /** Library averages, computed server-side. Silent failure leaves the cards bare. */
+  async function ensurePeers() {
+    try {
+      peers = await fetchPeerAverages({
+        map: ui.map,
+        dateFrom: ui.dateFrom,
+        dateTo: ui.dateTo
+      });
+    } catch {
+      peers = { metrics: {}, sample: 0 };
+    }
+    return peers;
   }
 
   function writeUrl() {
@@ -194,8 +262,8 @@ export function initPerformanceView({ auth, escapeHtml }) {
 
   function suggestions() {
     const needle = searchQuery.trim().toLowerCase();
-    const players = payload ? listPlayers(payload) : [];
-    const teams = payload ? listTeams(payload) : [];
+    const players = rosterPlayers(roster, '', Infinity);
+    const teams = rosterTeams(roster, '', Infinity);
     const out = [];
     if (!needle) {
       for (const t of teams.slice(0, 8)) {
@@ -305,11 +373,11 @@ export function initPerformanceView({ auth, escapeHtml }) {
     </div>`;
   }
 
-  function cardsHtml(stats, series, peers) {
+  function cardsHtml(stats, series, peerMetrics) {
     return `<div class="pf-cards">
       ${CARD_METRICS.map((m) => {
         const value = m.read(stats);
-        const comp = peers[m.key];
+        const comp = peerMetrics?.[m.key];
         const spark = sparkline(series.map((p) => p[m.key]));
         const max = Math.max(Math.abs(Number(value) || 0), Math.abs(Number(comp) || 0), 0.01) * 1.25;
         const fill = Number.isFinite(value) ? Math.max(0, Math.min(100, (Math.abs(value) / max) * 100)) : 0;
@@ -423,9 +491,9 @@ export function initPerformanceView({ auth, escapeHtml }) {
   }
 
   function teamPickerHtml() {
-    const team = listTeams(payload).find((t) => t.key === teamKey);
+    const team = rosterTeams(roster, '', Infinity).find((t) => t.key === teamKey);
     if (!team) return `<p class="view-empty">That team is not in the library.</p>`;
-    const people = listPlayers(payload).filter((p) => (team.playerIds || []).includes(p.id));
+    const people = rosterTeamPlayers(roster, teamKey);
     if (!people.length) return `<p class="view-empty">No players on ${escapeHtml(team.name)}.</p>`;
     return `<div class="pf-team-pick">
       <h2 class="pf-name">${escapeHtml(team.name)}</h2>
@@ -445,7 +513,7 @@ export function initPerformanceView({ auth, escapeHtml }) {
     const stats = playerStats(payload, playerId, ui, players, demos);
     const series = matchSeries(payload, playerId, ui, players, demos);
     const grid = roleGrid(payload, playerId, ui, players, demos);
-    const peers = peerAverages(payload, ui, players, demos);
+    const peerMetrics = peers?.metrics || {};
     const rating = stats?.a4r ?? stats?.rating;
     return `
       ${filtersHtml()}
@@ -459,7 +527,7 @@ export function initPerformanceView({ auth, escapeHtml }) {
           <span class="pf-hero-label">Rating</span>
         </div>
       </div>
-      ${cardsHtml(stats, series, peers)}
+      ${cardsHtml(stats, series, peerMetrics)}
       ${rolesHtml(grid)}
       <div class="pf-chart-wrap">${ratingChart(series)}</div>
       <div class="pf-matches">${matchesHtml(series)}</div>`;
@@ -511,15 +579,49 @@ export function initPerformanceView({ auth, escapeHtml }) {
     }
   }
 
+  /**
+   * Paint for the current selection. The payload is scoped to whoever is
+   * selected, so changing that selection is a fetch, not just a re-render.
+   */
+  async function renderScoped() {
+    if (!host) return;
+    mountHead();
+    const ids = playerId
+      ? demosForPlayer(roster, playerId)
+      : teamKey
+        ? demosForTeam(roster, teamKey)
+        : [];
+    if (ids.length && scopedTo !== ids.join(',')) {
+      host.innerHTML = `<div class="is-loading" role="status">${spinnerHtml()}</div>`;
+      try {
+        await ensurePayload();
+      } catch (err) {
+        host.innerHTML = `<p class="view-empty">${escapeHtml(
+          formatApiError(err).message || 'Could not load stats.'
+        )}</p>`;
+        return;
+      }
+    }
+    render();
+    // Peer averages land separately: the cards render immediately with the
+    // player's own numbers and gain their comparison notch a moment later.
+    if (playerId) {
+      const before = playerId;
+      ensurePeers().then(() => {
+        if (playerId === before) render();
+      });
+    }
+  }
+
   function pickPlayer(id) {
-    const p = listPlayers(payload).find((x) => x.id === id);
+    const p = rosterPlayers(roster, '', Infinity).find((x) => x.id === id);
     playerId = id;
     playerName = p?.name || id;
     teamKey = '';
     chapter = 'summary';
     searchQuery = '';
     searchOpen = false;
-    render();
+    renderScoped();
   }
 
   function pickTeam(key) {
@@ -529,18 +631,18 @@ export function initPerformanceView({ auth, escapeHtml }) {
     chapter = 'summary';
     searchQuery = '';
     searchOpen = false;
-    render();
+    renderScoped();
   }
 
   function resolveDefault() {
     if (playerId) {
-      const p = listPlayers(payload).find((x) => x.id === playerId);
+      const p = rosterPlayers(roster, '', Infinity).find((x) => x.id === playerId);
       if (p) playerName = p.name;
       return;
     }
     if (teamKey) return;
     const uname = auth?.username || auth?.displayName || '';
-    const hit = findPlayerByUsername(listPlayers(payload), uname);
+    const hit = findPlayerByUsername(rosterPlayers(roster, '', Infinity), uname);
     if (hit) {
       playerId = hit.id;
       playerName = hit.name;
@@ -664,8 +766,10 @@ export function initPerformanceView({ auth, escapeHtml }) {
 
   async function show(params = {}) {
     host.innerHTML = `<div class="is-loading" role="status">${spinnerHtml()}</div>`;
+    // The catalogue first: the selection has to be known before there is
+    // anything worth fetching stats for.
     try {
-      await ensurePayload();
+      await ensureRoster();
     } catch (err) {
       host.innerHTML = `<p class="view-empty">${escapeHtml(formatApiError(err).message || 'Could not load stats.')}</p>`;
       return;
@@ -676,13 +780,13 @@ export function initPerformanceView({ auth, escapeHtml }) {
     const ch = String(params.chapter || chapter || 'summary');
     chapter = CHAPTERS.some((c) => c.key === ch) ? ch : 'summary';
     resolveDefault();
-    render();
+    await renderScoped();
   }
 
   auth?.onChange?.(() => {
-    if (!playerId && payload) {
+    if (!playerId && roster) {
       resolveDefault();
-      render();
+      renderScoped();
     }
   });
 

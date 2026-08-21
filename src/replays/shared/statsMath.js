@@ -479,10 +479,24 @@ export function aim4OpeningRating({ opkd, swing, opatt }) {
  * @param {StatsFilter} filter
  * @param {Map<string, {t1?: string, t2?: string, name1?: string, name2?: string}>|null} [demos]
  */
-export function aggregatePlayers(rows, players, filter = {}, demos = null) {
-  /** @type {Map<string, any>} */
-  const acc = new Map();
+/**
+ * A reusable accumulator, so the library can be pooled a demo at a time.
+ *
+ * Splitting accumulation from derivation is what lets the server compute a
+ * library-wide peer average without ever holding the library: memory is bounded
+ * by the player count (thousands), not the demo count. The derived statistics
+ * are non-linear in the counters, so they cannot be averaged after the fact —
+ * the pooling has to happen down here, on the buckets.
+ */
+export function createPlayerAccumulator() {
+  return new Map();
+}
 
+/**
+ * Fold one batch of rows into an accumulator. Call repeatedly, then
+ * `derivePlayers` once.
+ */
+export function accumulatePlayers(acc, rows, players, filter = {}, demos = null) {
   const seat = (id, name) => {
     let s = acc.get(id);
     if (!s) {
@@ -688,6 +702,11 @@ export function aggregatePlayers(rows, players, filter = {}, demos = null) {
     }
   }
 
+  return acc;
+}
+
+/** Turn pooled counters into table rows. Safe to call once per query. */
+export function derivePlayers(acc) {
   const out = [];
   for (const s of acc.values()) {
     if (!s.all.rounds) continue;
@@ -875,6 +894,16 @@ export function aggregatePlayers(rows, players, filter = {}, demos = null) {
   }
   out.sort((a, b) => (b.a4r ?? b.rating) - (a.a4r ?? a.rating));
   return out;
+}
+
+/**
+ * One table row per player, pooled across demos. Unchanged behaviour: the
+ * accumulate/derive split above is an internal seam, not a new contract.
+ */
+export function aggregatePlayers(rows, players, filter = {}, demos = null) {
+  return derivePlayers(
+    accumulatePlayers(createPlayerAccumulator(), rows, players, filter, demos)
+  );
 }
 
 // ---------------------------------------------------------------------------

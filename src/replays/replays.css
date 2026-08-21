@@ -3953,6 +3953,13 @@ body.rv-open {
   width: 18px;
   height: 32px;
   flex: 0 0 auto;
+  /* Hover target for the "N of M matches loaded" tip. The ring is 12px inside
+     a 18x32 box, so without this the pointer misses it more often than not. */
+  cursor: help;
+}
+
+.st-library-load > .spinner {
+  pointer-events: none;
 }
 
 .st-library-load[hidden] {

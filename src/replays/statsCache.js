@@ -4,9 +4,24 @@
 // ---------------------------------------------------------------------------
 
 import { fetchStats as fetchStatsNetwork, STATS_LIBRARY_PAGE } from './api.js';
+import { columnsSatisfy, resolveColumns } from './shared/statsColumns.js';
 
-/** @type {{ key: string, payload: any, at: number, generation: number, complete: boolean, nextOffset: number }} */
-let cache = { key: '', payload: null, at: 0, generation: 0, complete: false, nextOffset: 0 };
+/**
+ * @type {{
+ *   key: string, scope: string, columns: string[]|null, payload: any,
+ *   at: number, generation: number, complete: boolean, nextOffset: number
+ * }}
+ */
+let cache = {
+  key: '',
+  scope: '',
+  columns: null,
+  payload: null,
+  at: 0,
+  generation: 0,
+  complete: false,
+  nextOffset: 0
+};
 
 /** @type {Map<string, Promise<any>>} */
 const inflight = new Map();
@@ -17,9 +32,15 @@ const batchListeners = new Map();
 /**
  * @param {string[] | null | undefined} demoIds
  */
-export function statsCacheKey(demoIds = null) {
-  if (!demoIds?.length) return 'library';
-  return `demos:${[...demoIds].map(String).sort().join(',')}`;
+export function statsCacheKey(demoIds = null, columns = null) {
+  const scope = !demoIds?.length
+    ? 'library'
+    : `demos:${[...demoIds].map(String).sort().join(',')}`;
+  // The contract is part of the identity: a "shapes" pull and a "rating" pull
+  // over the same demos are different payloads, and serving one for the other
+  // is how a page ends up rendering a rating built from league averages.
+  const groups = resolveColumns(columns ?? null).groups;
+  return `${scope}|${groups.join('+') || 'baseline'}`;
 }
 
 /** Bumps whenever the shared payload is cleared so panels drop stale local copies. */
@@ -27,10 +48,20 @@ export function statsCacheGeneration() {
   return cache.generation;
 }
 
-export function peekStatsCache(demoIds = null) {
-  const key = statsCacheKey(demoIds);
-  if (cache.key === key && cache.payload && cache.complete) return cache.payload;
-  return null;
+/**
+ * A cached payload usable for this request: same scope, and holding at least
+ * the columns asked for. A wider pull satisfies a narrower one, so navigating
+ * Database → Performance reuses what is already in memory instead of refetching.
+ */
+export function peekStatsCache(demoIds = null, columns = null) {
+  if (!cache.payload || !cache.complete) return null;
+  const scope = !demoIds?.length
+    ? 'library'
+    : `demos:${[...demoIds].map(String).sort().join(',')}`;
+  if (cache.scope !== scope) return null;
+  const needed = resolveColumns(columns ?? null).groups;
+  if (!columnsSatisfy(cache.columns, needed)) return null;
+  return cache.payload;
 }
 
 export function invalidateStatsCache() {
@@ -38,6 +69,8 @@ export function invalidateStatsCache() {
   // pull and its batch listeners alone so later pages still paint.
   cache = {
     key: '',
+    scope: '',
+    columns: null,
     payload: null,
     at: 0,
     generation: (cache.generation || 0) + 1,
@@ -157,9 +190,20 @@ async function fetchStatsPage(slice, opts) {
  * }} [opts]
  */
 export async function getStatsPayload(demoIds = null, opts = {}) {
-  const key = statsCacheKey(demoIds);
+  const columns = opts.columns ?? null;
+  const key = statsCacheKey(demoIds, columns);
+  const scope = !demoIds?.length
+    ? 'library'
+    : `demos:${[...demoIds].map(String).sort().join(',')}`;
+  const wantGroups = resolveColumns(columns).groups;
   const unlisten = listenBatch(key, opts.onBatch);
-  if (!opts.force && cache.key === key && cache.payload && cache.complete) {
+  const reusable =
+    !opts.force &&
+    cache.payload &&
+    cache.complete &&
+    cache.scope === scope &&
+    columnsSatisfy(cache.columns, wantGroups);
+  if (reusable) {
     opts.onProgress?.({
       type: 'progress',
       phase: 'cache',
@@ -182,6 +226,7 @@ export async function getStatsPayload(demoIds = null, opts = {}) {
     pending = (async () => {
       const resume =
         !opts.force && cache.key === key && cache.payload && !cache.complete;
+      const heldColumns = resume ? cache.columns : wantGroups;
       const merged = resume && cache.payload ? cache.payload : { demos: [] };
       if (!merged.demos) merged.demos = [];
       const scoped = demoIds?.length ? [...demoIds] : null;
@@ -194,10 +239,29 @@ export async function getStatsPayload(demoIds = null, opts = {}) {
           hasMore = false;
           break;
         }
+        // Progress events describe the page in flight: `done` counts within it,
+        // and a scoped request is sent with offset 0 because the slicing happens
+        // here. Neither is what a caller wants to show a user, so the two
+        // library-wide numbers are stamped on here, where the scope is known.
+        const pageStart = offset;
+        const libraryTotal = scoped ? scoped.length : 0;
+        const relayProgress = opts.onProgress
+          ? (p) => {
+              const done = Math.max(0, Number(p?.done) || 0);
+              opts.onProgress({
+                ...p,
+                libraryLoaded: pageStart + done,
+                libraryTotal:
+                  libraryTotal ||
+                  Math.max(Number(p?.libraryTotal) || 0, Number(p?.total) || 0)
+              });
+            }
+          : undefined;
         const chunk = await fetchStatsPage(slice, {
-          onProgress: opts.onProgress,
+          onProgress: relayProgress,
           offset: scoped ? 0 : offset,
-          limit: page
+          limit: page,
+          columns
         });
         const incomingLen = mergeChunk(merged, chunk);
         const loaded = merged.demos.length;
@@ -215,6 +279,8 @@ export async function getStatsPayload(demoIds = null, opts = {}) {
         const nextOffset = offset + (scoped ? slice.length : page);
         cache = {
           key,
+          scope,
+          columns: Array.isArray(chunk?.columns) ? chunk.columns : heldColumns,
           payload: merged,
           at: Date.now(),
           generation: cache.generation || 0,
@@ -235,6 +301,7 @@ export async function getStatsPayload(demoIds = null, opts = {}) {
       cache = {
         ...cache,
         key,
+        scope,
         payload: merged,
         at: Date.now(),
         complete: !hasMore,

@@ -68,7 +68,10 @@ import {
   writeRoundNotes
 } from './demoStore.js';
 import { cpuProbe, memorySnapshot } from './hostMemory.js';
-import { forgetDemoIndex, refreshLibraryStats, scheduleStatsIndex, STATS_LIBRARY_PAGE, statsPayload } from './statsIndex.js';
+import { forgetDemoIndex, loadStoredEntry, refreshLibraryStats, scheduleStatsIndex, STATS_LIBRARY_PAGE, statsPayload } from './statsIndex.js';
+import { ColumnContractError, resolveColumns } from '../../src/replays/shared/statsColumns.js';
+import { getRoster } from './rosterCatalogue.js';
+import { peerAverages } from './peerAverages.js';
 import { isAcceptedUpload, rarSupport } from './archive.js';
 import { allJobs, batchStatus, enqueueParse, forgetJob, getBatch, jobStatus, startIngest } from './jobs.js';
 import { SHARED_LIBRARY, authStatus, identify } from './auth.js';
@@ -1109,6 +1112,42 @@ export async function handleReplayRequest(req, res, url) {
     return true;
   }
 
+  // ---- roster catalogue ----------------------------------------------------
+  // Who played in what, without opening a single stats index. Every scoped page
+  // resolves its demo ids here first, then asks /stats for just those — which
+  // is the difference between 4100 demos and thirty.
+  if (req.method === 'GET' && p === '/api/replays/roster') {
+    const { allowed } = await readable();
+    const records = allowed.filter((r) => (r.status || 'ready') === 'ready');
+    const roster = await getRoster(statsIo, user, records, {
+      readEntry: (u, id) => loadStoredEntry(statsIo, u, id)
+    });
+    res.setHeader?.('Cache-Control', 'private, max-age=60');
+    json(res, 200, roster);
+    return true;
+  }
+
+  // ---- peer averages -------------------------------------------------------
+  // The Performance cards compare against the whole library, so this is the one
+  // query that legitimately walks every demo. It does so here, once, cached,
+  // accumulating a demo at a time — rather than shipping 4100 indexes to a
+  // browser so it can compute six means.
+  if (req.method === 'GET' && p === '/api/replays/peers') {
+    const { allowed } = await readable();
+    const records = allowed.filter((r) => (r.status || 'ready') === 'ready');
+    const filter = {
+      map: url.searchParams.get('map') || '',
+      dateFrom: url.searchParams.get('from') || '',
+      dateTo: url.searchParams.get('to') || ''
+    };
+    const out = await peerAverages(statsIo, user, records, filter, {
+      stamp: String(records.length)
+    });
+    res.setHeader?.('Cache-Control', 'private, max-age=300');
+    json(res, 200, out);
+    return true;
+  }
+
   // ---- stats --------------------------------------------------------------
   // Compact per-round index, one page at a time (STATS_LIBRARY_PAGE). The
   // client paints the first page, then asks for the next. Filtering still
@@ -1129,7 +1168,22 @@ export async function handleReplayRequest(req, res, url) {
           ? Math.min(STATS_LIBRARY_PAGE, only.length)
           : STATS_LIBRARY_PAGE
         : Math.max(1, Math.min(STATS_LIBRARY_PAGE, Math.floor(Number(rawLimit) || STATS_LIBRARY_PAGE)));
-    const pageOpts = { offset, limit };
+    // Column contract. Absent → the full set, so an old client build keeps
+    // working; a bad one is a 400 rather than a silently wrong rating.
+    const fields = url.searchParams.get('fields');
+    let pageOpts;
+    try {
+      pageOpts = { offset, limit, columns: fields };
+      // Resolve eagerly so a contract error is a 400 and not a mid-stream abort
+      // after the client has already been told the request succeeded.
+      resolveColumns(fields ?? null);
+    } catch (err) {
+      if (err instanceof ColumnContractError) {
+        json(res, 400, { error: err.message });
+        return true;
+      }
+      throw err;
+    }
 
     if (!stream) {
       const payload = await statsPayload(statsIo, user, records, only, pageOpts);
