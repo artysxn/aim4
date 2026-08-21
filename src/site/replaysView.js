@@ -3528,6 +3528,8 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
   function syncStatsUrl(state, { push = false } = {}) {
     if (subpage !== 'stats') return;
     const path = pagePath('stats');
+    const here = window.location.pathname.replace(/\/+$/, '') || '/';
+    if (here !== path) return;
     const q = statsViewToParams(state);
     const search = q.toString();
     const target = path + (search ? `?${search}` : '');

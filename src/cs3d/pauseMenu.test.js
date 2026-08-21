@@ -16,7 +16,10 @@ assert(html.includes('value="custom"'), 'custom option');
 assert(!html.includes('—'), 'no em dash in labels');
 
 const src = readFileSync(new URL('./pauseMenu.js', import.meta.url), 'utf8');
-const root = src.slice(src.indexOf('data-view="root"'), src.indexOf('data-view="settings"'));
-assert(root.includes('data-import'), 'import round lives on the Esc root panel');
+const root = src.slice(src.indexOf('data-view="root"'), src.indexOf('data-view="import"'));
+assert(root.includes('data-act="import"'), 'Import round is a root action');
+assert(!root.includes('data-import'), 'picker is not on the root panel');
+assert(src.includes('data-view="import"'), 'Import round is its own window');
+assert(src.includes('data-embed="1"'), 'pause host embeds the picker');
 
 console.log('pauseMenu.test.js ok');

@@ -32,6 +32,20 @@ export const PACKAGE_VERSION = 2;
 export const PACKAGE_VERSIONS = new Set([1, 2]);
 export const PACKAGE_EXT = '.aim4replay';
 
+/** True when `buf` starts with the AIM4 replay magic. SPA HTML is not a package. */
+export function isReplayPackage(buf) {
+  const bytes =
+    buf instanceof Uint8Array
+      ? buf
+      : buf instanceof ArrayBuffer
+        ? new Uint8Array(buf)
+        : buf?.buffer
+          ? new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength)
+          : null;
+  if (!bytes || bytes.length < 8) return false;
+  return new TextDecoder().decode(bytes.subarray(0, 8)) === PACKAGE_MAGIC;
+}
+
 /**
  * @param {Iterable<[string, Uint8Array|ArrayBuffer|Buffer]>} files
  * @returns {Uint8Array}

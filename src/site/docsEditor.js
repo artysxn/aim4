@@ -681,9 +681,13 @@ export function createDocsEditor({ escapeHtml, onSave, onDirty }) {
     syncOutlineActive();
   }
 
+  function outlineScrollRoot() {
+    return el.querySelector('.doc-page') || el.closest('.tm-shell') || window;
+  }
+
   let scrollRoot = null;
   function bindOutlineScroll() {
-    const next = el.closest('.tm-shell') || window;
+    const next = outlineScrollRoot();
     if (scrollRoot === next) return;
     unbindOutlineScroll();
     scrollRoot = next;
@@ -705,7 +709,8 @@ export function createDocsEditor({ escapeHtml, onSave, onDirty }) {
   function syncOutlineActive() {
     const host = outlineHost();
     if (!host || !outlineItems.length) return;
-    const mark = 96;
+    const scroller = el.querySelector('.doc-page');
+    const mark = (scroller?.getBoundingClientRect().top || 0) + 24;
     let current = 0;
     for (let i = 0; i < outlineItems.length; i++) {
       const top = outlineItems[i].el.getBoundingClientRect().top;

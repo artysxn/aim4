@@ -644,6 +644,12 @@ export async function handleReplayRequest(req, res, url) {
         return nameKey(r.team1?.name) === teamQ || nameKey(r.team2?.name) === teamQ;
       });
     }
+    const mapQ = String(url.searchParams.get('map') || '')
+      .trim()
+      .toUpperCase();
+    if (mapQ) {
+      records = records.filter((r) => String(r.map || '').toUpperCase() === mapQ);
+    }
     const byId = new Set(allRecords.map((r) => r.id));
     // Jobs whose record has not landed yet (upload just finished). Terminal
     // error/done jobs must not reappear here — otherwise deleting a failed

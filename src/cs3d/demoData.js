@@ -132,6 +132,35 @@ export function loadDemoBytes(bytes, name = 'demo') {
   };
 }
 
+/**
+ * One library round as a demo the viewer can play. Import round uses this
+ * instead of the whole-match package, which is why picking a round no longer
+ * waits on every other round's ticks.
+ *
+ * @param {object} o
+ * @param {string} o.name
+ * @param {object} [o.manifest]
+ * @param {string} o.mapCode
+ * @param {string} o.stem
+ * @param {object} o.meta
+ * @param {ArrayBuffer|DataView} o.ticks
+ */
+export function demoFromLoadedRound({ name, manifest, mapCode, stem, meta, ticks }) {
+  const view = ticks instanceof DataView ? ticks : new DataView(ticks);
+  const header = readHeader(view);
+  const cache = { stem, header, view };
+  return {
+    name: name || 'demo',
+    manifest: manifest || null,
+    mapCode: String(mapCode || meta?.map || '').toUpperCase(),
+    rounds: [{ stem, round: meta?.round ?? 1, meta }],
+    loadRound(want) {
+      if (want !== stem) throw new Error(`Round ${want} has no tick data.`);
+      return cache;
+    }
+  };
+}
+
 /** Drag-dropped File → demo. */
 export async function loadDemoFile(file) {
   return loadDemoBytes(await file.arrayBuffer(), file.name);

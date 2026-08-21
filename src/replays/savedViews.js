@@ -79,9 +79,18 @@ export function createSavedViews({ page, read, apply, escapeHtml, onStatus }) {
     return url.toString();
   }
 
+  const PAGE_PATH = {
+    database: '/database',
+    patterns: '/patterns',
+    charts: '/patterns'
+  };
+
   /** Keep the address bar in sync for charts / patterns (database already does). */
   function syncAddressBar(href) {
     if (page === 'database') return;
+    const allowed = PAGE_PATH[page];
+    const here = window.location.pathname.replace(/\/+$/, '') || '/';
+    if (allowed && here !== allowed) return;
     try {
       const next = new URL(href, window.location.origin);
       const cur = window.location.pathname + window.location.search;

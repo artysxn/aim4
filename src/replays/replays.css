@@ -4960,6 +4960,17 @@ body.rv-open {
   min-width: 6.5rem;
   z-index: 5;
 }
+
+/* Rounds is a 3-digit count. Without this it inherits .st-sticky-2 (team names). */
+.st-table th.st-col-rounds,
+.st-table td.st-col-rounds {
+  box-sizing: border-box;
+  width: 2.6rem;
+  min-width: 2.6rem;
+  max-width: 2.6rem;
+  padding-left: 6px;
+  padding-right: 6px;
+}
 .st-table .st-sticky-3 {
   min-width: 4rem;
   z-index: 5;
@@ -7892,10 +7903,10 @@ table.rp-mine-table tbody tr {
   gap: 6px;
 }
 
-/* Anchored at the halfway line: the question is which side of even, not how
-   big the number is. The line itself is the 50% mark. */
+/* Grown from the left. The centre line is 50%, not where the bar starts. */
 .tm-map-bar-track {
   position: relative;
+  overflow: hidden;
   height: 8px;
   border-radius: 3px;
   background: rgba(255, 255, 255, 0.07);
@@ -7905,8 +7916,8 @@ table.rp-mine-table tbody tr {
   content: '';
   position: absolute;
   left: 50%;
-  top: -1px;
-  bottom: -1px;
+  top: 0;
+  bottom: 0;
   width: 1px;
   z-index: 2;
   background: rgba(255, 255, 255, 0.22);
@@ -7916,20 +7927,21 @@ table.rp-mine-table tbody tr {
   position: absolute;
   top: 0;
   bottom: 0;
-  border-radius: 3px;
+  left: 0;
+  border-radius: 0;
   background: currentColor;
 }
 
 .tm-map-bar-prw {
   position: absolute;
+  top: 0;
+  bottom: 0;
   z-index: 1;
   pointer-events: none;
-  border-radius: 3px;
+  border-radius: 0;
 }
 
 .tm-map-bar-prw.is-under {
-  top: 2px;
-  bottom: 2px;
   background: repeating-linear-gradient(
     -45deg,
     currentColor 0,
@@ -7940,8 +7952,6 @@ table.rp-mine-table tbody tr {
 }
 
 .tm-map-bar-prw.is-over {
-  top: 0;
-  bottom: 0;
   background: repeating-linear-gradient(
     -45deg,
     currentColor 0,
@@ -8733,33 +8743,19 @@ table.rp-mine-table tbody tr {
   display: grid;
   grid-template-columns: 250px minmax(0, 1fr);
   gap: 14px;
-  align-items: start;
-}
-
-@media (max-width: 900px) {
-  .tm-docs {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .tm-docs-side {
-    position: static;
-    height: auto;
-    max-height: none;
-  }
-
-  .tm-doc-outline {
-    max-height: 220px;
-  }
+  align-items: stretch;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
 }
 
 .tm-docs-side {
-  position: sticky;
-  top: 12px;
   display: flex;
   flex-direction: column;
   gap: 10px;
-  height: calc(100vh - 120px);
+  height: 100%;
   min-height: 0;
+  overflow: hidden;
 }
 
 .tm-doc-list {
@@ -8888,12 +8884,22 @@ table.rp-mine-table tbody tr {
   flex-direction: column;
   gap: 10px;
   min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.tm-doc-main > #tm-doc-editor {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .tm-doc-head {
   display: flex;
   align-items: center;
   gap: 12px;
+  flex-shrink: 0;
 }
 
 .tm-doc-title {
@@ -8924,6 +8930,30 @@ table.rp-mine-table tbody tr {
 }
 
 @media (max-width: 900px) {
+  .tm-docs {
+    grid-template-columns: minmax(0, 1fr);
+    flex: none;
+  }
+
+  .tm-docs-side {
+    height: auto;
+    max-height: none;
+    overflow: visible;
+  }
+
+  .tm-doc-main,
+  .tm-doc-main > #tm-doc-editor,
+  .tm-docs .doc-editor,
+  .tm-docs .doc-page {
+    overflow: visible;
+    min-height: 0;
+    flex: none;
+  }
+
+  .tm-doc-outline {
+    max-height: 220px;
+  }
+
   .tm-docs-shared {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -8934,6 +8964,9 @@ table.rp-mine-table tbody tr {
   flex-direction: column;
   gap: 10px;
   min-width: 0;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .doc-toolbar {
@@ -8941,6 +8974,7 @@ table.rp-mine-table tbody tr {
   align-items: center;
   gap: 12px;
   flex-wrap: wrap;
+  flex-shrink: 0;
   padding: 8px 10px;
   border: 0;
   border-radius: var(--radius);
@@ -9019,7 +9053,9 @@ table.rp-mine-table tbody tr {
   border-radius: var(--radius);
   background: var(--surface);
   padding: 28px 34px;
-  min-height: 60vh;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .doc-surface {

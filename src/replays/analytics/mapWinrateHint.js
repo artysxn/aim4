@@ -29,7 +29,7 @@ export function mapWinrateHint(actual, predicted) {
 }
 
 /**
- * Track span between two winrates on a 0-100% bar (50% is centre).
+ * Track span between two winrates on a 0-100% bar grown from the left.
  * @param {number} a
  * @param {number} b
  * @returns {{ left: number, width: number }|null}
@@ -41,4 +41,19 @@ export function mapWinrateGapSpan(a, b) {
   const width = hi - lo;
   if (width < 0.05) return null;
   return { left: lo, width };
+}
+
+/**
+ * Solid fill width. Overperformance hatches the extra (predicted → actual),
+ * so the solid bar stops at predicted and does not cover the hatch.
+ * @param {number} actual
+ * @param {number} predicted
+ */
+export function mapWinrateFillWidth(actual, predicted) {
+  if (!Number.isFinite(actual)) return 0;
+  const a = Math.max(0, Math.min(100, actual));
+  if (mapWinrateCompareKind(actual, predicted) === 'over' && Number.isFinite(predicted)) {
+    return Math.max(0, Math.min(100, predicted));
+  }
+  return a;
 }

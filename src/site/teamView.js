@@ -52,6 +52,7 @@ import { COACH_CATEGORY_LABELS } from '../replays/coach/coachMessages.js';
 import { POSITION_MAPS, positionsFor } from '../replays/roles/teamPositions.js';
 import {
   mapWinrateCompareKind,
+  mapWinrateFillWidth,
   mapWinrateGapSpan,
   mapWinrateHint
 } from '../replays/analytics/mapWinrateHint.js';
@@ -672,17 +673,13 @@ export function initTeamView({ auth, escapeHtml }) {
     }
     const rows = overviewMaps.length ? overviewMaps : emptyMapStats();
     /**
-     * A round winrate as a bar.
-     *
-     * Anchored at 50%, because a map pool decision is never "how high is this
-     * number" but "which side of even is it, and by how much". Below-even bars
-     * grow left from the centre line, above-even grow right. Predicted winrate
-     * sits on the same track as a dashed overlay of the gap vs actual.
+     * A round winrate as a bar grown from the left. The 50% mark is a reference
+     * line, not an origin. Predicted vs actual is a hatch on the gap: thin
+     * dashes past the solid (under), thick dashes as the extra tip (over).
      */
     const sideBar = (side, rate, rounds, prw) => {
       const known = Number.isFinite(rate) && rounds >= MIN_SIDE_ROUNDS;
-      const offset = known ? Math.max(-50, Math.min(50, rate - 50)) : 0;
-      const left = offset < 0 ? 50 + offset : 50;
+      const fill = known ? mapWinrateFillWidth(rate, prw) : 0;
       const kind = known ? mapWinrateCompareKind(rate, prw) : '';
       const gap = kind ? mapWinrateGapSpan(rate, prw) : null;
       const overlay =
@@ -695,7 +692,7 @@ export function initTeamView({ auth, escapeHtml }) {
         : `${side} round winrate${known ? ` ${pct1(rate)} over ${rounds} rounds` : ', not enough rounds yet'}`;
       return `<span class="tm-map-bar" data-side="${side}" title="${escapeHtml(title)}">
         <span class="tm-map-bar-track">
-          <span class="tm-map-bar-fill" style="left:${left}%;width:${Math.abs(offset)}%"></span>
+          <span class="tm-map-bar-fill" style="width:${fill}%"></span>
           ${overlay}
         </span>
         <span class="tm-map-bar-label">${side}</span>
@@ -900,7 +897,8 @@ export function initTeamView({ auth, escapeHtml }) {
       const key = `${team.id}|${teamNameKey(team.name)}|${ids.join(',')}`;
       if (!overviewStatsPanel) overviewStatsPanel = createStatsPanel({
         escapeHtml,
-        omitTeamColumn: true
+        omitTeamColumn: true,
+        syncUrl: false
       });
       if (overviewStatsPanel.el.parentElement !== mount) {
         mount.replaceChildren(overviewStatsPanel.el);

@@ -9,6 +9,8 @@
 // ---------------------------------------------------------------------------
 
 import { decodePacked, isPacked } from './shared/tickPacked.js';
+import { isReplayPackage } from './shared/replayPackage.js';
+
 
 const API_BASE = (import.meta.env?.VITE_API_URL || '').replace(/\/$/, '');
 
@@ -190,7 +192,7 @@ function mergeDemoLists(primary, extra) {
  * `/api/sampledemos`, so Import round and the 2D library work without a
  * library import.
  *
- * @param {{ limit?: number, offset?: number, mine?: boolean, team?: string }} [opts]
+ * @param {{ limit?: number, offset?: number, mine?: boolean, team?: string, map?: string }} [opts]
  */
 export async function fetchDemos(opts = {}) {
   const params = new URLSearchParams();
@@ -200,6 +202,7 @@ export async function fetchDemos(opts = {}) {
     if (Number.isFinite(opts.offset) && opts.offset > 0) params.set('offset', String(opts.offset));
   }
   if (opts.team) params.set('team', String(opts.team));
+  if (opts.map) params.set('map', String(opts.map));
   const q = params.toString() ? `?${params}` : '';
   let lib;
   try {
@@ -241,6 +244,10 @@ function finishSampleMerge(lib, samples, opts) {
       return a === teamQ || b === teamQ;
     });
   }
+  if (opts.map) {
+    const code = String(opts.map).trim().toUpperCase();
+    extra = extra.filter((r) => String(r.map || '').toUpperCase() === code);
+  }
   if (!extra.length) return lib;
   const demos = mergeDemoLists(lib.demos, extra);
   const added = demos.length - (lib.demos || []).length;
@@ -262,27 +269,39 @@ export async function fetchDemo(id) {
   }
 }
 
+function isHtmlOrJsonType(res) {
+  const ct = (res.headers.get('content-type') || '').toLowerCase();
+  return ct.includes('text/html') || ct.includes('application/json') || ct.includes('text/plain');
+}
+
 /** Match package bytes for the 3D explorer. Library first, then sampledemos. */
 export async function fetchDemoPackage(id) {
-  let res = null;
-  try {
-    res = await safeFetch(`${API_BASE}/api/replays/demos/${encodeURIComponent(id)}/package`, {
+  const tryPackage = async (url) => {
+    const res = await safeFetch(url, {
       credentials: 'include',
       headers: await headers()
-    });
-    if (res.ok) return res.arrayBuffer();
-  } catch {
-    res = null;
+    }).catch(() => null);
+    if (!res) return { res: null, buf: null };
+    if (!res.ok) return { res, buf: null };
+    if (isHtmlOrJsonType(res)) return { res, buf: null };
+    const buf = await res.arrayBuffer();
+    if (!isReplayPackage(buf)) return { res, buf: null };
+    return { res, buf };
+  };
+
+  const lib = await tryPackage(
+    `${API_BASE}/api/replays/demos/${encodeURIComponent(id)}/package`
+  );
+  if (lib.buf) return lib.buf;
+  const sample = await tryPackage(`/api/sampledemos/demos/${encodeURIComponent(id)}/package`);
+  if (sample.buf) return sample.buf;
+
+  const errRes = lib.res && !lib.res.ok ? lib.res : sample.res && !sample.res.ok ? sample.res : null;
+  if (errRes) {
+    const detail = await errRes.json().catch(() => null);
+    throw new Error(detail?.error || `HTTP ${errRes.status}`);
   }
-  const sample = await fetch(`/api/sampledemos/demos/${encodeURIComponent(id)}/package`, {
-    credentials: 'include'
-  }).catch(() => null);
-  if (sample?.ok) return sample.arrayBuffer();
-  if (res) {
-    const detail = await res.json().catch(() => null);
-    throw new Error(detail?.error || `HTTP ${res.status}`);
-  }
-  throw new Error('Replay not found.');
+  throw new Error('This game has no 3D replay data.');
 }
 
 export async function deleteDemo(id) {
@@ -827,7 +846,7 @@ export async function fetchRoundTicks(file, stride = 1) {
       `/api/sampledemos/rounds/${encodeURIComponent(file)}/ticks?stride=${stride}`,
       { credentials: 'include' }
     ).catch(() => null);
-    if (sample?.ok) res = sample;
+    if (sample?.ok && !isHtmlOrJsonType(sample)) res = sample;
     else if (res) {
       const body = await res.json().catch(() => ({}));
       throw new Error(body.error || `Could not load round (${res.status})`);

@@ -101,7 +101,9 @@ export const PLAYER_FIXED_BASE = [
   },
   {
     key: 'rounds',
-    label: 'Rounds',
+    label: 'R',
+    headerTitle: 'Rounds',
+    colClass: 'st-col-rounds',
     get: (p) => p.rounds,
     cell: (p) => int(p.rounds),
     avgOf: (p) => (Number.isFinite(p.rounds) ? p.rounds : null),
@@ -871,7 +873,9 @@ export const TEAM_COLUMNS = [
   { key: 'name', label: 'Team', align: 'left', noAvg: true, get: (t) => t.name.toLowerCase() },
   {
     key: 'rounds',
-    label: 'Rds',
+    label: 'R',
+    headerTitle: 'Rounds',
+    colClass: 'st-col-rounds',
     get: (t) => t.rounds,
     cell: (t) => int(t.rounds),
     avgOf: (t) => (Number.isFinite(t.rounds) ? t.rounds : null),
@@ -1095,11 +1099,12 @@ function averageFooterHtml(rows, columns, sticky, escapeHtml) {
   const cells = columns
     .map((c, i) => {
       const stick = i < sticky ? ` st-sticky st-sticky-${i + 1}` : '';
+      const col = c.colClass || '';
       if (i === 0) {
         return `<td class="left st-avg-label${stick}">Average</td>`;
       }
       if (c.noAvg || !c.cell) {
-        return `<td class="${c.align === 'left' ? 'left ' : ''}${stick.trim()}">—</td>`;
+        return `<td class="${[c.align === 'left' ? 'left' : '', col, stick.trim()].filter(Boolean).join(' ')}">—</td>`;
       }
       const vals = [];
       for (const r of rows) {
@@ -1111,7 +1116,7 @@ function averageFooterHtml(rows, columns, sticky, escapeHtml) {
         vals.push(v);
       }
       if (!vals.length) {
-        return `<td class="${c.align === 'left' ? 'left ' : ''}${stick.trim()}">—</td>`;
+        return `<td class="${[c.align === 'left' ? 'left' : '', col, stick.trim()].filter(Boolean).join(' ')}">—</td>`;
       }
       const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
       const text =
@@ -1119,6 +1124,7 @@ function averageFooterHtml(rows, columns, sticky, escapeHtml) {
       const cls = [
         c.align === 'left' ? 'left' : '',
         c.strong ? 'strong' : '',
+        col,
         stick.trim()
       ]
         .filter(Boolean)
@@ -1188,10 +1194,10 @@ export function statsTableHtml(rows, opts) {
       const arrow = active ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '';
       const stick = i < sticky ? ` st-sticky st-sticky-${i + 1}` : '';
       const sortAttr = preserveOrder ? '' : ` data-sort="${c.key}"`;
-      const title = preserveOrder
-        ? escapeHtml(c.label)
-        : `Sort by ${escapeHtml(c.label)}`;
-      return `<th class="${c.align === 'left' ? 'left' : ''}${active ? ' sorted' : ''}${stick}"${sortAttr}
+      const sortName = c.headerTitle || c.label;
+      const title = preserveOrder ? escapeHtml(sortName) : `Sort by ${escapeHtml(sortName)}`;
+      const extra = c.colClass ? ` ${c.colClass}` : '';
+      return `<th class="${c.align === 'left' ? 'left' : ''}${active ? ' sorted' : ''}${stick}${extra}"${sortAttr}
         title="${title}">${escapeHtml(c.label)}${arrow}</th>`;
     })
     .join('');
@@ -1257,6 +1263,7 @@ export function statsTableHtml(rows, opts) {
             c.align === 'left' ? 'left' : '',
             c.strong ? 'strong' : '',
             typeof c.cellClass === 'function' ? c.cellClass(r) : c.cellClass || '',
+            c.colClass || '',
             t ? 'has-tip' : '',
             stick.trim()
           ]

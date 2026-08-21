@@ -1,6 +1,7 @@
 import { strict as assert } from 'node:assert';
 import {
   mapWinrateCompareKind,
+  mapWinrateFillWidth,
   mapWinrateGapSpan,
   mapWinrateHint
 } from './mapWinrateHint.js';
@@ -22,5 +23,11 @@ assert.equal(
 assert.deepEqual(mapWinrateGapSpan(50, 54), { left: 50, width: 4 });
 assert.deepEqual(mapWinrateGapSpan(56, 54), { left: 54, width: 2 });
 assert.equal(mapWinrateGapSpan(50, 50), null);
+
+assert.equal(mapWinrateFillWidth(45.8, 38.3), 38.3);
+assert.equal(mapWinrateFillWidth(60, 52), 52);
+assert.equal(mapWinrateFillWidth(50, 54), 50);
+assert.equal(mapWinrateFillWidth(40, 48), 40);
+assert.equal(mapWinrateFillWidth(50, 50), 50);
 
 console.log('mapWinrateHint.test.js: ok');

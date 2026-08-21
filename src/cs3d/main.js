@@ -70,13 +70,13 @@ import { practiceBackbuffer } from './practiceDisplay.js';
 import { createPerfFlags, displayHzHint } from './perfToggles.js';
 import { cycleSpawnIndex, formatSpawnChat } from './practiceSpawn.js';
 import { sourceVFovFromHFov } from '../utils/MathUtils.js';
-import { loadDemoBytes, loadDemoFile } from './demoData.js';
+import { loadDemoBytes, loadDemoFile, demoFromLoadedRound } from './demoData.js';
 import { PracticeBots } from './practiceBots.js';
 import { BloodSpray } from './blood.js';
 import { flinchPunch, bloodMagnitude, ragdollImpulse } from '../../shared/sim3d/flinch.js';
-import { bindImportRound } from './practiceImport.js';
+import { bindImportRound, gameLabel } from './practiceImport.js';
 import { nextCamMode, cycleLive, spectateTargetId, parseSpectateTarget } from './practiceCam.js';
-import { fetchDemos, fetchDemoPackage } from '../replays/api.js';
+import { fetchDemos, fetchDemoPackage, fetchDemo, fetchRoundMeta, fetchRoundTicks } from '../replays/api.js';
 import { createXrayPass, xrayIconList } from './xray.js';
 
 const params = new URLSearchParams(location.search);
@@ -1245,9 +1245,41 @@ async function loadLibraryDemo(id) {
   return loadDemoBytes(await fetchDemoPackage(id), id);
 }
 
-function importRound(demo, roundIndex) {
+async function loadPracticeRound(record, roundIndex) {
+  let rec = record;
+  let row = rec?.rounds?.[roundIndex];
+  if (!row?.file && rec?.id) {
+    rec = await fetchDemo(rec.id);
+    row = rec?.rounds?.[roundIndex];
+  }
+  if (!row?.file) throw new Error('This game has no 3D replay data.');
+  let meta;
+  let ticks;
+  try {
+    [meta, ticks] = await Promise.all([
+      fetchRoundMeta(row.file),
+      fetchRoundTicks(row.file, 1)
+    ]);
+  } catch (err) {
+    throw new Error(err?.message || 'This game has no 3D replay data.');
+  }
+  if (!meta || !ticks) throw new Error('This game has no 3D replay data.');
+  try {
+    return demoFromLoadedRound({
+      name: gameLabel(rec),
+      manifest: rec,
+      mapCode: String(meta.map || rec.map || '').toUpperCase(),
+      stem: row.file,
+      meta,
+      ticks
+    });
+  } catch {
+    throw new Error('This game has no 3D replay data.');
+  }
+}
+
+function importRound(demo) {
   acceptDemo(demo);
-  demoView.setRound(roundIndex);
   setCamMode('spectate');
   pauseMenu?.close();
   controls.requestLock();
@@ -1259,7 +1291,7 @@ function mountImport(el) {
   const ui = bindImportRound(el, {
     mapCode: map.code,
     fetchDemos,
-    loadDemo: loadLibraryDemo,
+    loadRound: loadPracticeRound,
     onImport: importRound
   });
   ui.onAction(onPlayback);

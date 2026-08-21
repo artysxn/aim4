@@ -107,7 +107,9 @@ export function createStatsPanel({
   /** Put Players / Teams / Filters in the site page-head next to DATABASE. */
   usePageHead = false,
   /** Overview: every row is already this team, so hide the Team column. */
-  omitTeamColumn = false
+  omitTeamColumn = false,
+  /** Mirror filters into `/database?…`. Off when this panel is embedded elsewhere. */
+  syncUrl = true
 }) {
   const el = document.createElement('div');
   el.className = 'st-panel';
@@ -1416,9 +1418,11 @@ export function createStatsPanel({
 
   function emitViewChange() {
     const state = viewState();
-    onViewChange?.(state);
+    if (syncUrl) {
+      onViewChange?.(state);
+      savedViews.touch();
+    }
     onDetailChange?.(detail);
-    savedViews.touch();
   }
 
   /**
@@ -1653,7 +1657,7 @@ export function createStatsPanel({
       applyViewState(spec || {});
     }
   });
-  el.querySelector('#st-saved')?.appendChild(savedViews.el);
+  if (syncUrl) el.querySelector('#st-saved')?.appendChild(savedViews.el);
 
   function syncHead() {
     const inDetail = Boolean(detail);

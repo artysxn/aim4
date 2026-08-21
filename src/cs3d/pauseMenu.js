@@ -56,9 +56,14 @@ export function createPauseMenu({
       <div class="c3-pause-actions">
         <button type="button" class="c3-pause-btn is-primary" data-act="resume">Resume</button>
         <button type="button" class="c3-pause-btn" data-act="settings">Settings</button>
-        <div class="c3-import" data-import></div>
+        <button type="button" class="c3-pause-btn" data-act="import">Import round</button>
         <a class="c3-pause-btn" data-act="menus" href="${PAUSE_MENUS_HREF}">Return to menus</a>
       </div>
+    </div>
+    <div class="c3-pause-panel c3-pause-import" data-view="import" hidden>
+      <div class="c3-pause-title">Import round</div>
+      <div class="c3-import" data-import data-embed="1"></div>
+      <button type="button" class="c3-pause-btn" data-act="back">Back</button>
     </div>
     <div class="c3-pause-panel c3-pause-settings" data-view="settings" hidden>
       <div class="c3-pause-seg" role="tablist">
@@ -127,8 +132,11 @@ export function createPauseMenu({
       populate();
       crosshair?.drawPreview();
     }
+    if (next === 'import') {
+      $('[data-import]')?._aim4Import?.show?.();
+    }
     const tools = $('[data-tools]');
-    if (tools) tools.hidden = next === 'settings';
+    if (tools) tools.hidden = next !== 'root';
     syncTools();
   };
 
@@ -256,6 +264,10 @@ export function createPauseMenu({
       setView('settings');
       return;
     }
+    if (act === 'import') {
+      setView('import');
+      return;
+    }
     if (act === 'back') {
       setView('root');
       return;
@@ -307,13 +319,13 @@ export function createPauseMenu({
       api.setOpen(false);
     },
     syncTools,
-    /** Esc: open if shut, settings back to pause, pause root stays up. */
+    /** Esc: open if shut, settings/import back to pause, pause root stays up. */
     handleEsc() {
       if (!open) {
         api.setOpen(true);
         return;
       }
-      if (view === 'settings') setView('root');
+      if (view === 'settings' || view === 'import') setView('root');
     }
   };
   return api;

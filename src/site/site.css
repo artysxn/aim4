@@ -664,6 +664,31 @@ a {
   flex-direction: column;
 }
 
+/* Documents: pin the list + outline. Only the document page scrolls.
+   Same viewport lock as the demo library, and only on the two-column layout. */
+@media (min-width: 901px) {
+  .site-shell:has(.view.active[data-view='team'] .tm-docs) {
+    height: 100vh;
+    max-height: 100vh;
+    overflow: hidden;
+  }
+
+  .site-shell:has(.view.active[data-view='team'] .tm-docs) .site-footer {
+    display: none;
+  }
+
+  .site-shell:has(.view.active[data-view='team'] .tm-docs) .site-main,
+  .site-shell:has(.view.active[data-view='team'] .tm-docs) .page-body {
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .view.active[data-view='team']:has(.tm-docs) > .tm-shell.view-pad-fill {
+    overflow: hidden;
+    padding-bottom: 16px;
+  }
+}
+
 .view-pad-fill > .rp-browser,
 .view-pad-fill > .rp-stats-panel,
 .view-pad-fill > .rp-playlists-panel {
