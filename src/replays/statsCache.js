@@ -152,6 +152,21 @@ export function statsPageHasMore(args) {
   return (Number(args.incomingLen) || 0) >= pageSize;
 }
 
+/**
+ * Progress phases whose `done` counts demos inside the page being fetched.
+ * `packing`, `receiving` and `building-table` describe the transfer of a page
+ * that has already been counted, and carry a page-sized `total` with no
+ * `libraryTotal` — treating their numbers as library progress is a bug.
+ */
+const DEMO_PHASES = new Set([
+  'start',
+  'loading',
+  'building',
+  'rebuilding',
+  'enriching',
+  'ready'
+]);
+
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -233,6 +248,17 @@ export async function getStatsPayload(demoIds = null, opts = {}) {
       const page = STATS_LIBRARY_PAGE;
       let offset = resume ? Math.max(0, Number(cache.nextOffset) || 0) : 0;
       let hasMore = true;
+      /**
+       * Library-wide progress, tracked across every page of this request.
+       *
+       * Kept here rather than derived per event because most progress lines
+       * cannot answer "of how many": `total` on a progress event is the size of
+       * the page in flight (300), and the `packing` / `receiving` lines that end
+       * each page carry no `libraryTotal` at all. Reading `total` as a library
+       * count is what made a 4100-demo library report "300 of 300".
+       */
+      let libraryTotalSeen = 0;
+      let libraryLoadedSeen = 0;
       while (true) {
         const slice = scoped ? scoped.slice(offset, offset + page) : null;
         if (scoped && !slice.length) {
@@ -244,16 +270,32 @@ export async function getStatsPayload(demoIds = null, opts = {}) {
         // here. Neither is what a caller wants to show a user, so the two
         // library-wide numbers are stamped on here, where the scope is known.
         const pageStart = offset;
-        const libraryTotal = scoped ? scoped.length : 0;
+        const pageCount = scoped ? slice.length : page;
         const relayProgress = opts.onProgress
           ? (p) => {
+              const phase = String(p?.phase || '');
+              // Only two sources may set the library size: our own scope, and
+              // the server's explicit `libraryTotal`. Never `total`.
+              if (scoped) {
+                libraryTotalSeen = scoped.length;
+              } else {
+                const stated = Number(p?.libraryTotal) || 0;
+                if (stated > 0) libraryTotalSeen = Math.max(libraryTotalSeen, stated);
+              }
+              // Demo-counting phases advance within the page. The rest
+              // (packing / receiving / building-table) describe shipping a page
+              // whose demos are already accounted for, so they land on its end.
               const done = Math.max(0, Number(p?.done) || 0);
+              const within = DEMO_PHASES.has(phase) ? Math.min(done, pageCount) : pageCount;
+              const next = pageStart + within;
+              libraryLoadedSeen = Math.max(
+                libraryLoadedSeen,
+                libraryTotalSeen ? Math.min(next, libraryTotalSeen) : next
+              );
               opts.onProgress({
                 ...p,
-                libraryLoaded: pageStart + done,
-                libraryTotal:
-                  libraryTotal ||
-                  Math.max(Number(p?.libraryTotal) || 0, Number(p?.total) || 0)
+                libraryLoaded: libraryLoadedSeen,
+                libraryTotal: libraryTotalSeen
               });
             }
           : undefined;

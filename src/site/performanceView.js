@@ -25,7 +25,8 @@ import {
   playerRows,
   playerStats,
   roleGrid,
-  smoothSeries
+  smoothSeries,
+  curvePath
 } from '../replays/performance/performanceMath.js';
 import { aggregateGuns, gunMapForPlayer } from '../replays/performance/gunStats.js';
 import {
@@ -102,6 +103,9 @@ function ratingChart(points) {
       .map((v, i) => (Number.isFinite(v) ? `${i ? 'L' : 'M'}${xAt(i).toFixed(1)} ${yAt(v).toFixed(1)}` : ''))
       .filter(Boolean)
       .join(' ');
+  const trendPts = smooth
+    .map((v, i) => (Number.isFinite(v) ? { x: xAt(i), y: yAt(v) } : null))
+    .filter(Boolean);
   const ticks = [];
   const step = points.length > 40 ? 10 : points.length > 20 ? 5 : 4;
   for (let i = 0; i < points.length; i += step) {
@@ -113,7 +117,7 @@ function ratingChart(points) {
     <svg class="pf-chart" viewBox="0 0 ${w} ${h}" role="img"
       aria-label="Rating over ${points.length} matches">
       <path d="${line(points.map((p) => p.rating))}" fill="none" class="pf-chart-raw" />
-      <path d="${line(smooth)}" fill="none" class="pf-chart-trend" />
+      <path d="${curvePath(trendPts)}" fill="none" class="pf-chart-trend" />
       ${ticks.join('')}
     </svg>
   </div>`;
@@ -401,7 +405,7 @@ export function initPerformanceView({ auth, escapeHtml }) {
 
   function rolesHtml(grid) {
     const table = (side) => {
-      const badge = side === 'CT' ? 'CT' : 'T';
+      const roleCls = side === 'CT' ? 'st-role-ct' : 'st-role-t';
       const rows = (grid[side] || [])
         .map((r) => {
           const tip =
@@ -410,16 +414,13 @@ export function initPerformanceView({ auth, escapeHtml }) {
               : '';
           return `<tr>
             <td class="left">${escapeHtml(r.mapName)}</td>
-            <td class="left">${escapeHtml(r.position || '—')}</td>
+            <td class="left ${roleCls}">${escapeHtml(r.position || '—')}</td>
             <td class="${tip ? 'has-tip' : ''}"${tip ? ` data-tip="${escapeHtml(tip)}"` : ''}>${f2(r.rating)}</td>
             <td>${signed(r.swing)}</td>
           </tr>`;
         })
         .join('');
       return `<div class="pf-roles-col">
-        <div class="pf-roles-head">
-          <span class="pf-side-badge is-${badge.toLowerCase()}">${badge}</span>
-        </div>
         <table class="st-table pf-roles-table">
           <thead><tr><th class="left">Map</th><th class="left">Role</th><th>Rating</th><th>Swing</th></tr></thead>
           <tbody>${rows}</tbody>
@@ -443,7 +444,7 @@ export function initPerformanceView({ auth, escapeHtml }) {
     }));
     const cols = playerMatchColumns();
     return statsTableHtml(rows, {
-      columns: cols.columns,
+      columns: cols.columns.filter((c) => c.key !== 'a4r'),
       fixedCount: cols.fixedCount,
       escapeHtml,
       sortKey: matchSort.key,
@@ -514,7 +515,7 @@ export function initPerformanceView({ auth, escapeHtml }) {
     const series = matchSeries(payload, playerId, ui, players, demos);
     const grid = roleGrid(payload, playerId, ui, players, demos);
     const peerMetrics = peers?.metrics || {};
-    const rating = stats?.a4r ?? stats?.rating;
+    const rating = stats?.rating;
     return `
       ${filtersHtml()}
       <div class="pf-hero">

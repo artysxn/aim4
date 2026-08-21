@@ -25,6 +25,7 @@ const entry = {
       f: 'r1', d: 'd1', m: 'de_nuke', n: 1, w: 1, s1: 'T', s2: 'CT', e1: 4, e2: 4,
       ok: 'p1', od: 'p2', p: { p1: [1, 0, 0, 100, 5, 3, 1, 0, 0, 1] },
       sw: { p1: 12 }, kt: [{ t: 5 }], ev: [], am: { p1: { shots: 5 } },
+      hg: { p1: 'ak47' },
       ut: { p1: { heThrown: 1 } }, utt: { 1: 40 }, du: { p1: { w: 1, p: 0.5, n: 1 } },
       mv: { p1: { psdt: 300, dt: 900 } }, aw: { p1: 12 }, ph: { p1: [1, 2] },
       rl: 'exec-a', cok: ['p1'], cod: [], pos1: 0.5, pos2: 0.5,
@@ -65,7 +66,7 @@ const entry = {
   const c = resolveColumns('rating');
   assert.equal(c.ratingReady, true);
   const out = projectEntry(entry, c);
-  for (const k of ['p', 'ok', 'od', 'sw', 'kt', 'ev', 'am', 'du']) {
+  for (const k of ['p', 'ok', 'od', 'sw', 'kt', 'ev', 'am', 'du', 'hg']) {
     assert.ok(k in out.rounds[0], `rating contract must carry "${k}"`);
   }
 }

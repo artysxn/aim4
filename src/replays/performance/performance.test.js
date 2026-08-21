@@ -5,11 +5,12 @@ import {
   findPlayerByUsername,
   lastDemoIds,
   smoothSeries,
+  curvePath,
   kprOf,
   stripAt
 } from './performanceMath.js';
 import {
-  primaryGunFromKills,
+  primaryGunFromRow,
   gunMapFromRows,
   gunMapForPlayer,
   demoSetStamp,
@@ -48,26 +49,17 @@ assert.deepEqual([...lastDemoIds(payload, 'p1', 2)], ['d3', 'd2']);
 assert.equal(lastDemoIds(payload, 'p1', 0).size, 3);
 
 assert.deepEqual(smoothSeries([1, 2, 3, 4], 2), [1, 1.5, 2.5, 3.5]);
+assert.equal(curvePath([{ x: 0, y: 0 }, { x: 10, y: 10 }]), 'M0.0 0.0 L10.0 10.0');
+assert.match(curvePath([{ x: 0, y: 10 }, { x: 10, y: 0 }, { x: 20, y: 10 }]), /^M0\.0 10\.0 C/);
 assert.equal(kprOf({ kills: 15, rounds: 10 }), 1.5);
 
-assert.equal(
-  primaryGunFromKills(
-    [
-      { a: 'p1', g: 1, w: 'ak47' },
-      { a: 'p1', g: 1, w: 'ak47' },
-      { a: 'p1', g: 1, w: 'deagle' },
-      { a: 'p2', g: 1, w: 'awp' }
-    ],
-    'p1'
-  ),
-  'ak47'
-);
-assert.equal(primaryGunFromKills([{ a: 'p1', g: 0, w: 'hegrenade' }], 'p1'), '');
+assert.equal(primaryGunFromRow({ hg: { p1: 'ak47' } }, 'p1'), 'ak47');
+assert.equal(primaryGunFromRow({ hg: {}, kt: [{ a: 'p1', g: 1, w: 'awp' }] }, 'p1'), '');
 assert.equal(gunLabel('ak47'), 'AK-47');
 
 const rows = [
-  { f: 'r1', d: 'd1', kt: [{ a: 'p1', g: 1, w: 'ak47' }] },
-  { f: 'r2', d: 'd1', kt: [{ a: 'p1', g: 1, w: 'awp' }] }
+  { f: 'r1', d: 'd1', hg: { p1: 'ak47' } },
+  { f: 'r2', d: 'd1', hg: { p1: 'awp' } }
 ];
 const files = gunMapFromRows(rows, 'p1');
 assert.equal(files.r1, 'ak47');
@@ -83,7 +75,7 @@ const store = {
   }
 };
 const first = gunMapForPlayer(rows, 'p1', ['d1'], store);
-const second = gunMapForPlayer([{ f: 'r9', kt: [{ a: 'p1', g: 1, w: 'deagle' }] }], 'p1', ['d1'], store);
+const second = gunMapForPlayer([{ f: 'r9', hg: { p1: 'deagle' } }], 'p1', ['d1'], store);
 assert.deepEqual(first, second, 'same demo stamp reuses cache');
 assert.equal(demoSetStamp(['b', 'a']), demoSetStamp(['a', 'b']));
 

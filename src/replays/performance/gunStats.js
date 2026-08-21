@@ -2,17 +2,16 @@
 // replays/performance/gunStats.js
 // Per-gun numbers for one player, from the stats index already in memory.
 //
-// Player matches are selected first. Each round's kills (`row.kt`) name the
-// gun, so rating / swing / accuracy / KPR / xK are a re-aggregation of those
-// rounds, not a library-wide rebuild. The file→gun map is cached against the
-// player's demo set so a second visit with the same matches is instant.
+// Player matches are selected first. Each round's `hg` field names the gun
+// held longest while alive. Rating / swing / accuracy / KPR / xK re-aggregate
+// those rounds. The file→gun map is cached against the player's demo set.
 // ---------------------------------------------------------------------------
 
 import { aggregatePlayers } from '../shared/statsMath.js';
 import { bareWeapon } from '../viewer/equipmentIcons.js';
 import { kprOf } from './performanceMath.js';
 
-const CACHE_KEY = 'aim4:perf:guns:v1';
+const CACHE_KEY = 'aim4:perf:guns:v2';
 
 const GUN_LABELS = {
   ak47: 'AK-47',
@@ -64,24 +63,11 @@ export function demoSetStamp(demoIds) {
   return `${ids.length}:${h}`;
 }
 
-/** Gun the player got the most kills with this round. Empty when none. */
-export function primaryGunFromKills(kt, playerId) {
-  const counts = new Map();
-  for (const k of kt || []) {
-    if (k.a !== playerId || !k.g || !k.w) continue;
-    const id = bareWeapon(k.w);
-    if (!id) continue;
-    counts.set(id, (counts.get(id) || 0) + 1);
-  }
-  let best = '';
-  let n = 0;
-  for (const [w, c] of counts) {
-    if (c > n || (c === n && w.localeCompare(best) < 0)) {
-      best = w;
-      n = c;
-    }
-  }
-  return best;
+/** Gun the player held longest this round (`row.hg` from tick hold time). */
+export function primaryGunFromRow(row, playerId) {
+  const held = row?.hg?.[playerId];
+  if (!held) return '';
+  return bareWeapon(held);
 }
 
 /**
@@ -95,7 +81,7 @@ export function gunMapFromRows(rows, playerId) {
   for (const row of rows || []) {
     const file = String(row.f || '');
     if (!file) continue;
-    const gun = primaryGunFromKills(row.kt, playerId);
+    const gun = primaryGunFromRow(row, playerId);
     if (gun) files[file] = gun;
   }
   return files;
@@ -192,7 +178,7 @@ export function aggregateGuns(rows, playerId, players, demos, gunByFile) {
       label: gunLabel(gun),
       rounds: p.rounds,
       used: attributed ? p.rounds / attributed : 0,
-      rating: p.a4r ?? p.rating,
+      rating: p.rating,
       swing: p.prwSwing,
       accuracy: shots > 0 ? p.accuracy : null,
       kpr: kprOf(p),

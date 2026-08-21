@@ -179,33 +179,6 @@
   gap: 16px;
 }
 
-.pf-roles-head {
-  display: flex;
-  align-items: center;
-  margin-bottom: 8px;
-}
-
-.pf-side-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 28px;
-  height: 20px;
-  padding: 0 6px;
-  border-radius: 4px;
-  font: 600 11px var(--font-body);
-}
-
-.pf-side-badge.is-t {
-  background: var(--rv-t, #e60611);
-  color: #fff;
-}
-
-.pf-side-badge.is-ct {
-  background: var(--rv-ct, #5b9fd4);
-  color: #fff;
-}
-
 .pf-roles-table {
   width: 100%;
 }

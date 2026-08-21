@@ -51,6 +51,7 @@ export const COLUMN_GROUPS = Object.freeze({
   utility:      { rows: ['ut', 'utt'],                 bytes: 1234 },
   movement:     { rows: ['mv'],                        bytes: 301  },
   awpHold:      { rows: ['aw'],                        bytes: 81   },
+  heldGun:      { rows: ['hg'],                        bytes: 72   },
   phase:        { rows: ['ph'],                        bytes: 1143 },
   roundLibrary: { rows: ['rl'],                        bytes: 81   },
   possession:   { rows: ['pos1', 'pos2'],              bytes: 34   },
@@ -78,8 +79,8 @@ const RATING_BEARING = new Set(RATING_CORE);
  * Performance need" has one answer that moves with the page.
  */
 export const COLUMN_PRESETS = Object.freeze({
-  /** Performance, player profile: anything showing A4R. */
-  rating: [...RATING_CORE, 'coreOpenings', 'roles'],
+  /** Performance, player profile: Rating 3.0 plus role / held-gun columns. */
+  rating: [...RATING_CORE, 'coreOpenings', 'roles', 'heldGun'],
   /** Rating plus every Premium metric column the Database table adds. */
   full: [...COLUMN_GROUP_IDS],
   /** Round list, pattern finder, antistrat: round shapes, no player ratings. */

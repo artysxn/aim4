@@ -1216,7 +1216,17 @@ export async function handleReplayRequest(req, res, url) {
       // whole library inside one NDJSON line (`{"type":"done","payload":…}`), which
       // left the UI stuck on "Loaded stats · N demos" while Node stringified and the
       // browser parsed a multi‑megabyte line with no further progress.
-      writeLine({ type: 'progress', phase: 'packing', done: total, total });
+      // libraryTotal travels with every progress line, not just the trailer:
+      // a consumer must never have to infer the library size from `total`,
+      // which is the size of this page.
+      writeLine({
+        type: 'progress',
+        phase: 'packing',
+        done: total,
+        total,
+        offset: payload.offset,
+        libraryTotal: payload.total
+      });
       const gated = gateStatsPayload(me, payload);
       writeLine({
         type: 'done',

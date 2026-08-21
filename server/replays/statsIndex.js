@@ -439,6 +439,12 @@ function needsRoleEnrichment(entry) {
   return false;
 }
 
+/** Held-gun map missing (longest-held primary, Performance Guns). */
+function needsHeldGunEnrichment(entry) {
+  if (!entry?.rounds?.length) return false;
+  return entry.rounds.some((r) => !r.hg || typeof r.hg !== 'object');
+}
+
 /** PSDT / distance-travelled bags missing on any round. */
 function needsMovementEnrichment(entry) {
   if (!entry?.rounds?.length) return false;
@@ -464,7 +470,11 @@ function needsRoundLibraryEnrichment(entry) {
  * build, and rewritten on demand by the admin round rescan.
  */
 function needsTickDerivedEnrichment(entry) {
-  return needsRoleEnrichment(entry) || needsMovementEnrichment(entry);
+  return (
+    needsRoleEnrichment(entry) ||
+    needsMovementEnrichment(entry) ||
+    needsHeldGunEnrichment(entry)
+  );
 }
 
 /** Load zone network for a map (bombsites + vision). Always returns an object. */
@@ -735,7 +745,10 @@ async function enrichPhases(io, user, entry, { roles = true, fields = null } = {
       }
       if (want('duels')) row.du = null;
       if (want('movement')) row.mv = row.mv || {};
-      if (want('awpHold')) row.aw = row.aw || {};
+      if (want('awpHold')) {
+        row.aw = row.aw || {};
+        row.hg = row.hg || {};
+      }
       if (want('core')) {
         row.cok = [];
         row.cod = [];
@@ -768,12 +781,16 @@ async function enrichTickDerived(io, user, entry, opts = {}) {
   const wantRoles = Boolean(opts.forceRoles) || needsRoleEnrichment(entry);
   const wantMv = needsMovementEnrichment(entry);
   const wantRl = needsRoundLibraryEnrichment(entry);
-  if (!wantRoles && !wantMv && !wantRl) return entry;
+  const wantHg = needsHeldGunEnrichment(entry);
+  if (!wantRoles && !wantMv && !wantRl && !wantHg) return entry;
 
   if (typeof io.readRoundTicks !== 'function') {
     if (wantRoles) entry.roles = { v: ROLES_VERSION, maps: {} };
     if (wantMv) {
       for (const row of entry.rounds) row.mv = row.mv || {};
+    }
+    if (wantHg) {
+      for (const row of entry.rounds) row.hg = row.hg || {};
     }
     return entry;
   }
@@ -797,6 +814,7 @@ async function enrichTickDerived(io, user, entry, opts = {}) {
     }
     if (!meta) {
       if (wantMv) row.mv = row.mv || {};
+      if (wantHg) row.hg = row.hg || {};
       await yieldEventLoop();
       continue;
     }
@@ -820,12 +838,14 @@ async function enrichTickDerived(io, user, entry, opts = {}) {
     }
     if (!tickBuffer) {
       if (wantMv) row.mv = row.mv || {};
+      if (wantHg) row.hg = row.hg || {};
       await yieldEventLoop();
       continue;
     }
 
     const track = new TickTrack(tickBuffer);
     if (wantMv) applyMovementFields(row, meta, track, roster);
+    if (wantHg) applyAwpHoldFields(row, meta, track, roster);
 
     const mapCode = meta.map || row.m || '';
     if ((roleWork || wantRl) && !zoneCache.has(mapCode)) {
@@ -1006,6 +1026,7 @@ async function buildIndex(io, user, record) {
       row.du = null;
       row.mv = {};
       row.aw = {};
+      row.hg = {};
       row.rl = null;
       row.cok = [];
       row.cod = [];

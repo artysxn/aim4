@@ -676,7 +676,11 @@ export async function fetchStats(demoIds = null, opts = {}) {
         type: 'progress',
         phase: 'receiving',
         done: bodyTotal,
-        total: bodyTotal
+        // `total` here is this page's demo count. The library size comes off the
+        // trailer, so pass it through rather than leaving the consumer to guess.
+        total: bodyTotal,
+        offset: Number(msg.offset) || 0,
+        libraryTotal: streamMeta.libraryTotal
       });
       return;
     }

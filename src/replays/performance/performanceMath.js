@@ -161,6 +161,31 @@ export function smoothSeries(values, window = 5) {
 }
 
 /**
+ * Catmull-Rom spline as SVG cubics. `points` are `{ x, y }` in viewBox space.
+ */
+export function curvePath(points) {
+  const pts = (points || []).filter((p) => Number.isFinite(p?.x) && Number.isFinite(p?.y));
+  if (pts.length < 2) return '';
+  const fmt = (n) => n.toFixed(1);
+  let d = `M${fmt(pts[0].x)} ${fmt(pts[0].y)}`;
+  if (pts.length === 2) {
+    return `${d} L${fmt(pts[1].x)} ${fmt(pts[1].y)}`;
+  }
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = pts[i === 0 ? 0 : i - 1];
+    const p1 = pts[i];
+    const p2 = pts[i + 1];
+    const p3 = pts[i + 2] || p2;
+    const c1x = p1.x + (p2.x - p0.x) / 6;
+    const c1y = p1.y + (p2.y - p0.y) / 6;
+    const c2x = p2.x - (p3.x - p1.x) / 6;
+    const c2y = p2.y - (p3.y - p1.y) / 6;
+    d += ` C${fmt(c1x)} ${fmt(c1y)} ${fmt(c2x)} ${fmt(c2y)} ${fmt(p2.x)} ${fmt(p2.y)}`;
+  }
+  return d;
+}
+
+/**
  * One point per match, oldest first.
  */
 export function matchSeries(payload, playerId, ui, players, demos) {
@@ -185,7 +210,7 @@ export function matchSeries(payload, playerId, ui, players, demos) {
     points.push({
       demoId: demo.id,
       when: demoTimestamp(demo),
-      rating: p.a4r ?? p.rating,
+      rating: p.rating,
       kd: p.kd,
       swing: p.prwSwing,
       kpr: kprOf(p),
@@ -241,14 +266,14 @@ export function roleGrid(payload, playerId, ui, players, demos) {
         });
         const ratings = tagged
           .filter((p) => p.id !== playerId && roleLabel(p, side) === position && p.rounds >= 8)
-          .map((p) => p.a4r ?? p.rating);
+          .map((p) => p.rating);
         peer = mean(ratings);
       }
       out[side].push({
         map: map.code,
         mapName: map.name,
         position,
-        rating: mine?.a4r ?? mine?.rating ?? null,
+        rating: mine?.rating ?? null,
         swing: mine?.prwSwing ?? null,
         rounds: mine?.rounds || 0,
         peer

@@ -251,10 +251,14 @@ export function createStatsPanel({
    * Taking the max keeps the count monotonic when both fire.
    */
   function noteLibraryProgress({ loaded, total }) {
-    const nextTotal = Number(total) || libraryProgress.total;
+    // The library only ever grows during one load, so a smaller total is a
+    // miscounted event rather than news. Re-scoping goes through
+    // resetLibraryProgress, which is the only way the total comes down.
+    const stated = Number(total) || 0;
+    const nextTotal = Math.max(libraryProgress.total, stated);
     const nextLoaded = Math.max(0, Number(loaded) || 0);
     libraryProgress = {
-      loaded: Math.max(libraryProgress.total === nextTotal ? libraryProgress.loaded : 0, nextLoaded),
+      loaded: Math.min(Math.max(libraryProgress.loaded, nextLoaded), nextTotal || nextLoaded),
       total: nextTotal
     };
     paintLibraryProgress();
