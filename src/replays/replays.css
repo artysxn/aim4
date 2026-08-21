@@ -2799,10 +2799,6 @@ body.rv-open {
   background: rgba(90, 209, 122, 0.22);
 }
 
-.rv-player.is-pov .rv-player-hp {
-  width: 100% !important;
-}
-
 .rv-player.is-pov[data-side='T'] .rv-player-hp {
   background: var(--rv-t);
 }
@@ -2813,6 +2809,26 @@ body.rv-open {
 
 .rv-timeline.is-3d-immerse .rv-team-col {
   display: none !important;
+}
+
+.rv-timeline.is-3d-immerse .rv-map.is-3d .rv-canvas,
+.rv-timeline.is-3d-immerse .rv-clock-row,
+.rv-timeline.is-3d-immerse .rv-feed-stack {
+  visibility: hidden;
+}
+
+.rv-map .c3-mh {
+  z-index: 6;
+}
+
+.rv-map .c3-mh-chat,
+.rv-map .c3-mh-cam {
+  display: none !important;
+}
+
+.rv-timeline.is-3d-immerse .c3-mh-radar {
+  width: 260px;
+  height: 260px;
 }
 
 .rv-map.is-3d {
@@ -2849,7 +2865,7 @@ body.rv-open {
 }
 
 .rv-player[data-side='T'] .rv-player-hp {
-  background: var(--rv-t);
+  background: #7a2218;
 }
 
 .rv-player[data-side='CT'] .rv-player-hp {
@@ -12209,8 +12225,8 @@ a.ua-link:visited {
   inset: auto;
   top: 10px;
   left: 10px;
-  width: 176px;
-  height: 176px;
+  width: 280px;
+  height: 280px;
   z-index: 3;
   pointer-events: none;
   overflow: hidden;

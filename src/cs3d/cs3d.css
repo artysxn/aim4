@@ -1367,12 +1367,16 @@ body {
 }
 .c3-xray-name,
 .c3-xray-hp {
-  color: #e8a84a;
+  color: #e60611;
   font: 700 12px/1.15 var(--font-body, sans-serif);
   letter-spacing: 0.04em;
   text-transform: uppercase;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
   white-space: nowrap;
+}
+.c3-xray-tag.is-ct .c3-xray-name,
+.c3-xray-tag.is-ct .c3-xray-hp {
+  color: #5b9fd4;
 }
 .c3-xray-hp {
   font-size: 11px;
@@ -1383,5 +1387,8 @@ body {
   margin-top: 2px;
   border-left: 5px solid transparent;
   border-right: 5px solid transparent;
-  border-top: 6px solid #e8a84a;
+  border-top: 6px solid #e60611;
+}
+.c3-xray-tag.is-ct .c3-xray-ptr {
+  border-top-color: #5b9fd4;
 }

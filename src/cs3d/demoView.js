@@ -288,6 +288,7 @@ export class DemoView {
           : null;
       if (!obj) continue;
       const a = readRecord(this.ticks.view, r0, slot, _a);
+      if (!a.alive) continue;
       const duck = a.duckAmount > 0 ? a.duckAmount : (a.flags & FLAG_DUCKING) !== 0 ? 1 : 0;
       const player = this.meta.players?.find((p) => p.slot === slot);
       const id = player?.id;

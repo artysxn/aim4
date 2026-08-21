@@ -620,7 +620,7 @@ export function createMatchHud({ root, map, match, hooks = {} }) {
         node.clock.textContent = clock;
       }
       const overlayKey = frame.overlay
-        ? `${snap.hp}|${snap.held}|${snap.primary}|${snap.pistol}|${snap.money}|${snap.dead}|${snap.side}|${(snap.nades || []).join(',')}`
+        ? `${snap.hp}|${snap.held}|${snap.primary}|${snap.pistol}|${snap.money}|${snap.dead}|${snap.side}|${(snap.nades || []).join(',')}|${snap.roundKills}|${(snap.kills || []).length}`
         : '';
       if (snap.gen !== lastGen || overlayKey !== lastOverlayKey) {
         lastGen = snap.gen;

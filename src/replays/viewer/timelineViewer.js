@@ -33,7 +33,7 @@ import {
 } from '../stats/statsTables.js';
 import { RadarRenderer, SIDE_COLORS } from './radarRenderer.js';
 import { Playback, RoundSequence } from './playback.js';
-import { specKeyForSeat } from './view3dFollow.js';
+import { canSpectateSlot, specKeyForSeat } from './view3dFollow.js';
 import { clockAt, formatClock, timingFor, ROUND_SECONDS } from './roundClock.js';
 import { economyLabel, winningSide } from '../shared/roundId.js';
 import { iconImgHtml, inventoryAt } from './equipmentIcons.js';
@@ -871,6 +871,7 @@ export function createTimelineViewer({
     mapEl.classList.toggle('is-3d', mode3d);
     el.classList.toggle('is-3d', mode3d);
     el.classList.toggle('is-3d-immerse', mode3d && immerse3d);
+    view3d?.setImmerse?.(mode3d && immerse3d);
     if (!mode3d) setRadarOverview(false);
     syncPovHighlight();
     syncPovBtn();
@@ -2346,6 +2347,7 @@ export function createTimelineViewer({
     if (!mode3d || !view3d) return false;
     const slot = specToSlot.get(Number(spec));
     if (slot == null) return false;
+    if (!canSpectateSlot(states, slot)) return false;
     view3d.spectateSlot(slot);
     syncPovHighlight();
     sync3dButtons();
@@ -5305,6 +5307,8 @@ export function createTimelineViewer({
     // The 3D view reads the same sampled tick the radar does, so the two can
     // never drift apart — they are one set of numbers drawn twice.
     if (mode3d && view3d) {
+      const wins = countWins();
+      const s1 = activeMeta.team1Side;
       view3d.setFrame({
         tick,
         tickRate: timing.tickRate,
@@ -5316,7 +5320,10 @@ export function createTimelineViewer({
         weapons: activeMeta.weapons || [],
         teamSides: { 1: activeMeta.team1Side, 2: activeMeta.team2Side },
         roundKey: files[activeIndex] || '',
-        stats: track ? activeMeta.stats || {} : {}
+        stats: track ? activeMeta.stats || {} : {},
+        clock: clockAt(timing, tick).seconds,
+        scoreT: s1 === 'CT' ? wins.team2 : wins.team1,
+        scoreCt: s1 === 'CT' ? wins.team1 : wins.team2
       });
     }
 

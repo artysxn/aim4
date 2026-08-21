@@ -3,9 +3,9 @@
 // GOTV-style through-wall outlines: each player is drawn into a mask
 // (their own shape, unlit, no world geometry), then a fullscreen composite
 // paints a T-red or CT-blue halo around its edge. The fill stays in the
-// mask so the edge can be found; it is not composited. The playermodel
-// already in the scene is left alone. Name, health and loadout icons sit
-// in HTML above the head.
+// mask so the edge can be found; it is not composited, so the playermodel
+// is not painted black. Name, health and loadout icons sit in HTML above
+// the head.
 //
 // Non-player meshes are hidden for the mask pass so the silhouette camera
 // never sees a wall. Viewmodels are a different scene and never enter it.
@@ -179,7 +179,9 @@ export function createXrayPass({ renderer, scene, parent }) {
     depthWrite: true,
     side: THREE.DoubleSide
   });
-  silMat.colorNode = fillUniform;
+  // RGB + opaque alpha. A Color uniform alone often writes a=0 on WebGPU, which
+  // emptied the mask (names with no outline). Black RGB with a=1 filled bodies.
+  silMat.colorNode = vec4(fillUniform, float(1));
 
   const xrayCam = new THREE.PerspectiveCamera();
   const quadCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
@@ -220,8 +222,8 @@ export function createXrayPass({ renderer, scene, parent }) {
       depthWrite: false,
       toneMapped: false,
       fog: false,
-      blending: THREE.AdditiveBlending,
-      premultipliedAlpha: true
+      blending: THREE.NormalBlending,
+      premultipliedAlpha: false
     });
     try {
       const fill = texture(rt.texture, screenUV);
@@ -231,14 +233,14 @@ export function createXrayPass({ renderer, scene, parent }) {
         halo = max(halo, texture(rt.texture, uv).a);
       }
       const edge = max(halo.sub(fill.a), float(0));
-      // Interior is dropped: only the rim is added, so a visible body is not
-      // painted over. Through a wall the rim is the x-ray. Fill RGB is T red
-      // or CT blue from the mask pass.
-      glowMat.colorNode = vec4(fill.rgb.mul(edge), edge);
+      // Rim only. Interior alpha stays 0 so the textured body is not covered,
+      // and we never composite the mask's fill (that used to paint players black).
+      glowMat.colorNode = vec4(fill.rgb, edge);
       glowReady = true;
     } catch (e) {
-      console.warn('cs3d: x-ray glow unavailable, drawing fill only', e);
-      glowMat.colorNode = texture(rt.texture, screenUV);
+      console.warn('cs3d: x-ray glow unavailable, drawing rim from mask alpha', e);
+      const fill = texture(rt.texture, screenUV);
+      glowMat.colorNode = vec4(fill.rgb, fill.a.mul(float(0)));
       glowReady = true;
     }
     quad.material = glowMat;
@@ -349,9 +351,11 @@ export function createXrayPass({ renderer, scene, parent }) {
       }
       const name = String(s.name || '').trim();
       const hp = Math.max(0, Math.min(100, Math.round(Number(s.hp) || 0)));
-      const key = `${name}|${hp}|${(s.items || []).join(',')}`;
+      const side = s.side === 'CT' ? 'CT' : 'T';
+      const key = `${name}|${hp}|${side}|${(s.items || []).join(',')}`;
       if (el.dataset.key !== key) {
         el.dataset.key = key;
+        el.className = `c3-xray-tag is-${side.toLowerCase()}`;
         const icons = (s.items || []).map((n) => iconImgHtml(n, 'c3-xray-icon')).join('');
         el.innerHTML =
           `<div class="c3-xray-icons">${icons}</div>` +

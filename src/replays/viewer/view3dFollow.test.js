@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { deathFollowShouldSnap, nextCamMode, nextFollowSlot, specKeyForSeat } from './view3dFollow.js';
+import { canSpectateSlot, deathFollowShouldSnap, nextCamMode, nextFollowSlot, specKeyForSeat } from './view3dFollow.js';
 
 const players = [
   { id: 'a', slot: 0 },
@@ -88,6 +88,12 @@ const players = [
     [0, 1, 2, 3, 4].map((i) => specKeyForSeat('right', i)),
     [6, 7, 8, 9, 0]
   );
+}
+
+{
+  assert.equal(canSpectateSlot([{ alive: true }, { alive: false }], 0), true);
+  assert.equal(canSpectateSlot([{ alive: true }, { alive: false }], 1), false);
+  assert.equal(canSpectateSlot([], 0), false);
 }
 
 console.log('view3dFollow.test.js: ok');

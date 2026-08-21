@@ -63,8 +63,9 @@ import { Controls } from '../../cs3d/controls.js';
 import { placeThirdPersonCamera, THIRD_PERSON_BACK } from '../../cs3d/thirdPerson.js';
 import { mountCrosshair } from '../../cs3d/crosshairOverlay.js';
 import { rayAabb, botBox, hitgroupFromHeight } from '../../cs3d/practiceBots.js';
-import { isGun, isGrenade, bareWeapon, inventoryAt } from './equipmentIcons.js';
+import { isGun, isGrenade, bareWeapon, hudLoadout, inventoryAt } from './equipmentIcons.js';
 import { createXrayPass, markXrayObject, xrayIconList } from '../../cs3d/xray.js';
+import { createMatchHud } from '../../cs3d/matchHud.js';
 import { BloodSpray } from '../../cs3d/blood.js';
 import {
   consumeForward,
@@ -78,7 +79,7 @@ import {
   scaledAimPunch,
   scaledCameraPunch
 } from '../../cs3d/demoHits.js';
-import { DEATH_FOLLOW_SECONDS, deathFollowShouldSnap, nextCamMode, nextFollowSlot } from './view3dFollow.js';
+import { canSpectateSlot, DEATH_FOLLOW_SECONDS, deathFollowShouldSnap, nextCamMode, nextFollowSlot } from './view3dFollow.js';
 
 const DEG = Math.PI / 180;
 const RAD = 180 / Math.PI;
@@ -171,6 +172,8 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange }) {
   let xray = null;
   let xrayWanted = false;
   let _xraySubjects = [];
+  let matchHud = null;
+  let hudOn = false;
   /** The POV player's state for the viewmodel, rebuilt by applyFrame(). */
   let povState = null;
   /** Tick the shot scan last ran to, so each shot kicks the gun exactly once. */
@@ -831,7 +834,8 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange }) {
       const obj = b.model?.group?.visible ? b.model.group : b.group.visible ? b.group : null;
       if (!obj) continue;
       const s = frame.states[slot];
-      const pose = s?.alive ? s : corpseOf(slot, s);
+      if (!s?.alive) continue;
+      const pose = s;
       const p = (frame.players || []).find((x) => x.slot === slot);
       const id = p?.id;
       const st = (id && frame.stats?.[id]) || {};
@@ -849,13 +853,142 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange }) {
         id: id || `slot-${slot}`,
         object: obj,
         name: p?.name || '',
-        hp: s?.alive ? Math.max(0, Math.min(100, s.health | 0)) : 0,
+        hp: Math.max(0, Math.min(100, s.health | 0)),
         side: pose?.side === 'T' || pose?.side === 'CT' ? pose.side : sideOf(slot),
-        duck: duckOf(s?.alive ? s : pose || {}),
+        duck: duckOf(s),
         items: xrayIconList(inv)
       });
     }
     return out;
+  }
+
+  function hudMatchStub() {
+    return {
+      pruneKills() {},
+      snapshot() {
+        return {
+          gen: 1,
+          hp: 0,
+          dead: true,
+          side: 'T',
+          money: 0,
+          held: '',
+          primary: '',
+          pistol: '',
+          knife: 'knife',
+          nades: [],
+          clip: '',
+          reserve: '',
+          roundKills: 0,
+          kills: [],
+          clock: 0,
+          scoreT: 0,
+          scoreCt: 0,
+          name: ''
+        };
+      }
+    };
+  }
+
+  function hudOverlay() {
+    if (!frame || povSlot < 0) return null;
+    const s = frame.states[povSlot];
+    if (!s) return null;
+    const p = (frame.players || []).find((x) => x.slot === povSlot);
+    const id = p?.id;
+    const st = (id && frame.stats?.[id]) || {};
+    const weapon = frame.weapons?.[s.weapon] || '';
+    const inv = inventoryAt({
+      loadout: st.loadout || [],
+      grenades: frame.events?.grenades,
+      itemEvents: frame.events?.items,
+      playerId: id,
+      tick: frame.tick,
+      state: s,
+      activeWeapon: weapon
+    });
+    const nades = (inv.util || []).filter((x) => x !== 'defuser' && x !== 'c4');
+    const slots = hudLoadout(inv);
+    const tick = frame.tick || 0;
+    const rate = frame.tickRate || 64;
+    const killWindow = 8 * rate;
+    const nameOf = (pid) => (frame.players || []).find((x) => x.id === pid)?.name || '';
+    const sideOfId = (pid) => {
+      const slot = (frame.players || []).find((x) => x.id === pid)?.slot;
+      const stt = slot != null ? frame.states[slot] : null;
+      return stt?.side === 'CT' ? 'CT' : 'T';
+    };
+    const kills = (frame.events?.kills || [])
+      .filter((k) => k.tick <= tick && tick - k.tick < killWindow)
+      .slice(-6)
+      .map((k) => ({
+        killer: nameOf(k.attacker),
+        victim: nameOf(k.victim),
+        weapon: k.weapon,
+        killerSide: sideOfId(k.attacker),
+        victimSide: sideOfId(k.victim),
+        at: 0
+      }));
+    const roundKills = (frame.events?.kills || []).filter((k) => k.attacker === id && k.tick <= tick).length;
+    return {
+      hp: s.alive ? Math.max(0, s.health | 0) : 0,
+      dead: !s.alive,
+      side: s.side === 'CT' ? 'CT' : 'T',
+      money: st.money || 0,
+      held: slots.held || weapon,
+      primary: slots.primary,
+      pistol: slots.pistol,
+      knife: 'knife',
+      nades,
+      clip: '',
+      reserve: '',
+      roundKills,
+      kills,
+      name: p?.name || '',
+      x: s.x,
+      y: s.y,
+      z: s.z,
+      yaw: s.yaw
+    };
+  }
+
+  function hudMarks() {
+    if (!frame) return [];
+    const out = [];
+    for (let i = 0; i < (frame.states || []).length; i++) {
+      if (i === povSlot) continue;
+      const s = frame.states[i];
+      if (!s?.alive) continue;
+      out.push({ x: s.x, y: s.y, z: s.z, yaw: s.yaw, side: s.side });
+    }
+    return out;
+  }
+
+  function updateMatchHud() {
+    if (!matchHud || !hudOn) return;
+    const over = hudOverlay();
+    if (!over) {
+      matchHud.update({ overlay: { dead: true, hp: 0, nades: [], kills: [] } });
+      return;
+    }
+    let tAlive = 0;
+    let ctAlive = 0;
+    for (const s of frame.states || []) {
+      if (!s?.alive) continue;
+      if (s.side === 'CT') ctAlive++;
+      else tAlive++;
+    }
+    matchHud.update({
+      src: [over.x, over.y, over.z],
+      yaw: over.yaw,
+      marks: hudMarks(),
+      clock: frame.clock,
+      ctAlive,
+      tAlive,
+      scoreCt: frame.scoreCt,
+      scoreT: frame.scoreT,
+      overlay: over
+    });
   }
 
   function syncPointerCursor() {
@@ -1287,6 +1420,7 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange }) {
     lighting?.update();
     _xraySubjects = xray?.enabled ? collectXraySubjects() : [];
     xray?.updateLabels(camera, _xraySubjects);
+    updateMatchHud();
     if (mapRenderer) mapRenderer.render(camera);
     else renderer.render(scene, camera);
   }
@@ -1320,6 +1454,10 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange }) {
       if (!xrayWanted) xray?.updateLabels(camera, []);
       return xrayWanted;
     },
+    setImmerse(on) {
+      hudOn = !!on;
+      if (matchHud) matchHud.el.hidden = !hudOn || !visible;
+    },
     get povName() {
       if (povSlot < 0 || !frame) return null;
       const p = (frame.players || []).find((x) => x.slot === povSlot);
@@ -1334,6 +1472,12 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange }) {
       flashOverlay = document.createElement('div');
       flashOverlay.className = 'c3-flash';
       container.appendChild(flashOverlay);
+      matchHud = createMatchHud({
+        root: container,
+        map: { code: slug, name: slug },
+        match: hudMatchStub()
+      });
+      matchHud.el.hidden = !hudOn;
       crosshair = mountCrosshair(container, { scaleToResolution: false }).canvas;
       window.addEventListener('keydown', onAlt);
       window.addEventListener('keyup', onAlt);
@@ -1364,6 +1508,7 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange }) {
       canvas.hidden = false;
       if (flashOverlay) flashOverlay.hidden = false;
       if (crosshair) crosshair.hidden = false;
+      if (matchHud) matchHud.el.hidden = !hudOn;
       if (isFree()) controls.setEnabled(true);
       syncPointerCursor();
       resize();
@@ -1373,6 +1518,7 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange }) {
       canvas.hidden = true;
       if (flashOverlay) flashOverlay.hidden = true;
       if (crosshair) crosshair.hidden = true;
+      if (matchHud) matchHud.el.hidden = true;
       xray?.updateLabels(camera, []);
       controls?.setEnabled(false);
       syncPointerCursor();
@@ -1401,6 +1547,7 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange }) {
     spectateSlot(slot) {
       const n = Number(slot);
       if (!Number.isFinite(n) || n < 0) return null;
+      if (!canSpectateSlot(frame?.states, n | 0)) return null;
       cancelDeathFollow();
       povSlot = n | 0;
       if (isFree()) setCamMode('pov');
@@ -1475,6 +1622,8 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange }) {
       flashOverlay?.remove();
       for (const b of bodies) b.model?.dispose();
       xray?.dispose();
+      matchHud?.el?.remove();
+      canvas.parentElement?.classList.remove('is-match');
       viewModel.dispose();
       demoNades?.dispose();
       nadeEffects?.dispose();

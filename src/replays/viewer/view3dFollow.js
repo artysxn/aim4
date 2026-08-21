@@ -31,6 +31,12 @@ export function specKeyForSeat(side, seat) {
   return i + 1;
 }
 
+/** Digit / roster spectate only follows a living player. */
+export function canSpectateSlot(states, slot) {
+  const s = states?.[slot];
+  return Boolean(s?.alive);
+}
+
 /**
  * True when this frame is a seek / first sample, not playback through a death.
  * Matches applyFrame's animation window: more than a quarter second, or back.
