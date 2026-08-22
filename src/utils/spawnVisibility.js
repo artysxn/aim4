@@ -64,8 +64,14 @@ function rayBox(o, d, box) {
   return rayAABB(lo, ld, [0, 0, 0], box.size);
 }
 
-/** True when no cover box blocks the segment (excluding endpoints). */
+/**
+ * True when nothing blocks the segment (excluding endpoints).
+ *
+ * `boxes` is either an arena's cover list or a ported map's triangle hull
+ * (src/utils/MeshCollision.js), which answers the same question against a BVH.
+ */
 export function lineOfSightClear(from, to, boxes = []) {
+  if (boxes?.isMeshCollider) return boxes.losClear(from, to);
   const dx = to[0] - from[0];
   const dy = to[1] - from[1];
   const dz = to[2] - from[2];

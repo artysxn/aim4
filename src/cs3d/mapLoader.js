@@ -25,6 +25,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { MeshBVH } from 'three-mesh-bvh';
 import { MaterialLibrary } from './materials.js';
+import { surfaceArea as sumSurfaceArea } from '../../shared/cs3d/flatGreys.js';
 import { decodeRgbeAdd, RGBE_BYTES } from '../../shared/cs3d/rgbe.js';
 import { packFetch, packFetchOk, packFetchStats } from './packFetch.js';
 
@@ -312,27 +313,13 @@ export function normalizeTile(mesh, wantColor, tint, wantAmb) {
  *
  * ~3.7M triangles for Nuke, spread across 80 group loads, so no frame wears
  * more than a fraction of a millisecond of it.
+ *
+ * The sum itself is shared/cs3d/flatGreys.js, because the aim trainer's map
+ * porter measures the same areas offline and a different sum there would shade
+ * a ported map differently from the view it is copying.
  */
 function surfaceArea(geom) {
-  const p = geom.getAttribute('position').array;
-  const idx = geom.index.array;
-  let sum = 0;
-  for (let i = 0; i < idx.length; i += 3) {
-    const a = idx[i] * 3;
-    const b = idx[i + 1] * 3;
-    const c = idx[i + 2] * 3;
-    const ux = p[b] - p[a];
-    const uy = p[b + 1] - p[a + 1];
-    const uz = p[b + 2] - p[a + 2];
-    const vx = p[c] - p[a];
-    const vy = p[c + 1] - p[a + 1];
-    const vz = p[c + 2] - p[a + 2];
-    const cx = uy * vz - uz * vy;
-    const cy = uz * vx - ux * vz;
-    const cz = ux * vy - uy * vx;
-    sum += Math.sqrt(cx * cx + cy * cy + cz * cz);
-  }
-  return sum * 0.5;
+  return sumSurfaceArea(geom.getAttribute('position').array, geom.index.array);
 }
 
 /**

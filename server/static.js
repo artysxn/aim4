@@ -28,7 +28,9 @@ const MIME = {
   '.ttf': 'font/ttf',
   '.otf': 'font/otf',
   '.ico': 'image/x-icon',
-  '.wasm': 'application/wasm'
+  '.wasm': 'application/wasm',
+  // Ported maps (public/maps/<slug>/<slug>.glb, scripts/gen-trainer-map.mjs).
+  '.glb': 'model/gltf-binary'
 };
 
 export function distExists() {

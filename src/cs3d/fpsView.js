@@ -50,21 +50,10 @@
 // ---------------------------------------------------------------------------
 
 import * as THREE from 'three/webgpu';
-
-/**
- * The ramp ends, as 8-bit grey: smallest surface in the map → largest surface.
- *
- * The dark end is nowhere near black on purpose. The biggest materials are the
- * ground, the roofs and the outside walls, which is most of any screenful, so
- * whatever value the ramp ends at is what most of the view will be — and the
- * lighting below can only take it down from there. A first cut ended at 0x1a
- * and put 83% of the frame under 40/255: a correct ramp nobody could read.
- */
-const GREY_SMALLEST = 0xf0;
-const GREY_LARGEST = 0x42;
-
-/** Darker than the darkest surface in shadow, so the horizon reads as backdrop. */
-const SKY_GREY = 0x161616;
+// The ramp itself — the greys, the drop rule and the log fit — is
+// shared/cs3d/flatGreys.js, because scripts/gen-trainer-map.mjs bakes the same
+// shading into the aim trainer's ported maps and the two must not drift.
+import { SKY_GREY, greyRamp } from '../../shared/cs3d/flatGreys.js';
 
 /**
  * How the one unit of light a fully-lit surface receives is split between the
@@ -79,20 +68,6 @@ const SKY_GREY = 0x161616;
  */
 const SUN_SHARE = 0.55;
 const AMBIENT_SHARE = 0.45;
-
-/**
- * Materials the flat view drops instead of flattening. Cut-outs (MASK), the
- * blended and glass surfaces (BLEND), the decals and the effect cards all get
- * their look from a texture's alpha, and an opaque grey stand-in for one is a
- * slab rather than a fence.
- */
-const isDetail = (m) => !!m.decal || !!m.effect || m.alphaMode !== 'OPAQUE';
-
-/** Ramp position (0 smallest, 1 largest) → a grey hex. */
-function greyAt(t) {
-  const v = Math.round(GREY_SMALLEST + (GREY_LARGEST - GREY_SMALLEST) * t);
-  return (v << 16) | (v << 8) | v;
-}
 
 export class FpsView {
   /**
@@ -214,39 +189,15 @@ export class FpsView {
   }
 
   /**
-   * A grey per material id, from the log of its world-space area, spread over
-   * the whole ramp between the map's smallest and largest surface.
+   * A grey per material id (shared/cs3d/flatGreys.js).
    *
    * Recomputed on every toggle rather than cached: with the map still
-   * streaming, the areas are still growing.
+   * streaming, the areas are still growing. A map baked for the aim trainer has
+   * no such problem — it runs the same ramp once over the finished map.
    *
    * @returns {Map<number, number|null>} id → grey hex, or null for "not drawn"
    */
   _greys(pack) {
-    const mats = pack.manifest.materials;
-    const out = new Map();
-    let lo = Infinity;
-    let hi = -Infinity;
-    for (const m of mats) {
-      if (isDetail(m)) {
-        out.set(m.id, null);
-        continue;
-      }
-      const a = pack.matArea.get(m.id) || 0;
-      if (a <= 0) continue;
-      const l = Math.log(a);
-      if (l < lo) lo = l;
-      if (l > hi) hi = l;
-    }
-    const span = hi - lo;
-    for (const m of mats) {
-      if (out.has(m.id)) continue;
-      const a = pack.matArea.get(m.id) || 0;
-      // No area yet: its tiles have not streamed in. Mid ramp rather than an
-      // extreme, so a half-loaded map does not read as all-ground or all-prop.
-      const t = a > 0 && span > 1e-6 ? Math.min(1, Math.max(0, (Math.log(a) - lo) / span)) : 0.5;
-      out.set(m.id, greyAt(t));
-    }
-    return out;
+    return greyRamp(pack.manifest.materials, (id) => pack.matArea.get(id) || 0);
   }
 }

@@ -11,7 +11,7 @@
 // ---------------------------------------------------------------------------
 
 import { clamp, lerp } from '../utils/MathUtils.js';
-import { resolveBoxCollisions, groundHeightAt } from '../utils/BoxCollision.js';
+import { resolveCollisions, supportHeightAt, hasCollision } from '../utils/mapCollision.js';
 import {
   srcFriction,
   srcAccelerate,
@@ -87,8 +87,8 @@ export class PlayerController {
     this.floorY = floorY;
     this.colliders = colliders;
     const spawnY = pos[1] || 0;
-    this.footY = colliders?.length
-      ? Math.max(spawnY, groundHeightAt(pos[0], pos[2], colliders, spawnY, floorY))
+    this.footY = hasCollision(colliders)
+      ? Math.max(spawnY, supportHeightAt(pos[0], pos[2], colliders, spawnY, floorY))
       : spawnY;
     this.vel.x = 0;
     this.vel.z = 0;
@@ -109,7 +109,7 @@ export class PlayerController {
   }
 
   _supportY() {
-    return groundHeightAt(this.pos.x, this.pos.z, this.colliders, this.footY, this.floorY);
+    return supportHeightAt(this.pos.x, this.pos.z, this.colliders, this.footY, this.floorY);
   }
 
   update(dt) {
@@ -234,8 +234,8 @@ export class PlayerController {
       }
     }
 
-    if (this.colliders?.length) {
-      resolveBoxCollisions(this.pos, this.vel, this.footY, this.crouchAmt, this.colliders);
+    if (hasCollision(this.colliders)) {
+      resolveCollisions(this.pos, this.vel, this.footY, this.crouchAmt, this.colliders);
     }
 
     const eye = this.footY + lerp(STAND_EYE, CROUCH_EYE, this.crouchAmt);

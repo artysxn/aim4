@@ -15,7 +15,7 @@ import { BaseScenario, beep } from './BaseScenario.js';
 import { buildBotTargetFromSettings } from '../bots/buildBotTarget.js';
 import { randRange, clamp, lerp, degToRad } from '../utils/MathUtils.js';
 import { srcFriction, srcAccelerate, RUN_SPEED, STAND_EYE } from '../utils/SourceMovement.js';
-import { resolveBoxCollisions, groundHeightAt } from '../utils/BoxCollision.js';
+import { resolveCollisions, supportHeightAt } from '../utils/mapCollision.js';
 import { gridLineColors, createCoverGridMaterial, applyCoverGridRepeat } from '../utils/ColorUtils.js';
 import { markBulletDecalSurface } from '../utils/bulletImpact.js';
 import { SHOT_INTERVAL } from '../weapons/ak47.js';
@@ -23,6 +23,8 @@ import { competitivePresetFor } from './competitivePresets.js';
 import { COMPETITIVE_CONFIG_KEY } from './leaderboardConfig.js';
 import { DEFAULTS } from '../core/SettingsManager.js';
 import { DEATHMATCH_MAP, deathmatchExtent } from './deathmatchMap.js';
+import { dmMapById, DM_MAP_DEFAULT } from '../maps/dmMaps.js';
+import { loadMeshMap } from '../maps/meshMap.js';
 import { eyeOffset, SPAWN_GRACE } from '../multiplayer/constants.js';
 import { pickSpawnPreferHidden, movementHitScale, movementReactionDelay, isPointVisible } from '../utils/spawnVisibility.js';
 import { worldImpactNormal } from '../utils/bulletImpact.js';
@@ -34,6 +36,18 @@ import {
 import { botDifficultyMultipliers } from './botDifficulty.js';
 
 const BODY_R = 0.35; // movement collision radius (matches player hull)
+
+/**
+ * How far up or down a wander goal may be from the bot picking it, on a mesh
+ * map, in metres.
+ *
+ * The arena is one storey and its bounds ARE its playable area. A real map is
+ * neither: dust2's bounding box holds catwalks, roofs and the inside of the
+ * skybox, and a bot that picks a goal on top of B site from inside the tunnels
+ * walks into a wall until it gives up. Roughly one flight of stairs, so a bot
+ * will still take a ramp but will not target a floor it cannot reach.
+ */
+const MESH_GOAL_CLIMB = 3;
 
 const ENGAGE_RANGE = 22; // m — within this (and with LOS) a bot holds & jiggles
 const DESIRED_RANGE = 9; // m — preferred fighting distance while engaged
@@ -82,8 +96,22 @@ export class DeathmatchScenario extends BaseScenario {
       ? (preset?.runDuration ?? 60)
       : Infinity;
 
-    this.map = DEATHMATCH_MAP;
-    this.colliders = this.map.boxes;
+    // Which world this run is played in. Competitive is always the arena: a
+    // ranked board is only comparable if everyone shot at the same walls.
+    const pick = this.competitive ? DM_MAP_DEFAULT : d.map || DM_MAP_DEFAULT;
+    this.mapEntry = dmMapById(pick);
+    this.isMeshMap = this.mapEntry.kind === 'mesh';
+    // A mesh map's real bounds and spawns arrive with its geometry. Until then
+    // the scenario runs on the arena's, which keeps every `this.map.bounds`
+    // reader below working on frame one instead of guarding for null.
+    this.map = this.isMeshMap
+      ? { id: this.mapEntry.id, label: this.mapEntry.label, bounds: this.mapEntry.data.bounds, spawns: this.mapEntry.data.spawns, boxes: [] }
+      : DEATHMATCH_MAP;
+    this.floorY = this.isMeshMap ? this.mapEntry.data.bounds.minY - 2 : 0;
+    /** Null until a mesh map's geometry lands; see `_loadMeshMap`. */
+    this.colliders = this.isMeshMap ? null : this.map.boxes;
+    this.mapHandle = null;
+    this.mapError = null;
     this.coverMeshes = [];
     this._envObjects = [];
     this.bots = [];
@@ -96,6 +124,57 @@ export class DeathmatchScenario extends BaseScenario {
     this._lastAttackerBotId = null;
 
     this._buildEnvironment();
+    if (this.isMeshMap) void this._loadMeshMap();
+  }
+
+  /**
+   * Whether the world this run needs is actually here.
+   *
+   * The arena is in the bundle and is always ready; a ported map is 8 MB over
+   * the wire. Everything that would otherwise run against a world that has not
+   * arrived — spawning, bot movement, collision — waits on this.
+   */
+  get mapReady() {
+    return !this.isMeshMap || !!this.mapHandle;
+  }
+
+  /**
+   * Fetch a ported map and put it in the scene.
+   *
+   * The geometry is shared and cached across runs (src/maps/meshMap.js), so
+   * this is only slow the first time somebody picks the map. When it lands the
+   * whole scenario is (re)started against it: the player and the bots were
+   * either waiting for a spawn or standing on the placeholder, and both want
+   * placing on the real thing.
+   */
+  async _loadMeshMap() {
+    try {
+      const handle = await loadMeshMap(this.mapEntry.data);
+      if (this._disposed) {
+        handle.detach();
+        return;
+      }
+      this.mapHandle = handle;
+      this.map = {
+        id: handle.data.id,
+        label: handle.data.label,
+        bounds: handle.bounds,
+        spawns: handle.spawns,
+        boxes: []
+      };
+      this.floorY = handle.floorY;
+      this.colliders = handle.collider;
+      this.root.add(handle.mesh);
+      // Into `coverMeshes` and NOT into `_envObjects`: it is what bullets, bot
+      // sightlines and the decal placer trace against, and it is shared
+      // geometry that dispose() must not free.
+      this.coverMeshes.push(handle.mesh);
+      markBulletDecalSurface(handle.mesh);
+      if (this.running) this.onStart();
+    } catch (e) {
+      this.mapError = e;
+      console.warn(`deathmatch: could not load ${this.mapEntry.id} —`, e.message || e);
+    }
   }
 
   get name() {
@@ -138,7 +217,11 @@ export class DeathmatchScenario extends BaseScenario {
   static configKeyFor(settings, variant = 'practice') {
     if (variant === 'competitive') return COMPETITIVE_CONFIG_KEY;
     const d = settings.data.deathmatch;
-    return `n${d.botCount}_spd${d.botSpeed}_bh${d.botBodyHit}_hh${d.botHeadHit}`;
+    // The map is part of the config: a run on dust2 is not comparable with a
+    // run on the arena, and a saved best against one must not be shown for the
+    // other.
+    const map = d.map && d.map !== DM_MAP_DEFAULT ? `${d.map}_` : '';
+    return `${map}n${d.botCount}_spd${d.botSpeed}_bh${d.botBodyHit}_hh${d.botHeadHit}`;
   }
   configKey() {
     return DeathmatchScenario.configKeyFor(this.settings, this.variant);
@@ -188,6 +271,10 @@ export class DeathmatchScenario extends BaseScenario {
 
   // ---- Environment --------------------------------------------------------
   _buildEnvironment() {
+    // A ported map brings its own ground, its own walls and its own greys. The
+    // arena's floor plane would cut straight through dust2's lower half and its
+    // grid would be drawn across the sky.
+    if (this.isMeshMap) return;
     const add = (obj) => { this.root.add(obj); this._envObjects.push(obj); return obj; };
     const c = this.settings.data.colors;
     const [gridCenter, gridEdge] = gridLineColors(c.floor);
@@ -382,7 +469,9 @@ export class DeathmatchScenario extends BaseScenario {
     if (!head) return false;
     head.getWorldPosition(_headPos);
     const botPoint = [_headPos.x, _headPos.y, _headPos.z];
-    const boxes = this.colliders;
+    // Cover boxes on an arena, a triangle hull on a ported map; `isPointVisible`
+    // takes either (src/utils/spawnVisibility.js).
+    const world = this.colliders;
 
     if (target.type === 'player') {
       if (this._dead || this._isInPlayerGrace()) return false;
@@ -394,7 +483,7 @@ export class DeathmatchScenario extends BaseScenario {
         [fwd.x, fwd.y, fwd.z],
         botPoint,
         hFov,
-        boxes
+        world
       );
     }
 
@@ -407,7 +496,7 @@ export class DeathmatchScenario extends BaseScenario {
       [fwd.x, fwd.y, fwd.z],
       botPoint,
       hFov,
-      boxes
+      world
     );
   }
 
@@ -506,12 +595,21 @@ export class DeathmatchScenario extends BaseScenario {
     bot.pos.x = clamp(bot.pos.x, b.minX + BODY_R, b.maxX - BODY_R);
     bot.pos.z = clamp(bot.pos.z, b.minZ + BODY_R, b.maxZ - BODY_R);
 
-    bot.footY = groundHeightAt(bot.pos.x, bot.pos.z, this.colliders, bot.footY, 0);
-    resolveBoxCollisions(bot.pos, bot.vel, bot.footY, bot.crouch, this.colliders);
+    bot.footY = supportHeightAt(bot.pos.x, bot.pos.z, this.colliders, bot.footY, this.floorY);
+    resolveCollisions(bot.pos, bot.vel, bot.footY, bot.crouch, this.colliders);
   }
 
-  /** True when (x, z) lies inside any cover box footprint (honours rotationY). */
-  _pointInCover(x, z) {
+  /** True when (x, z) is somewhere a body cannot stand. */
+  _pointInCover(x, z, footY = 0) {
+    if (!this.colliders) return false;
+    if (this.colliders.isMeshCollider) {
+      // On a map the ground is not flat, so the question has to be asked at the
+      // height the body would actually be standing at — a goal on the roof of
+      // Long A is not blocked, it is just not where this bot is.
+      const y = this.colliders.groundHeightAt(x, z, footY, this.floorY);
+      if (Math.abs(y - footY) > MESH_GOAL_CLIMB) return true;
+      return this.colliders.blockedAt(x, y, z);
+    }
     for (const box of this.colliders) {
       let dx = x - box.pos[0];
       let dz = z - box.pos[2];
@@ -542,7 +640,7 @@ export class DeathmatchScenario extends BaseScenario {
       const gz = lerp(bot.pos.z, pz, t) + randRange(-8, 8);
       const x = clamp(gx, b.minX + 1, b.maxX - 1);
       const z = clamp(gz, b.minZ + 1, b.maxZ - 1);
-      if (!this._pointInCover(x, z)) {
+      if (!this._pointInCover(x, z, bot.footY)) {
         bot.goal = { x, z };
         return;
       }
@@ -556,6 +654,12 @@ export class DeathmatchScenario extends BaseScenario {
     this._killFeed = [];
     this._lastAttackerBotId = null;
     this._ensureBoardEntry(PLAYER_BOARD_ID, 'You');
+    // Nothing to spawn onto yet. `_loadMeshMap` calls this again the moment the
+    // geometry lands, so the run starts properly rather than starting in a void
+    // and being patched up afterwards.
+    if (!this.mapReady) return;
+    // A second start on the same run (the map arriving) must not stack bots.
+    for (const bot of this.bots.splice(0)) this._removeBot(bot);
 
     const spawn = this._pickSpawn();
     this.engine.player.spawn({
@@ -575,6 +679,7 @@ export class DeathmatchScenario extends BaseScenario {
   }
 
   onUpdate(dt) {
+    if (!this.mapReady) return;
     const max = RUN_SPEED * this.botSpeedMul;
     const px = this.camera.position.x;
     const pz = this.camera.position.z;
@@ -837,6 +942,12 @@ export class DeathmatchScenario extends BaseScenario {
     }
   }
 
+  /** Take a bot off the board outright — no death animation, no respawn. */
+  _removeBot(bot) {
+    const i = this.targets.indexOf(bot.target);
+    if (i >= 0) this._removeTargetAt(i);
+  }
+
   _killBot(bot, fromPlayer = true, killerBot = null, headshot = false) {
     if (!fromPlayer && killerBot) {
       this._recordKill(killerBot.boardKey, bot.boardKey, { headshot });
@@ -879,6 +990,12 @@ export class DeathmatchScenario extends BaseScenario {
       }
     }
     this._envObjects = [];
+    // Detached, not disposed: a ported map's geometry, its BVHs and its
+    // material are shared with every later run of it (src/maps/meshMap.js), and
+    // freeing them here would make the next start pay the whole load again.
+    this.mapHandle?.detach();
+    this.mapHandle = null;
+    this.colliders = null;
     this.coverMeshes = [];
     super.dispose();
   }

@@ -25,6 +25,8 @@
 //   node scripts/cs3d-upload.mjs --map nuke      # one map
 //   node scripts/cs3d-upload.mjs --dry           # show what would change
 //   node scripts/cs3d-upload.mjs --force         # re-upload even if unchanged
+//   node scripts/cs3d-upload.mjs --dir public/maps/ported --prefix maps/ported
+//                                                # any other tree, keyed under a prefix
 //
 // Credentials (R2 -> Manage API Tokens -> Object Read & Write):
 //   R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET
@@ -40,7 +42,6 @@ import { fileURLToPath } from 'node:url';
 import { S3Client, PutObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const PACK_DIR = path.resolve(process.env.CS3D_PACK_DIR || path.join(ROOT, 'server', 'data', 'cs3d', 'pack'));
 
 const args = process.argv.slice(2);
 const flag = (n) => args.includes(n);
@@ -49,6 +50,17 @@ const opt = (n, d) => {
   return i >= 0 ? String(args[i + 1] || '') : d;
 };
 const only = opt('--map', '');
+/**
+ * Which tree to sync, and under what key prefix.
+ *
+ * Defaults to the 3D explorer's pack directory at the bucket root, which is
+ * every existing caller. `--dir` plus `--prefix` is how the aim trainer's
+ * ported maps ride the same bucket and the same headers without a second copy
+ * of the retry, HEAD-compare and cache-control logic
+ * (`npm run maps:upload` -> public/maps/ported -> maps/ported/...).
+ */
+const SRC_DIR = path.resolve(opt('--dir', '') || process.env.CS3D_PACK_DIR || path.join(ROOT, 'server', 'data', 'cs3d', 'pack'));
+const PREFIX = opt('--prefix', '').replace(/^\/+|\/+$/g, '');
 const dry = flag('--dry');
 const force = flag('--force');
 const CONCURRENCY = Number(opt('--jobs', 8));
@@ -152,14 +164,14 @@ async function main() {
         'R2_SECRET_ACCESS_KEY and R2_BUCKET in the environment or .env.local'
     );
   }
-  if (!fs.existsSync(PACK_DIR)) fail(`no pack directory at ${PACK_DIR}`);
+  if (!fs.existsSync(SRC_DIR)) fail(`no source directory at ${SRC_DIR}`);
 
-  const maps = (await fsp.readdir(PACK_DIR, { withFileTypes: true }))
+  const maps = (await fsp.readdir(SRC_DIR, { withFileTypes: true }))
     .filter((e) => e.isDirectory())
     .map((e) => e.name)
     .filter((m) => !only || m === only)
     .sort();
-  if (!maps.length) fail(only ? `no pack for "${only}"` : 'no packs to upload');
+  if (!maps.length) fail(only ? `nothing named "${only}" under ${SRC_DIR}` : `nothing to upload under ${SRC_DIR}`);
 
   const s3 = new S3Client({
     region: 'auto',
@@ -167,7 +179,7 @@ async function main() {
     credentials: { accessKeyId, secretAccessKey }
   });
 
-  console.log(`cs3d-upload: ${PACK_DIR} -> r2://${Bucket}${dry ? ' (dry run)' : ''}`);
+  console.log(`cs3d-upload: ${SRC_DIR} -> r2://${Bucket}/${PREFIX ? `${PREFIX}/` : ''}${dry ? ' (dry run)' : ''}`);
 
   let uploaded = 0;
   let skipped = 0;
@@ -175,7 +187,7 @@ async function main() {
   let lastLog = Date.now();
 
   for (const map of maps) {
-    const files = await walk(path.join(PACK_DIR, map));
+    const files = await walk(path.join(SRC_DIR, map));
     // manifest.json last: until it lands, the old one still points at a
     // complete set of files. Uploading it first would advertise geometry that
     // is not there yet to anyone loading mid-sync.
@@ -190,7 +202,7 @@ async function main() {
         const i = cursor++;
         if (i >= files.length) return;
         const { full, key: rel } = files[i];
-        const Key = `${map}/${rel}`;
+        const Key = PREFIX ? `${PREFIX}/${map}/${rel}` : `${map}/${rel}`;
         const body = await fsp.readFile(full);
         const isManifest = path.basename(full) === 'manifest.json';
 

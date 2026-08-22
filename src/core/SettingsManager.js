@@ -269,6 +269,10 @@ export const DEFAULTS = {
     missLimit: 0
   },
   deathmatch: {
+    // Which world to play in (src/maps/dmMaps.js): the trainer's own arena, or
+    // a CS2 map ported in as flat-grey geometry. Competitive ignores this and
+    // always uses the arena, so a ranked board stays comparable.
+    map: 'arena',
     botCount: 4, // bots hunting the player at once (1..6)
     botDifficulty: 'hard', // training only — hard | medium | easy
     botSpeed: 1.0, // multiplier on default run speed (215 u/s)

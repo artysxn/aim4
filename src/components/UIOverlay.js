@@ -103,6 +103,7 @@ import { formatServerRegion } from '../multiplayer/regionLabels.js';
 import { SCENARIO_ICONS, MATCHMAKING_ICON, TRAINING_ICON, PLAYLISTS_ICON as PLAYLISTS_TILE_ICON, CUSTOM_GAMES_ICON, MULTIPLAYER_ICON, LEADERBOARD_ICON, ACCOUNT_ICON, LOGOUT_ICON, SETTINGS_ICON, PRECISION_ICON, ALL_MODES_ICON, SNIPING_ICON } from '../aim4/icons.js';
 import { ARENAS } from '../scenarios/DuelsScenario.js';
 import { duelsArenaSelectOptions } from '../scenarios/duelsArenas.js';
+import { dmMapSelectOptions } from '../maps/dmMaps.js';
 import { isKillLeaderboardScenario, isLowerScoreLeaderboardScenario } from '../scenarios/leaderboardConfig.js';
 import { SCENARIO_META, TRAINING_CATEGORIES } from '../lib/gamemodeCatalog.js';
 
@@ -834,7 +835,15 @@ ${botDifficultyField('set-duels-bot-difficulty')}
         id: 'deathmatch',
         label: 'Deathmatch',
         body: `
-${botDifficultyField('set-dm-bot-difficulty')}
+<div class="field field-plain">
+            <div class="field-top">
+              <span class="field-label">Map</span>
+            </div>
+            <select id="set-dm-map">
+              ${dmMapSelectOptions()}
+            </select>
+          </div>
+          ${botDifficultyField('set-dm-bot-difficulty')}
 ${rf('set-dm-bots', 'Bots', 1, 6, 1)}
           ${rf('set-dm-speed', 'Bot speed', 0.25, 2.0, 0.05)}
           ${rf('set-dm-body', 'Bot body hit %', 5, 50, 1)}
@@ -3031,6 +3040,9 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     this._bindRange('set-duels-ttk', (v, d) => { d.duels.ttk = v; });
     this._bindRange('set-duels-misslimit', (v, d) => { d.duels.missLimit = v; }, { parse: (v) => parseInt(v, 10) });
 
+    $('#set-dm-map')?.addEventListener('change', (e) => {
+      draft((d) => { d.deathmatch.map = e.target.value; });
+    });
     this._bindRange('set-dm-bots', (v, d) => { d.deathmatch.botCount = v; }, { parse: (v) => parseInt(v, 10) });
     $('#set-dm-bot-difficulty')?.addEventListener('change', (e) => {
       draft((d) => { d.deathmatch.botDifficulty = e.target.value; });
@@ -6300,6 +6312,8 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     this._setRange('set-duels-ttk', s.duels.ttk);
     this._setRange('set-duels-misslimit', s.duels.missLimit ?? 0);
 
+    const dmMap = $('#set-dm-map');
+    if (dmMap) dmMap.value = s.deathmatch?.map ?? 'arena';
     this._setRange('set-dm-bots', s.deathmatch?.botCount ?? 4);
     $('#set-dm-bot-difficulty').value = s.deathmatch?.botDifficulty ?? 'hard';
     this._setRange('set-dm-speed', s.deathmatch?.botSpeed ?? 1);
