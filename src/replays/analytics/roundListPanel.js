@@ -19,7 +19,9 @@ const fmtIndex = (n) => (Number.isFinite(n) ? `${n.toFixed(2)}x` : EMPTY);
 const fmtRating = (n) => (Number.isFinite(n) ? n.toFixed(2) : EMPTY);
 const fmtCount = (n) => (n > 0 ? String(n) : EMPTY);
 const ratingCell = (n) =>
-  Number.isFinite(n) ? withDeltaHtml(n.toFixed(2), n, 1, DELTA_BANDS.rating) : EMPTY;
+  Number.isFinite(n)
+    ? withDeltaHtml(n.toFixed(2), n, 1, DELTA_BANDS.rating)
+    : withDeltaHtml('––', null, null, null);
 
 /** Overpass is out of the overview pool. */
 const HIDDEN_MAPS = new Set(['OVP']);

@@ -8182,9 +8182,9 @@ table.rp-mine-table tbody tr {
 
 .tm-map-bar {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) 22px 12px;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
 }
 
 /* Grown from the left. The centre line is 50%, not where the bar starts. */
@@ -8254,44 +8254,59 @@ table.rp-mine-table tbody tr {
 }
 
 .tm-map-bar-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
+  display: contents;
   color: var(--muted);
   font-size: 10px;
   white-space: nowrap;
 }
 
+.tm-map-bar-side {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1;
+}
+
 .pf-num {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
+  justify-content: flex-end;
+  gap: 2px;
+  width: 100%;
   white-space: nowrap;
+  box-sizing: border-box;
+}
+
+.pf-num-val {
+  min-width: 0;
 }
 
 .pf-delta {
   display: inline-flex;
   align-items: center;
-  flex: 0 0 auto;
+  justify-content: center;
+  flex: 0 0 14px;
+  width: 14px;
+  height: 14px;
   line-height: 0;
-  vertical-align: middle;
 }
 
 .pf-delta-icon {
   display: block;
-  width: 16px;
-  height: 16px;
-  min-width: 16px;
-  min-height: 16px;
-  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
   object-fit: contain;
 }
 
-.tm-map-bar-label .pf-delta-icon {
-  width: 14px;
-  height: 14px;
-  min-width: 14px;
-  min-height: 14px;
+.tm-map-bar .pf-delta {
+  flex: 0 0 12px;
+  width: 12px;
+  height: 12px;
+}
+
+.tm-map-bar .pf-delta-icon {
+  width: 12px;
+  height: 12px;
 }
 
 .tm-maps-list {

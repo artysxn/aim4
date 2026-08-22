@@ -17,7 +17,7 @@ import {
   gunLabel,
   aggregateGuns
 } from './gunStats.js';
-import { DELTA_BANDS, deltaLevel, deltaMarkHtml } from './deltaMark.js';
+import { DELTA_BANDS, deltaLevel, deltaMarkHtml, withDeltaHtml } from './deltaMark.js';
 import { mapRoundTableHtml } from './mapRoundTables.js';
 
 assert.equal(stripAt('@artysan'), 'artysan');
@@ -156,13 +156,21 @@ assert.equal(deltaLevel(54.1, 52, DELTA_BANDS.winrate), 1);
 assert.equal(deltaLevel(60, 52, DELTA_BANDS.winrate), 2);
 assert.equal(deltaLevel(44, 52, DELTA_BANDS.winrate), -2);
 
-assert.equal(deltaMarkHtml(0), '');
+assert.ok(deltaMarkHtml(0).includes('pf-delta'));
+assert.ok(!deltaMarkHtml(0).includes('<img'));
 assert.ok(deltaMarkHtml(1).includes('is-up'));
 assert.ok(deltaMarkHtml(-2).includes('is-down'));
 assert.notEqual(deltaMarkHtml(1), deltaMarkHtml(2));
 assert.ok(deltaMarkHtml(2).includes('pf-delta'));
 assert.ok(deltaMarkHtml(1).includes('<img'));
 assert.ok(deltaMarkHtml(2).includes('data:image/svg+xml'));
+assert.ok(withDeltaHtml('1.04', 1.04, 1.0, DELTA_BANDS.rating).includes('pf-num-val'));
+assert.ok(withDeltaHtml('1.04', 1.04, 1.0, DELTA_BANDS.rating).includes('pf-delta'));
+assert.equal(
+  withDeltaHtml('1.04', 1.04, 1.0, DELTA_BANDS.rating).includes('<img'),
+  false,
+  'on-average values still reserve the arrow slot'
+);
 
 {
   const esc = (s) => String(s);

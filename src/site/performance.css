@@ -153,27 +153,24 @@
 }
 
 .pf-card-value .pf-num {
-  display: inline-flex;
-  align-items: center;
+  width: auto;
+  justify-content: flex-start;
   gap: 6px;
+}
+
+.pf-card-value .pf-delta {
+  flex: 0 0 22px;
+  width: 22px;
+  height: 22px;
 }
 
 .pf-card-value .pf-delta-icon {
   width: 22px;
   height: 22px;
-  min-width: 22px;
-  min-height: 22px;
 }
 
 .pf-roles-table td .pf-delta {
-  margin-left: 2px;
-}
-
-.pf-roles-table td .pf-delta-icon {
-  width: 14px;
-  height: 14px;
-  min-width: 14px;
-  min-height: 14px;
+  flex-basis: 14px;
 }
 
 .pf-bar {

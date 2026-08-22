@@ -63,21 +63,22 @@ export function deltaLevel(value, peer, bands) {
 }
 
 /**
- * Markup for a 1x/2x chevron, or '' when the value is on the average.
+ * Markup for a 1x/2x chevron. Always the same width: an empty slot when the
+ * value sits on the average, so neighbours do not shift.
  * @param {-2|-1|0|1|2} level
  */
 export function deltaMarkHtml(level) {
   const n = Number(level) || 0;
-  if (!n) return '';
+  if (!n) return `<span class="pf-delta" aria-hidden="true"></span>`;
   const key = n > 0 ? (n >= 2 ? '2up' : '1up') : n <= -2 ? '2down' : '1down';
   const dir = n > 0 ? 'up' : 'down';
   const src = SRC[key];
   return `<span class="pf-delta is-${dir}" aria-hidden="true"><img class="pf-delta-icon" src="${src}" alt="" width="18" height="18" draggable="false" /></span>`;
 }
 
-/** Number HTML plus the mark, when both value and peer are finite. */
+/** Number HTML plus a reserved mark slot, so a missing arrow never moves the digits. */
 export function withDeltaHtml(text, value, peer, bands) {
-  const mark = deltaMarkHtml(deltaLevel(value, peer, bands));
-  if (!mark) return text;
-  return `<span class="pf-num">${text}${mark}</span>`;
+  const empty = text === '––' || text === '\u2014' || text === '—';
+  const valCls = empty ? 'pf-num-val pf-empty' : 'pf-num-val';
+  return `<span class="pf-num"><span class="${valCls}">${text}</span>${deltaMarkHtml(deltaLevel(value, peer, bands))}</span>`;
 }

@@ -57,7 +57,7 @@ import {
   mapWinrateGapSpan,
   mapWinrateHint
 } from '../replays/analytics/mapWinrateHint.js';
-import { DELTA_BANDS, withDeltaHtml } from '../replays/performance/deltaMark.js';
+import { DELTA_BANDS, deltaLevel, deltaMarkHtml } from '../replays/performance/deltaMark.js';
 import { createDocsEditor } from './docsEditor.js';
 import { mountDrawingBoard } from './drawingBoard.js';
 import { mountUtilityArchive } from './utilityArchive.js';
@@ -691,9 +691,7 @@ export function initTeamView({ auth, escapeHtml }) {
           ? `<span class="tm-map-bar-prw is-${kind}" style="left:${gap.left}%;width:${gap.width}%"></span>`
           : '';
       const hint = kind ? mapWinrateHint(rate, prw) : '';
-      const mark = known
-        ? withDeltaHtml('', rate, league, DELTA_BANDS.winrate)
-        : '';
+      const mark = deltaMarkHtml(known ? deltaLevel(rate, league, DELTA_BANDS.winrate) : 0);
       const title = hint
         ? hint
         : `${side} round winrate${known ? ` ${pct1(rate)} over ${rounds} rounds` : ', not enough rounds yet'}${
@@ -704,7 +702,7 @@ export function initTeamView({ auth, escapeHtml }) {
           <span class="tm-map-bar-fill" style="width:${fill}%"></span>
           ${overlay}
         </span>
-        <span class="tm-map-bar-label">${side}${mark}</span>
+        <span class="tm-map-bar-label"><span class="tm-map-bar-side">${side}</span>${mark}</span>
       </span>`;
     };
     return `<ul class="tm-maps-list">${rows
