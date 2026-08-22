@@ -102,6 +102,7 @@ export function createRoundListPanel({ escapeHtml }) {
       label: 'Win%',
       get: (r) => (Number.isFinite(r.ranWin) ? r.ranWin : -1),
       cell: (r) => fmtPct(r.ranWin),
+      html: (r) => fmtPct(r.ranWin),
       tip: (r) =>
         r.ranRounds
           ? `Won ${r.ranWins} of ${r.ranRounds} rounds we ran.`
@@ -140,6 +141,7 @@ export function createRoundListPanel({ escapeHtml }) {
       label: 'Win%',
       get: (r) => (Number.isFinite(r.facedWin) ? r.facedWin : -1),
       cell: (r) => fmtPct(r.facedWin),
+      html: (r) => fmtPct(r.facedWin),
       tip: (r) =>
         r.facedRounds
           ? `Won ${r.facedWins} of ${r.facedRounds} rounds we faced.`
@@ -151,6 +153,7 @@ export function createRoundListPanel({ escapeHtml }) {
       noAvg: true,
       get: (r) => (Number.isFinite(r.whenSec) ? r.whenSec : -1),
       cell: (r) => r.when || EMPTY,
+      html: (r) => r.when || EMPTY,
       tip: (r) => (r.when ? `Median clock: ${r.when}.` : 'No tagged timing yet.')
     }
   ];

@@ -438,6 +438,10 @@ const tag = (k, at) => ({ k, m: at === null ? {} : { When: at } });
   assert.ok(html.includes('/demos?rounds='), 'Ran/Faced open those rounds in a new tab');
   assert.ok(!/>2\.00x</.test(html) && !/>1\.33x</.test(html), 'Ran/Faced cells are counts, not x');
   assert.ok(html.includes('>2</a>') || html.includes('>2</td>'), 'Ran shows the raw count');
+  assert.ok(
+    !html.includes('&lt;span class="pf-empty"'),
+    'empty Faced/Win%/When cells render as dashes, not escaped tags'
+  );
 
   const body = html.slice(html.indexOf('<tbody>'), html.indexOf('</tbody>'));
   const tips = [...body.matchAll(/data-tip="([^"]+)"/g)].map((m) => m[1]);
