@@ -27,6 +27,19 @@ export class Target {
     this.spawnDuration = 0.12;
     this.dyingT = 0;
     this.dyingDuration = 0.18;
+    /**
+     * Set by a target whose model animates its own death (the CS2 agent bots,
+     * src/bots/AgentBotModel.js): `(t, dt) => void` with t 0..1 through
+     * `dyingDuration`. When present it replaces BOTH halves of the default
+     * death — the scale-up pop and the per-mesh opacity walk — because a body
+     * that swells to 1.6x while it falls over reads as a bug, and because the
+     * meshes to fade are skinned clones whose materials the model owns.
+     *
+     * `dt` is here because scenarios stop calling `model.update()` on a target
+     * once it is dying (`if (target.state !== 'dying')` — half of them do it),
+     * so this is the only clock a death animation gets.
+     */
+    this.deathHandler = null;
 
     this._fadeColor = new THREE.Color(0xffffff);
   }
@@ -56,6 +69,10 @@ export class Target {
     this.state = 'dying';
     this.dyingT = 0;
     if (fadeColor != null) this._fadeColor.set(fadeColor);
+    if (this.deathHandler) {
+      this.deathHandler(0, 0);
+      return;
+    }
     for (const m of this.colliders.concat(this.visuals)) {
       if (m.material) {
         m.material.transparent = true;
@@ -80,10 +97,14 @@ export class Target {
     if (this.state === 'dying') {
       this.dyingT += dt;
       const t = Math.min(1, this.dyingT / this.dyingDuration);
-      this.object.scale.setScalar(1 + t * 0.6);
-      for (const m of this.colliders.concat(this.visuals)) {
-        if (m.material) m.material.opacity = 1 - t;
-        setTargetGlowOpacity(m, 1 - t);
+      if (this.deathHandler) {
+        this.deathHandler(t, dt);
+      } else {
+        this.object.scale.setScalar(1 + t * 0.6);
+        for (const m of this.colliders.concat(this.visuals)) {
+          if (m.material) m.material.opacity = 1 - t;
+          setTargetGlowOpacity(m, 1 - t);
+        }
       }
       if (t >= 1) this.alive = false;
     }

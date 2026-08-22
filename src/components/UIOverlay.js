@@ -255,7 +255,10 @@ function botDifficultyField(id) {
 }
 
 function classicBotModelField() {
-  return `<label class="field-check"><input type="checkbox" class="set-bots-classic-model" /> Classic bot model (static cylinder + sphere, training only)</label>`;
+  return (
+    `<label class="field-check"><input type="checkbox" class="set-bots-agent-model" /> CS2 agent bots (real models and animations)</label>` +
+    `<label class="field-check"><input type="checkbox" class="set-bots-classic-model" /> Classic bot model (static cylinder + sphere, training only)</label>`
+  );
 }
 
 function numField(id, label, step) {
@@ -502,6 +505,15 @@ export class UIOverlay {
           ${colorRow('set-col-cover', 'Cover / columns')}
           ${colorRow('set-col-target', 'Gridshot target')}
           <button type="button" class="btn btn-block" data-reset-colors>Reset colors</button>
+          <div class="settings-subhead">CS2 bot colors</div>
+          <label class="field-check"><input type="checkbox" id="set-bot-flat" /> Flat colors instead of CS2 skins</label>
+          <div id="set-bot-color-fields" hidden>
+            ${colorRow('set-col-agent-head', 'Head (and rifle)')}
+            ${colorRow('set-col-agent-torso', 'Torso')}
+            ${colorRow('set-col-agent-arms', 'Arms')}
+            ${colorRow('set-col-agent-legs', 'Legs')}
+          </div>
+          <p class="muted">Applies to the CS2 agent bots. The bodies keep their shading and their surface detail — only the color maps come off. Bots stay lit the same way whichever direction they face.</p>
           <div class="settings-subhead">Skybox</div>
           <label class="field-check"><input type="checkbox" id="set-custom-skybox" /> Custom skybox</label>
           <div id="set-skybox-fields" hidden>
@@ -599,6 +611,12 @@ export class UIOverlay {
           ${rf('set-vm-oy', 'Hands up', -0.5, 0.5, 0.01)}
           ${rf('set-vm-oz', 'Hands forward', -0.5, 1.0, 0.01)}
           <label class="field-check"><input type="checkbox" id="set-vm-bob" /> Weapon bob while moving</label>
+          <label class="field-check"><input type="checkbox" id="set-vm-agent" /> CS2 weapon models and hands</label>
+          <label class="field-check"><input type="checkbox" id="set-vm-flat" /> Flat colors instead of CS2 skins</label>
+          <div id="set-vm-color-fields" hidden>
+            ${colorRow('set-col-vm-hands', 'Hands')}
+            ${colorRow('set-col-vm-weapon', 'Weapon')}
+          </div>
           <label class="field-check"><input type="checkbox" id="set-vm-aimpunch" /> Aimpunch (view-punch recoil)</label>
           <div class="field field-plain">
             <div class="field-top"><span class="field-label">Shoot</span></div>
@@ -2826,6 +2844,9 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     this._bindRange('set-vm-ox', (v, d) => { d.viewmodel.offsetX = v; });
     this._bindRange('set-vm-oy', (v, d) => { d.viewmodel.offsetY = v; });
     this._bindRange('set-vm-oz', (v, d) => { d.viewmodel.offsetZ = v; });
+    $('#set-vm-agent')?.addEventListener('change', (e) => {
+      draft((d) => { d.viewmodel.agentModels = e.target.checked; });
+    });
     $('#set-vm-bob').addEventListener('change', (e) => {
       draft((d) => { d.viewmodel.bob = e.target.checked; });
     });
@@ -2974,13 +2995,17 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     this._bindRange('set-snxf-misslimit', (v, d) => { d.snipercrossfire.missLimit = v; }, { parse: (v) => parseInt(v, 10) });
 
     this.root.querySelector('#scenario-settings-drawer')?.addEventListener('change', (e) => {
-      if (!e.target.classList?.contains('set-bots-classic-model')) return;
+      const classic = e.target.classList?.contains('set-bots-classic-model');
+      const agent = e.target.classList?.contains('set-bots-agent-model');
+      if (!classic && !agent) return;
       const checked = e.target.checked;
       draft((d) => {
-        if (!d.bots) d.bots = { classicModel: false };
-        d.bots.classicModel = checked;
+        if (!d.bots) d.bots = { classicModel: false, agentModel: true };
+        if (classic) d.bots.classicModel = checked;
+        else d.bots.agentModel = checked;
       });
-      this.root.querySelectorAll('.set-bots-classic-model').forEach((el) => {
+      const sel = classic ? '.set-bots-classic-model' : '.set-bots-agent-model';
+      this.root.querySelectorAll(sel).forEach((el) => {
         el.checked = checked;
       });
     });
@@ -3015,6 +3040,34 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     col('#set-col-ehead', 'enemyHead');
     col('#set-col-cover', 'cover');
     col('#set-col-target', 'target');
+    col('#set-col-agent-head', 'agentHead');
+    col('#set-col-agent-torso', 'agentTorso');
+    col('#set-col-agent-arms', 'agentArms');
+    col('#set-col-agent-legs', 'agentLegs');
+    // The viewmodel's two colours live under `viewmodel`, not `colors`: they
+    // belong to the gun in your hands rather than to the arena's theme, and
+    // the viewmodel block is what gets copied into a replay.
+    const vmCol = (id, key) =>
+      $(id)?.addEventListener('input', (e) => {
+        draft((d) => { d.viewmodel[key] = e.target.value; });
+      });
+    vmCol('#set-col-vm-hands', 'handColor');
+    vmCol('#set-col-vm-weapon', 'weaponColor');
+    $('#set-bot-flat')?.addEventListener('change', (e) => {
+      const on = e.target.checked;
+      draft((d) => {
+        if (!d.bots) d.bots = {};
+        d.bots.flatColors = on;
+      });
+      const fields = $('#set-bot-color-fields');
+      if (fields) fields.hidden = !on;
+    });
+    $('#set-vm-flat')?.addEventListener('change', (e) => {
+      const on = e.target.checked;
+      draft((d) => { d.viewmodel.flatColors = on; });
+      const fields = $('#set-vm-color-fields');
+      if (fields) fields.hidden = !on;
+    });
     $('#set-custom-skybox')?.addEventListener('change', (e) => {
       // Custom skybox and texture work is the `aim.cosmetics` capability:
       // presets from Premium, full control on Elite, nothing on Free.
@@ -6114,6 +6167,8 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     this._setRange('set-vm-oy', s.viewmodel?.offsetY ?? -0.15);
     this._setRange('set-vm-oz', s.viewmodel?.offsetZ ?? 0.5);
     $('#set-vm-bob').checked = s.viewmodel?.bob !== false;
+    const vmAgent = $('#set-vm-agent');
+    if (vmAgent) vmAgent.checked = s.viewmodel?.agentModels !== false;
     $('#set-vm-aimpunch').checked = s.weapon?.aimpunch !== false;
     this._syncInputCaptureLabel('set-shoot-bind', s.weapon?.shootBind ?? 'Mouse0');
 
@@ -6242,6 +6297,13 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     this.root.querySelectorAll('.set-bots-classic-model').forEach((el) => {
       el.checked = classicBot;
     });
+    const agentBot = s.bots?.agentModel !== false;
+    this.root.querySelectorAll('.set-bots-agent-model').forEach((el) => {
+      el.checked = agentBot;
+      // The classic bot wins when both are asked for; say so rather than
+      // leaving two ticked boxes that disagree.
+      el.disabled = classicBot;
+    });
 
     $('#set-col-bg').value = s.colors.bg;
     $('#set-custom-skybox').checked = !!s.customSkybox;
@@ -6267,6 +6329,21 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     $('#set-col-ehead').value = s.colors.enemyHead;
     $('#set-col-cover').value = s.colors.cover;
     $('#set-col-target').value = s.colors.target;
+    const botFlat = s.bots?.flatColors === true;
+    const setVal = (id, v) => { const el = $(id); if (el && v) el.value = v; };
+    const setHidden = (id, hidden) => { const el = $(id); if (el) el.hidden = hidden; };
+    const setChecked = (id, v) => { const el = $(id); if (el) el.checked = v; };
+    setChecked('#set-bot-flat', botFlat);
+    setHidden('#set-bot-color-fields', !botFlat);
+    setVal('#set-col-agent-head', s.colors.agentHead);
+    setVal('#set-col-agent-torso', s.colors.agentTorso);
+    setVal('#set-col-agent-arms', s.colors.agentArms);
+    setVal('#set-col-agent-legs', s.colors.agentLegs);
+    const vmFlat = s.viewmodel?.flatColors === true;
+    setChecked('#set-vm-flat', vmFlat);
+    setHidden('#set-vm-color-fields', !vmFlat);
+    setVal('#set-col-vm-hands', s.viewmodel?.handColor);
+    setVal('#set-col-vm-weapon', s.viewmodel?.weaponColor);
     $('#set-target-glow').checked = !!s.targetGlow;
     const gc = resolveTargetGlowConfig(s.targetGlowConfig);
     this._setRange('set-glow-strength', gc.bloomStrength);

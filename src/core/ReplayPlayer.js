@@ -17,6 +17,9 @@ import { ReplayAnalytics } from '../lib/replayAnalytics.js';
 import { createCoverGridMaterial, applyCoverGridRepeat } from '../utils/ColorUtils.js';
 import { applyTargetGlow } from '../utils/targetGlow.js';
 import { CSBotModel } from '../bots/CSBotModel.js';
+import { AgentBotModel } from '../bots/AgentBotModel.js';
+import { sharedAgentModels } from '../agents/agentModels.js';
+import { sharedWeaponAssets } from '../agents/weaponAssets.js';
 
 export const REPLAY_SPEEDS = [0.125, 0.25, 0.5, 1, 2, 4];
 
@@ -229,7 +232,7 @@ export class ReplayPlayer {
       let object;
       let model = null;
       if (ent.kind === 'csbot' && ent.botParams) {
-        model = new CSBotModel(ent.botParams);
+        model = buildReplayBot(ent.botParams);
         object = new THREE.Group();
         object.add(model.root);
       } else {
@@ -573,4 +576,29 @@ export class ReplayPlayer {
     this.engine.camera.position.set(0, EYE_HEIGHT, 0);
     this.engine.camera.rotation.set(0, 0, 0, 'YXZ');
   }
+}
+
+/**
+ * The bot model a recorded `csbot` entity should be played back through.
+ *
+ * A replay says which one it was; if it says "agent" and the pack is not
+ * loaded (a cold page, a dead CDN, the setting turned off since), the skeletal
+ * bot stands in. Both take the same `setYaw / setPitch / update(dt, {crouch})`
+ * drive, so the playback path above does not branch — only the shape does.
+ */
+function buildReplayBot(params) {
+  if (params?.agent) {
+    const models = sharedAgentModels();
+    if (models.ready) {
+      return new AgentBotModel({
+        models,
+        side: params.side || 'CT',
+        widthScale: params.widthScale ?? 1,
+        scale: params.scale ?? 1,
+        weapon: params.weapon ? sharedWeaponAssets().cloneModel(params.weapon) : null
+      });
+    }
+    return new CSBotModel({ widthScale: params.widthScale ?? 1, scale: params.scale ?? 1, rifle: true });
+  }
+  return new CSBotModel(params);
 }

@@ -42,6 +42,14 @@ export class Engine {
     this.fps = 0;
     /** Optional (renderer, camera) => void — drawn after the main scene pass. */
     this.afterRender = null;
+    /**
+     * Optional (renderer, camera) => void — the first-person viewmodel's own
+     * pass (src/weapons/AgentViewmodel.js). Separate from `afterRender`, and
+     * before it, for two reasons: that slot already belongs to a scenario
+     * (DoorsAwpScenario's overlay) and would be trampled, and the gun belongs
+     * UNDER a scenario overlay rather than over it.
+     */
+    this.viewmodelRender = null;
 
     this._setupLights();
     this._bloom = new TargetBloomPass(this.renderer, this.scene, this.camera);
@@ -196,6 +204,7 @@ _setupLights() {
       }
       this._skybox?.update(this.camera);
       this._bloom.render();
+      if (this.viewmodelRender) this.viewmodelRender(this.renderer, this.camera);
       if (this.afterRender) this.afterRender(this.renderer, this.camera);
     };
     loop();

@@ -20,6 +20,10 @@ import { ReplayRecorder } from './core/ReplayRecorder.js';
 import { ReplayPlayer } from './core/ReplayPlayer.js';
 import { UIOverlay } from './components/UIOverlay.js';
 import { getEntitlements } from './lib/entitlements.js';
+import { sharedAgentModels, setAgentPaint } from './agents/agentModels.js';
+import { sharedWeaponAssets } from './agents/weaponAssets.js';
+import { BOT_WEAPON } from './bots/buildBotTarget.js';
+import { TRAINER_WEAPONS } from './agents/weaponAssets.js';
 
 const settings = new SettingsManager();
 const auth = new AuthManager(settings);
@@ -49,6 +53,32 @@ engine.replayPlayer = replayPlayer;
 const ui = new UIOverlay({
   engine, input, settings, crosshair, sceneManager, auth, replayRecorder, replayPlayer
 });
+
+// CS2's own agent and weapon models, off the same CDN the 3D map explorer
+// reads. Started here and never awaited: everything that draws them checks
+// `ready` and keeps the built-in blocky models until the pack lands, so a slow
+// (or absent) CDN costs the first run of a session its fidelity and nothing
+// else. See src/agents/packBase.js.
+sharedAgentModels().load();
+
+// The agent bots' paint, pushed from settings rather than read by them: a bot
+// is built by whatever scenario is running and a colour picker is dragged
+// rather than submitted, so this is the one place that knows both.
+function pushAgentPaint() {
+  const s = settings.activeSettings();
+  setAgentPaint({
+    flat: s.bots?.flatColors === true,
+    head: s.colors?.agentHead,
+    torso: s.colors?.agentTorso,
+    arms: s.colors?.agentArms,
+    legs: s.colors?.agentLegs
+  });
+}
+pushAgentPaint();
+settings.onChange(pushAgentPaint);
+sharedWeaponAssets()
+  .preload([...Object.values(TRAINER_WEAPONS), BOT_WEAPON])
+  .catch(() => {});
 
 ui.init();
 auth.init().then(() => {
@@ -99,5 +129,5 @@ engine.start();
 
 // Dev-only handle for debugging/automated verification (stripped from prod).
 if (import.meta.env.DEV) {
-  window.__aim = { engine, input, player, settings, crosshair, sceneManager, ui, auth };
+  window.__aim = { engine, input, player, settings, crosshair, sceneManager, ui, auth, weapon, viewmodel, agents: sharedAgentModels(), guns: sharedWeaponAssets() };
 }

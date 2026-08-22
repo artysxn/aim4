@@ -19,6 +19,8 @@ import * as THREE from 'three';
 import { TICK_RATE, TICK_DT, inputBitmask } from '../lib/replayCodec.js';
 import { isBloomTargetMesh } from '../utils/targetGlow.js';
 import { CSBotModel } from '../bots/CSBotModel.js';
+import { AgentBotModel } from '../bots/AgentBotModel.js';
+import { BOT_WEAPON } from '../bots/buildBotTarget.js';
 
 const MAX_SECONDS = 5 * 60; // hard cap so a stuck run can't exhaust memory
 const MAX_TICKS = MAX_SECONDS * TICK_RATE;
@@ -165,7 +167,7 @@ export class ReplayRecorder {
   }
 
   _blueprintFor(target) {
-    if (target?.model instanceof CSBotModel) return null;
+    if (this._isCSBot(target)) return null;
     const savedObj = target.object.scale.x;
     const savedMesh = target._mesh?.scale.x ?? 1;
     target.object.scale.setScalar(1);
@@ -183,12 +185,37 @@ export class ReplayRecorder {
     return id;
   }
 
+  /**
+   * Is this target a bot whose POSE is recorded rather than its geometry?
+   *
+   * Both bot models qualify, and it matters that they share the branch: a
+   * replay stores a pose-recorded bot as seven numbers a tick, and stores
+   * everything else by describing every mesh it can see. Let an agent bot fall
+   * through to `_blueprintFor` and the replay would try to serialise 37,000
+   * skinned vertices per bot as static geometry — enormous, and wrong, because
+   * a described mesh has no skeleton to pose at playback.
+   */
   _isCSBot(target) {
-    return target?.model instanceof CSBotModel;
+    const m = target?.model;
+    return m instanceof CSBotModel || m instanceof AgentBotModel;
   }
 
+  /**
+   * What a playback needs to rebuild this bot. `agent` decides which model;
+   * a replay recorded before the CS2 agents existed has no such key, so it
+   * reads as the skeletal bot it was, which is what it should be.
+   */
   _botParamsFrom(target) {
     const m = target.model;
+    if (m instanceof AgentBotModel) {
+      return {
+        agent: true,
+        side: m.body?.side || 'CT',
+        widthScale: m._w,
+        scale: m.root.scale.x,
+        weapon: m.weapon ? BOT_WEAPON : null
+      };
+    }
     return {
       bodyColor: m._bodyMat.color.getHex(),
       headColor: m._headMat.color.getHex(),

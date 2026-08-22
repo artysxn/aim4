@@ -720,7 +720,10 @@ export async function handleReplayRequest(req, res, url) {
     // would hide orgs that only appear on later pages).
     const teams = clusterTeams(records.filter((r) => (r.status || 'ready') === 'ready'));
 
-    json(res, 200, {
+    // Compressed. Each record carries its full round list — one long filename
+    // per round — so a page of fifty runs to ~125 KB of highly repetitive JSON,
+    // and the team clusters for the typeahead span the whole library on top.
+    await jsonBig(res, 200, {
       demos,
       teams,
       total: records.length,
@@ -735,7 +738,7 @@ export async function handleReplayRequest(req, res, url) {
       // readable set, matching what `mine=1` returns them.
       owned: me.signedIn ? (me.admin ? allowed.length : allowed.filter(ownedBy).length) : 0,
       usage: await usage(user)
-    });
+    }, req);
     return true;
   }
 
@@ -1642,7 +1645,8 @@ export async function handleReplayRequest(req, res, url) {
         rounds.push(...extra);
       }
     }
-    json(res, 200, { rounds, total: rounds.length, noted });
+    // Up to 2000 round summaries; repetitive enough to be worth the gzip.
+    await jsonBig(res, 200, { rounds, total: rounds.length, noted }, req);
     return true;
   }
 
@@ -1823,7 +1827,14 @@ export async function handleReplayRequest(req, res, url) {
     // encodes which round of which demo this is, and a written round is never
     // rewritten. Reopening a demo was refetching every round's meta from the
     // server; now the browser answers from its own cache.
-    json(res, 200, { round: meta }, { 'Cache-Control': 'private, max-age=31536000, immutable' });
+    // Compressed: round meta is repetitive JSON — kill lists, damage events and
+    // grenade paths — and the viewer pulls one per round when a demo opens,
+    // which measured ~950 KB uncompressed for a 22-round match. It is immutable
+    // and cached hard, so this is a first-open cost, but it is the first open
+    // that people notice.
+    await jsonBig(res, 200, { round: meta }, req, {
+      'Cache-Control': 'private, max-age=31536000, immutable'
+    });
     return true;
   }
 

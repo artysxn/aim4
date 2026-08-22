@@ -10,11 +10,23 @@
 // Two gun meshes are built up-front (rifle + pistol); setWeapon() toggles which
 // one is visible and loads that weapon's recoil/muzzle tuning. Configurable from
 // Settings: handedness, viewmodel FOV, XYZ offset, bob.
+//
+// The blocky guns are now the FALLBACK. When the CS2 weapons pack has landed
+// (src/agents/weaponAssets.js) this class hands the drawing over to
+// AgentViewmodel — real arms, the real weapon, and the game's own draw / idle /
+// shoot / reload clips, in their own render pass — and keeps everything else it
+// owns: the tracers, the impact sparks, the bullet holes and the view punch,
+// none of which the pack has anything to say about. `useAgent` is the switch,
+// and everything downstream of it stays on the same public API, so nothing that
+// calls into the viewmodel (BaseScenario.shoot, ReplayPlayer, the UI) knows
+// which one is drawing.
 // ---------------------------------------------------------------------------
 
 import * as THREE from 'three';
 import { getWeapon } from '../weapons/index.js';
 import { buildGunModel } from '../weapons/gunModels.js';
+import { AgentViewmodel } from '../weapons/AgentViewmodel.js';
+import { sharedWeaponAssets, weaponNameFor } from '../agents/weaponAssets.js';
 
 const TRACER_POOL = 24;
 const TRACER_LIFE = 0.09; // seconds — quick, just a firing indicator
@@ -39,6 +51,25 @@ export class Viewmodel {
     engine.scene.add(this.group);
 
     this._models = {};
+    /** What setVisible was last told, independent of which model is drawing. */
+    this._wantVisible = false;
+    this._spec = null;
+    this._wasReloading = false;
+    this.agent = new AgentViewmodel();
+    engine.viewmodelRender = (renderer, camera) => this.agent.render(renderer, camera);
+    // The pack is already being fetched by main.js; this is only the callback.
+    sharedWeaponAssets()
+      .load()
+      .then((ok) => {
+        if (!ok) return;
+        this.agent.setSide('CT');
+        this.agent.applySettings(this.settings.activeSettings().viewmodel || {});
+        if (this._spec) this.agent.setWeapon(weaponNameFor(this._spec));
+        this._syncModels();
+      })
+      .catch(() => {});
+    settings.onChange(() => this.agent.applySettings(this.settings.activeSettings().viewmodel || {}));
+
     this._buildModels();
     this._buildTracers();
     this._buildImpactSparks();
@@ -162,16 +193,22 @@ export class Viewmodel {
   }
 
   // ---- Public API ----------------------------------------------------------
+  /** True while the CS2 arms and weapon are the ones being drawn. */
+  get useAgent() {
+    if (this.settings.activeSettings().viewmodel?.agentModels === false) return false;
+    return this.agent.ready;
+  }
+
   /** Switch the visible gun mesh + load its recoil/muzzle tuning. */
   setWeapon(spec) {
     if (!spec) return;
+    this._spec = spec;
     this._punchTauSpray = spec.punchTauSpray;
     this._punchTauRecover = spec.punchTauRecover;
     this._viewPunchStrength = spec.viewPunchStrength;
     for (const id in this._models) {
       const model = this._models[id];
       const active = id === spec.model;
-      model.group.visible = active && this.group.visible;
       model._active = active;
       if (active) {
         this._flash = model.flash;
@@ -179,16 +216,35 @@ export class Viewmodel {
         this._muzzleUp = model.up;
       }
     }
+    const name = weaponNameFor(spec);
+    if (this.agent.ready) {
+      // Already holding it (a second run with the same weapon): the draw is
+      // still what should play, so ask for it rather than no-oping.
+      if (this.agent.weaponName === name) this.agent.redraw();
+      else this.agent.setWeapon(name);
+    }
+    this._syncModels();
+  }
+
+  /**
+   * Show whichever model is in charge, and only that one. Called whenever the
+   * pack lands, the weapon changes or visibility flips, because any of the
+   * three can be what decides the answer.
+   */
+  _syncModels() {
+    const agent = this.useAgent;
+    this.group.visible = this._wantVisible && !agent;
+    for (const id in this._models) {
+      this._models[id].group.visible = this.group.visible && this._models[id]._active;
+    }
+    this.agent.setVisible(this._wantVisible && agent);
   }
 
   setVisible(v) {
     v = !!v;
-    if (v === this.group.visible) return;
-    this.group.visible = v;
-    // Only the active weapon's mesh should ever show.
-    for (const id in this._models) {
-      this._models[id].group.visible = v && this._models[id]._active;
-    }
+    if (v === this._wantVisible) return;
+    this._wantVisible = v;
+    this._syncModels();
     if (!v) {
       this._punchPitch = 0;
       this._punchYaw = 0;
@@ -208,6 +264,7 @@ export class Viewmodel {
   fire({ recoil = true } = {}) {
     if (recoil) this._kick = 1;
     this._flashT = FLASH_LIFE;
+    if (this.useAgent) this.agent.attack();
   }
 
   /**
@@ -316,11 +373,30 @@ export class Viewmodel {
 
   /** Recompute gun + muzzle world positions (call after fire() for tracers). */
   syncMuzzleForShot(motion = {}) {
+    if (this.useAgent) {
+      this._syncAgentMuzzle();
+      return;
+    }
     if (!this.group.visible) {
       this._muzzle.copy(this.camera.position);
       return;
     }
     this._applyTransform(motion);
+  }
+
+  /**
+   * The muzzle when the CS2 model is the one drawing.
+   *
+   * Off the weapon table's own attachment, not off the drawn gun — see
+   * AgentViewmodel.muzzleWorld. Hidden (scoped, or between runs) it collapses
+   * to the eye, which is where the old blocky path put it too.
+   */
+  _syncAgentMuzzle() {
+    if (!this.agent.visible) {
+      this._muzzle.copy(this.camera.position);
+      return;
+    }
+    this.agent.muzzleWorld(this.camera, this._muzzle);
   }
 
   _applyTransform(motion = {}) {
@@ -418,6 +494,7 @@ export class Viewmodel {
     } else {
       this._bobPhase = 0;
     }
+    if (this.useAgent) this._updateAgent(dt, motion);
     this._applyTransform(motion);
 
     // Decay kick + flash.
@@ -432,6 +509,35 @@ export class Viewmodel {
         this._flash.material.opacity = 0;
       }
     }
+  }
+
+  /**
+   * Drive the CS2 viewmodel for this frame.
+   *
+   * The reload is watched rather than pushed, because the trainer's reload is
+   * the WeaponController's: it owns the timer, the magazine and the trigger
+   * lockout, and it does not call in here. So the clip is started on the
+   * rising edge of `weapon.reloading` and stretched to `spec.reloadTime` —
+   * whatever the pack's own clip is worth, the trainer's timing is the timing.
+   */
+  _updateAgent(dt, motion = {}) {
+    const input = this.engine.player?.input;
+    const cam = this.camera;
+    this.agent.update(dt, {
+      speed: motion.speedHoriz || 0,
+      onGround: motion.onGround !== false,
+      viewYaw: input ? input.yaw : cam.rotation.y,
+      viewPitch: input ? input.pitch : cam.rotation.x,
+      punchPitch: this._punchPitch,
+      punchYaw: this._punchYaw
+    });
+    const weapon = this.engine.weapon;
+    const reloading = !!weapon?.reloading;
+    if (reloading && !this._wasReloading) {
+      this.agent.reload({ empty: (weapon.ammo ?? 0) <= 0, seconds: weapon.spec?.reloadTime || 0 });
+    }
+    this._wasReloading = reloading;
+    this._syncAgentMuzzle();
   }
 
   _updateTracers(dt) {

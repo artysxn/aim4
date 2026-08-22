@@ -109,8 +109,18 @@ function sampleDemosDev() {
 // The 3D island imports `three/webgpu`. GLTFLoader / SkeletonUtils / RGBELoader
 // still say `from 'three'`, and Vite would otherwise bundle a second copy of
 // the core (the "Multiple instances of Three.js" warning, extra memory, GC
-// hitches). The trainer's EffectComposer path must keep the WebGL build, so
-// only these three addons are redirected.
+// hitches). The trainer's EffectComposer path must keep the WebGL build.
+//
+// But the trainer needs those same addons now, to load the CS2 agent and
+// weapon packs into its own WebGL scene (src/agents/). One copy of an addon
+// can only ever say `three` OR `three/webgpu`, so whichever way it is pointed
+// the other page pays for a whole second three core — 1.2 MB of it.
+//
+// So the addon is resolved TWICE, under two module ids. The bare path is the
+// island's and is redirected as before; the same path with `?three-webgl` is
+// the trainer's own copy and keeps plain `three`. Two GLTFLoaders in the app
+// (~150 KB) rather than two three cores on one page.
+const THREE_WEBGL_Q = '?three-webgl';
 function cs3dThreeWebgpu() {
   const JSM = [
     '/three/examples/jsm/loaders/GLTFLoader.js',
@@ -121,8 +131,16 @@ function cs3dThreeWebgpu() {
     name: 'aim4-cs3d-three-webgpu',
     enforce: 'pre',
     async resolveId(id, importer) {
+      // The trainer's copy: same file on disk, its own module id.
+      if (id.endsWith(THREE_WEBGL_Q)) {
+        const bare = id.slice(0, -THREE_WEBGL_Q.length);
+        const r = await this.resolve(bare, importer, { skipSelf: true });
+        return r ? `${r.id}${THREE_WEBGL_Q}` : null;
+      }
       if (id !== 'three' || !importer) return null;
       const from = importer.replace(/\\/g, '/');
+      // ...and inside it, `three` stays the WebGL build.
+      if (from.includes(THREE_WEBGL_Q)) return null;
       if (!JSM.some((tail) => from.endsWith(tail))) return null;
       return this.resolve('three/webgpu', importer, { skipSelf: true });
     }
@@ -140,7 +158,12 @@ export default defineConfig({
     exclude: [
       'three/examples/jsm/loaders/GLTFLoader.js',
       'three/examples/jsm/loaders/RGBELoader.js',
-      'three/examples/jsm/utils/SkeletonUtils.js'
+      'three/examples/jsm/utils/SkeletonUtils.js',
+      // ...and the trainer's own copies of them (cs3dThreeWebgpu), which must
+      // not be pre-bundled either: esbuild would resolve their `three` before
+      // the plugin can leave it pointing at the WebGL build.
+      'three/examples/jsm/loaders/GLTFLoader.js?three-webgl',
+      'three/examples/jsm/utils/SkeletonUtils.js?three-webgl'
     ]
   },
   server: {

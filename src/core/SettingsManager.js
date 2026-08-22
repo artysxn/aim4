@@ -134,7 +134,18 @@ export const DEFAULTS = {
     offsetX: 0.16, // metres right of centre (flipped for left hand)
     offsetY: -0.15, // metres below the eye
     offsetZ: 0.5, // metres forward
-    bob: true // weapon bob while moving
+    bob: true, // weapon bob while moving
+    // CS2's own arms and weapon models with the game's draw/shoot/reload clips
+    // (src/weapons/AgentViewmodel.js). Off falls back to the box-primitive
+    // rifle/pistol/AWP in gunModels.js, which is also what draws until the
+    // pack has landed.
+    agentModels: true,
+    // Drop the CS2 skins off the hands and the gun and wear one flat colour
+    // each instead — still lit and still carrying their normal maps, so the
+    // shape reads. Optional; the textures are the default.
+    flatColors: false,
+    handColor: '#6f7480',
+    weaponColor: '#3a3f46'
   },
   weapon: {
     aimpunch: true, // view-punch camera kick when firing (toggle for those who dislike it)
@@ -261,13 +272,26 @@ export const DEFAULTS = {
     missLimit: 0
   },
   bots: {
-    classicModel: false // training only — static cylinder/sphere instead of CSBotModel
+    classicModel: false, // training only — static cylinder/sphere instead of CSBotModel
+    // CS2's own CT agent + its world-model animations (src/agents/). Falls back
+    // to the built-in skeletal bot on its own when the pack has not landed yet,
+    // so turning this off is a preference, not a workaround.
+    agentModel: true,
+    // The agent's skins off, four flat colours by body group on (the colours
+    // live under `colors.agent*`, with the rest of the theme). Optional.
+    flatColors: false
   },
   colors: {
     bg:        '#0a0a0a', // scene background + fog
     floor:     '#101010', // floor surface
     enemyBody: '#8a8a8a', // bot body cylinder
     enemyHead: '#ffcf4d', // bot head sphere
+    // The CS2 agent bots' four body groups, when bots.flatColors is on. The
+    // held rifle takes the head colour — see src/bots/AgentBotModel.js.
+    agentHead:  '#ffcf4d',
+    agentTorso: '#8a8a8a',
+    agentArms:  '#8a8a8a',
+    agentLegs:  '#8a8a8a',
     cover:     '#4a4a4a', // cover boxes / columns
     target:    '#ff5a3c'  // Gridshot spheres
   },

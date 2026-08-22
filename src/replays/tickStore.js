@@ -25,6 +25,17 @@ import {
 
 export const COARSE_STRIDE = 100;
 
+/**
+ * Background full-tick prefetches in flight at once.
+ *
+ * Was 2. A browser allows six connections to one origin, and the spiral order
+ * already puts the rounds nearest the one being watched first, so the extra
+ * workers fetch what is most likely to be needed next rather than competing
+ * with it. Left below six so the active round's own fetch, notes and map
+ * requests are never queued behind the prefetch.
+ */
+export const WARM_CONCURRENCY = 4;
+
 /** One decoded tick buffer, addressable by demo tick. */
 export class TickTrack {
   constructor(buffer) {
@@ -156,24 +167,34 @@ export class TickStore {
    * Pass one. Walks the selection in order, pulling every Nth tick of each
    * round before moving to the next.
    */
-  async coarsePass(files, stride = COARSE_STRIDE) {
-    for (let i = 0; i < files.length; i++) {
-      if (this.cancelled) return;
-      const file = files[i];
-      const e = this.entry(file);
-      if (e.coarse || e.full) {
-        this.emit({ type: 'coarse', file, index: i, total: files.length, cached: true });
-        continue;
-      }
-      try {
-        const buf = await fetchRoundTicks(file, stride);
+  async coarsePass(files, stride = COARSE_STRIDE, concurrency = WARM_CONCURRENCY) {
+    let next = 0;
+    const worker = async () => {
+      for (;;) {
         if (this.cancelled) return;
-        e.coarse = new TickTrack(buf);
-        this.emit({ type: 'coarse', file, index: i, total: files.length });
-      } catch (err) {
-        this.emit({ type: 'error', file, error: err.message });
+        const i = next++;
+        if (i >= files.length) return;
+        const file = files[i];
+        const e = this.entry(file);
+        if (e.coarse || e.full) {
+          this.emit({ type: 'coarse', file, index: i, total: files.length, cached: true });
+          continue;
+        }
+        try {
+          const buf = await fetchRoundTicks(file, stride);
+          if (this.cancelled) return;
+          e.coarse = new TickTrack(buf);
+          this.emit({ type: 'coarse', file, index: i, total: files.length });
+        } catch (err) {
+          this.emit({ type: 'error', file, error: err.message });
+        }
       }
-    }
+    };
+    // Was one request at a time, so a 24-round match paid 24 round trips of
+    // latency back to back before any of it was usable.
+    await Promise.all(
+      Array.from({ length: Math.max(1, concurrency) }, () => worker())
+    );
     this.emit({ type: 'coarse-done', total: files.length });
   }
 
@@ -240,7 +261,7 @@ export class TickStore {
    * @param {number} [concurrency] kept low so a click is never stuck behind a
    *   queue of speculative fetches on a slow connection
    */
-  warm(files, activeIndex = 0, concurrency = 2) {
+  warm(files, activeIndex = 0, concurrency = WARM_CONCURRENCY) {
     const pass = ++this.warmPass;
     const order = spiral(files.length, activeIndex);
     let next = 0;
