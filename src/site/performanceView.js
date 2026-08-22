@@ -427,23 +427,27 @@ export function initPerformanceView({ auth, escapeHtml }) {
   }
 
   function rolesHtml(grid) {
+    const lib = peers?.roles || {};
     const table = (side) => {
       const roleCls = side === 'CT' ? 'st-role-ct' : 'st-role-t';
       const rows = (grid[side] || [])
         .map((r) => {
+          const libPeer = r.position ? lib[r.map]?.[side]?.[r.position] : null;
+          const ratingPeer = Number.isFinite(libPeer?.rating) ? libPeer.rating : r.peer;
+          const swingPeer = Number.isFinite(libPeer?.swing) ? libPeer.swing : r.peerSwing;
           const ratingTip =
-            Number.isFinite(r.rating) && Number.isFinite(r.peer)
-              ? `${f2(r.rating)} vs ${f2(r.peer)} avg`
+            Number.isFinite(r.rating) && Number.isFinite(ratingPeer)
+              ? `${f2(r.rating)} vs ${f2(ratingPeer)} avg`
               : '';
           const swingTip =
-            Number.isFinite(r.swing) && Number.isFinite(r.peerSwing)
-              ? `${signed(r.swing)} vs ${signed(r.peerSwing)} avg`
+            Number.isFinite(r.swing) && Number.isFinite(swingPeer)
+              ? `${signed(r.swing)} vs ${signed(swingPeer)} avg`
               : '';
           return `<tr>
             <td class="left">${escapeHtml(r.mapName)}</td>
             <td class="left ${roleCls}">${escapeHtml(r.position || '—')}</td>
-            <td class="${ratingTip ? 'has-tip' : ''}"${ratingTip ? ` data-tip="${escapeHtml(ratingTip)}"` : ''}>${withDeltaHtml(f2(r.rating), r.rating, r.peer, DELTA_BANDS.rating)}</td>
-            <td class="${swingTip ? 'has-tip' : ''}"${swingTip ? ` data-tip="${escapeHtml(swingTip)}"` : ''}>${withDeltaHtml(signed(r.swing), r.swing, r.peerSwing, DELTA_BANDS.swing)}</td>
+            <td class="${ratingTip ? 'has-tip' : ''}"${ratingTip ? ` data-tip="${escapeHtml(ratingTip)}"` : ''}>${withDeltaHtml(f2(r.rating), r.rating, ratingPeer, DELTA_BANDS.rating)}</td>
+            <td class="${swingTip ? 'has-tip' : ''}"${swingTip ? ` data-tip="${escapeHtml(swingTip)}"` : ''}>${withDeltaHtml(signed(r.swing), r.swing, swingPeer, DELTA_BANDS.swing)}</td>
           </tr>`;
         })
         .join('');

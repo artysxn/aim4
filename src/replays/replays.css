@@ -8111,6 +8111,11 @@ table.rp-mine-table tbody tr {
   overflow-y: auto;
 }
 
+.tm-roundlist .st-table .pf-empty {
+  color: var(--muted, #5c5c62);
+  font-weight: 400;
+}
+
 .tm-roundlist .st-table tbody tr.tm-rl-t td,
 .tm-roundlist .st-table tbody tr.tm-rl-t td.st-sticky {
   background-color: #1c0606;
@@ -8257,32 +8262,36 @@ table.rp-mine-table tbody tr {
   white-space: nowrap;
 }
 
+.pf-num {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  white-space: nowrap;
+}
+
 .pf-delta {
   display: inline-flex;
   align-items: center;
   flex: 0 0 auto;
-  color: inherit;
   line-height: 0;
   vertical-align: middle;
 }
 
 .pf-delta-icon {
   display: block;
-  width: 14px;
-  height: 14px;
-}
-
-.pf-delta.is-up {
-  color: #6fcf97;
-}
-
-.pf-delta.is-down {
-  color: var(--rv-t, #e60611);
+  width: 16px;
+  height: 16px;
+  min-width: 16px;
+  min-height: 16px;
+  flex: 0 0 auto;
+  object-fit: contain;
 }
 
 .tm-map-bar-label .pf-delta-icon {
-  width: 12px;
-  height: 12px;
+  width: 14px;
+  height: 14px;
+  min-width: 14px;
+  min-height: 14px;
 }
 
 .tm-maps-list {

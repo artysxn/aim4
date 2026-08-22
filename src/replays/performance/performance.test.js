@@ -161,6 +161,8 @@ assert.ok(deltaMarkHtml(1).includes('is-up'));
 assert.ok(deltaMarkHtml(-2).includes('is-down'));
 assert.notEqual(deltaMarkHtml(1), deltaMarkHtml(2));
 assert.ok(deltaMarkHtml(2).includes('pf-delta'));
+assert.ok(deltaMarkHtml(1).includes('<img'));
+assert.ok(deltaMarkHtml(2).includes('data:image/svg+xml'));
 
 {
   const esc = (s) => String(s);

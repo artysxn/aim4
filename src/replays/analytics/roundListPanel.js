@@ -3,19 +3,23 @@
 //
 // One database-style table for the selected map and side. T rows are dark red,
 // CT rows dark blue. Ran / Faced are raw counts; the relative usage (vs the
-// library) and share of our rounds sit on hover. Rating is the team's average
-// player rating over those rounds. Counts open those rounds in a new timeline
-// tab.
+// library) and share of our rounds sit on hover. Rating is Rating 3.0, the
+// team's average player rating over those rounds, sorted highest first. Empty
+// cells are gray dashes. Counts open those rounds in a new timeline tab.
 // ---------------------------------------------------------------------------
 
 import { MAPS } from '../shared/roundId.js';
 import { libraryMaps, roundListStats } from './roundListStats.js';
 import { attachTips, bindStatsHScroll, statsTableHtml } from '../stats/statsTables.js';
+import { DELTA_BANDS, withDeltaHtml } from '../performance/deltaMark.js';
 
-const fmtPct = (n) => (Number.isFinite(n) ? `${n.toFixed(1)}%` : '—');
-const fmtIndex = (n) => (Number.isFinite(n) ? `${n.toFixed(2)}x` : '—');
-const fmtRating = (n) => (Number.isFinite(n) ? n.toFixed(2) : '—');
-const fmtCount = (n) => (n > 0 ? String(n) : '—');
+const EMPTY = '<span class="pf-empty">––</span>';
+const fmtPct = (n) => (Number.isFinite(n) ? `${n.toFixed(1)}%` : EMPTY);
+const fmtIndex = (n) => (Number.isFinite(n) ? `${n.toFixed(2)}x` : EMPTY);
+const fmtRating = (n) => (Number.isFinite(n) ? n.toFixed(2) : EMPTY);
+const fmtCount = (n) => (n > 0 ? String(n) : EMPTY);
+const ratingCell = (n) =>
+  Number.isFinite(n) ? withDeltaHtml(n.toFixed(2), n, 1, DELTA_BANDS.rating) : EMPTY;
 
 /** Overpass is out of the overview pool. */
 const HIDDEN_MAPS = new Set(['OVP']);
@@ -36,7 +40,7 @@ export function createRoundListPanel({ escapeHtml }) {
 
   /** @type {{ payload: object|null, teamName: string, maps: string[], mapCode: string, preferredMap: string, side: 'T'|'CT' }} */
   let state = { payload: null, teamName: '', maps: [], mapCode: '', preferredMap: '', side: 'T' };
-  let sort = { key: 'ran', dir: 'desc' };
+  let sort = { key: 'ranRating', dir: 'desc' };
   /** Avoid walking the library again on a sort or side click. */
   let statsCache = { payload: null, teamName: '', mapCode: '', stats: null };
 
@@ -69,7 +73,7 @@ export function createRoundListPanel({ escapeHtml }) {
       get: (r) => r.ranRounds || 0,
       cell: (r) => fmtCount(r.ranRounds),
       html: (r) =>
-        r.ranRounds ? roundsLink(r.ranFiles, fmtCount(r.ranRounds)) : escapeHtml('—'),
+        r.ranRounds ? roundsLink(r.ranFiles, fmtCount(r.ranRounds)) : EMPTY,
       tip: (r) =>
         usageTip({
           rounds: r.ranRounds,
@@ -84,6 +88,7 @@ export function createRoundListPanel({ escapeHtml }) {
       label: 'Rating',
       get: (r) => (Number.isFinite(r.ranRating) ? r.ranRating : -1),
       cell: (r) => fmtRating(r.ranRating),
+      html: (r) => ratingCell(r.ranRating),
       strong: true,
       tip: (r) =>
         Number.isFinite(r.ranRating)
@@ -106,7 +111,7 @@ export function createRoundListPanel({ escapeHtml }) {
       get: (r) => r.facedRounds || 0,
       cell: (r) => fmtCount(r.facedRounds),
       html: (r) =>
-        r.facedRounds ? roundsLink(r.facedFiles, fmtCount(r.facedRounds)) : escapeHtml('—'),
+        r.facedRounds ? roundsLink(r.facedFiles, fmtCount(r.facedRounds)) : EMPTY,
       tip: (r) =>
         usageTip({
           rounds: r.facedRounds,
@@ -121,6 +126,7 @@ export function createRoundListPanel({ escapeHtml }) {
       label: 'Rating',
       get: (r) => (Number.isFinite(r.facedRating) ? r.facedRating : -1),
       cell: (r) => fmtRating(r.facedRating),
+      html: (r) => ratingCell(r.facedRating),
       strong: true,
       tip: (r) =>
         Number.isFinite(r.facedRating)
@@ -142,7 +148,7 @@ export function createRoundListPanel({ escapeHtml }) {
       label: 'When',
       noAvg: true,
       get: (r) => (Number.isFinite(r.whenSec) ? r.whenSec : -1),
-      cell: (r) => r.when || '—',
+      cell: (r) => r.when || EMPTY,
       tip: (r) => (r.when ? `Median clock: ${r.when}.` : 'No tagged timing yet.')
     }
   ];

@@ -146,19 +146,34 @@
 .pf-card-value {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   font: 600 28px/1 var(--font-body);
   letter-spacing: -0.02em;
   color: var(--text);
 }
 
+.pf-card-value .pf-num {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .pf-card-value .pf-delta-icon {
-  width: 18px;
-  height: 18px;
+  width: 22px;
+  height: 22px;
+  min-width: 22px;
+  min-height: 22px;
 }
 
 .pf-roles-table td .pf-delta {
   margin-left: 2px;
+}
+
+.pf-roles-table td .pf-delta-icon {
+  width: 14px;
+  height: 14px;
+  min-width: 14px;
+  min-height: 14px;
 }
 
 .pf-bar {
@@ -292,7 +307,8 @@
   color: transparent;
 }
 
-.st-table.pf-map-table .pf-empty {
+.st-table.pf-map-table .pf-empty,
+.st-table .pf-empty {
   color: var(--muted, #5c5c62);
   font-weight: 400;
 }
