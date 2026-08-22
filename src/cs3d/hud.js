@@ -59,6 +59,7 @@ export class Hud {
             <div><b>K</b> delete the bot you are aiming at</div>
             <div><b>O</b> skip thrown grenades</div>
             <div><b>X</b> X-ray</div>
+            <div><b>Down</b> hide HUD and viewmodel</div>
             <div><b>Esc</b> menu</div>
             <div class="c3-keys-demo"><b>Drop</b> an .aim4replay on the page to watch it here</div>
             <div class="c3-keys-demo"><b>1-0</b> spectate a player</div>

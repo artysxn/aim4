@@ -104,6 +104,11 @@ body {
   visibility: hidden;
 }
 
+/* Arrow Down: world only, for screenshots. */
+#c3-ui.is-clean-view > * {
+  visibility: hidden !important;
+}
+
 #c3-ui {
   position: fixed;
   inset: 0;

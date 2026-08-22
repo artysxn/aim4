@@ -1366,6 +1366,27 @@ export function createStatsPanel({
       mapCode: mapCode || undefined,
       mapRow: Boolean(mapCode)
     };
+    // Server mode paints this table straight from the aggregate endpoint and
+    // holds no rounds, so `collectTeamRoundFiles` had nothing to walk and the
+    // click was a silent no-op on the default (unscoped) Database view. Pull
+    // the payload the same way every other rounds-needing interaction does.
+    if (!payload) {
+      if (link.classList.contains('is-busy')) return;
+      link.classList.add('is-busy');
+      const wasBusy = bodyEl.getAttribute('aria-busy');
+      try {
+        await ensurePayload();
+      } catch {
+        return;
+      } finally {
+        link.classList.remove('is-busy');
+        // ensurePayload marks the body busy for its own spinner; this path
+        // never repaints the table, so put the flag back where it was.
+        if (wasBusy === null) bodyEl.removeAttribute('aria-busy');
+        else bodyEl.setAttribute('aria-busy', wasBusy);
+      }
+      if (!payload) return;
+    }
     const files = collectTeamRoundFiles(teamRow);
     if (!files.length) return;
     await onPlayRounds(files, teamRoundsTitle(teamRow));

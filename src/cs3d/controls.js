@@ -234,6 +234,10 @@ export class Controls {
           e.preventDefault();
           this.hooks.onChat?.();
           break;
+        case 'ArrowDown':
+          e.preventDefault();
+          this.hooks.onToggleHud?.();
+          break;
         case 'Space':
           if (this.locked) this.player.input.jump = true;
           break;

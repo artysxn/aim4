@@ -36,14 +36,16 @@ import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js
 import { assetBase } from './mapLoader.js';
 import { packFetch, loadWithRetry, PACK_CDN } from './packFetch.js';
 import { UNIT_M } from '../../shared/sim3d/units.js';
+import { sourceVFovFromHFov } from '../utils/MathUtils.js';
 import { VIEW_RECOIL_TRACKING } from '../../shared/sim3d/recoil.js';
+import { gripFallbackOffset } from '../../shared/sim3d/gripPlacement.js';
 import { reloadClipAliases } from './viewModelClips.js';
 
 export const WEAPONS_PACK_VERSION = 4;
 
 const DEG = Math.PI / 180;
 
-/** CS2's `viewmodel_fov` default. The world renders at its own, wider, FOV. */
+/** CS2's `viewmodel_fov` default (4:3 horizontal cvar, same as world `fov`). */
 export const VIEWMODEL_FOV = 68;
 
 /**
@@ -506,6 +508,11 @@ export class ViewModel {
     /** This weapon's own clip set, when CS2 ships one; the class set backs it. */
     this.weaponSet = null;
     /**
+     * This weapon's placement when the pack has none, solved from its grip
+     * marker (shared/sim3d/gripPlacement.js). Null means "use the pack's".
+     */
+    this._wpnOffset = null;
+    /**
      * Live placement offsets driven by the tuner (src/cs3d/vmTuner.js). `rig`
      * is view space (x right, y up, z back); `wpn` and `rot` are the pack's rig
      * frame relative to the hand bone (x forward, y up, z RIGHT — the bind pose
@@ -600,6 +607,25 @@ export class ViewModel {
     this.applyWeaponTune();
     this._applyCull();
     if (this.weaponModel) this.wpnMount.add(this.weaponModel);
+    // Pose the new rig. A fresh skeleton comes up in the BIND pose, and the
+    // bind pose is not a rest pose: `hand_R` sits 18 units to the side of the
+    // eye and `hand_L` 18 the other way, while `wpn` is 17 units in FRONT. So
+    // the gun renders and the hands are off either edge of a 68-degree frame —
+    // a floating weapon with nothing holding it.
+    //
+    // Nothing re-poses it on its own. `_play` is only reached from a weapon
+    // change, a shot, a reload, or a one-shot clip ending, so a demo POV switch
+    // to a player on the other side holding the same weapon rebuilt the rig
+    // here and then left it: `setWeapon` returns early on the same name and
+    // never reaches its `_play`. Playing forward the next shot hid the bug;
+    // paused, that shot never comes and the hands stay gone.
+    //
+    // Fade 0 rather than the usual 0.06: there is nothing on a brand-new mixer
+    // to cross-fade FROM, and a fade-in would spend its first frame at weight
+    // zero — one more frame of exactly the bind pose this is here to leave.
+    this._current = null;
+    this._currentLoops = false;
+    this._play('idle', { loop: true, fade: 0 });
   }
 
   /**
@@ -670,8 +696,10 @@ export class ViewModel {
     if (!this.wpnMount) return;
     const t = this.tune;
     // The pack solves each weapon's own placement (cs3d-weapons.mjs
-    // computeVmOffsets); the tuner rides on top of it as a correction.
-    const b = this.weapon?.vmOffset || [0, 0, 0];
+    // computeVmOffsets); the tuner rides on top of it as a correction. The
+    // three guns it leaves at zero are placed by their grip marker instead —
+    // see `_wpnOffset` and shared/sim3d/gripPlacement.js.
+    const b = this._wpnOffset || this.weapon?.vmOffset || [0, 0, 0];
     this.wpnMount.matrix
       .makeRotationX(-this._frameX)
       .multiply(new THREE.Matrix4().makeTranslation(b[0] + t.wpn.x, b[1] + t.wpn.y, b[2] + t.wpn.z))
@@ -691,6 +719,8 @@ export class ViewModel {
     if (!stats) return;
     this.weaponName = bare;
     this.weapon = stats;
+    // The last gun's solved placement is not this one's.
+    this._wpnOffset = null;
     this.clipSet = this.assets.clips[stats.class] ? stats.class : 'rifle';
     if (!this.arms) this.setSide(this.side);
     // The old model goes as soon as the new one is asked for, so a slow fetch
@@ -713,6 +743,17 @@ export class ViewModel {
     this.weaponSet = own || null;
     this.applyWeaponTune(); // this weapon's own placement, not the last one's
     if (model) {
+      // Measured on the TEMPLATE, before it is parented: the solve reads a
+      // world position, and under the mount that would already include the
+      // placement it is working out. Null for every weapon the pack placed.
+      this._wpnOffset = gripFallbackOffset(model, stats);
+      if (this._wpnOffset) {
+        this.applyWeaponTune();
+        console.log(
+          `cs3d: ${bare} has no packed viewmodel offset; placed by its grip marker at ` +
+            `[${this._wpnOffset.map((v) => v.toFixed(2)).join(', ')}]`
+        );
+      }
       this.weaponModel = cloneSkinned(model);
       // Still on the mount, even now that the weapon brings its own skeleton.
       //
@@ -767,12 +808,21 @@ export class ViewModel {
       a = this.mixer.clipAction(c);
       this.actions.set(c.name, a);
     }
-    for (const [, other] of this.actions) if (other !== a) other.fadeOut(fade);
+    for (const [, other] of this.actions) {
+      if (other === a) continue;
+      if (fade > 0) other.fadeOut(fade);
+      else other.stop();
+    }
     a.reset();
     a.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, Infinity);
     a.clampWhenFinished = !loop;
     a.enabled = true;
-    a.fadeIn(fade).play();
+    // `fadeIn(0)` is not "no fade": it schedules an interpolant from weight 0
+    // to 1 over zero seconds, which reads 0 on the frame it is set and only
+    // clears on the next one. Take the weight directly instead.
+    if (fade > 0) a.fadeIn(fade);
+    else a.setEffectiveWeight(1);
+    a.play();
     this._current = a;
     this._currentLoops = loop;
     return a;
@@ -1038,7 +1088,7 @@ export class ViewModel {
  */
 export function createViewModelPass(renderer, { fov = VIEWMODEL_FOV } = {}) {
   const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(fov, 1, 0.5, 400);
+  const camera = new THREE.PerspectiveCamera(sourceVFovFromHFov(fov), 1, 0.5, 400);
   scene.add(camera);
   // The map's sun, once `setSun` has it — until then a key over the shoulder,
   // which is what this pass used to have permanently.
@@ -1125,7 +1175,7 @@ export function createViewModelPass(renderer, { fov = VIEWMODEL_FOV } = {}) {
       fill.intensity = intensity;
     },
     setFov(v) {
-      camera.fov = v;
+      camera.fov = sourceVFovFromHFov(v);
       camera.updateProjectionMatrix();
     },
     resize(width, height) {

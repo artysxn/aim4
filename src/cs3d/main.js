@@ -176,6 +176,8 @@ let pauseMenu = null;
 let perf = null;
 let xray = null;
 let _xraySubjects = [];
+/** Arrow Down: no HUD, crosshair, chat, or viewmodel. */
+let cleanView = false;
 const passStamp = { sky: 0, world: 0, bloom: 0, vm: 0, shadowDirty: 0 };
 // ---- UI --------------------------------------------------------------------
 const controls = new Controls(canvas, player, {
@@ -289,6 +291,10 @@ const controls = new Controls(canvas, player, {
     buyMenu.close();
     vmTuner.close();
     matchHud?.openChat();
+  },
+  onToggleHud: () => {
+    cleanView = !cleanView;
+    uiRoot.classList.toggle('is-clean-view', cleanView);
   }
 });
 let thirdPerson = false;
@@ -1413,7 +1419,7 @@ async function boot() {
       // Silhouettes first, then the gun, both inside the scene pass.
       overlay: () => {
         let drew = false;
-        if (xray?.enabled) {
+        if (!cleanView && xray?.enabled) {
           xray.render(camera, _xraySubjects);
           drew = true;
         }
@@ -1725,7 +1731,7 @@ function setupGradePanel(knobs, slug) {
 function updateViewModel(dt, inThird) {
   if (!viewModel.ready) return;
   const pov = demoView.active && demoView.povSlot !== null ? demoView.povState() : null;
-  const show = pov ? true : player.mode === 'walk' && !inThird;
+  const show = !cleanView && (pov ? true : player.mode === 'walk' && !inThird);
   viewModel.visible = show;
   if (!show) return;
   if (pov) {
@@ -2060,7 +2066,7 @@ function frame(now) {
   lighting?.update();
   passStamp.shadowDirty = lighting?.sun?.shadow?.needsUpdate ? 1 : 0;
   pack?.materials?.setTime(now / 1000);
-  _xraySubjects = xray?.enabled ? collectPracticeXraySubjects() : [];
+  _xraySubjects = !cleanView && xray?.enabled ? collectPracticeXraySubjects() : [];
   xray?.updateLabels(camera, _xraySubjects);
   const presented = !renderer.backend || shouldPresent(now);
   if (renderer.backend && presented) renderFrame();

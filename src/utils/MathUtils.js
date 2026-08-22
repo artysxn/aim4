@@ -65,9 +65,16 @@ export function hFovToVFov(hFovDeg, aspect) {
 }
 
 /**
- * Vertical FOV for the saved horizontal FOV setting (Source / CS2 semantics).
- * Vertical stays fixed; widescreen renders gain horizontal FOV, and 4:3
- * stretched resolutions stretch horizontally on display without changing angles.
+ * Vertical FOV for a Source / CS2 FOV cvar (world `fov` / `hFov`, and
+ * `viewmodel_fov`). Both are horizontal degrees at 4:3; the engine then runs
+ * ScaleFOVByWidthRatio(fov, aspect / (4/3)) before projection. Three.js wants
+ * the matching vertical, which is independent of the current aspect:
+ *
+ *   vFov = 2 * atan( tan(cvar / 2) / (4/3) )
+ *
+ * Passing the cvar through as PerspectiveCamera.fov treats it as vertical and
+ * is much wider than the game (68 viewmodel becomes ~100° horizontal at 16:9
+ * instead of ~84°).
  */
 export function sourceVFovFromHFov(hFovDeg) {
   return hFovToVFov(hFovDeg, FOV_REFERENCE_ASPECT);

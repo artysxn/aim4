@@ -32,6 +32,7 @@
 import * as THREE from 'three';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js?three-webgl';
 import { UNIT_M } from '../../shared/sim3d/units.js';
+import { sourceVFovFromHFov } from '../utils/MathUtils.js';
 import { VIEW_RECOIL_TRACKING } from '../../shared/sim3d/recoil.js';
 import { reloadClipAliases } from '../cs3d/viewModelClips.js';
 import { sharedWeaponAssets, weaponNameFor } from '../agents/weaponAssets.js';
@@ -49,10 +50,11 @@ import {
   sampleAngles,
   forwardOf
 } from './viewmodelMotion.js';
+import { gripFallbackOffset } from '../../shared/sim3d/gripPlacement.js';
 
 const DEG = Math.PI / 180;
 
-/** CS2's `viewmodel_fov` default. The arena renders at the player's own FOV. */
+/** CS2's `viewmodel_fov` default (4:3 horizontal cvar). The arena uses world FOV. */
 export const VIEWMODEL_FOV = 68;
 
 /**
@@ -98,43 +100,6 @@ const RIG_YAW = Math.PI / 2;
 const SETTING_DEFAULT = { offsetX: 0.16, offsetY: -0.15, offsetZ: 0.5 };
 const M_TO_UNIT = 1 / UNIT_M;
 
-/**
- * The bone every weapon model carries where the right hand grips it.
- * `scripts/cs3d-weapons.mjs` keeps it in the packed model's own bone list.
- */
-const GRIP_BONE = 'ag1_hand_r';
-
-/**
- * Where a CORRECTLY placed weapon's grip marker ends up, in the mount frame
- * (x forward, y up, z right — Source units).
- *
- * Why this exists: `cs3d-weapons.mjs` solves each weapon's `vmOffset` by
- * matching the model's barrel span to the `wpnEnd` / `wpnTip` helper bones the
- * viewmodel clips pose. **34 of the pack's 66 weapons pose neither**, and the
- * packer writes them `[0, 0, 0]`. For knives and grenades that is deliberate
- * and correct — they are held rather than aimed, and already sit right. For
- * the four it simply MISSED (usp_silencer, elite, revolver, and hkp2000's
- * silenced twin) a zero offset leaves the gun floating forward of the hand,
- * which is what the trainer's pistol looked like.
- *
- * These numbers are `gripLocal + vmOffset` measured off the pack's own solved
- * weapons — i.e. where their grip markers actually land once placed:
- *
- *     pistols   glock (−2.96, −2.76)  hkp2000 (−2.75, −2.78)  deagle (−2.19, −3.04)
- *     rifles    ak47 (−3.43, −5.35)   m4a1_s  (−3.42, −4.58)  awp    (−3.14, −4.38)
- *
- * Tight within a class and clearly different between them, which is what makes
- * the class median a usable target rather than a fudge. A weapon the packer
- * missed is then placed so its own grip lands there.
- *
- * The right fix is upstream — the packer could fall back to this same rule —
- * and the map explorer has the identical gap until it does.
- */
-const GRIP_TARGET = {
-  pistol: [-2.63, -2.86, 0],
-  rifle: [-3.33, -4.77, -0.24]
-};
-
 // ---------------------------------------------------------------------------
 
 /**
@@ -151,7 +116,7 @@ export class AgentViewmodel {
 
     // ---- the pass ---------------------------------------------------------
     this.scene = new THREE.Scene();
-    this.camera = new THREE.PerspectiveCamera(fov, 1, 0.5, 400);
+    this.camera = new THREE.PerspectiveCamera(sourceVFovFromHFov(fov), 1, 0.5, 400);
     this.scene.add(this.camera);
     // A key over the shoulder and a fill, which is all the trainer's arenas
     // have to offer anyway — there is no map bake here to sample.
@@ -309,7 +274,7 @@ export class AgentViewmodel {
       hands: vm.handColor || DEFAULT_VIEWMODEL_PAINT.hands,
       weapon: vm.weaponColor || DEFAULT_VIEWMODEL_PAINT.weapon
     });
-    const fov = Number.isFinite(vm.fov) ? vm.fov : VIEWMODEL_FOV;
+    const fov = sourceVFovFromHFov(Number.isFinite(vm.fov) ? vm.fov : VIEWMODEL_FOV);
     if (fov !== this.camera.fov) {
       this.camera.fov = fov;
       this.camera.updateProjectionMatrix();
@@ -358,21 +323,15 @@ export class AgentViewmodel {
 
   /**
    * This weapon's placement: the pack's, or one solved from its grip marker
-   * when the pack has none (see GRIP_TARGET).
+   * when the pack has none (shared/sim3d/gripPlacement.js — the map explorer's
+   * viewmodel reads the same rule, which is why it lives there).
    *
    * Never writes back to the manifest row — that object is shared with every
    * other reader of the pack, including the ballistics and the bots.
    */
   _solveOffset(model) {
-    const packed = this.weapon?.vmOffset;
-    const missing = !packed || (packed[0] === 0 && packed[1] === 0 && packed[2] === 0);
-    const target = GRIP_TARGET[this.weapon?.class];
-    if (!missing || !target || !model) return packed ? [...packed] : [0, 0, 0];
-    const grip = model.getObjectByName(GRIP_BONE);
-    if (!grip) return [0, 0, 0];
-    model.updateMatrixWorld(true);
-    const p = grip.getWorldPosition(new THREE.Vector3());
-    const solved = [target[0] - p.x, target[1] - p.y, target[2] - p.z];
+    const solved = gripFallbackOffset(model, this.weapon);
+    if (!solved) return this.weapon?.vmOffset ? [...this.weapon.vmOffset] : [0, 0, 0];
     console.log(
       `aim4: ${this.weaponName} has no packed viewmodel offset; placed by its grip marker at ` +
         `[${solved.map((v) => v.toFixed(2)).join(', ')}]`

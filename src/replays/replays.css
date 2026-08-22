@@ -4127,6 +4127,12 @@ body.rv-open {
   text-decoration-color: rgba(255, 255, 255, 0.55);
 }
 
+/* Round WR link waiting on the library payload before it can open Timeline. */
+.st-link.is-busy {
+  opacity: 0.5;
+  cursor: progress;
+}
+
 .st-link:focus-visible {
   outline: 1px solid rgba(255, 255, 255, 0.45);
   outline-offset: 2px;
