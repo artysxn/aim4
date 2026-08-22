@@ -103,13 +103,22 @@ function needsRoundMetaFilter(filter) {
   return hasActiveShapes(filter) || hasNarrowTimeWindow(filter) || hasNarrowUtility(filter);
 }
 
-/** Resolve subject list (legacy playerId supported). Empty ⇒ anyone. */
+/**
+ * Resolve subject list (legacy playerId supported). Empty ⇒ anyone.
+ *
+ * The cap is the sidebar's rule — "up to 5 subjects" — and it belongs to
+ * subjects a person picked. It must NOT apply to `scanAllPlayers`, which is
+ * `matchingFilesAsync` handing this function every player on the map because
+ * anyone-mode still has to answer a drawn shape per player per phase. Slicing
+ * that list to five turned "kill from this box, anywhere on Dust2" into "kill
+ * from this box by whichever five players the first demo happened to list" —
+ * a search over 7,000 rounds that could only ever return the handful those
+ * five played, silently, with no sign that anything had been dropped.
+ */
 export function playerIdsFromFilter(filter) {
   if (Array.isArray(filter?.playerIds)) {
-    return [...new Set(filter.playerIds.map(String).filter(Boolean))].slice(
-      0,
-      ANALYTICS_PLAYER_MAX
-    );
+    const ids = [...new Set(filter.playerIds.map(String).filter(Boolean))];
+    return filter.scanAllPlayers ? ids : ids.slice(0, ANALYTICS_PLAYER_MAX);
   }
   if (filter?.playerId) return [String(filter.playerId)];
   return [];
@@ -253,10 +262,14 @@ export async function matchingFilesAsync(payload, filter, tickCache = new Map(),
   }
 
   if (needsRoundMetaFilter(filter)) {
+    // Anyone-mode with geography: a shape is answered per player per phase, so
+    // "did anyone do this here" is "did any player on the map do this here".
+    // `scanAllPlayers` is what tells `playerIdsFromFilter` these are not five
+    // chosen subjects but the whole roster of the map.
     const allIds = listPlayerIdsOnMap(payload, filter.map);
     const windows = await matchingWindowsAsync(
       payload,
-      { ...filter, playerIds: allIds },
+      { ...filter, playerIds: allIds, scanAllPlayers: true },
       tickCache,
       opts
     );

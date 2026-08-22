@@ -460,7 +460,14 @@ export async function loadRoundPacks(
     fetchTicks = fetchRoundTicks
   } = {}
 ) {
-  const missing = files.filter((f) => f && !cache.has(f));
+  const missing = files.filter((f) => {
+    if (!f) return false;
+    const pack = cache.get(f);
+    if (!pack) return true;
+    // Its ticks were dropped to stay under the retained-bytes budget (see
+    // `releaseTicks`), and this search reads positions. A miss, not a hit.
+    return Boolean(ticks && pack.ticksReleased);
+  });
   const total = missing.length;
   if (!total) {
     onProgress?.({ done: 0, total: 0 });
@@ -472,11 +479,15 @@ export async function loadRoundPacks(
   const worker = async () => {
     while (next < missing.length) {
       const file = missing[next++];
-      const pack = { meta: null, ticks: null };
-      try {
-        pack.meta = await fetchMeta(file);
-      } catch {
-        pack.meta = null;
+      // A released pack still has its meta; only its ticks were dropped, so
+      // re-reading it costs one request rather than two.
+      const pack = { meta: cache.get(file)?.meta || null, ticks: null };
+      if (!pack.meta) {
+        try {
+          pack.meta = await fetchMeta(file);
+        } catch {
+          pack.meta = null;
+        }
       }
       if (pack.meta && ticks) {
         try {
@@ -495,20 +506,74 @@ export async function loadRoundPacks(
 }
 
 /**
+ * Round files loaded, and evaluated, before the next batch starts.
+ *
+ * The load used to be one call for every file the search touched. That was
+ * fine while a whole-map search only ever looked at a handful of rounds; it is
+ * not fine now that it looks at all of them, because every tick buffer would
+ * be resident at once before the first one was read. Batching bounds the peak
+ * without changing the answer — files are independent of each other.
+ */
+export const PACK_CHUNK_FILES = 300;
+
+/**
+ * Tick bytes kept in the cache between searches.
+ *
+ * Ticks are the expensive half to fetch — a whole-map search is two requests
+ * per round and the browser will only run six at a time — so keeping them is
+ * what makes editing a shape and searching again nearly free rather than
+ * another few minutes. A stride-64 round is ~18 KB (115 samples x 10 slots x
+ * 16 bytes), so this holds a little over 7,000 rounds: a full Dust2 library
+ * fits, and a map several times that size is capped rather than allowed to
+ * grow without limit. Past the budget the oldest buffers are dropped and
+ * refetched if a later search wants them. Meta is kept either way — it is the
+ * small half and every search needs it.
+ */
+export const TICK_CACHE_BYTES = 128 * 1024 * 1024;
+
+/**
+ * Drop the oldest tick buffers until the cache is back under `budget`.
+ * Insertion order is load order, so the front of the map is the least recently
+ * fetched. Meta stays; `ticksReleased` marks the pack so `loadRoundPacks`
+ * knows to re-read it rather than treating it as a hit.
+ */
+export function releaseTicks(cache, budget = TICK_CACHE_BYTES) {
+  let held = 0;
+  for (const pack of cache.values()) held += pack?.ticks?.byteLength || 0;
+  if (held <= budget) return held;
+  for (const pack of cache.values()) {
+    if (!pack?.ticks) continue;
+    held -= pack.ticks.byteLength || 0;
+    pack.ticks = null;
+    pack.ticksReleased = true;
+    if (held <= budget) break;
+  }
+  return held;
+}
+
+/**
  * Filter phase windows by drawn shapes and/or global clock / utility filters.
  * `matchMode`: `'all'` (AND, default) or `'any'` (OR). Empty shapes + open
  * clock + all util types on ⇒ pass-through.
  *
- * Round packs are loaded up front, in parallel, for the DISTINCT files the
- * windows name — there are typically ten windows per file (a player per phase),
- * and the old loop walked windows rather than files.
+ * Round packs are fetched for the DISTINCT files the windows name — there are
+ * typically thirty windows per file (a player per phase), and the old loop
+ * walked windows rather than files — in batches of `PACK_CHUNK_FILES`, each
+ * batch evaluated before the next is fetched.
  *
  * @param {Array<{ file: string, phase: string, playerId: string, [k: string]: any }>} windows
  * @param {Array<object>} shapes
  * @param {Map<string, { meta: object|null, ticks: ArrayBuffer|null }>} [cache]
  * @param {'all'|'any'} [matchMode]
  * @param {{ timeWindow?: object, utility?: Record<string, boolean> }|null} [filter]
- * @param {{ onProgress?: (p: { done: number, total: number }) => void }} [opts]
+ * @param {{
+ *   onProgress?: (p: { done: number, total: number }) => void,
+ *   concurrency?: number,
+ *   chunk?: number,
+ *   tickBudget?: number,
+ *   fetchMeta?: Function,
+ *   fetchTicks?: Function
+ * }} [opts]
  */
 export async function filterWindowsByShapes(
   windows,
@@ -524,23 +589,11 @@ export async function filterWindowsByShapes(
   const utility = utilNarrow ? filter.utility : null;
   if (!active.length && !timeWin && !utilNarrow) return windows;
   const requireAll = matchMode !== 'any';
+  const needTicks = searchNeedsTicks(active);
 
-  // Everything the network is going to be asked for, asked for at once.
-  const files = [...new Set(windows.map((w) => w.file).filter(Boolean))];
-  await loadRoundPacks(files, cache, {
-    ticks: searchNeedsTicks(active),
-    onProgress: opts.onProgress || null,
-    concurrency: opts.concurrency
-  });
-
-  const out = [];
-  for (const w of windows) {
-    const pack = cache.get(w.file);
-    if (!pack?.meta) continue;
-
-    let ok;
+  /** Does one window survive the active shapes / clock / utility filters? */
+  const windowPasses = (w, pack) => {
     if (active.length) {
-      ok = requireAll;
       for (const shape of active) {
         const pass = shapePassesWindow({
           meta: pack.meta,
@@ -552,23 +605,69 @@ export async function filterWindowsByShapes(
           utility
         });
         if (requireAll) {
-          if (!pass) {
-            ok = false;
-            break;
-          }
+          if (!pass) return false;
         } else if (pass) {
-          ok = true;
-          break;
+          return true;
         }
       }
-    } else {
-      ok = true;
-      if (timeWin && !phaseOverlapsTime(pack.meta, w.phase, timeWin)) ok = false;
-      if (ok && utilNarrow && !playerThrewUtil(pack.meta, w.playerId, w.phase, utility, timeWin)) {
-        ok = false;
+      // AND ran out of shapes to fail on; OR ran out of shapes to pass on.
+      return requireAll;
+    }
+    if (timeWin && !phaseOverlapsTime(pack.meta, w.phase, timeWin)) return false;
+    if (utilNarrow && !playerThrewUtil(pack.meta, w.playerId, w.phase, utility, timeWin)) {
+      return false;
+    }
+    return true;
+  };
+
+  // Windows grouped by the file they need, so a batch can be evaluated the
+  // moment it lands and its buffers let go of.
+  /** @type {Map<string, Array<object>>} */
+  const byFile = new Map();
+  for (const w of windows) {
+    if (!w?.file) continue;
+    const list = byFile.get(w.file);
+    if (list) list.push(w);
+    else byFile.set(w.file, [w]);
+  }
+  const files = [...byFile.keys()];
+  const chunk = Math.max(1, opts.chunk || PACK_CHUNK_FILES);
+  const budget = Number.isFinite(opts.tickBudget) ? opts.tickBudget : TICK_CACHE_BYTES;
+
+  /** @type {Set<object>} */
+  const passed = new Set();
+  for (let i = 0; i < files.length; i += chunk) {
+    const slice = files.slice(i, i + chunk);
+    // Progress counts files over the WHOLE search, not within a batch: the
+    // batching is an implementation detail and a counter that restarted at
+    // zero every 300 rounds would read as the loop it is not.
+    const cached = slice.filter((f) => {
+      const pack = cache.get(f);
+      return pack && !(needTicks && pack.ticksReleased);
+    }).length;
+    await loadRoundPacks(slice, cache, {
+      ticks: needTicks,
+      concurrency: opts.concurrency,
+      fetchMeta: opts.fetchMeta,
+      fetchTicks: opts.fetchTicks,
+      onProgress: opts.onProgress
+        ? ({ done }) => opts.onProgress({ done: i + cached + done, total: files.length })
+        : null
+    });
+    opts.onProgress?.({ done: Math.min(i + slice.length, files.length), total: files.length });
+
+    for (const file of slice) {
+      const pack = cache.get(file);
+      if (!pack?.meta) continue;
+      for (const w of byFile.get(file) || []) {
+        if (windowPasses(w, pack)) passed.add(w);
       }
     }
-    if (ok) out.push(w);
+    if (needTicks) releaseTicks(cache, budget);
   }
-  return out;
+
+  // Returned in window order, not file order: this is grouped by file only so
+  // a batch can be let go of, and a caller that pairs windows with rows must
+  // not see the same search come back reshuffled.
+  return windows.filter((w) => passed.has(w));
 }

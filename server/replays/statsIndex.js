@@ -114,11 +114,57 @@ export function normalizeStatsFields(raw) {
 const TRADE_SECONDS = 5;
 
 /**
- * How many demos one GET /stats response may carry. The Database pages this
- * size; holding the whole library (thousands of indexes) plus JSON.stringify
- * of it is what blew the default ~2 GB heap.
+ * How many demos one GET /stats response may carry, when nothing better is
+ * known. The Database pages this size; holding the whole library (thousands of
+ * indexes) plus JSON.stringify of it is what blew the default ~2 GB heap.
+ *
+ * This is a FALLBACK, not the limit. What actually bounds a response is
+ * STATS_PAGE_BYTES below — a demo count is the wrong unit, because a demo on
+ * the Pattern Finder's contract is a fifth the size of one on the full set,
+ * and capping both at 300 made the narrow page five times more conservative
+ * than it needed to be. That is what turned one map into four round trips.
  */
 export const STATS_LIBRARY_PAGE = 300;
+
+/**
+ * What one response may weigh, in bytes of JSON, before the page is cut.
+ *
+ * The number to respect is not the heap but `JSON.stringify`: the whole page
+ * becomes one string before a byte of it is written, and that string is the
+ * peak. 64 MB is comfortable inside a default heap with the parsed entries
+ * still resident beside it.
+ *
+ * It lands almost exactly on the old behaviour for the full contract
+ * (8,307 bytes a round, ~24 rounds a demo → ~320 demos), so the Database and
+ * the admin tools page as they always did. A Pattern Finder page
+ * (1,557 bytes a round → ~1,700 demos) becomes one request for any map.
+ */
+export const STATS_PAGE_BYTES = 64 * 1024 * 1024;
+
+/**
+ * How many of these records fit in one response on this contract.
+ *
+ * Uses each record's own round count rather than an average, so a library of
+ * long overtime matches is cut in the same place a library of short ones is —
+ * by weight, which is the thing that actually costs.
+ *
+ * @param {object[]} records   the page candidates, in order
+ * @param {number} bytesPerRound  from resolveColumns
+ * @param {number} [budget]
+ * @returns {number} at least 1, so a single enormous demo still ships
+ */
+export function demosPerPage(records, bytesPerRound, budget = STATS_PAGE_BYTES) {
+  const per = Math.max(1, Number(bytesPerRound) || 1);
+  let bytes = 0;
+  let n = 0;
+  for (const r of records) {
+    const rounds = Math.max(1, Number(r?.roundCount ?? r?.rounds) || 24);
+    bytes += rounds * per;
+    if (n && bytes > budget) break;
+    n += 1;
+  }
+  return Math.max(1, n);
+}
 
 /** Keep a little more than one page so a follow-up batch still hits RAM. */
 const MEMORY_CAP = STATS_LIBRARY_PAGE + 100;
@@ -1309,13 +1355,13 @@ export async function statsPayload(io, user, records, demoIds = null, opts = {})
   const libraryTotal = list.length;
   const offset = Math.max(0, Math.floor(Number(opts.offset) || 0));
   const rawLimit = Number(opts.limit);
-  const limit =
-    Number.isFinite(rawLimit) && rawLimit > 0
-      ? Math.min(STATS_LIBRARY_PAGE, Math.floor(rawLimit))
-      : wanted
-        ? Math.min(STATS_LIBRARY_PAGE, list.length)
-        : STATS_LIBRARY_PAGE;
-  const page = list.slice(offset, offset + limit);
+  // What the caller asked for, then what the response can actually carry. The
+  // second is the real cap (see STATS_PAGE_BYTES); the first only ever narrows.
+  const asked =
+    Number.isFinite(rawLimit) && rawLimit > 0 ? Math.floor(rawLimit) : list.length || STATS_LIBRARY_PAGE;
+  const candidates = list.slice(offset, offset + asked);
+  const limit = demosPerPage(candidates, contract.bytesPerRound);
+  const page = candidates.slice(0, limit);
   const total = page.length;
   onProgress?.({
     done: 0,

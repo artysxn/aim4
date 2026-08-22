@@ -4,6 +4,16 @@
 // ---------------------------------------------------------------------------
 
 import { fetchStats as fetchStatsNetwork, STATS_LIBRARY_PAGE } from './api.js';
+
+/**
+ * Stats pages in flight at once.
+ *
+ * A page costs server time to pack, network time to ship, and worker time to
+ * parse — three different resources, and running them one page at a time idles
+ * two of them at every moment. Three is enough to keep all three busy without
+ * asking one browser tab to hold four pages of a library in memory at once.
+ */
+export const PAGE_PIPELINE = 3;
 import { payloadCovers, resolveColumns } from './shared/statsColumns.js';
 
 /**
@@ -171,11 +181,22 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * The network call one page makes. Swappable so the paging pipeline — which
+ * decides ordering, overlap and when to stop — can be tested without a server.
+ */
+let statsFetcher = fetchStatsNetwork;
+
+/** Test seam: install a stand-in fetcher, or restore the real one with no argument. */
+export function setStatsFetcher(fn) {
+  statsFetcher = fn || fetchStatsNetwork;
+}
+
 async function fetchStatsPage(slice, opts) {
   let lastErr;
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      return await fetchStatsNetwork(slice, opts);
+      return await statsFetcher(slice, opts);
     } catch (err) {
       lastErr = err;
       if (attempt === 2) break;
@@ -245,7 +266,16 @@ export async function getStatsPayload(demoIds = null, opts = {}) {
       const merged = resume && cache.payload ? cache.payload : { demos: [] };
       if (!merged.demos) merged.demos = [];
       const scoped = demoIds?.length ? [...demoIds] : null;
-      const page = STATS_LIBRARY_PAGE;
+      // A SCOPED request — the Pattern Finder handing us one map's demos —
+      // goes in ONE request. The server cuts the page by weight
+      // (statsIndex.js STATS_PAGE_BYTES), so asking for the whole list is safe:
+      // if it really is too big to ship at once, the reply is short and the
+      // loop below picks up the rest. On the narrow contract that page is a
+      // fifth the size it used to be, so a map fits.
+      //
+      // A library-wide pull keeps paging: it has no scope to bound it, and the
+      // Database's table paints from the first page while the rest arrives.
+      const page = scoped ? Math.max(1, scoped.length) : STATS_LIBRARY_PAGE;
       let offset = resume ? Math.max(0, Number(cache.nextOffset) || 0) : 0;
       let hasMore = true;
       /**
@@ -259,18 +289,19 @@ export async function getStatsPayload(demoIds = null, opts = {}) {
        */
       let libraryTotalSeen = 0;
       let libraryLoadedSeen = 0;
-      while (true) {
-        const slice = scoped ? scoped.slice(offset, offset + page) : null;
-        if (scoped && !slice.length) {
-          hasMore = false;
-          break;
-        }
+
+      /**
+       * Fetch ONE page. Everything page-specific — the slice, the progress
+       * relay's page window — is closed over here so the pipeline below only
+       * has to decide when to start it.
+       */
+      const fetchPage = (pageStart) => {
+        const slice = scoped ? scoped.slice(pageStart, pageStart + page) : null;
+        const pageCount = scoped ? slice.length : page;
         // Progress events describe the page in flight: `done` counts within it,
         // and a scoped request is sent with offset 0 because the slicing happens
         // here. Neither is what a caller wants to show a user, so the two
         // library-wide numbers are stamped on here, where the scope is known.
-        const pageStart = offset;
-        const pageCount = scoped ? slice.length : page;
         const relayProgress = opts.onProgress
           ? (p) => {
               const phase = String(p?.phase || '');
@@ -288,6 +319,9 @@ export async function getStatsPayload(demoIds = null, opts = {}) {
               const done = Math.max(0, Number(p?.done) || 0);
               const within = DEMO_PHASES.has(phase) ? Math.min(done, pageCount) : pageCount;
               const next = pageStart + within;
+              // Monotonic: with pages in flight together these arrive
+              // interleaved, and a counter that goes backwards is worse than
+              // one that stalls.
               libraryLoadedSeen = Math.max(
                 libraryLoadedSeen,
                 libraryTotalSeen ? Math.min(next, libraryTotalSeen) : next
@@ -299,26 +333,29 @@ export async function getStatsPayload(demoIds = null, opts = {}) {
               });
             }
           : undefined;
-        const chunk = await fetchStatsPage(slice, {
+        return fetchStatsPage(slice, {
           onProgress: relayProgress,
-          offset: scoped ? 0 : offset,
+          offset: scoped ? 0 : pageStart,
           limit: page,
           columns
         });
+      };
+
+      /** Take one finished page: merge it, remember it, tell the subscribers. */
+      const absorb = (pageStart, chunk) => {
         const incomingLen = mergeChunk(merged, chunk);
         const loaded = merged.demos.length;
         const total = scoped
           ? scoped.length
           : Math.max(Number(chunk?.total) || 0, Number(chunk?.libraryTotal) || 0, loaded);
-        hasMore = statsPageHasMore({
+        const more = statsPageHasMore({
           scoped: Boolean(scoped),
           scopedLen: scoped ? scoped.length : 0,
-          offset,
+          offset: pageStart,
           pageSize: page,
           chunk,
           incomingLen
         });
-        const nextOffset = offset + (scoped ? slice.length : page);
         cache = {
           key,
           scope,
@@ -326,20 +363,101 @@ export async function getStatsPayload(demoIds = null, opts = {}) {
           payload: merged,
           at: Date.now(),
           generation: cache.generation || 0,
-          complete: !hasMore,
-          nextOffset
+          complete: false,
+          nextOffset: pageStart + (scoped ? incomingLen || page : page)
         };
         emitBatch(key, {
           payload: merged,
-          offset,
+          offset: pageStart,
           loaded,
           total,
-          hasMore,
-          complete: !hasMore
+          hasMore: more,
+          complete: false
         });
-        if (!hasMore) break;
-        offset = nextOffset;
+        return { more, chunk };
+      };
+
+      // ---- the pipeline ----------------------------------------------------
+      //
+      // Pages used to run strictly one at a time: fetch, wait for the server to
+      // pack it, wait for the bytes, wait for the worker to parse them, merge,
+      // and only then ask for the next one. Every one of those waits is on a
+      // different resource, so the whole chain idles three of them at any
+      // moment — which is what the pause between each 300 looked like.
+      //
+      // Now up to PAGE_PIPELINE are in flight while their predecessors are
+      // still being parsed and merged. Pages are still MERGED in order, so the
+      // payload is byte-identical to what the serial loop produced; only the
+      // waiting overlaps.
+      // A SCOPED request already knows its own size — the caller handed us the
+      // demo list — so every page can start at once. Only a library-wide pull
+      // has to fetch page 0 first and read the total off it; guessing there
+      // would mean speculative requests past the end.
+      let totalDemos;
+      const offsets = [];
+      if (scoped) {
+        // One request for the whole scope. The server may still answer short —
+        // it cuts a page by weight — so follow up from wherever it stopped
+        // until the scope is covered. Normally that is a single pass.
+        totalDemos = scoped.length;
+        while (offset < totalDemos) {
+          const chunk = await fetchPage(offset);
+          const before = merged.demos.length;
+          const { more } = absorb(offset, chunk);
+          const served = merged.demos.length - before;
+          hasMore = more;
+          // No progress means the server cannot serve this demo at all; step
+          // over it rather than asking for it forever.
+          offset += served > 0 ? served : 1;
+          if (!more && offset >= totalDemos) break;
+          if (!more && served === 0) break;
+        }
+        totalDemos = merged.demos.length;
+      } else {
+        const first = await fetchPage(offset);
+        const { more } = absorb(offset, first);
+        hasMore = more;
+        totalDemos = Math.max(
+          Number(first?.total) || 0,
+          Number(first?.libraryTotal) || 0,
+          merged.demos.length
+        );
+        if (hasMore) {
+          for (let o = offset + page; o < totalDemos; o += page) offsets.push(o);
+        }
       }
+      if (offsets.length) {
+        /** offset → in-flight page. Never more than PAGE_PIPELINE of them. */
+        const flight = new Map();
+        let launched = 0;
+        const launch = () => {
+          while (flight.size < PAGE_PIPELINE && launched < offsets.length) {
+            const o = offsets[launched++];
+            flight.set(o, fetchPage(o));
+          }
+        };
+        launch();
+        for (const o of offsets) {
+          const chunk = await flight.get(o);
+          flight.delete(o);
+          launch();
+          const res = absorb(o, chunk);
+          hasMore = res.more;
+          // A short page means the library ended earlier than its own count
+          // said. Stop merging, and let the ones already in flight fall away.
+          if (!hasMore) break;
+        }
+      }
+      offset = Number(cache.nextOffset) || merged.demos.length;
+      hasMore = false;
+      emitBatch(key, {
+        payload: merged,
+        offset,
+        loaded: merged.demos.length,
+        total: scoped ? scoped.length : Math.max(totalDemos, merged.demos.length),
+        hasMore: false,
+        complete: true
+      });
       cache = {
         ...cache,
         key,

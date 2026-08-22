@@ -1307,7 +1307,8 @@ export async function handleReplayRequest(req, res, url) {
   }
 
   // ---- stats --------------------------------------------------------------
-  // Compact per-round index, one page at a time (STATS_LIBRARY_PAGE). The
+  // Compact per-round index, one page at a time — sized by weight, not by demo
+  // count (statsIndex.js STATS_PAGE_BYTES). The
   // client paints the first page, then asks for the next. Filtering still
   // happens in the browser against whatever has arrived so far.
   if (req.method === 'GET' && p === '/api/replays/stats') {
@@ -1320,12 +1321,15 @@ export async function handleReplayRequest(req, res, url) {
       /application\/x-ndjson/i.test(String(req.headers.accept || ''));
     const offset = Math.max(0, Math.floor(Number(url.searchParams.get('offset') || 0) || 0));
     const rawLimit = url.searchParams.get('limit');
+    // No demo-count clamp here any more: `statsPayload` cuts the page by what
+    // the response will WEIGH (STATS_PAGE_BYTES), using the contract's own
+    // bytes-per-round and each record's round count. Clamping to 300 on top of
+    // that is what made a Pattern Finder scope — a fifth the size per demo —
+    // arrive in four round trips instead of one.
     const limit =
       rawLimit === null || rawLimit === ''
-        ? only?.length
-          ? Math.min(STATS_LIBRARY_PAGE, only.length)
-          : STATS_LIBRARY_PAGE
-        : Math.max(1, Math.min(STATS_LIBRARY_PAGE, Math.floor(Number(rawLimit) || STATS_LIBRARY_PAGE)));
+        ? only?.length || STATS_LIBRARY_PAGE
+        : Math.max(1, Math.floor(Number(rawLimit) || STATS_LIBRARY_PAGE));
     // Column contract. Absent → the full set, so an old client build keeps
     // working; a bad one is a 400 rather than a silently wrong rating.
     const fields = url.searchParams.get('fields');

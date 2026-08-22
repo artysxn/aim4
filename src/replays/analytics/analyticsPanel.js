@@ -969,9 +969,22 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     )}</div>`;
   }
 
+  /**
+   * The whole leaderboard, not a window onto it.
+   *
+   * Both tables used to be sliced to the first 40 rows. There was no marker of
+   * any kind — the table simply stopped, inside a scroller, which reads as the
+   * end of the data rather than the end of the page. On a library with
+   * thousands of players that is the top 40 by rating being presented as the
+   * league. The card scrolls; the rows are the answer to the search; show them.
+   */
   function renderLeaderboard(rows, teamRows, focusIds, roundCount) {
+    const n = state.lbMode === 'teams' ? teamRows.length : rows.length;
+    const what = state.lbMode === 'teams' ? 'team' : 'player';
     const head = `<header class="an-card-head an-lb-head">
-        <h3 class="an-section-title">Statistics <small>${roundCount} rounds</small></h3>
+        <h3 class="an-section-title">Statistics <small>${roundCount.toLocaleString()} rounds${
+          n ? ` · ${n.toLocaleString()} ${what}${n === 1 ? '' : 's'}` : ''
+        }</small></h3>
         ${lbModeSwitchHtml()}
       </header>`;
 
@@ -995,7 +1008,6 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
             </thead>
             <tbody>
               ${teamRows
-                .slice(0, 40)
                 .map(
                   (t, i) => `<tr class="an-lb-row">
                     <td>${i + 1}</td>
@@ -1017,7 +1029,6 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       return `<section class="an-card an-lb">${head}<p class="view-empty">No players on matching rounds.</p></section>`;
     }
     const focus = new Set(focusIds || []);
-    const top = rows.slice(0, 40);
     return `<section class="an-card an-lb">
       ${head}
       <div class="an-lb-scroll">
@@ -1034,7 +1045,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
             </tr>
           </thead>
           <tbody>
-            ${top
+            ${rows
               .map((p, i) => {
                 const on = focus.has(p.id) ? ' focus' : '';
                 return `<tr class="an-lb-row${on}">
@@ -1236,7 +1247,10 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       const agg = await aggregateAnalyticsAsync(payload, filter, tickCache, {
         onProgress: ({ done, total }) => {
           if (token !== renderToken || !total) return;
-          setMatchingLabel(token, `Matching selections… ${done}/${total} rounds`);
+          setMatchingLabel(
+            token,
+            `Matching selections… ${done.toLocaleString()}/${total.toLocaleString()} rounds`
+          );
         }
       });
       if (token !== renderToken) return;
@@ -1258,13 +1272,30 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       let teamLb = [];
       let lbError = null;
       if (agg.files.length) {
-        setMatchingLabel(token, 'Building the leaderboard…');
+        // How many rounds are being added up, and a clock, because the server
+        // answers this in one shot: there is no honest fraction to show, but
+        // "7,005 rounds, 4s" is the size of the job and proof it is alive —
+        // which is what a bare "Building the leaderboard…" left the reader to
+        // guess at while a cold aggregate store built itself.
+        const scanned = agg.files.length.toLocaleString();
+        const startedAt = Date.now();
+        const tick = () => {
+          const secs = Math.round((Date.now() - startedAt) / 1000);
+          setMatchingLabel(
+            token,
+            `Building the leaderboard… ${scanned} rounds${secs >= 1 ? ` · ${secs}s` : ''}`
+          );
+        };
+        tick();
+        const timer = setInterval(tick, 1000);
         try {
           const tables = await fetchAggregateForRounds(agg.files, { tables: 'players,teams' });
           lb = tables.players || [];
           teamLb = tables.teams || [];
         } catch (err) {
           lbError = err?.message || String(err);
+        } finally {
+          clearInterval(timer);
         }
       }
       if (token !== renderToken) return;
