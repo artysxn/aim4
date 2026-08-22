@@ -102,11 +102,11 @@ export function aggregateHot(store, filter = {}, allowDemo = null) {
   const teamRounds = new Array(nPlayers).fill(null);
 
   const mapIds = filter.maps?.length
-    ? new Set(filter.maps.map((m) => store.maps.values.indexOf(m)).filter((i) => i >= 0))
+    ? new Set(filter.maps.map((m) => store.maps.find(m)).filter((i) => i >= 0))
     : null;
   if (filter.maps?.length && (!mapIds || !mapIds.size)) return [];
   const fileIds = filter.files?.length
-    ? new Set(filter.files.map((f) => store.files.values.indexOf(f)).filter((i) => i >= 0))
+    ? new Set(filter.files.map((f) => store.files.find(f)).filter((i) => i >= 0))
     : null;
   if (filter.files?.length && (!fileIds || !fileIds.size)) return [];
 
@@ -371,11 +371,11 @@ export function aggregateTeamsHot(store, filter = {}, playerRows = null, allowDe
   } = store;
 
   const mapIds = filter.maps?.length
-    ? new Set(filter.maps.map((m) => store.maps.values.indexOf(m)).filter((i) => i >= 0))
+    ? new Set(filter.maps.map((m) => store.maps.find(m)).filter((i) => i >= 0))
     : null;
   if (filter.maps?.length && (!mapIds || !mapIds.size)) return [];
   const fileIds = filter.files?.length
-    ? new Set(filter.files.map((f) => store.files.values.indexOf(f)).filter((i) => i >= 0))
+    ? new Set(filter.files.map((f) => store.files.find(f)).filter((i) => i >= 0))
     : null;
   if (filter.files?.length && (!fileIds || !fileIds.size)) return [];
 

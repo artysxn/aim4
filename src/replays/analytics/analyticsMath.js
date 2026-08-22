@@ -227,7 +227,7 @@ export function matchingWindows(payload, filter) {
 /**
  * Matching windows with optional drawn-shape / clock / utility filters.
  */
-export async function matchingWindowsAsync(payload, filter, tickCache = new Map()) {
+export async function matchingWindowsAsync(payload, filter, tickCache = new Map(), opts = {}) {
   const base = matchingWindows(payload, filter);
   if (!needsRoundMetaFilter(filter)) return base;
   return filterWindowsByShapes(
@@ -235,19 +235,20 @@ export async function matchingWindowsAsync(payload, filter, tickCache = new Map(
     filter?.shapes || [],
     tickCache,
     filter.shapeMatch || 'all',
-    filter
+    filter,
+    opts
   );
 }
 
 /**
  * Round files matching filters (and shapes). Works with 0 subjects (anyone).
  */
-export async function matchingFilesAsync(payload, filter, tickCache = new Map()) {
+export async function matchingFilesAsync(payload, filter, tickCache = new Map(), opts = {}) {
   if (!filter?.map) return [];
   const ids = playerIdsFromFilter(filter);
 
   if (ids.length) {
-    const windows = await matchingWindowsAsync(payload, filter, tickCache);
+    const windows = await matchingWindowsAsync(payload, filter, tickCache, opts);
     return [...new Set(windows.map((w) => w.file).filter(Boolean))];
   }
 
@@ -256,7 +257,8 @@ export async function matchingFilesAsync(payload, filter, tickCache = new Map())
     const windows = await matchingWindowsAsync(
       payload,
       { ...filter, playerIds: allIds },
-      tickCache
+      tickCache,
+      opts
     );
     return [...new Set(windows.map((w) => w.file).filter(Boolean))];
   }
@@ -444,13 +446,13 @@ export function aggregateAnalytics(payload, filter) {
 /**
  * Aggregate with drawn-shape filters. Anyone mode → files + empty phase stats.
  */
-export async function aggregateAnalyticsAsync(payload, filter, tickCache = new Map()) {
+export async function aggregateAnalyticsAsync(payload, filter, tickCache = new Map(), opts = {}) {
   const ids = playerIdsFromFilter(filter);
   if (!ids.length) {
-    const files = await matchingFilesAsync(payload, filter, tickCache);
+    const files = await matchingFilesAsync(payload, filter, tickCache, opts);
     return emptyAggregate(files);
   }
-  const windows = await matchingWindowsAsync(payload, filter, tickCache);
+  const windows = await matchingWindowsAsync(payload, filter, tickCache, opts);
   return aggregateFromWindows(windows);
 }
 

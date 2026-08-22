@@ -97,15 +97,27 @@ export const COLUMN_PRESETS = Object.freeze({
   /** Round list, antistrat: round shapes, no player metrics at all. */
   shapes: ['phase', 'roundLibrary'],
   /**
-   * Pattern Finder: round shapes, utility, and an exact Rating 3.0.
+   * Pattern Finder: the phase bags the search itself walks, and nothing else.
    *
-   * The statistics card under the radar shows Rating for the matching rounds,
-   * and it has to be the same Rating the Database shows for that player — so
-   * the whole rating core comes along. That makes this nearly the full set;
-   * the saving on this page comes from fetching one map's demos rather than
-   * the library, not from dropping columns.
+   * This is what the page actually reads off a round — `analyticsMath.js` and
+   * `analyticsPanel.js` between them touch `d f m n w ok od p` (all baseline)
+   * and `ph`, and nothing more. The shape features read kills and grenades off
+   * the ROUND META, not off these columns, which is why `kills` and `utility`
+   * are absent from a search that filters on both.
+   *
+   * The leaderboard's Rating 3.0 is not fetched: it is computed on the server
+   * over the rounds the search matched (`POST /api/replays/aggregate` with a
+   * `files` list). It used to be computed in the browser, which is what made
+   * this contract 93% of the full set — `aim` and `duels` are 4,227 bytes a
+   * round and exist for nothing else.
    */
-  patterns: [...RATING_CORE, 'coreOpenings', 'phase', 'roundLibrary', 'utility'],
+  patterns: ['phase'],
+  /**
+   * What `patterns` used to be, kept for anything that still aggregates rating
+   * in the browser over raw rounds. Nearly the full set; prefer the server
+   * aggregate over reaching for this.
+   */
+  patternsWithRating: [...RATING_CORE, 'coreOpenings', 'phase', 'roundLibrary', 'utility'],
   /** Team tables: team-level rates, no per-player rating. */
   team: ['prw', 'possession', 'anchor', 'utility'],
   /** Match cards / listings: who played and who won. Baseline only. */

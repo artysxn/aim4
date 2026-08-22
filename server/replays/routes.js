@@ -1171,7 +1171,35 @@ export async function handleReplayRequest(req, res, url) {
   // add them up — costs ~18 s and ~740 MB on a 4100-demo library, most of it
   // spent parsing JSON twice so the browser can produce a few dozen rows. The
   // rows are what the page wanted; this returns them.
-  if (req.method === 'GET' && p === '/api/replays/aggregate') {
+  //
+  // POST takes the same thing in a body, for one reason: the `files` filter.
+  // The Pattern Finder's leaderboard is "these exact rounds", and a search on a
+  // busy map matches tens of thousands of them — a couple of hundred kilobytes
+  // of round ids, which is well past what any URL will carry. Everything else
+  // about the two is identical.
+  if (
+    (req.method === 'GET' || req.method === 'POST') &&
+    p === '/api/replays/aggregate'
+  ) {
+    let body = null;
+    if (req.method === 'POST') {
+      try {
+        // Big enough for a whole map's rounds: ~20k ids at ~14 bytes each.
+        body = await readJson(req, 4 * 1024 * 1024);
+      } catch (err) {
+        json(res, 400, { error: err?.message || 'Invalid JSON body.' });
+        return true;
+      }
+    }
+    /** Query for GET, body for POST. Same names, same meanings. */
+    const arg = (key) => (body ? body[key] : url.searchParams.get(key));
+    const argList = (key) => {
+      if (!body) return csv(url, key);
+      const v = body[key];
+      if (Array.isArray(v)) return v.map(String).filter(Boolean);
+      return typeof v === 'string' && v ? v.split(',').map((x) => x.trim()).filter(Boolean) : undefined;
+    };
+    const argHas = (key) => (body ? body[key] !== undefined && body[key] !== null : url.searchParams.has(key));
     // The store is built from the whole library, once, for everybody. What this
     // caller may read is applied as a mask per query.
     const { records: allRecords, allowed } = await readable();
@@ -1179,23 +1207,29 @@ export async function handleReplayRequest(req, res, url) {
     const allowedIds = new Set(
       allowed.filter((r) => (r.status || 'ready') === 'ready').map((r) => r.id)
     );
-    const only = csv(url, 'demos');
+    const only = argList('demos');
     const scoped = only?.length ? new Set(only) : null;
     const filter = {
-      maps: csv(url, 'maps') || [],
-      side: url.searchParams.get('side') || '',
-      econ: url.searchParams.has('econ') ? Number(url.searchParams.get('econ')) : null,
-      oppEcon: url.searchParams.has('oppEcon') ? Number(url.searchParams.get('oppEcon')) : null,
-      result: url.searchParams.get('result') || '',
-      advantage: url.searchParams.get('advantage') || '',
-      teamName: url.searchParams.get('teamName') || '',
-      dateFrom: url.searchParams.get('from') || '',
-      dateTo: url.searchParams.get('to') || '',
-      files: csv(url, 'files') || []
+      maps: argList('maps') || [],
+      side: arg('side') || '',
+      econ: argHas('econ') ? Number(arg('econ')) : null,
+      oppEcon: argHas('oppEcon') ? Number(arg('oppEcon')) : null,
+      result: arg('result') || '',
+      advantage: arg('advantage') || '',
+      teamName: arg('teamName') || '',
+      dateFrom: arg('from') || '',
+      dateTo: arg('to') || '',
+      files: argList('files') || []
     };
+    // A `files` filter that matched nothing must return nothing, not the whole
+    // library — an empty list here means "these rounds", and there are none.
+    if (body?.files !== undefined && !filter.files.length) {
+      await jsonBig(res, 200, { players: [], playersTotal: 0, teams: [], teamsTotal: 0, maps: [], offset: 0 }, req);
+      return true;
+    }
     // Which tables the caller wants. Teams cost an extra pass over the rounds,
     // so a page showing only players should not pay for them.
-    const tabs = (url.searchParams.get('tables') || 'players')
+    const tabs = (arg('tables') || 'players')
       .split(',')
       .map((x) => x.trim())
       .filter(Boolean);
@@ -1212,13 +1246,13 @@ export async function handleReplayRequest(req, res, url) {
     // players should not ship all of them to render one screen.
     const page = (rows) => {
       if (!rows) return undefined;
-      const offset = Math.max(0, Math.floor(Number(url.searchParams.get('offset')) || 0));
-      const rawLimit = url.searchParams.get('limit');
-      if (rawLimit === null || rawLimit === '') return rows;
+      const off = Math.max(0, Math.floor(Number(arg('offset')) || 0));
+      const rawLimit = arg('limit');
+      if (rawLimit === null || rawLimit === undefined || rawLimit === '') return rows;
       const limit = Math.max(1, Math.min(5000, Math.floor(Number(rawLimit) || 100)));
-      return rows.slice(offset, offset + limit);
+      return rows.slice(off, off + limit);
     };
-    const offset = Math.max(0, Math.floor(Number(url.searchParams.get('offset')) || 0));
+    const offset = Math.max(0, Math.floor(Number(arg('offset')) || 0));
 
     // Trimmed to the caller's tier before it leaves the process. This shape —
     // `{ players, teams }` — is exactly what gateStatsPayload was written for,

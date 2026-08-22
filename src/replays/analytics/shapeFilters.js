@@ -410,24 +410,113 @@ export function shapePassesWindow({
   return true;
 }
 
+/** Shape features that read a player's position out of the tick buffer. */
+const TICK_FEATURES = new Set(['player_in', 'kill_from', 'death_from', 'first_duel_in']);
+
+/**
+ * Does this search need tick buffers at all?
+ *
+ * `grenade_in` answers off the round's own grenade events and says so in as
+ * many words; a clock-only or utility-only filter never calls
+ * `shapePassesWindow`. Both used to pay for a tick buffer per round regardless
+ * — and ticks are the expensive half by an order of magnitude (a stride-64
+ * buffer is ~200 KB against ~10 KB of meta).
+ */
+export function searchNeedsTicks(activeShapes) {
+  return (activeShapes || []).some((s) => TICK_FEATURES.has(s?.feature || 'player_in'));
+}
+
+/** Round packs fetched at once. Enough to fill a link, few enough to stay polite. */
+export const PACK_CONCURRENCY = 8;
+
+/**
+ * Load the round packs a set of windows needs, in parallel, reporting progress.
+ *
+ * This replaces a loop that awaited `fetchRoundMeta` and then `fetchRoundTicks`
+ * inline, one window at a time. Two things were wrong with that and both are
+ * felt rather than seen:
+ *
+ *   · **Serial.** Every distinct round file cost two round-trips end to end
+ *     before the next one started. A map with twenty thousand rounds is forty
+ *     thousand requests in a queue of one, and the whole phase is network
+ *     latency with an idle CPU behind it.
+ *   · **Silent.** The caller could only say "Matching selections…" because the
+ *     loop had no idea how many files it was going to touch. `onProgress` here
+ *     is what lets it count.
+ *
+ * Files already in `cache` are not refetched, so changing one shape and
+ * searching again pays only for what it has not seen.
+ */
+export async function loadRoundPacks(
+  files,
+  cache,
+  {
+    ticks = true,
+    onProgress = null,
+    concurrency = PACK_CONCURRENCY,
+    // Injected so a test can drive the pool without a network. Production
+    // callers never pass these.
+    fetchMeta = fetchRoundMeta,
+    fetchTicks = fetchRoundTicks
+  } = {}
+) {
+  const missing = files.filter((f) => f && !cache.has(f));
+  const total = missing.length;
+  if (!total) {
+    onProgress?.({ done: 0, total: 0 });
+    return cache;
+  }
+  let done = 0;
+  let next = 0;
+  onProgress?.({ done: 0, total });
+  const worker = async () => {
+    while (next < missing.length) {
+      const file = missing[next++];
+      const pack = { meta: null, ticks: null };
+      try {
+        pack.meta = await fetchMeta(file);
+      } catch {
+        pack.meta = null;
+      }
+      if (pack.meta && ticks) {
+        try {
+          pack.ticks = await fetchTicks(file, 64);
+        } catch {
+          pack.ticks = null;
+        }
+      }
+      cache.set(file, pack);
+      done += 1;
+      onProgress?.({ done, total });
+    }
+  };
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(concurrency, missing.length)) }, worker));
+  return cache;
+}
+
 /**
  * Filter phase windows by drawn shapes and/or global clock / utility filters.
  * `matchMode`: `'all'` (AND, default) or `'any'` (OR). Empty shapes + open
  * clock + all util types on ⇒ pass-through.
- * Loads meta + ticks per distinct round file (cached by caller).
+ *
+ * Round packs are loaded up front, in parallel, for the DISTINCT files the
+ * windows name — there are typically ten windows per file (a player per phase),
+ * and the old loop walked windows rather than files.
  *
  * @param {Array<{ file: string, phase: string, playerId: string, [k: string]: any }>} windows
  * @param {Array<object>} shapes
  * @param {Map<string, { meta: object|null, ticks: ArrayBuffer|null }>} [cache]
  * @param {'all'|'any'} [matchMode]
  * @param {{ timeWindow?: object, utility?: Record<string, boolean> }|null} [filter]
+ * @param {{ onProgress?: (p: { done: number, total: number }) => void }} [opts]
  */
 export async function filterWindowsByShapes(
   windows,
   shapes,
   cache = new Map(),
   matchMode = 'all',
-  filter = null
+  filter = null,
+  opts = {}
 ) {
   const active = (shapes || []).filter((s) => s && s.enabled !== false && s.geometry);
   const timeWin = sanitizeWindow(filter?.timeWindow);
@@ -436,27 +525,18 @@ export async function filterWindowsByShapes(
   if (!active.length && !timeWin && !utilNarrow) return windows;
   const requireAll = matchMode !== 'any';
 
+  // Everything the network is going to be asked for, asked for at once.
+  const files = [...new Set(windows.map((w) => w.file).filter(Boolean))];
+  await loadRoundPacks(files, cache, {
+    ticks: searchNeedsTicks(active),
+    onProgress: opts.onProgress || null,
+    concurrency: opts.concurrency
+  });
+
   const out = [];
   for (const w of windows) {
-    const file = w.file;
-    let pack = cache.get(file);
-    if (!pack) {
-      pack = { meta: null, ticks: null };
-      try {
-        pack.meta = await fetchRoundMeta(file);
-      } catch {
-        pack.meta = null;
-      }
-      if (pack.meta) {
-        try {
-          pack.ticks = await fetchRoundTicks(file, 64);
-        } catch {
-          pack.ticks = null;
-        }
-      }
-      cache.set(file, pack);
-    }
-    if (!pack.meta) continue;
+    const pack = cache.get(w.file);
+    if (!pack?.meta) continue;
 
     let ok;
     if (active.length) {

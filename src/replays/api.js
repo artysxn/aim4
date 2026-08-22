@@ -351,6 +351,35 @@ export async function fetchAggregate(filter = {}, opts = {}) {
   );
 }
 
+/**
+ * The same tables for an explicit set of ROUNDS, sent in a body.
+ *
+ * The Pattern Finder's leaderboard is "these exact rounds, the ones the search
+ * matched", and a search on a busy map matches tens of thousands of them —
+ * hundreds of kilobytes of round ids, far past what a URL will carry. That is
+ * the whole reason this is a POST and `fetchAggregate` is not.
+ *
+ * The rounds themselves never leave the server: the client sends ids and gets
+ * back the finished rows, which is what lets the Pattern Finder stop
+ * downloading the per-round rating columns at all.
+ */
+export async function fetchAggregateForRounds(files, opts = {}) {
+  const list = [...new Set((files || []).filter(Boolean))];
+  if (!list.length) return { players: [], teams: [], playersTotal: 0, teamsTotal: 0 };
+  return asJson(
+    await safeFetch(`${API_BASE}/api/replays/aggregate`, {
+      method: 'POST',
+      headers: await headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({
+        files: list,
+        tables: opts.tables || 'players,teams',
+        ...(opts.demos?.length ? { demos: opts.demos } : {}),
+        ...(Number.isFinite(opts.limit) ? { limit: opts.limit } : {})
+      })
+    })
+  );
+}
+
 function isHtmlOrJsonType(res) {
   const ct = (res.headers.get('content-type') || '').toLowerCase();
   return ct.includes('text/html') || ct.includes('application/json') || ct.includes('text/plain');

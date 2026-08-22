@@ -70,6 +70,21 @@ function interner() {
       return i;
     },
     lookup: (i) => from[i],
+    /**
+     * The id for a value that is already interned, or −1.
+     *
+     * Distinct from `id()`, which INTERNS what it is given: a filter asking for
+     * a value the store has never seen must not grow the table. And distinct
+     * from `values.indexOf()`, which is what the filters used to do — a linear
+     * scan of the whole table per requested value. On the Pattern Finder's
+     * round-file filter that is (rounds asked for × rounds in the library),
+     * which on a big library is billions of string compares to answer a
+     * question the map already knows.
+     */
+    find(v) {
+      const i = to.get(String(v ?? ''));
+      return i === undefined ? -1 : i;
+    },
     get size() {
       return from.length;
     },

@@ -12,7 +12,7 @@
 
 import { consumeCapability, formatApiError } from '../api.js';
 import { getStatsPayload, peekStatsCache, statsCacheGeneration } from '../statsCache.js';
-import { fetchRoster } from '../api.js';
+import { fetchRoster, fetchAggregateForRounds } from '../api.js';
 import { demosForMap, rosterMaps } from '../shared/rosterQuery.js';
 import { CAP } from '../../../shared/entitlements/keys.js';
 import { ECONOMIES, MAPS, economyLabel } from '../shared/roundId.js';
@@ -1167,7 +1167,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
   /** Paint the right card and the rounds list under the left filters. */
   function paintResults() {
     if (!lastResults) return;
-    const { agg, lb, teamLb, roundCount, needsPh } = lastResults;
+    const { agg, lb, teamLb, roundCount, needsPh, lbError } = lastResults;
     rememberRadarView();
     mainEl.innerHTML = `
       ${
@@ -1175,11 +1175,31 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
           ? `<p class="an-warn">Some rounds are still building phase data. Refresh shortly if numbers look incomplete.</p>`
           : ''
       }
+      ${lbError ? `<p class="an-warn">Could not build the leaderboard: ${escapeHtml(lbError)}</p>` : ''}
       ${renderRadarCard()}
       ${renderLeaderboard(lb, teamLb, state.playerIds, roundCount)}`;
     const slot = sideRoundsEl();
     if (slot) slot.innerHTML = renderRounds(agg);
     paintRadar();
+  }
+
+  /**
+   * What the antistrat chapter reads: round tags and the round's own identity.
+   *
+   * Its own contract rather than the Pattern Finder's, because the two used to
+   * share `patterns` and no longer want the same thing — antistratScan.js reads
+   * `row.rl` and the baseline fields, and the finder does not fetch `rl` at all
+   * any more.
+   */
+  const ANTISTRAT_COLUMNS = 'shapes';
+
+  /** Write the in-progress line, if this render is still the current one. */
+  function setMatchingLabel(token, text) {
+    if (token !== renderToken) return;
+    const el = mainEl.querySelector('#an-matching');
+    if (!el) return;
+    el.hidden = false;
+    el.textContent = text;
   }
 
   async function renderMain() {
@@ -1199,25 +1219,61 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     // Always replace the empty-map prompt as soon as a map is chosen; otherwise
     // it sticks around for the whole aggregate await (or forever on error).
     rememberRadarView();
+    // Both branches carry the counter: a clock or utility filter with no shape
+    // drawn still walks every round off the network, and used to show a bare
+    // spinner while it did.
     mainEl.innerHTML = hasShapes
-      ? `<p class="view-empty">Matching selections…</p>${renderRadarCard()}`
-      : `<div class="is-loading" role="status" aria-live="polite"><span class="spinner" aria-hidden="true"></span><span class="sr-only">Loading</span></div>${renderRadarCard()}`;
+      ? `<p class="view-empty" id="an-matching">Matching selections…</p>${renderRadarCard()}`
+      : `<div class="is-loading" role="status" aria-live="polite"><span class="spinner" aria-hidden="true"></span><span class="sr-only">Loading</span></div><p class="view-empty" id="an-matching" hidden></p>${renderRadarCard()}`;
     paintRadar();
 
     try {
       const filter = filterObj();
-      const agg = await aggregateAnalyticsAsync(payload, filter, tickCache);
+      // The match walks every round the subjects appear in and pulls each one's
+      // meta (and, for the shapes that need a position, its ticks) off the
+      // network. That is the whole cost of this phase, and it is countable —
+      // so count it, rather than leaving a sentence on screen for a minute.
+      const agg = await aggregateAnalyticsAsync(payload, filter, tickCache, {
+        onProgress: ({ done, total }) => {
+          if (token !== renderToken || !total) return;
+          setMatchingLabel(token, `Matching selections… ${done}/${total} rounds`);
+        }
+      });
       if (token !== renderToken) return;
 
-      const lb = leaderboardFromFiles(payload, agg.files);
-      const teamLb = teamLeaderboardFromFiles(payload, agg.files);
+      // The leaderboard is computed on the server, over the rounds the search
+      // just matched.
+      //
+      // It used to be computed here, which is why this page downloaded the
+      // per-round rating inputs for the whole map: `aim` and `duels` alone are
+      // 4,227 bytes a round and exist for nothing else, 55% of a payload the
+      // search itself never reads. Sending the matched round ids and getting
+      // the finished rows back is the same numbers — the server runs the same
+      // `derivePlayers` / `deriveTeams` this file used to — for a request
+      // instead of a download.
+      //
+      // If it fails, the card says so rather than showing a table quietly
+      // aggregated from columns that are no longer fetched.
+      let lb = [];
+      let teamLb = [];
+      let lbError = null;
+      if (agg.files.length) {
+        setMatchingLabel(token, 'Building the leaderboard…');
+        try {
+          const tables = await fetchAggregateForRounds(agg.files, { tables: 'players,teams' });
+          lb = tables.players || [];
+          teamLb = tables.teams || [];
+        } catch (err) {
+          lbError = err?.message || String(err);
+        }
+      }
       if (token !== renderToken) return;
 
       const needsPh = (payload.demos || []).some((d) =>
         (d.rounds || []).some((r) => r.m === state.map && !r.ph)
       );
       const roundCount = agg.anyone ? agg.files.length : agg.rounds;
-      lastResults = { agg, lb, teamLb, roundCount, needsPh };
+      lastResults = { agg, lb, teamLb, roundCount, needsPh, lbError };
       paintResults();
     } catch (err) {
       if (token !== renderToken) return;
@@ -1333,7 +1389,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
         antistrat?.load();
         return;
       }
-      const cached = peekStatsCache(null, 'patterns');
+      const cached = peekStatsCache(null, ANTISTRAT_COLUMNS);
       if (cached) {
         payload = cached;
         payloadGeneration = statsCacheGeneration();
@@ -1346,9 +1402,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       mainEl.innerHTML = spinnerHtml('Loading stats…');
       try {
         const data = await getStatsPayload(null, {
-          // See loadMapPayload: the statistics card needs the kill column for an
-          // exact Rating 3.0.
-          columns: 'patterns',
+          columns: ANTISTRAT_COLUMNS,
           onProgress: (p) => {
             if (token !== loadToken) return;
             setSpinnerLabel(mainEl, statsProgressLabel(p));
@@ -1378,7 +1432,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       antistrat?.load();
       return;
     }
-    const cached = peekStatsCache(null, 'patterns');
+    const cached = peekStatsCache(null, ANTISTRAT_COLUMNS);
     if (cached) {
       payload = cached;
       payloadGeneration = statsCacheGeneration();
