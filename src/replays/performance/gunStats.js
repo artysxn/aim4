@@ -3,7 +3,7 @@
 // Per-gun numbers for one player, from the stats index already in memory.
 //
 // Player matches are selected first. Each round's `hg` field names the gun
-// held longest while alive. Rating / swing / accuracy / KPR / xK re-aggregate
+// held longest while alive. Rating 3.0 / swing / accuracy / KPR / xK re-aggregate
 // those rounds. The file→gun map is cached against the player's demo set.
 // ---------------------------------------------------------------------------
 

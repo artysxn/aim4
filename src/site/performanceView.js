@@ -35,6 +35,7 @@ import {
 import { aggregateGuns, gunMapForPlayer } from '../replays/performance/gunStats.js';
 import { MAP_ROUND_CODES, mapRoundGrid } from '../replays/performance/mapRoundStats.js';
 import { mapRoundBlocksHtml } from '../replays/performance/mapRoundTables.js';
+import { DELTA_BANDS, withDeltaHtml } from '../replays/performance/deltaMark.js';
 import {
   attachTips,
   bindStatsHScroll,
@@ -409,7 +410,12 @@ export function initPerformanceView({ auth, escapeHtml }) {
             <span class="pf-card-label">${escapeHtml(m.label)}</span>
             ${spark}
           </div>
-          <div class="pf-card-value">${fmtMetric(m.fmt, value)}</div>
+          <div class="pf-card-value">${withDeltaHtml(
+            fmtMetric(m.fmt, value),
+            value,
+            comp,
+            DELTA_BANDS[m.band]
+          )}</div>
           <div class="pf-bar ${above ? 'is-up' : 'is-down'}">
             <span class="pf-bar-fill" style="width:${fill.toFixed(1)}%"></span>
             ${notch != null ? `<i class="pf-bar-notch" style="left:${notch.toFixed(1)}%"></i>` : ''}
@@ -425,15 +431,19 @@ export function initPerformanceView({ auth, escapeHtml }) {
       const roleCls = side === 'CT' ? 'st-role-ct' : 'st-role-t';
       const rows = (grid[side] || [])
         .map((r) => {
-          const tip =
+          const ratingTip =
             Number.isFinite(r.rating) && Number.isFinite(r.peer)
               ? `${f2(r.rating)} vs ${f2(r.peer)} avg`
+              : '';
+          const swingTip =
+            Number.isFinite(r.swing) && Number.isFinite(r.peerSwing)
+              ? `${signed(r.swing)} vs ${signed(r.peerSwing)} avg`
               : '';
           return `<tr>
             <td class="left">${escapeHtml(r.mapName)}</td>
             <td class="left ${roleCls}">${escapeHtml(r.position || '—')}</td>
-            <td class="${tip ? 'has-tip' : ''}"${tip ? ` data-tip="${escapeHtml(tip)}"` : ''}>${f2(r.rating)}</td>
-            <td>${signed(r.swing)}</td>
+            <td class="${ratingTip ? 'has-tip' : ''}"${ratingTip ? ` data-tip="${escapeHtml(ratingTip)}"` : ''}>${withDeltaHtml(f2(r.rating), r.rating, r.peer, DELTA_BANDS.rating)}</td>
+            <td class="${swingTip ? 'has-tip' : ''}"${swingTip ? ` data-tip="${escapeHtml(swingTip)}"` : ''}>${withDeltaHtml(signed(r.swing), r.swing, r.peerSwing, DELTA_BANDS.swing)}</td>
           </tr>`;
         })
         .join('');

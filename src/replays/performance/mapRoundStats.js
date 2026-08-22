@@ -60,7 +60,7 @@ function emptyCell() {
  * @property {number} rounds
  * @property {number} wins
  * @property {number|null} winrate  percent, the team's, over these rounds
- * @property {number|null} rating   this player's, over these rounds
+ * @property {number|null} rating   Rating 3.0 for this player, over these rounds
  * @property {number|null} swing    this player's PRW swing
  * @property {string[]} files       newest first, capped for a timeline link
  *

@@ -21,6 +21,7 @@
 
 import assert from 'node:assert/strict';
 import { loadRoundPacks, searchNeedsTicks, PACK_CONCURRENCY } from './shapeFilters.js';
+import { COARSE_STRIDE } from '../tickStore.js';
 
 // ---- which searches need a tick buffer --------------------------------------
 {
@@ -45,7 +46,7 @@ import { loadRoundPacks, searchNeedsTicks, PACK_CONCURRENCY } from './shapeFilte
 
 // ---- a stand-in for the network ---------------------------------------------
 function tracker({ delay = 0 } = {}) {
-  const t = { meta: [], ticks: [], inFlight: 0, peak: 0 };
+  const t = { meta: [], ticks: [], strides: [], inFlight: 0, peak: 0 };
   const gate = async () => {
     t.inFlight += 1;
     t.peak = Math.max(t.peak, t.inFlight);
@@ -58,9 +59,10 @@ function tracker({ delay = 0 } = {}) {
     t.meta.push(file);
     return { id: file, players: [], events: {} };
   };
-  t.fetchTicks = async (file) => {
+  t.fetchTicks = async (file, stride) => {
     await gate();
     t.ticks.push(file);
+    t.strides.push(stride);
     return new ArrayBuffer(8);
   };
   return t;
@@ -116,6 +118,17 @@ const files = (n) => Array.from({ length: n }, (_, i) => `r${i}`);
     fetchTicks: t.fetchTicks
   });
   assert.equal(t.ticks.length, 10, 'and fetched when a shape does read positions');
+
+  // The stride is not free to choose. The server precomputes one thinned pass
+  // per round (`.c100.bin`) and serves it as a file read; every other stride
+  // misses it and decompresses the whole 1.1 MB round to answer, ~4.2 ms of
+  // synchronous server CPU on every round of every position search. This
+  // asked for 64 for months, which is exactly that miss.
+  assert.deepEqual(
+    [...new Set(t.strides)],
+    [COARSE_STRIDE],
+    'ticks are fetched at the stride the server has precomputed'
+  );
 }
 
 // ---- a round whose meta fails costs nothing more ----------------------------

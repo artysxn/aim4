@@ -144,9 +144,21 @@
 }
 
 .pf-card-value {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   font: 600 28px/1 var(--font-body);
   letter-spacing: -0.02em;
   color: var(--text);
+}
+
+.pf-card-value .pf-delta-icon {
+  width: 18px;
+  height: 18px;
+}
+
+.pf-roles-table td .pf-delta {
+  margin-left: 2px;
 }
 
 .pf-bar {
@@ -278,6 +290,11 @@
 
 .st-table.pf-map-table .pf-mt-pad td {
   color: transparent;
+}
+
+.st-table.pf-map-table .pf-empty {
+  color: var(--muted, #5c5c62);
+  font-weight: 400;
 }
 
 .st-table.pf-map-table .pf-mt-name {

@@ -3,6 +3,7 @@
 // ---------------------------------------------------------------------------
 
 import { fetchRoundMeta, fetchRoundTicks } from '../api.js';
+import { COARSE_STRIDE } from '../tickStore.js';
 import { phaseAtTick, phaseBounds } from '../coach/roundPhases.js';
 import { readHeader, readRecord } from '../shared/tickFormat.js';
 import { P } from '../shared/statsMath.js';
@@ -518,8 +519,8 @@ const TICK_FEATURES = new Set([
  * `grenade_in` answers off the round's own grenade events and says so in as
  * many words; a clock-only or utility-only filter never calls
  * `shapePassesWindow`. Both used to pay for a tick buffer per round regardless
- * — and ticks are the expensive half by an order of magnitude (a stride-64
- * buffer is ~200 KB against ~10 KB of meta).
+ * — and ticks are the expensive half, a second request per round for a body
+ * the meta already answered without.
  */
 export function searchNeedsTicks(activeShapes) {
   return (activeShapes || []).some((s) => TICK_FEATURES.has(s?.feature || 'player_in'));
@@ -590,7 +591,23 @@ export async function loadRoundPacks(
       }
       if (pack.meta && ticks) {
         try {
-          pack.ticks = await fetchTicks(file, 64);
+          // COARSE_STRIDE, not a stride of this search's own choosing.
+          //
+          // The server precomputes exactly one thinned pass per round, the
+          // `.c100.bin` the timeline's coarse pass reads, and serves it as a
+          // plain file read. Any other stride misses that file and falls
+          // through to `decodeTickzStride`, which zstd-decompresses and
+          // columnar-unpacks the WHOLE 1.1 MB round to hand back 18 KB —
+          // measured at 4.2 ms of synchronous CPU per round, on Node's only
+          // thread, so concurrent requests do not overlap and every meta
+          // request queues behind them. This asked for 64 and paid that on
+          // every round of every position search.
+          //
+          // Nothing above needs the finer grid: `shapePassesWindow` samples
+          // `player_in` once a second, and the event features read one row at
+          // a kill tick. `samplePlayerAt` divides by the buffer's own header
+          // stride, so the coarser buffer is read correctly without a change.
+          pack.ticks = await fetchTicks(file, COARSE_STRIDE);
         } catch {
           pack.ticks = null;
         }
@@ -621,8 +638,8 @@ export const PACK_CHUNK_FILES = 300;
  * Ticks are the expensive half to fetch — a whole-map search is two requests
  * per round and the browser will only run six at a time — so keeping them is
  * what makes editing a shape and searching again nearly free rather than
- * another few minutes. A stride-64 round is ~18 KB (115 samples x 10 slots x
- * 16 bytes), so this holds a little over 7,000 rounds: a full Dust2 library
+ * another few minutes. A stride-100 round is ~11.6 KB (74 samples x 10 slots
+ * x 16 bytes), so this holds a little over 11,000 rounds: a full Dust2 library
  * fits, and a map several times that size is capped rather than allowed to
  * grow without limit. Past the budget the oldest buffers are dropped and
  * refetched if a later search wants them. Meta is kept either way — it is the

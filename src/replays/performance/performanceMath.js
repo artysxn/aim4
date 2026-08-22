@@ -133,12 +133,12 @@ function mean(values) {
 }
 
 export const CARD_METRICS = [
-  { key: 'kd', label: 'K/D', fmt: 'num2', read: (p) => p?.kd },
-  { key: 'swing', label: 'Swing', fmt: 'signed', read: (p) => p?.prwSwing },
-  { key: 'kpr', label: 'KPR', fmt: 'num2', read: (p) => kprOf(p) },
-  { key: 'xk', label: 'xK', fmt: 'num2', read: (p) => p?.xk },
-  { key: 'tfw', label: 'Fight win', fmt: 'pct', read: (p) => p?.tfw },
-  { key: 'pfw', label: 'PFW', fmt: 'pct', read: (p) => p?.pfw }
+  { key: 'kd', label: 'K/D', fmt: 'num2', band: 'kd', read: (p) => p?.kd },
+  { key: 'swing', label: 'Swing', fmt: 'signed', band: 'swing', read: (p) => p?.prwSwing },
+  { key: 'kpr', label: 'KPR', fmt: 'num2', band: 'kpr', read: (p) => kprOf(p) },
+  { key: 'xk', label: 'xK', fmt: 'num2', band: 'xk', read: (p) => p?.xk },
+  { key: 'tfw', label: 'Fight win', fmt: 'pct', band: 'pct', read: (p) => p?.tfw },
+  { key: 'pfw', label: 'PFW', fmt: 'pct', band: 'pct', read: (p) => p?.pfw }
 ];
 
 /** Library averages for the summary cards (peers with enough rounds). */
@@ -266,15 +266,17 @@ export function roleGrid(payload, playerId, ui, players, demos) {
       const withRole = attachPlayerRoles(mine ? [mine] : [], payload, { maps: [map.code] })[0];
       const position = roleLabel(withRole || {}, side);
       let peer = null;
+      let peerSwing = null;
       if (position) {
         const { rows, active } = mapSideRows(payload, map.code, side, dateFilter, players, demos);
         const tagged = attachPlayerRoles(aggregatePlayers(rows, players, active, demos), payload, {
           maps: [map.code]
         });
-        const ratings = tagged
-          .filter((p) => p.id !== playerId && roleLabel(p, side) === position && p.rounds >= 8)
-          .map((p) => p.rating);
-        peer = mean(ratings);
+        const peers = tagged.filter(
+          (p) => p.id !== playerId && roleLabel(p, side) === position && p.rounds >= 8
+        );
+        peer = mean(peers.map((p) => p.rating));
+        peerSwing = mean(peers.map((p) => p.prwSwing));
       }
       out[side].push({
         map: map.code,
@@ -283,7 +285,8 @@ export function roleGrid(payload, playerId, ui, players, demos) {
         rating: mine?.rating ?? null,
         swing: mine?.prwSwing ?? null,
         rounds: mine?.rounds || 0,
-        peer
+        peer,
+        peerSwing
       });
     }
   }

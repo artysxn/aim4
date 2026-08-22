@@ -17,6 +17,7 @@
 import {
   accumulatePlayers,
   createPlayerAccumulator,
+  demoPassesDate,
   derivePlayers
 } from '../../src/replays/shared/statsMath.js';
 import { CARD_METRICS } from '../../src/replays/performance/performanceMath.js';
@@ -69,7 +70,7 @@ function mean(values) {
 }
 
 function cacheKey(user, filter, stamp) {
-  return [user, filter.map || '', filter.dateFrom || '', filter.dateTo || '', stamp].join('|');
+  return ['v2', user, filter.map || '', filter.dateFrom || '', filter.dateTo || '', stamp].join('|');
 }
 
 /** Drop expired entries, then the oldest, until the cache is within its cap. */
@@ -116,6 +117,15 @@ export async function peerAverages(io, user, records, filter = {}, opts = {}) {
       dateFrom: filter.dateFrom || '',
       dateTo: filter.dateTo || ''
     };
+    /** @type {Record<string, { T: { r: number, w: number }, CT: { r: number, w: number } }>} */
+    const mapSides = {};
+    const bumpSide = (code, side, won) => {
+      if (!code || (side !== 'T' && side !== 'CT')) return;
+      if (!mapSides[code]) mapSides[code] = { T: { r: 0, w: 0 }, CT: { r: 0, w: 0 } };
+      const bag = mapSides[code][side];
+      bag.r += 1;
+      if (won) bag.w += 1;
+    };
 
     let done = 0;
     for (const record of records) {
@@ -130,13 +140,29 @@ export async function peerAverages(io, user, records, filter = {}, opts = {}) {
         players.set(`${entry.id}:${p.id}`, { name: p.name, team: p.team });
       }
       accumulatePlayers(acc, entry.rounds, players, active, demos);
+      const wantMap = filter.map ? String(filter.map).toUpperCase() : '';
+      if (demoPassesDate(entry, active)) {
+        for (const row of entry.rounds) {
+          const code = String(row.m || entry.map || '').toUpperCase();
+          if (wantMap && code !== wantMap) continue;
+          const tTeam = (row.s1 || 'T') === 'T' ? 1 : 2;
+          bumpSide(code, 'T', row.w === tTeam);
+          bumpSide(code, 'CT', row.w === (tTeam === 1 ? 2 : 1));
+        }
+      }
       demos.delete(entry.id);
       for (const p of entry.players || []) players.delete(`${entry.id}:${p.id}`);
     }
 
     const list = derivePlayers(acc).filter((p) => p.rounds >= PEER_MIN_ROUNDS);
-    const out = { sample: list.length, metrics: {} };
+    const out = { sample: list.length, metrics: {}, mapSides: {} };
     for (const m of CARD_METRICS) out.metrics[m.key] = mean(list.map(m.read));
+    for (const [code, sides] of Object.entries(mapSides)) {
+      out.mapSides[code] = {
+        T: sides.T.r ? (sides.T.w / sides.T.r) * 100 : null,
+        CT: sides.CT.r ? (sides.CT.w / sides.CT.r) * 100 : null
+      };
+    }
     cache.set(key, { at: Date.now(), stamp, value: out });
     evict();
     return out;

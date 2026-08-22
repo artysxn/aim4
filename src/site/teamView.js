@@ -25,6 +25,7 @@ import {
   fetchTeamDocument,
   fetchSharedDocument,
   fetchTeams,
+  fetchPeerAverages,
   fetchUtilityIndex,
   joinTeam,
   leaveTeam,
@@ -56,6 +57,7 @@ import {
   mapWinrateGapSpan,
   mapWinrateHint
 } from '../replays/analytics/mapWinrateHint.js';
+import { DELTA_BANDS, withDeltaHtml } from '../replays/performance/deltaMark.js';
 import { createDocsEditor } from './docsEditor.js';
 import { mountDrawingBoard } from './drawingBoard.js';
 import { mountUtilityArchive } from './utilityArchive.js';
@@ -195,6 +197,8 @@ export function initTeamView({ auth, escapeHtml }) {
   let overviewMaps = [];
   let overviewMapsLoading = false;
   let overviewMapsToken = 0;
+  /** Library T/CT round winrate per map, from peer averages. */
+  let overviewLeagueSides = {};
   /** Lazy-loaded timeline viewer module. */
   let viewerModule = null;
   let openDocId = '';
@@ -677,7 +681,7 @@ export function initTeamView({ auth, escapeHtml }) {
      * line, not an origin. Predicted vs actual is a hatch on the gap: thin
      * dashes past the solid (under), thick dashes as the extra tip (over).
      */
-    const sideBar = (side, rate, rounds, prw) => {
+    const sideBar = (side, rate, rounds, prw, league) => {
       const known = Number.isFinite(rate) && rounds >= MIN_SIDE_ROUNDS;
       const fill = known ? mapWinrateFillWidth(rate, prw) : 0;
       const kind = known ? mapWinrateCompareKind(rate, prw) : '';
@@ -687,15 +691,20 @@ export function initTeamView({ auth, escapeHtml }) {
           ? `<span class="tm-map-bar-prw is-${kind}" style="left:${gap.left}%;width:${gap.width}%"></span>`
           : '';
       const hint = kind ? mapWinrateHint(rate, prw) : '';
+      const mark = known
+        ? withDeltaHtml('', rate, league, DELTA_BANDS.winrate)
+        : '';
       const title = hint
         ? hint
-        : `${side} round winrate${known ? ` ${pct1(rate)} over ${rounds} rounds` : ', not enough rounds yet'}`;
+        : `${side} round winrate${known ? ` ${pct1(rate)} over ${rounds} rounds` : ', not enough rounds yet'}${
+            known && Number.isFinite(league) ? `. Library ${league.toFixed(1)}%.` : ''
+          }`;
       return `<span class="tm-map-bar" data-side="${side}" title="${escapeHtml(title)}">
         <span class="tm-map-bar-track">
           <span class="tm-map-bar-fill" style="width:${fill}%"></span>
           ${overlay}
         </span>
-        <span class="tm-map-bar-label">${side}</span>
+        <span class="tm-map-bar-label">${side}${mark}</span>
       </span>`;
     };
     return `<ul class="tm-maps-list">${rows
@@ -709,8 +718,8 @@ export function initTeamView({ auth, escapeHtml }) {
       <li class="tm-map-row${active}" data-tm-map="${escapeHtml(m.code)}" role="button" tabindex="0">
         <span class="tm-map-name">${name}</span>
         <span class="tm-map-bars">
-          ${sideBar('T', m.tWinrate, m.tRounds, m.tPrw)}
-          ${sideBar('CT', m.ctWinrate, m.ctRounds, m.ctPrw)}
+          ${sideBar('T', m.tWinrate, m.tRounds, m.tPrw, overviewLeagueSides[m.code]?.T)}
+          ${sideBar('CT', m.ctWinrate, m.ctRounds, m.ctPrw, overviewLeagueSides[m.code]?.CT)}
         </span>
       </li>`;
       })
@@ -735,6 +744,7 @@ export function initTeamView({ auth, escapeHtml }) {
     overviewMapsKey = '';
     overviewMapFilter = '';
     overviewMaps = [];
+    overviewLeagueSides = {};
     overviewMapsLoading = false;
     overviewMapsToken++;
   }
@@ -756,6 +766,15 @@ export function initTeamView({ auth, escapeHtml }) {
     try {
       // Map record + team PRW only. The per-player rating columns (aim, duels)
       // are four fifths of the payload and nothing here reads them.
+      const peersP = fetchPeerAverages()
+        .then((peers) => {
+          if (token !== overviewMapsToken) return;
+          if (peers?.mapSides) {
+            overviewLeagueSides = peers.mapSides;
+            paintOverviewMaps();
+          }
+        })
+        .catch(() => {});
       const payload = await getStatsPayload(ids, { columns: 'team' });
       if (token !== overviewMapsToken) return;
       const want = teamNameKey(team?.name || '');

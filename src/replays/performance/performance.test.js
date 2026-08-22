@@ -17,6 +17,8 @@ import {
   gunLabel,
   aggregateGuns
 } from './gunStats.js';
+import { DELTA_BANDS, deltaLevel, deltaMarkHtml } from './deltaMark.js';
+import { mapRoundTableHtml } from './mapRoundTables.js';
 
 assert.equal(stripAt('@artysan'), 'artysan');
 assert.equal(findPlayerByUsername([{ id: '1', name: 'artysan', maps: ['DD2'] }], 'artysan').id, '1');
@@ -124,6 +126,58 @@ assert.equal(guns.length, 1);
 assert.equal(guns[0].gun, 'ak47');
 assert.equal(guns[0].kills, 2);
 assert.equal(guns[0].rounds, 1);
-assert.ok(guns[0].used > 0);
+assert.ok(Number.isFinite(guns[0].rating), 'guns rating is Rating 3.0 from aggregatePlayers');
+assert.equal(guns[0].a4r, undefined);
+
+assert.equal(deltaLevel(1.0, 1.0, DELTA_BANDS.rating), 0);
+assert.equal(deltaLevel(1.04, 1.0, DELTA_BANDS.rating), 0);
+assert.equal(deltaLevel(1.05, 1.0, DELTA_BANDS.rating), 1);
+assert.equal(deltaLevel(1.16, 1.0, DELTA_BANDS.rating), 1);
+assert.equal(deltaLevel(1.17, 1.0, DELTA_BANDS.rating), 2);
+assert.equal(deltaLevel(0.83, 1.0, DELTA_BANDS.rating), -2);
+assert.equal(deltaLevel(1.13, 1.0, DELTA_BANDS.rating), 1);
+
+assert.equal(deltaLevel(0.5, 0, DELTA_BANDS.swing), 0);
+assert.equal(deltaLevel(1.0, 0, DELTA_BANDS.swing), 1);
+assert.equal(deltaLevel(2.29, 0, DELTA_BANDS.swing), 1);
+assert.equal(deltaLevel(2.3, 0, DELTA_BANDS.swing), 2);
+assert.equal(deltaLevel(-2.67, 0, DELTA_BANDS.swing), -2);
+
+assert.equal(deltaLevel(0.79, 0.76, DELTA_BANDS.kpr), 0);
+assert.equal(deltaLevel(0.79, 0.75, DELTA_BANDS.kpr), 1);
+assert.equal(deltaLevel(0.79, 0.67, DELTA_BANDS.kpr), 2);
+
+assert.equal(deltaLevel(55, 53.5, DELTA_BANDS.pct), 0);
+assert.equal(deltaLevel(55, 53.4, DELTA_BANDS.pct), 1);
+assert.equal(deltaLevel(55, 50.9, DELTA_BANDS.pct), 2);
+
+assert.equal(deltaLevel(54, 52, DELTA_BANDS.winrate), 0);
+assert.equal(deltaLevel(54.1, 52, DELTA_BANDS.winrate), 1);
+assert.equal(deltaLevel(60, 52, DELTA_BANDS.winrate), 2);
+assert.equal(deltaLevel(44, 52, DELTA_BANDS.winrate), -2);
+
+assert.equal(deltaMarkHtml(0), '');
+assert.ok(deltaMarkHtml(1).includes('is-up'));
+assert.ok(deltaMarkHtml(-2).includes('is-down'));
+assert.notEqual(deltaMarkHtml(1), deltaMarkHtml(2));
+assert.ok(deltaMarkHtml(2).includes('pf-delta'));
+
+{
+  const esc = (s) => String(s);
+  const html = mapRoundTableHtml(
+    [
+      { key: 'low', label: 'Low', ran: { rating: 0.8, swing: 0, winrate: 40, rounds: 2, files: [] }, faced: { rating: null, swing: null, winrate: null, rounds: 0, files: [] } },
+      { key: 'high', label: 'High', ran: { rating: 1.4, swing: 1, winrate: 70, rounds: 2, files: [] }, faced: { rating: null, swing: null, winrate: null, rounds: 0, files: [] } },
+      { key: 'empty', label: 'Empty', ran: { rating: null, swing: null, winrate: null, rounds: 0, files: [] }, faced: { rating: null, swing: null, winrate: null, rounds: 0, files: [] } }
+    ],
+    'T',
+    3,
+    esc
+  );
+  const names = [...html.matchAll(/pf-rt-text">([^<]+)/g)].map((m) => m[1]);
+  assert.deepEqual(names, ['High', 'Low', 'Empty'], 'round types sort by rating');
+  assert.ok(html.includes('pf-empty'), 'empty cells are gray dashes');
+  assert.ok(!html.includes('\u2014'), 'maps table does not use an em dash');
+}
 
 console.log('performance.test.js ok');

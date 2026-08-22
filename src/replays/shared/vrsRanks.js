@@ -181,6 +181,10 @@ function escapeHtml(s) {
     .replace(/"/g, '&quot;');
 }
 
+/** Charts sidebar glyph, inline so Rank stays usable from Node tests. */
+const CHARTS_ICON =
+  '<svg class="mb-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 -960 960 960" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M147.27-147.27v-665.46h665.46v665.46H147.27Zm55.96-154.19v98.23h553.54v-360.66L525.85-306.46 367.04-465.27 203.23-301.46Z"/></svg>';
+
 /**
  * Dropdown with two text fields (Own / Enemy). `scope` prefixes data-rank so
  * Charts can host one per axis.
@@ -195,7 +199,7 @@ export function rankFilterHtml(opts = {}) {
   const extraClass = opts.extraClass || '';
   const label = rankSummaryLabel(own, opp);
   return `<details class="st-rank-dd${extraClass ? ` ${extraClass}` : ''}">
-    <summary class="${summaryClass}" aria-label="Rank">${escapeHtml(label)}</summary>
+    <summary class="${summaryClass}" aria-label="Rank"><span class="mb-summary">${CHARTS_ICON}<span class="mb-label">${escapeHtml(label)}</span></span></summary>
     <div class="st-rank-menu" role="group" aria-label="Rank">
       <input class="site-input st-rank-input" type="text" inputmode="numeric" autocomplete="off"
         spellcheck="false" data-rank="${scope}rankOwn" placeholder="Own" aria-label="Own rank"
@@ -219,7 +223,11 @@ export function placeRankMenu(details) {
 
 export function syncRankSummary(details, own, opp) {
   const summary = details?.querySelector?.('summary');
-  if (summary) summary.textContent = rankSummaryLabel(own, opp);
+  if (!summary) return;
+  const label = rankSummaryLabel(own, opp);
+  const slot = summary.querySelector('.mb-label');
+  if (slot) slot.textContent = label;
+  else summary.textContent = label;
 }
 
 /** @type {ReturnType<typeof buildGlobalRanks> | null} */

@@ -594,7 +594,7 @@ button.rp-side-name:hover {
 
 .rp-filters {
   position: relative;
-  z-index: 4;
+  z-index: 40;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -4293,6 +4293,8 @@ body.rv-open {
   --st-ctrl-radius: var(--radius-sm);
   --st-ctrl-text: #5c5c62;
   --st-ctrl-text-on: var(--text);
+  position: relative;
+  z-index: 20;
   display: flex;
   align-items: center;
   flex-wrap: nowrap;
@@ -4649,7 +4651,7 @@ body.rv-open {
 /* Fixed so opening never toggles the filter-row scrollbar. */
 .st-round-menu {
   position: fixed;
-  z-index: 80;
+  z-index: 400;
   top: 0;
   left: 0;
   min-width: 180px;
@@ -4685,10 +4687,20 @@ body.rv-open {
   box-sizing: border-box;
   width: 100%;
   min-width: 7rem;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: none;
 }
 
-.st-rank-dd > summary::-webkit-details-marker {
+.st-rank-dd > summary > .mb-summary {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.st-rank-dd > summary::-webkit-details-marker,
+.st-rank-dd > summary::marker {
   display: none;
+  content: none;
 }
 
 .st-rank-dd > summary::after {
@@ -4705,7 +4717,7 @@ body.rv-open {
 
 .st-rank-menu {
   position: fixed;
-  z-index: 80;
+  z-index: 400;
   top: 0;
   left: 0;
   display: grid;
@@ -4742,7 +4754,13 @@ body.rv-open {
 .an-sidebar .st-rank-dd > summary,
 .rp-filters .st-rank-dd > summary,
 .pf-filters .st-rank-dd > summary,
-.ch-side .st-rank-dd > summary {
+.ch-side .st-rank-dd > summary,
+.st-filters .st-rank-dd > summary.site-select,
+.an-sidebar .st-rank-dd > summary.site-select,
+.rp-filters .st-rank-dd > summary.site-select,
+.pf-filters .st-rank-dd > summary.site-select,
+.ch-side .st-rank-dd > summary.site-select,
+.ch-side .st-rank-dd > summary.ch-dd-summary {
   background-image: none;
 }
 
@@ -5587,7 +5605,7 @@ body.rv-open {
 .an-sidebar {
   position: sticky;
   top: 16px;
-  z-index: 3;
+  z-index: 40;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -6570,6 +6588,7 @@ body.rv-open {
   --ch-ctrl-text-on: var(--text);
   position: sticky;
   top: 12px;
+  z-index: 40;
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -7011,10 +7030,15 @@ body.rv-open {
   box-sizing: border-box;
   width: 100%;
   padding-right: 10px;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: none;
 }
 
-.ch-dd > summary::-webkit-details-marker {
+.ch-dd > summary::-webkit-details-marker,
+.ch-dd > summary::marker {
   display: none;
+  content: none;
 }
 
 .ch-dd > summary::after {
@@ -7031,7 +7055,7 @@ body.rv-open {
 
 .ch-dd-menu {
   position: fixed;
-  z-index: 80;
+  z-index: 400;
   top: 0;
   left: 0;
   min-width: 180px;
@@ -8153,7 +8177,7 @@ table.rp-mine-table tbody tr {
 
 .tm-map-bar {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 1.6em;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 6px;
 }
@@ -8225,9 +8249,40 @@ table.rp-mine-table tbody tr {
 }
 
 .tm-map-bar-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
   color: var(--muted);
   font-size: 10px;
   white-space: nowrap;
+}
+
+.pf-delta {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  color: inherit;
+  line-height: 0;
+  vertical-align: middle;
+}
+
+.pf-delta-icon {
+  display: block;
+  width: 14px;
+  height: 14px;
+}
+
+.pf-delta.is-up {
+  color: #6fcf97;
+}
+
+.pf-delta.is-down {
+  color: var(--rv-t, #e60611);
+}
+
+.tm-map-bar-label .pf-delta-icon {
+  width: 12px;
+  height: 12px;
 }
 
 .tm-maps-list {
@@ -12214,6 +12269,14 @@ a.ua-link:visited {
   background-position: right 10px center;
   background-size: 10px 6px;
   cursor: pointer;
+}
+
+/* Details summaries already draw a ::after caret. The select chevron above
+   would stack a second triangle on Rank / round / chart dropdowns. */
+:is(.rp-filters, .an-sidebar, .st-filters, .pf-filters, .ch-side)
+  :is(.st-rank-dd, .st-round-multi, .ch-dd)
+  > summary.site-select {
+  background-image: none;
 }
 
 :is(

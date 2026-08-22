@@ -14,6 +14,17 @@
 import { MAPS } from '../shared/roundId.js';
 import { f2, pct, signed } from './performanceMath.js';
 
+const EMPTY = '<span class="pf-empty">––</span>';
+const fmtRating = (n) => (Number.isFinite(n) ? f2(n) : EMPTY);
+const fmtSwing = (n) => (Number.isFinite(n) ? signed(n) : EMPTY);
+const fmtWr = (n) => (Number.isFinite(n) ? pct(n) : EMPTY);
+
+function ratingSortKey(row) {
+  if (Number.isFinite(row?.ran?.rating)) return row.ran.rating;
+  if (Number.isFinite(row?.faced?.rating)) return row.faced.rating;
+  return -Infinity;
+}
+
 const PLAY_ICON =
   '<svg class="pf-rt-play" viewBox="0 -960 960 960" aria-hidden="true">' +
   '<path d="M364.31-279.08v-401.84L679.39-480 364.31-279.08Z" /></svg>';
@@ -46,9 +57,9 @@ function laneCellsHtml(cell, split, esc) {
   const tip = cell.rounds ? `${cell.rounds} round${cell.rounds === 1 ? '' : 's'}` : '';
   const cls = [split ? 'pf-mt-split' : '', tip ? 'has-tip' : ''].filter(Boolean).join(' ');
   const attr = tip ? ` data-tip="${esc(tip)}"` : '';
-  return `<td class="${cls}"${attr}>${f2(cell.rating)}</td>
-    <td>${signed(cell.swing)}</td>
-    <td>${pct(cell.winrate)}</td>`;
+  return `<td class="${cls}"${attr}>${fmtRating(cell.rating)}</td>
+    <td>${fmtSwing(cell.swing)}</td>
+    <td>${fmtWr(cell.winrate)}</td>`;
 }
 
 /**
@@ -61,7 +72,10 @@ function laneCellsHtml(cell, split, esc) {
  */
 export function mapRoundTableHtml(rows, side, height, esc) {
   const isCt = side === 'CT';
-  const body = rows
+  const sorted = [...(rows || [])].sort(
+    (a, b) => ratingSortKey(b) - ratingSortKey(a) || String(a.label || '').localeCompare(String(b.label || ''))
+  );
+  const body = sorted
     .map(
       (r) => `<tr>
         <td class="left pf-mt-name">${roundNameHtml(r, esc)}</td>
@@ -70,7 +84,7 @@ export function mapRoundTableHtml(rows, side, height, esc) {
       </tr>`
     )
     .join('');
-  const pad = Math.max(0, height - rows.length);
+  const pad = Math.max(0, height - sorted.length);
   const filler = Array.from({ length: pad })
     .map(
       () =>

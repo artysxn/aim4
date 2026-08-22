@@ -88,6 +88,8 @@ assert.ok(html.includes('data-rank="rankOwn"'));
 assert.ok(html.includes('placeholder="Own"'));
 assert.ok(html.includes('placeholder="Enemy"'));
 assert.ok(html.includes('30-100 vs 1-29'));
+assert.ok(html.includes('mb-icon'), 'charts icon sits inside Rank');
+assert.ok(html.includes('mb-label'), 'label is separate from the icon');
 
 {
   const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), '../data/standings');

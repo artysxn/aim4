@@ -2071,6 +2071,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
 
     filtersEl.querySelectorAll('details.st-rank-dd').forEach((details) => {
       details.addEventListener('toggle', () => {
+        details.closest('.rp-filter-group')?.classList.toggle('menu-open', details.open);
         if (!details.open) return;
         placeRankMenu(details);
         requestAnimationFrame(() => placeRankMenu(details));
