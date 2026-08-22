@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -8,18 +8,21 @@ import {
   parseStandingsMarkdown,
   resolveDemoTeams
 } from './teamStandings.js';
+import { latestStandingFiles } from './vrsStandings.js';
 
 const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), '../data/standings');
+const bundled = latestStandingFiles(readdirSync(dir).map((name) => ({ name })));
+assert.ok(bundled.europe && bundled.americas && bundled.asia, 'bundled snapshots present');
 const europe = parseStandingsMarkdown(
-  readFileSync(path.join(dir, 'standings_europe_2026_07_06.md'), 'utf8'),
+  readFileSync(path.join(dir, bundled.europe.file), 'utf8'),
   'europe'
 );
 const americas = parseStandingsMarkdown(
-  readFileSync(path.join(dir, 'standings_americas_2026_07_06.md'), 'utf8'),
+  readFileSync(path.join(dir, bundled.americas.file), 'utf8'),
   'americas'
 );
 const asia = parseStandingsMarkdown(
-  readFileSync(path.join(dir, 'standings_asia_2026_07_06.md'), 'utf8'),
+  readFileSync(path.join(dir, bundled.asia.file), 'utf8'),
   'asia'
 );
 const all = [...europe, ...americas, ...asia];

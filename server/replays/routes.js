@@ -1164,6 +1164,17 @@ export async function handleReplayRequest(req, res, url) {
     return true;
   }
 
+  if (req.method === 'GET' && p === '/api/replays/vrs') {
+    const { loadGlobalRanks, loadedStandingSnapshot } = await import('./teamStandingsDb.js');
+    const table = loadGlobalRanks();
+    json(res, 200, {
+      asOf: loadedStandingSnapshot(),
+      size: table.size,
+      teams: table.list
+    });
+    return true;
+  }
+
   // ---- aggregate -----------------------------------------------------------
   // The player table for a filter, computed here rather than in the browser.
   //
@@ -1217,6 +1228,8 @@ export async function handleReplayRequest(req, res, url) {
       result: arg('result') || '',
       advantage: arg('advantage') || '',
       teamName: arg('teamName') || '',
+      rankOwn: arg('rankOwn') || '',
+      rankOpp: arg('rankOpp') || '',
       dateFrom: arg('from') || '',
       dateTo: arg('to') || '',
       files: argList('files') || []

@@ -1,7 +1,11 @@
 // ---------------------------------------------------------------------------
 // replays/teamStandingsDb.js
-// Loads Valve regional standings markdown from the repo and resolves demo
-// team names from player handles before ingest / on package import.
+// Loads Valve regional standings markdown and resolves demo team names from
+// player handles before ingest / on package import.
+//
+// Newest snapshot wins. The repo ships a bundled copy; a daily GitHub scan
+// (vrsSync.js) writes newer live/<year> tables into AIM4_STANDINGS_DIR (or
+// <replay root>/standings) when Valve publishes a new date.
 // ---------------------------------------------------------------------------
 
 import fs from 'node:fs';
@@ -12,31 +16,94 @@ import {
   parseStandingsMarkdown,
   resolveDemoTeams
 } from '../../src/replays/shared/teamStandings.js';
+import {
+  VRS_REGIONS,
+  compareStandingDates,
+  parseStandingFileName
+} from '../../src/replays/shared/vrsStandings.js';
+import { buildGlobalRanks } from '../../src/replays/shared/vrsRanks.js';
 
-const STANDINGS_DIR = path.join(
-  path.dirname(fileURLToPath(import.meta.url)),
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+export const BUNDLED_STANDINGS_DIR = path.join(
+  __dirname,
   '../../src/replays/data/standings'
 );
 
-const STANDINGS_FILES = [
-  { file: 'standings_europe_2026_07_06.md', region: 'europe' },
-  { file: 'standings_americas_2026_07_06.md', region: 'americas' },
-  { file: 'standings_asia_2026_07_06.md', region: 'asia' }
-];
+export function bundledStandingsDir() {
+  return process.env.AIM4_STANDINGS_BUNDLED_DIR || BUNDLED_STANDINGS_DIR;
+}
+
+export function liveStandingsDir() {
+  if (process.env.AIM4_STANDINGS_DIR) return process.env.AIM4_STANDINGS_DIR;
+  const replayRoot =
+    process.env.AIM4_REPLAY_DIR || path.join(__dirname, '..', 'data', 'replays');
+  return path.join(replayRoot, 'standings');
+}
+
+/**
+ * Newest standings file per region, live copy beating bundled on a date tie.
+ * @param {string[]} [dirs]
+ * @returns {Record<string, { region: string, date: string, year: string, file: string, dir: string, path: string }>}
+ */
+export function discoverStandingFiles(dirs) {
+  const search = dirs || [bundledStandingsDir(), liveStandingsDir()];
+  /** @type {Record<string, { region: string, date: string, year: string, file: string, dir: string, path: string }>} */
+  const best = {};
+  for (const dir of search) {
+    let names;
+    try {
+      names = fs.readdirSync(dir);
+    } catch {
+      continue;
+    }
+    for (const name of names) {
+      const parsed = parseStandingFileName(name);
+      if (!parsed) continue;
+      const next = { ...parsed, dir, path: path.join(dir, name) };
+      const prev = best[parsed.region];
+      if (!prev) {
+        best[parsed.region] = next;
+        continue;
+      }
+      const cmp = compareStandingDates(parsed.date, prev.date);
+      if (cmp > 0 || (cmp === 0 && dir === liveStandingsDir())) {
+        best[parsed.region] = next;
+      }
+    }
+  }
+  return best;
+}
+
+/** Date stamp currently on disk per region, or null if that region is missing. */
+export function loadedStandingSnapshot() {
+  const files = discoverStandingFiles();
+  /** @type {Record<string, string | null>} */
+  const out = {};
+  for (const region of VRS_REGIONS) out[region] = files[region]?.date || null;
+  return out;
+}
 
 /** @type {import('../../src/replays/shared/teamStandings.js').StandingTeam[] | null} */
 let cached = null;
+/** @type {ReturnType<typeof buildGlobalRanks> | null} */
+let rankCache = null;
 
 export function loadStandingTeams() {
   if (cached) return cached;
   const teams = [];
-  for (const { file, region } of STANDINGS_FILES) {
-    const full = path.join(STANDINGS_DIR, file);
+  const files = discoverStandingFiles();
+  for (const region of VRS_REGIONS) {
+    const hit = files[region];
+    if (!hit) {
+      console.warn(`[standings] no ${region} snapshot on disk`);
+      continue;
+    }
     try {
-      const md = fs.readFileSync(full, 'utf8');
+      const md = fs.readFileSync(hit.path, 'utf8');
       teams.push(...parseStandingsMarkdown(md, region));
     } catch (err) {
-      console.warn(`[standings] could not load ${file}:`, err?.message || err);
+      console.warn(`[standings] could not load ${hit.file}:`, err?.message || err);
     }
   }
   cached = teams;
@@ -46,6 +113,14 @@ export function loadStandingTeams() {
 /** Test helper — drop the in-memory table so the next load re-reads disk. */
 export function forgetStandingTeams() {
   cached = null;
+  rankCache = null;
+}
+
+/** Three regions pooled by points. Rank 1 is worldwide, not per-region. */
+export function loadGlobalRanks() {
+  if (rankCache) return rankCache;
+  rankCache = buildGlobalRanks(loadStandingTeams());
+  return rankCache;
 }
 
 /**

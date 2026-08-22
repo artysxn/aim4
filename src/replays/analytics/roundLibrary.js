@@ -9,7 +9,9 @@
 // first definition to match wins, which is why the list is written strictest
 // first.
 //
-// Every definition here is the map's own vocabulary. Region names resolve
+// Every definition here is the map's own vocabulary, plus four universal
+// types (All A/B hits, A/B Afterplant on T, A/B Retake on CT) that read
+// bombsites and key zones rather than painted names. Region names resolve
 // against the painted hierarchy by name (position, zone or area alike, see
 // createRegionIndex), and utility names resolve against the stored utility
 // spots. A map with nothing painted classifies every round as Default, which
@@ -149,6 +151,126 @@ function stayedHome(f, from, to, min, opts) {
     if (f.countIn([...T_YARD, ...SILO], s.sec) > 0) return false;
   }
   return sawWindow;
+}
+
+/**
+ * Universal A/B hit and retake/afterplant. These read bombsite polygons and
+ * key zones (a1-a4 / b1-b4), never painted region names, so they run on every
+ * map that has Sites drawn.
+ */
+function tAndCt(f) {
+  return {
+    t: f.side === 'T' ? f : f.enemy,
+    ct: f.side === 'CT' ? f : f.enemy
+  };
+}
+
+function siteStackAt(f, letter, sec) {
+  const { t, ct } = tAndCt(f);
+  if (!t || !ct) return false;
+  if ((t.aliveCount?.(sec) ?? 0) < 2 || (ct.aliveCount?.(sec) ?? 0) < 2) return false;
+  return (
+    (t.playersInSite?.(letter, sec)?.size || 0) >= 2 &&
+    (ct.playersInSite?.(letter, sec)?.size || 0) >= 2
+  );
+}
+
+function firstSiteStack(f, letter) {
+  for (const s of f.series || []) {
+    if (siteStackAt(f, letter, s.sec)) return s.sec;
+  }
+  return null;
+}
+
+function matchSiteHit(letter) {
+  return (f) => {
+    const stacked = firstSiteStack(f, letter);
+    if (stacked === null) return null;
+    const kills = f.killsInSite?.(letter) || [];
+    if (kills.length >= 3) {
+      return { marks: { Stacked: stacked, Fight: kills[2].sec } };
+    }
+    if (f.plantSite === letter && Number.isFinite(f.plantSec)) {
+      const before = kills.filter((k) => k.sec < f.plantSec);
+      if (before.length >= 2) {
+        return { marks: { Stacked: stacked, Plant: f.plantSec } };
+      }
+    }
+    return null;
+  };
+}
+
+function matchSiteRetake(letter) {
+  return (f) => {
+    if (f.plantSite !== letter || !Number.isFinite(f.plantSec)) return null;
+    const { t, ct } = tAndCt(f);
+    const at = f.plantSec;
+    if ((ct?.aliveCount?.(at) ?? 0) < 2) return null;
+    if ((t?.aliveCount?.(at) ?? 0) < 1) return null;
+    const kills = (f.killsInSite?.(letter, { from: at, to: f.lastSec }) || []).filter(
+      (k) => k.sec >= at
+    );
+    if (!kills.length) return null;
+    return { marks: { Plant: at, Contact: kills[0].sec } };
+  };
+}
+
+const UNIVERSAL_T = [
+  {
+    key: 'all-a-hits',
+    label: 'All A hits',
+    desc: '2+ Ts and 2+ CTs alive, 2+ of each on the A site or a1-a4, and either 3+ kills in that ground or 2+ kills there before an A plant.',
+    match: matchSiteHit('a')
+  },
+  {
+    key: 'all-b-hits',
+    label: 'All B hits',
+    desc: '2+ Ts and 2+ CTs alive, 2+ of each on the B site or b1-b4, and either 3+ kills in that ground or 2+ kills there before a B plant.',
+    match: matchSiteHit('b')
+  },
+  {
+    key: 'a-afterplant',
+    label: 'A Afterplant',
+    desc: 'Bomb down on A. 2+ CTs and 1+ T still alive. A kill in the A site or a1-a4 before the round is decided.',
+    match: matchSiteRetake('a')
+  },
+  {
+    key: 'b-afterplant',
+    label: 'B Afterplant',
+    desc: 'Bomb down on B. 2+ CTs and 1+ T still alive. A kill in the B site or b1-b4 before the round is decided.',
+    match: matchSiteRetake('b')
+  }
+];
+
+const UNIVERSAL_CT = [
+  {
+    key: 'all-a-hits',
+    label: 'All A hits',
+    desc: '2+ Ts and 2+ CTs alive, 2+ of each on the A site or a1-a4, and either 3+ kills in that ground or 2+ kills there before an A plant.',
+    match: matchSiteHit('a')
+  },
+  {
+    key: 'all-b-hits',
+    label: 'All B hits',
+    desc: '2+ Ts and 2+ CTs alive, 2+ of each on the B site or b1-b4, and either 3+ kills in that ground or 2+ kills there before a B plant.',
+    match: matchSiteHit('b')
+  },
+  {
+    key: 'a-retake',
+    label: 'A Retake',
+    desc: 'Bomb down on A. 2+ CTs and 1+ T still alive. A kill in the A site or a1-a4 before the round is decided.',
+    match: matchSiteRetake('a')
+  },
+  {
+    key: 'b-retake',
+    label: 'B Retake',
+    desc: 'Bomb down on B. 2+ CTs and 1+ T still alive. A kill in the B site or b1-b4 before the round is decided.',
+    match: matchSiteRetake('b')
+  }
+];
+
+function withUniversal(t, ct) {
+  return { T: [...UNIVERSAL_T, ...t], CT: [...UNIVERSAL_CT, ...ct] };
 }
 
 /**
@@ -3841,13 +3963,13 @@ export const DEFAULT_TYPE = { key: 'default', label: 'Default / Other' };
 
 /** @type {Record<string, { T: RoundTypeDef[], CT: RoundTypeDef[] }>} */
 export const ROUND_LIBRARY = {
-  NUK: { T: NUK_T, CT: NUK_CT },
-  INF: { T: INF_T, CT: INF_CT },
-  DD2: { T: DD2_T, CT: DD2_CT },
-  ANU: { T: ANU_T, CT: ANU_CT },
-  ANC: { T: ANC_T, CT: ANC_CT },
-  MIR: { T: MIR_T, CT: MIR_CT },
-  CCH: { T: CCH_T, CT: CCH_CT }
+  NUK: withUniversal(NUK_T, NUK_CT),
+  INF: withUniversal(INF_T, INF_CT),
+  DD2: withUniversal(DD2_T, DD2_CT),
+  ANU: withUniversal(ANU_T, ANU_CT),
+  ANC: withUniversal(ANC_T, ANC_CT),
+  MIR: withUniversal(MIR_T, MIR_CT),
+  CCH: withUniversal(CCH_T, CCH_CT)
 };
 
 export function hasRoundLibrary(mapCode) {

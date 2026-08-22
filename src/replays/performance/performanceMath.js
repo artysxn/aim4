@@ -31,6 +31,11 @@ export const LAST_MATCH_OPTS = [
 
 const PEER_MIN_ROUNDS = 20;
 
+/** Two decimals, or an em dash. The Performance page's number formats. */
+export const f2 = (n) => (Number.isFinite(n) ? n.toFixed(2) : '\u2014');
+export const pct = (n) => (Number.isFinite(n) ? `${Math.round(n)}%` : '\u2014');
+export const signed = (n) => (Number.isFinite(n) ? `${n > 0 ? '+' : ''}${n.toFixed(2)}` : '\u2014');
+
 export function stripAt(name) {
   return String(name || '')
     .trim()
@@ -91,7 +96,9 @@ export function statsFilterFrom(ui) {
     side: ui.side || '',
     econ: Number.isFinite(econ) ? econ : null,
     dateFrom: ui.dateFrom || '',
-    dateTo: ui.dateTo || ''
+    dateTo: ui.dateTo || '',
+    rankOwn: ui.rankOwn || '',
+    rankOpp: ui.rankOpp || ''
   };
 }
 

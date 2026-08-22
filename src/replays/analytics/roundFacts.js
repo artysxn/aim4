@@ -396,6 +396,28 @@ export function buildRoundFacts({ meta, track, network, utilities = [], mapCode 
   }
   contacts.sort((a, b) => a.sec - b.sec);
 
+  const bombEv = (meta.events?.bomb || []).find((b) => b?.type === 'planted');
+  const plantTick = Number.isFinite(meta.plantTick)
+    ? meta.plantTick
+    : Number.isFinite(bombEv?.tick)
+      ? bombEv.tick
+      : null;
+  const plantSec = plantTick != null ? secOf(plantTick) : null;
+  let plantSite = null;
+  if (plantSec != null) {
+    const px = Number(bombEv?.x ?? bombEv?.at?.x);
+    const py = Number(bombEv?.y ?? bombEv?.at?.y);
+    const pz = Number(bombEv?.z ?? bombEv?.at?.z) || 0;
+    if (Number.isFinite(px) && Number.isFinite(py)) {
+      if (regions.insideSite('a', px, py, pz)) plantSite = 'a';
+      else if (regions.insideSite('b', px, py, pz)) plantSite = 'b';
+    }
+    if (!plantSite) {
+      const letter = String(bombEv?.site || '').toLowerCase();
+      if (letter === 'a' || letter === 'b') plantSite = letter;
+    }
+  }
+
   /**
    * Where a player stood at a moment.
    *
@@ -637,6 +659,27 @@ export function buildRoundFacts({ meta, track, network, utilities = [], mapCode 
       return out;
     }
 
+    /**
+     * Fatal contacts whose victim stood on that bombsite or its key zones.
+     * Both sides share the same kill list; a B hit counts every death there,
+     * not only the ones this side scored.
+     */
+    function killsInSite(letter, { from = 0, to = lastSec } = {}) {
+      const out = [];
+      const seen = new Set();
+      for (const c of contacts) {
+        if (!c.kill) continue;
+        if (c.sec < from || c.sec > to) continue;
+        const at = pointAt(c.victim, c.sec);
+        if (!at || !regions.insideSite(letter, at.x, at.y, at.z)) continue;
+        const key = `${c.victim}@${c.sec}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push({ sec: c.sec, victim: c.victim, attacker: c.attacker });
+      }
+      return out;
+    }
+
     /** True when this player had an AWP out at `sec`. */
     function heldAwp(id, sec) {
       return ptsAt(sec).some((p) => p.id === id && p.awp);
@@ -692,6 +735,9 @@ export function buildRoundFacts({ meta, track, network, utilities = [], mapCode 
       nadesNamed,
       nadesAtSpot,
       fights,
+      killsInSite,
+      plantSec,
+      plantSite,
       awper,
       heldAwp,
       deathSec,

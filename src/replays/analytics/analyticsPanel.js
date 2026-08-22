@@ -10,9 +10,21 @@
 //   Charts   scatter builder over the stats index (chartsPanel).
 // ---------------------------------------------------------------------------
 
-import { consumeCapability, formatApiError } from '../api.js';
+import { consumeCapability, fetchVrsRanks, formatApiError } from '../api.js';
 import { getStatsPayload, peekStatsCache, statsCacheGeneration } from '../statsCache.js';
-import { fetchRoster, fetchAggregateForRounds } from '../api.js';
+import { fetchRoster, fetchAggregateForRounds, fetchZones } from '../api.js';
+import { TickTrack } from '../tickStore.js';
+import { loadRadar } from '../viewer/radarRenderer.js';
+import { hasControlField, prepareControlField } from '../zones/zoneOverlay.js';
+import {
+  MAP_CONTROL_MAX_SECONDS,
+  cellsInShape,
+  controlOfCells,
+  controlShapes,
+  controlTeamRows,
+  controlWindow,
+  controlWinrates
+} from './zoneControl.js';
 import { demosForMap, rosterMaps } from '../shared/rosterQuery.js';
 import { CAP } from '../../../shared/entitlements/keys.js';
 import { ECONOMIES, MAPS, economyLabel } from '../shared/roundId.js';
@@ -34,7 +46,8 @@ import {
   loadShapes,
   saveShapes,
   newShapeId,
-  sanitizeTimeWindow
+  sanitizeTimeWindow,
+  shapeUtilityKeys
 } from './shapeFilters.js';
 import { createRangeSlider } from '../../lib/rangeSlider.js';
 import { iconImgHtml } from '../viewer/equipmentIcons.js';
@@ -50,6 +63,7 @@ import { renderUpgradeError } from '../../site/upgradeGate.js';
 import { createSavedViews } from '../savedViews.js';
 import { createAntistratPanel } from './antistratPanel.js';
 import { createChartsPanel } from '../charts/chartsPanel.js';
+import { placeRankMenu, rankFilterHtml, syncRankSummary } from '../shared/vrsRanks.js';
 import sideCharts from '../../icons/sideicons/sideicon_charts.svg?raw';
 
 const PHASE_OPTS = [
@@ -59,10 +73,10 @@ const PHASE_OPTS = [
 ];
 
 const UTIL_ICONS = [
-  { key: 'smoke', weapon: 'smokegrenade', title: 'Smokes' },
-  { key: 'molotov', weapon: 'molotov', title: 'Molotovs' },
-  { key: 'flash', weapon: 'flashbang', title: 'Flashes' },
-  { key: 'he', weapon: 'hegrenade', title: 'HE' }
+  { key: 'smoke', weapon: 'smokegrenade', title: 'Smokes', label: 'Smoke' },
+  { key: 'molotov', weapon: 'molotov', title: 'Molotovs', label: 'Molotov' },
+  { key: 'flash', weapon: 'flashbang', title: 'Flashes', label: 'Flash' },
+  { key: 'he', weapon: 'hegrenade', title: 'HE', label: 'HE' }
 ];
 
 function defaultUtility() {
@@ -272,8 +286,19 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     phases: new Set(),
     /** Utility types included when searching grenades (analyzer util bar). */
     utilityVisible: defaultUtility(),
+    /**
+     * Map-control drill-down. `controlSide` is the bucket whose teams the
+     * leaderboard is showing ('' = the ordinary leaderboard); `controlTeam` is
+     * one team inside it, which narrows the rounds list. Both are cleared
+     * whenever the search itself changes, because they name a slice of a
+     * result that no longer exists.
+     */
+    controlSide: '',
+    controlTeam: '',
     /** Global round-clock window for when the searched thing happens. */
     timeWindow: defaultTimeWindow(),
+    rankOwn: '',
+    rankOpp: '',
     /** @type {Array<object>} */
     shapes: [],
     /** @type {'all'|'any'|''} */
@@ -336,6 +361,8 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       phases: [...state.phases],
       utility: { ...state.utilityVisible },
       timeWindow: sanitizeTimeWindow(state.timeWindow),
+      rankOwn: state.rankOwn || '',
+      rankOpp: state.rankOpp || '',
       shapes: JSON.parse(JSON.stringify(state.shapes || [])),
       shapeMatch: state.shapeMatch
     }),
@@ -361,6 +388,8 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       }
       const tw = sanitizeTimeWindow(spec.timeWindow);
       state.timeWindow = tw || defaultTimeWindow();
+      state.rankOwn = String(spec.rankOwn || '');
+      state.rankOpp = String(spec.rankOpp || '');
       state.shapes = Array.isArray(spec.shapes) ? spec.shapes : [];
       state.shapeMatch = spec.shapeMatch === 'any' ? 'any' : 'all';
       render();
@@ -396,6 +425,8 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       phases: state.phases,
       utility: { ...state.utilityVisible },
       timeWindow: sanitizeTimeWindow(state.timeWindow),
+      rankOwn: state.rankOwn || '',
+      rankOpp: state.rankOpp || '',
       shapes: state.shapes,
       shapeMatch: state.shapeMatch === 'any' ? 'any' : 'all'
     };
@@ -461,7 +492,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
   }
 
   function closeRoundMenus(except = null) {
-    for (const d of sidebarEl.querySelectorAll('details.an-round-multi[open]')) {
+    for (const d of sidebarEl.querySelectorAll('details.an-round-multi[open], details.st-rank-dd[open]')) {
       if (except && d === except) continue;
       d.removeAttribute('open');
     }
@@ -469,6 +500,22 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
 
   function featureLabel(key) {
     return SHAPE_FEATURES.find((f) => f.key === key)?.label || key;
+  }
+
+  /**
+   * What a drawn selection is called in the list.
+   *
+   * A grenade selection carries the utility types it was drawn with, so it
+   * says which — "Smoke in rect 1", "Molotov + HE in rect 2" — rather than the
+   * generic "Grenade in", which was the only honest name back when all of them
+   * read the same global switches.
+   */
+  function shapeLabel(s, i) {
+    const keys = s.feature === 'grenade_in' ? shapeUtilityKeys(s) : null;
+    const what = keys
+      ? `${keys.map((k) => UTIL_ICONS.find((u) => u.key === k)?.label || k).join(' + ')} in`
+      : featureLabel(s.feature);
+    return `${what} ${s.geometry?.type === 'poly' ? 'poly' : 'rect'} ${i + 1}`;
   }
 
   function slotsLeft() {
@@ -669,6 +716,14 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       </div>
 
       <div class="an-field">
+        ${rankFilterHtml({
+          own: state.rankOwn,
+          opp: state.rankOpp,
+          summaryClass: 'site-select an-select st-rank-summary'
+        })}
+      </div>
+
+      <div class="an-field">
         <div class="an-subject" id="an-subject-typeahead">
           ${
             state.playerIds.length
@@ -819,11 +874,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
             state.shapes.length
               ? state.shapes
                   .map((s, i) => {
-                    const label =
-                      s.name ||
-                      `${featureLabel(s.feature)} ${s.geometry?.type === 'poly' ? 'poly' : 'rect'} ${
-                        i + 1
-                      }`;
+                    const label = s.name || shapeLabel(s, i);
                     const win = windowLabel(s);
                     const editing = editingWindow === s.id;
                     return `<div class="an-shape-row${s.enabled === false ? ' off' : ''}">
@@ -900,6 +951,19 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     paintTimeRead();
   }
 
+  /**
+   * The window a freshly drawn control selection gets: the global clock window
+   * when it is already short enough to be a moment, otherwise its last twenty
+   * seconds, otherwise the 1:20–1:00 stretch most calls are judged on.
+   */
+  function defaultControlWindow() {
+    const g = sanitizeTimeWindow(state.timeWindow);
+    if (g && g.to - g.from <= MAP_CONTROL_MAX_SECONDS) return { from: g.from, to: g.to };
+    if (g) return { from: g.to - MAP_CONTROL_MAX_SECONDS, to: g.to };
+    const to = SHAPE_WINDOW_MAX_SECONDS - 60;
+    return { from: to - MAP_CONTROL_MAX_SECONDS, to };
+  }
+
   /** Mount the two-handle clock slider for the shape being edited, if any. */
   function mountWindowSlider() {
     const host = sidebarEl.querySelector('.an-shape-window');
@@ -911,6 +975,11 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     const paintLabel = (from, to) => {
       if (label) label.textContent = `${clockLeft(from)} to ${clockLeft(to)}`;
     };
+    /** Which handle moved, deduced by comparing against the last report. */
+    let lastSpan = {
+      from: shape.window?.from ?? 0,
+      to: shape.window?.to ?? SHAPE_WINDOW_MAX_SECONDS
+    };
     const slider = createRangeSlider({
       min: 0,
       max: SHAPE_WINDOW_MAX_SECONDS,
@@ -919,11 +988,26 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       step: 1,
       label: 'Round clock window',
       onChange: (from, to) => {
+        // A control selection may not span more than twenty seconds: the
+        // handles are held apart rather than allowed into a state the search
+        // then refuses. The handle that moved keeps its place; the other is
+        // pulled along.
+        if (shape.feature === 'map_control' && to - from > MAP_CONTROL_MAX_SECONDS) {
+          if (from !== lastSpan.from) to = from + MAP_CONTROL_MAX_SECONDS;
+          else from = to - MAP_CONTROL_MAX_SECONDS;
+          from = Math.max(0, from);
+          to = Math.min(SHAPE_WINDOW_MAX_SECONDS, to);
+          slider.set(from, to);
+        }
+        lastSpan = { from, to };
         paintLabel(from, to);
         // Full span means "no window": the stored shape stays clean and the
-        // chip goes back to the plain clock.
-        if (from <= 0 && to >= SHAPE_WINDOW_MAX_SECONDS) delete shape.window;
-        else shape.window = { from, to };
+        // chip goes back to the plain clock. Control always keeps one.
+        if (shape.feature !== 'map_control' && from <= 0 && to >= SHAPE_WINDOW_MAX_SECONDS) {
+          delete shape.window;
+        } else {
+          shape.window = { from, to };
+        }
         persistShapes();
         scheduleWindowRerender();
       }
@@ -1065,11 +1149,16 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     </section>`;
   }
 
-  function renderRounds(agg) {
+  /**
+   * @param {object} agg
+   * @param {Set<string>|null} [only]  map-control drill-down, when one is open
+   */
+  function renderRounds(agg, only = null) {
     /** @type {Map<string, { file: string, demoId: string, round: number, phases: Set<string> }>} */
     const byFile = new Map();
     if (agg.windows?.length) {
       for (const w of agg.windows) {
+        if (only && !only.has(w.file)) continue;
         let g = byFile.get(w.file);
         if (!g) {
           g = { file: w.file, demoId: w.demoId, round: w.round, phases: new Set() };
@@ -1079,6 +1168,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       }
     } else {
       for (const file of agg.files || []) {
+        if (only && !only.has(file)) continue;
         byFile.set(file, { file, demoId: '', round: 0, phases: new Set() });
       }
       // Enrich round numbers from payload when anyone-mode has no windows.
@@ -1144,14 +1234,62 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
         wrap,
         onShapeComplete: (geometry) => {
           rememberRadarView();
+          const feature =
+            state.drawFeature && state.drawFeature !== 'any' ? state.drawFeature : 'player_in';
           state.shapes.push({
             id: newShapeId(),
             map: state.map,
             name: '',
-            feature: state.drawFeature && state.drawFeature !== 'any' ? state.drawFeature : 'player_in',
+            feature,
             geometry,
+            // The utility buttons are what you arm the next selection with, not
+            // a global switch every grenade selection re-reads at search time.
+            // Taking the copy here is what lets "molotov in A, smoke in B" be
+            // one search instead of two contradictory ones.
+            ...(feature === 'grenade_in' ? { utility: { ...state.utilityVisible } } : {}),
+            // Control has to be asked about a moment, so it is born with one
+            // rather than drawn and then rejected. The global clock if it is
+            // already short enough, otherwise its last 20 seconds.
+            ...(feature === 'map_control' ? { window: defaultControlWindow() } : {}),
             enabled: true
           });
+          persistShapes();
+          render();
+        },
+        // What the canvas needs from the panel to make a selection editable in
+        // place: its name, and somewhere to put the two edits.
+        shapeLabel: (s, i) => {
+          const base = s.name || shapeLabel(s, i);
+          const win = windowLabel(s);
+          const head = win ? `${base} · ${win}` : base;
+          // A control selection reads out its answer where the question was
+          // asked: hover the ground and see what holding it is worth.
+          const sum = s.feature === 'map_control' ? lastResults?.controlSummary : null;
+          if (!sum) return head;
+          const line = (side) => ({
+            text: sum[side].rounds
+              ? `${side} control: ${fmt(sum[side].winrate, 1)}% winrate (${sum[
+                  side
+                ].rounds.toLocaleString()} rounds)`
+              : `${side} control: no rounds`,
+            color: sideColor(side)
+          });
+          return [{ text: head }, line('T'), line('CT')];
+        },
+        onShapeEdit: (id, geometry) => {
+          const s = state.shapes.find((x) => x.id === id);
+          if (!s) return;
+          s.geometry = geometry;
+          rememberRadarView();
+          persistShapes();
+          // A reshaped selection is a different question, so the search re-runs
+          // — once, on pointer-up, not per pixel of the drag.
+          render();
+        },
+        onShapeDelete: (id) => {
+          if (editingWindow === id) editingWindow = '';
+          state.shapes = state.shapes.filter((x) => x.id !== id);
+          rememberRadarView();
           persistShapes();
           render();
         }
@@ -1168,6 +1306,218 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     ctl.setData(state.map, state.shapes, state.drawMode).catch(() => {});
   }
 
+  /**
+   * The side colours, read off the stylesheet rather than restated here: T red
+   * and CT blue are already what the killfeed, the duel feed and the round list
+   * use, and a second copy in JS is a second thing to forget to change.
+   */
+  function sideColor(side) {
+    const name = side === 'CT' ? '--rv-ct' : '--rv-t';
+    const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    return v || (side === 'CT' ? '#5b9fd4' : '#e60611');
+  }
+
+  // ---- map control ---------------------------------------------------------
+  //
+  // Possession needs two things the rest of the finder does not: the map's zone
+  // network and its radar image, from which the walkable cell lattice is baked.
+  // Both are per-map and cached, so a search pays for them once.
+
+  /** @type {object | null} */
+  let controlNetwork = null;
+  let controlNetworkMap = '';
+  /** @type {Promise<object|null> | null} */
+  let controlNetworkLoad = null;
+
+  async function ensureControlField(map) {
+    if (!map) return null;
+    if (controlNetworkMap === map && controlNetworkLoad) return controlNetworkLoad;
+    controlNetworkMap = map;
+    controlNetwork = null;
+    controlNetworkLoad = (async () => {
+      try {
+        const [network, image] = await Promise.all([fetchZones(map), loadRadar(map)]);
+        prepareControlField(network, map, image);
+        controlNetwork = hasControlField(network) ? network : null;
+      } catch {
+        controlNetwork = null;
+      }
+      return controlNetwork;
+    })();
+    return controlNetworkLoad;
+  }
+
+  /**
+   * What each enabled control selection asks, ready to run per round: the cells
+   * it covers and the stretch of clock it covers them over.
+   *
+   * With more than one, a side has to hold ALL of them to count as holding the
+   * ground — "T control" of two boxes means the Ts had both, which is the only
+   * reading under which the win rate beside it means anything.
+   */
+  function controlPlanFor(network, shapes) {
+    const geom = network?._fieldGeom;
+    if (!geom) return [];
+    return controlShapes(shapes)
+      .map((shape) => ({
+        shape,
+        window: controlWindow(shape),
+        cells: cellsInShape(geom, shape.geometry)
+      }))
+      .filter((p) => p.window && p.cells.length);
+  }
+
+  /** The side holding every selection in the plan, for one round. */
+  function controlSideForPack(plan, network, pack) {
+    if (!pack?.meta || !pack?.ticks) return '';
+    let track;
+    try {
+      track = new TickTrack(pack.ticks);
+    } catch {
+      return '';
+    }
+    let side = '';
+    for (const p of plan) {
+      const got = controlOfCells({
+        meta: pack.meta,
+        track,
+        network,
+        cells: p.cells,
+        window: p.window
+      });
+      if (!got.side) return '';
+      if (!side) side = got.side;
+      else if (side !== got.side) return '';
+    }
+    return side;
+  }
+
+  /** Round rows for a set of files, and the demo each one came from. */
+  function rowsForFiles(files) {
+    const want = new Set(files || []);
+    const rows = new Map();
+    const demos = new Map();
+    for (const demo of payload?.demos || []) {
+      for (const row of demo.rounds || []) {
+        if (!row?.f || !want.has(row.f) || rows.has(row.f)) continue;
+        rows.set(row.f, row);
+        demos.set(row.f, demo);
+      }
+    }
+    return { rows, demos };
+  }
+
+  /**
+   * The control read-out: how the matched rounds split by who held the ground,
+   * and what each side's win rate was while holding it.
+   *
+   * Both rows are buttons. Reading "Ts win 60% here" is the first question;
+   * "which teams" is always the second, and it is one click rather than a new
+   * search.
+   */
+  function renderControlCard() {
+    const res = lastResults;
+    const sum = res?.controlSummary;
+    if (!sum) return '';
+    const plan = res.controlPlan || [];
+    const names = plan
+      .map((pl) => {
+        const i = state.shapes.indexOf(pl.shape);
+        const win = windowLabel(pl.shape);
+        return `${pl.shape.name || shapeLabel(pl.shape, i)}${win ? ` · ${win}` : ''}`;
+      })
+      .join(' + ');
+
+    const row = (side) => {
+      const b = sum[side];
+      const on = state.controlSide === side;
+      const pct = b.rounds ? `${fmt(b.winrate, 1)}%` : '—';
+      return `<button type="button" class="an-ctl-row${on ? ' active' : ''}" data-an-ctl-side="${side}"${
+        b.rounds ? '' : ' disabled'
+      }>
+        <span class="an-ctl-side">${side} control</span>
+        <span class="an-ctl-pct">${pct}</span>
+        <span class="an-ctl-sub">${b.wins.toLocaleString()} of ${b.rounds.toLocaleString()} rounds won</span>
+      </button>`;
+    };
+
+    return `<section class="an-card an-ctl">
+      <header class="an-card-head">
+        <h3 class="an-section-title">Map control <small>${escapeHtml(names)}</small></h3>
+        ${
+          state.controlSide
+            ? `<button type="button" class="btn btn-sm" data-an-ctl-side="">Clear</button>`
+            : ''
+        }
+      </header>
+      <div class="an-ctl-rows">${row('T')}${row('CT')}</div>
+      <p class="an-muted an-ctl-foot">${
+        sum.neither
+          ? `${sum.neither.toLocaleString()} of ${sum.total.toLocaleString()} rounds went to neither side.`
+          : `${sum.total.toLocaleString()} rounds.`
+      } Win rate is the holding side's own.</p>
+    </section>`;
+  }
+
+  /**
+   * Teams inside one control bucket. Players are not offered: the question
+   * "who wins when they hold this" is about a side, and a side is a team.
+   */
+  function renderControlTeams() {
+    const res = lastResults;
+    const rows = res?.controlTeams || [];
+    const side = state.controlSide;
+    const head = `<header class="an-card-head an-lb-head">
+        <h3 class="an-section-title">Teams holding it as <span class="an-ctl-side" style="--ctl: ${
+          side === 'CT' ? 'var(--rv-ct)' : 'var(--rv-t)'
+        }">${escapeHtml(side)}</span>
+          <small>${rows.length.toLocaleString()} team${rows.length === 1 ? '' : 's'}</small></h3>
+      </header>`;
+    if (!rows.length) {
+      return `<section class="an-card an-lb">${head}<p class="view-empty">No teams held it on that side.</p></section>`;
+    }
+    return `<section class="an-card an-lb">
+      ${head}
+      <div class="an-lb-scroll">
+        <table class="an-lb-table">
+          <thead>
+            <tr><th>#</th><th>Team</th><th>R</th><th>W</th><th>Round WR</th></tr>
+          </thead>
+          <tbody>
+            ${rows
+              .map(
+                (t, i) => `<tr class="an-lb-row an-ctl-team${
+                  state.controlTeam === t.key ? ' focus' : ''
+                }" data-an-ctl-team="${escapeHtml(t.key)}">
+                  <td>${i + 1}</td>
+                  <td class="an-lb-name">${escapeHtml(t.name)}</td>
+                  <td>${t.rounds}</td>
+                  <td>${t.wins}</td>
+                  <td>${fmt(t.winrate, 1)}%</td>
+                </tr>`
+              )
+              .join('')}
+          </tbody>
+        </table>
+      </div>
+    </section>`;
+  }
+
+  /** Files the rounds list should show once a control bucket is open. */
+  function controlOnlyFiles() {
+    const res = lastResults;
+    if (!res?.control || !state.controlSide) return null;
+    if (state.controlTeam) {
+      const team = (res.controlTeams || []).find((t) => t.key === state.controlTeam);
+      return new Set(team?.files || []);
+    }
+    const out = new Set();
+    for (const [file, side] of res.control) {
+      if (side === state.controlSide) out.add(file);
+    }
+    return out;
+  }
+
   /** Last computed results, so the Players | Teams switch repaints for free. */
   let lastResults = null;
 
@@ -1178,7 +1528,17 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
   /** Paint the right card and the rounds list under the left filters. */
   function paintResults() {
     if (!lastResults) return;
-    const { agg, lb, teamLb, roundCount, needsPh, lbError } = lastResults;
+    const { agg, lb, teamLb, roundCount, needsPh, lbError, controlNote } = lastResults;
+    // The team table for the open bucket, recomputed here rather than in the
+    // search: picking a side is a question about a result already in hand.
+    lastResults.controlTeams = state.controlSide
+      ? controlTeamRows(
+          lastResults.control,
+          lastResults.controlRows,
+          lastResults.controlDemos,
+          state.controlSide
+        )
+      : [];
     rememberRadarView();
     mainEl.innerHTML = `
       ${
@@ -1187,10 +1547,16 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
           : ''
       }
       ${lbError ? `<p class="an-warn">Could not build the leaderboard: ${escapeHtml(lbError)}</p>` : ''}
+      ${controlNote ? `<p class="an-warn">${escapeHtml(controlNote)}</p>` : ''}
       ${renderRadarCard()}
-      ${renderLeaderboard(lb, teamLb, state.playerIds, roundCount)}`;
+      ${renderControlCard()}
+      ${
+        state.controlSide
+          ? renderControlTeams()
+          : renderLeaderboard(lb, teamLb, state.playerIds, roundCount)
+      }`;
     const slot = sideRoundsEl();
-    if (slot) slot.innerHTML = renderRounds(agg);
+    if (slot) slot.innerHTML = renderRounds(agg, controlOnlyFiles());
     paintRadar();
   }
 
@@ -1226,6 +1592,9 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       return;
     }
     const token = ++renderToken;
+    // A drill-down names a slice of a result that is about to be replaced.
+    state.controlSide = '';
+    state.controlTeam = '';
     const hasShapes = state.shapes.some((s) => s.enabled !== false);
     // Always replace the empty-map prompt as soon as a map is chosen; otherwise
     // it sticks around for the whole aggregate await (or forever on error).
@@ -1240,6 +1609,39 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
 
     try {
       const filter = filterObj();
+
+      // Map control, if any selection asks for it. It filters nothing — it
+      // rides along on the packs the match is already opening and records who
+      // held the ground in each round, which is read out afterwards.
+      const wanted = controlShapes(state.shapes);
+      let controlNote = '';
+      let controlPlan = [];
+      /** @type {Map<string, string> | null} file → 'T' | 'CT' | '' */
+      let control = null;
+      if (wanted.length) {
+        const unwindowed = wanted.filter((sh) => !controlWindow(sh));
+        if (unwindowed.length) {
+          controlNote =
+            `Map control needs a stretch of the round clock of ${MAP_CONTROL_MAX_SECONDS} ` +
+            `seconds or less. Set one with the clock button on ` +
+            `${unwindowed.map((sh) => shapeLabel(sh, state.shapes.indexOf(sh))).join(', ')}.`;
+        } else {
+          setMatchingLabel(token, 'Loading map control…');
+          const network = await ensureControlField(state.map);
+          if (token !== renderToken) return;
+          controlPlan = controlPlanFor(network, state.shapes);
+          if (!network) {
+            controlNote =
+              'Map control needs this map’s zones and radar, and they could not be loaded.';
+          } else if (!controlPlan.length) {
+            controlNote = 'That selection covers no walkable ground, so nobody can hold it.';
+          } else {
+            control = new Map();
+          }
+        }
+      }
+      const network = controlNetwork;
+
       // The match walks every round the subjects appear in and pulls each one's
       // meta (and, for the shapes that need a position, its ticks) off the
       // network. That is the whole cost of this phase, and it is countable —
@@ -1251,7 +1653,10 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
             token,
             `Matching selections… ${done.toLocaleString()}/${total.toLocaleString()} rounds`
           );
-        }
+        },
+        onPack: control
+          ? (file, pack) => control.set(file, controlSideForPack(controlPlan, network, pack))
+          : null
       });
       if (token !== renderToken) return;
 
@@ -1304,7 +1709,24 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
         (d.rounds || []).some((r) => r.m === state.map && !r.ph)
       );
       const roundCount = agg.anyone ? agg.files.length : agg.rounds;
-      lastResults = { agg, lb, teamLb, roundCount, needsPh, lbError };
+      const { rows: controlRows, demos: controlDemos } = control
+        ? rowsForFiles(agg.files)
+        : { rows: null, demos: null };
+      lastResults = {
+        agg,
+        lb,
+        teamLb,
+        roundCount,
+        needsPh,
+        lbError,
+        controlNote,
+        controlPlan,
+        control,
+        controlRows,
+        controlDemos,
+        controlSummary: control ? controlWinrates(control, controlRows) : null,
+        controlTeams: []
+      };
       paintResults();
     } catch (err) {
       if (token !== renderToken) return;
@@ -1403,6 +1825,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     chapter = CHAPTERS.some((c) => c.key === fromUrl) ? fromUrl : 'players';
     mountChapterNav();
     applyChapterChrome();
+    if (chapter !== 'charts') void fetchVrsRanks().catch(() => {});
 
     // Charts spends its own quota; skip the pattern-finder fetch.
     if (chapter === 'charts') {
@@ -1632,6 +2055,8 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       state.phases.clear();
       state.utilityVisible = defaultUtility();
       state.timeWindow = defaultTimeWindow();
+      state.rankOwn = '';
+      state.rankOpp = '';
       state.shapeMatch = '';
       state.drawFeature = '';
       state.drawMode = '';
@@ -1647,11 +2072,46 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     (e) => {
       const details = e.target;
       if (!(details instanceof HTMLDetailsElement)) return;
-      if (!details.classList.contains('an-round-multi')) return;
+      if (!details.classList.contains('an-round-multi') && !details.classList.contains('st-rank-dd')) {
+        return;
+      }
       if (details.open) {
         closeRoundMenus(details);
-        placeRoundMenu(details);
-        requestAnimationFrame(() => placeRoundMenu(details));
+        if (details.classList.contains('st-rank-dd')) {
+          placeRankMenu(details);
+          requestAnimationFrame(() => placeRankMenu(details));
+        } else {
+          placeRoundMenu(details);
+          requestAnimationFrame(() => placeRoundMenu(details));
+        }
+      }
+    },
+    true
+  );
+
+  let rankRerenderTimer = 0;
+  sidebarEl.addEventListener('input', (e) => {
+    const rank = e.target.closest('[data-rank]');
+    if (!rank) return;
+    const field = String(rank.dataset.rank || '').split('|').pop();
+    if (field !== 'rankOwn' && field !== 'rankOpp') return;
+    state[field] = rank.value || '';
+    syncRankSummary(rank.closest('details'), state.rankOwn, state.rankOpp);
+    clearTimeout(rankRerenderTimer);
+    rankRerenderTimer = setTimeout(() => {
+      renderMain();
+      savedViews.touch();
+    }, 250);
+  });
+
+  window.addEventListener(
+    'scroll',
+    () => {
+      for (const d of sidebarEl.querySelectorAll('details.an-round-multi[open]')) {
+        placeRoundMenu(d);
+      }
+      for (const d of sidebarEl.querySelectorAll('details.st-rank-dd[open]')) {
+        placeRankMenu(d);
       }
     },
     true
@@ -1768,7 +2228,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
   });
 
   document.addEventListener('pointerdown', (e) => {
-    if (!e.target.closest?.('details.an-round-multi')) closeRoundMenus();
+    if (!e.target.closest?.('details.an-round-multi, details.st-rank-dd')) closeRoundMenus();
   });
 
   // Play buttons live in the rounds list, which sits in the SIDEBAR now; the
@@ -1782,6 +2242,23 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
         state.lbMode = next;
         paintResults();
       }
+      return;
+    }
+    const ctlSide = e.target.closest('[data-an-ctl-side]');
+    if (ctlSide) {
+      const next = ctlSide.dataset.anCtlSide || '';
+      // Clicking the open side again closes it, so the ordinary leaderboard is
+      // always one click away.
+      state.controlSide = next === state.controlSide ? '' : next;
+      state.controlTeam = '';
+      paintResults();
+      return;
+    }
+    const ctlTeam = e.target.closest('[data-an-ctl-team]');
+    if (ctlTeam) {
+      const key = ctlTeam.dataset.anCtlTeam || '';
+      state.controlTeam = key === state.controlTeam ? '' : key;
+      paintResults();
       return;
     }
     const playOne = e.target.closest('[data-an-play]');

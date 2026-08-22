@@ -419,18 +419,31 @@ const tag = (k, at) => ({ k, m: at === null ? {} : { When: at } });
 
   assert.ok(html.includes('st-table'), 'the table uses the database chrome');
   assert.ok(html.includes('data-rl-map'), 'a map picker sits next to the title');
+  assert.ok(html.includes('data-rl-side="T"'), 'a T/CT switch sits next to the map picker');
+  assert.ok(
+    /data-rl-side="T"[^>]*aria-pressed="true"/.test(html) ||
+      /class="rp-seg-btn active"[^>]*data-rl-side="T"/.test(html),
+    'T is the default side'
+  );
   assert.ok(html.includes('data-sort="ran"'), 'Ran is a column');
+  assert.ok(html.includes('data-sort="ranRating"'), 'Ran rating sits next to Ran');
   assert.ok(html.includes('data-sort="faced"'), 'Faced is a column');
+  assert.ok(html.includes('data-sort="facedRating"'), 'Faced rating sits next to Faced');
+  assert.ok(html.includes('sorted'), 'a column is the default sort');
+  assert.ok(/data-sort="ran"[^>]*sorted|sorted[^>]*data-sort="ran"/.test(html), 'default sort is Ran');
   assert.ok(!html.includes('Grey'), 'no library-average caption');
   assert.ok(!html.includes('T rounds'), 'no T/CT section titles');
   assert.ok(html.includes('tm-rl-t'), 'T rows are tinted');
+  assert.ok(!html.includes('tm-rl-ct'), 'CT rows wait for the CT switch');
   assert.ok(html.includes('/demos?rounds='), 'Ran/Faced open those rounds in a new tab');
+  assert.ok(!/>2\.00x</.test(html) && !/>1\.33x</.test(html), 'Ran/Faced cells are counts, not x');
+  assert.ok(html.includes('>2</a>') || html.includes('>2</td>'), 'Ran shows the raw count');
 
   const body = html.slice(html.indexOf('<tbody>'), html.indexOf('</tbody>'));
   const tips = [...body.matchAll(/data-tip="([^"]+)"/g)].map((m) => m[1]);
   assert.ok(
-    tips.some((t) => /We ran this 2 times/.test(t)),
-    'Ran hover says how many we ran'
+    tips.some((t) => /\d\.\d{2}x vs average/.test(t) && /of our rounds/.test(t)),
+    'Ran hover is the x vs average and share of our rounds'
   );
   assert.ok(
     tips.some((t) => /Won 1 of 2 rounds we ran/.test(t)),

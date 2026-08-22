@@ -3,8 +3,8 @@
 // Parse Valve regional standings tables and match a demo side's player names
 // to a known roster (e.g. NiKo + karrigan + m0NESY → Falcons).
 //
-// Pure data helpers — no fs. The server loads the vendored .md files and
-// hands the parsed teams to these functions.
+// Pure data helpers — no fs. The server loads the latest snapshot (live copy
+// or bundled fallback) and hands the parsed teams to these functions.
 // ---------------------------------------------------------------------------
 
 import { shortIdFor } from './roundId.js';

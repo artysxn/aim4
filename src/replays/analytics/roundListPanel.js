@@ -1,9 +1,11 @@
 // ---------------------------------------------------------------------------
 // Team Overview: winrates per round type in the round library.
 //
-// One database-style table for the selected map. T rows are dark red, CT rows
-// dark blue. Ran / Faced are relative usage vs the library (1.5x means more
-// often than everyone else) and open those rounds in a new timeline tab.
+// One database-style table for the selected map and side. T rows are dark red,
+// CT rows dark blue. Ran / Faced are raw counts; the relative usage (vs the
+// library) and share of our rounds sit on hover. Rating is the team's average
+// player rating over those rounds. Counts open those rounds in a new timeline
+// tab.
 // ---------------------------------------------------------------------------
 
 import { MAPS } from '../shared/roundId.js';
@@ -12,6 +14,8 @@ import { attachTips, bindStatsHScroll, statsTableHtml } from '../stats/statsTabl
 
 const fmtPct = (n) => (Number.isFinite(n) ? `${n.toFixed(1)}%` : '—');
 const fmtIndex = (n) => (Number.isFinite(n) ? `${n.toFixed(2)}x` : '—');
+const fmtRating = (n) => (Number.isFinite(n) ? n.toFixed(2) : '—');
+const fmtCount = (n) => (n > 0 ? String(n) : '—');
 
 /** Overpass is out of the overview pool. */
 const HIDDEN_MAPS = new Set(['OVP']);
@@ -30,15 +34,25 @@ export function createRoundListPanel({ escapeHtml }) {
   el.className = 'tm-card tm-roundlist';
   el.hidden = true;
 
-  /** @type {{ payload: object|null, teamName: string, maps: string[], mapCode: string, preferredMap: string }} */
-  let state = { payload: null, teamName: '', maps: [], mapCode: '', preferredMap: '' };
+  /** @type {{ payload: object|null, teamName: string, maps: string[], mapCode: string, preferredMap: string, side: 'T'|'CT' }} */
+  let state = { payload: null, teamName: '', maps: [], mapCode: '', preferredMap: '', side: 'T' };
   let sort = { key: 'ran', dir: 'desc' };
+  /** Avoid walking the library again on a sort or side click. */
+  let statsCache = { payload: null, teamName: '', mapCode: '', stats: null };
 
   function roundsLink(files, label) {
     const text = escapeHtml(label);
     const href = roundsHref(files);
     if (!href) return text;
     return `<a class="st-link" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${text}</a>`;
+  }
+
+  function usageTip({ rounds, index, share, empty, ofWhat }) {
+    if (!rounds) return empty;
+    const parts = [];
+    if (Number.isFinite(index)) parts.push(`${fmtIndex(index)} vs average`);
+    if (Number.isFinite(share)) parts.push(`${fmtPct(share)} of ${ofWhat}`);
+    return parts.join('. ') + (parts.length ? '.' : '');
   }
 
   const COLUMNS = [
@@ -52,14 +66,29 @@ export function createRoundListPanel({ escapeHtml }) {
     {
       key: 'ran',
       label: 'Ran',
-      get: (r) => (Number.isFinite(r.ran) ? r.ran : -1),
-      cell: (r) => (r.ranRounds ? fmtIndex(r.ran) : '—'),
+      get: (r) => r.ranRounds || 0,
+      cell: (r) => fmtCount(r.ranRounds),
       html: (r) =>
-        r.ranRounds ? roundsLink(r.ranFiles, fmtIndex(r.ran)) : escapeHtml('—'),
+        r.ranRounds ? roundsLink(r.ranFiles, fmtCount(r.ranRounds)) : escapeHtml('—'),
       tip: (r) =>
-        r.ranRounds
-          ? `We ran this ${r.ranRounds} times. ${fmtIndex(r.ran)} vs the library share.`
-          : 'We have not run this.'
+        usageTip({
+          rounds: r.ranRounds,
+          index: r.ranIndex,
+          share: r.ranShare,
+          empty: 'We have not run this.',
+          ofWhat: 'our rounds'
+        })
+    },
+    {
+      key: 'ranRating',
+      label: 'Rating',
+      get: (r) => (Number.isFinite(r.ranRating) ? r.ranRating : -1),
+      cell: (r) => fmtRating(r.ranRating),
+      strong: true,
+      tip: (r) =>
+        Number.isFinite(r.ranRating)
+          ? `Rating ${fmtRating(r.ranRating)} over ${r.ranRounds} rounds.`
+          : 'No rating over these rounds.'
     },
     {
       key: 'ranWin',
@@ -74,14 +103,29 @@ export function createRoundListPanel({ escapeHtml }) {
     {
       key: 'faced',
       label: 'Faced',
-      get: (r) => (Number.isFinite(r.faced) ? r.faced : -1),
-      cell: (r) => (r.facedRounds ? fmtIndex(r.faced) : '—'),
+      get: (r) => r.facedRounds || 0,
+      cell: (r) => fmtCount(r.facedRounds),
       html: (r) =>
-        r.facedRounds ? roundsLink(r.facedFiles, fmtIndex(r.faced)) : escapeHtml('—'),
+        r.facedRounds ? roundsLink(r.facedFiles, fmtCount(r.facedRounds)) : escapeHtml('—'),
       tip: (r) =>
-        r.facedRounds
-          ? `We faced this ${r.facedRounds} times. ${fmtIndex(r.faced)} vs the library share.`
-          : 'Nobody has run this against us.'
+        usageTip({
+          rounds: r.facedRounds,
+          index: r.facedIndex,
+          share: r.facedShare,
+          empty: 'Nobody has run this against us.',
+          ofWhat: 'rounds we faced'
+        })
+    },
+    {
+      key: 'facedRating',
+      label: 'Rating',
+      get: (r) => (Number.isFinite(r.facedRating) ? r.facedRating : -1),
+      cell: (r) => fmtRating(r.facedRating),
+      strong: true,
+      tip: (r) =>
+        Number.isFinite(r.facedRating)
+          ? `Rating ${fmtRating(r.facedRating)} over ${r.facedRounds} rounds.`
+          : 'No rating over these rounds.'
     },
     {
       key: 'facedWin',
@@ -109,16 +153,20 @@ export function createRoundListPanel({ escapeHtml }) {
       name: t.label,
       desc: t.desc,
       side,
-      ran: t.index,
+      ranIndex: t.index,
+      ranShare: t.ours.share,
       ranWin: t.ours.winrate,
       ranRounds: t.ours.rounds,
       ranWins: t.ours.wins,
       ranFiles: t.ours.files || [],
-      faced: t.facedIndex,
+      ranRating: t.ours.rating,
+      facedIndex: t.facedIndex,
+      facedShare: t.faced.share,
       facedWin: t.faced.winrate,
       facedRounds: t.faced.rounds,
       facedWins: t.faced.wins,
       facedFiles: t.faced.files || [],
+      facedRating: t.faced.rating,
       when: when?.clock || '',
       whenSec: Number.isFinite(when?.seconds) ? when.seconds : -1
     };
@@ -135,18 +183,44 @@ export function createRoundListPanel({ escapeHtml }) {
     return `<select class="site-select tm-rl-map" data-rl-map aria-label="Map">${opts}</select>`;
   }
 
+  function sideSwitchHtml(side) {
+    const tOn = side === 'T' ? ' active' : '';
+    const ctOn = side === 'CT' ? ' active' : '';
+    return `<div class="rp-seg rp-seg-side" role="group" aria-label="Side">
+      <button type="button" class="rp-seg-btn${tOn}" data-rl-side="T" aria-pressed="${side === 'T' ? 'true' : 'false'}" aria-label="T" title="T">
+        <img src="/icons/icon_t.png" alt="" width="16" height="16" draggable="false" />
+      </button>
+      <button type="button" class="rp-seg-btn${ctOn}" data-rl-side="CT" aria-pressed="${side === 'CT' ? 'true' : 'false'}" aria-label="CT" title="CT">
+        <img src="/icons/icon_ct.png" alt="" width="16" height="16" draggable="false" />
+      </button>
+    </div>`;
+  }
+
+  function statsFor() {
+    const { payload, teamName, mapCode } = state;
+    if (
+      statsCache.payload === payload &&
+      statsCache.teamName === teamName &&
+      statsCache.mapCode === mapCode
+    ) {
+      return statsCache.stats;
+    }
+    const stats = payload ? roundListStats(payload, { mapCode, teamName }) : null;
+    statsCache = { payload, teamName, mapCode, stats };
+    return stats;
+  }
+
   function render() {
-    const { maps, mapCode, payload, teamName } = state;
+    const { maps, mapCode, side } = state;
     if (!maps.length) {
       el.hidden = true;
       el.innerHTML = '';
       return;
     }
-    const stats = payload ? roundListStats(payload, { mapCode, teamName }) : null;
+    const stats = statsFor();
     const rows = [];
-    for (const side of ['T', 'CT']) {
-      const bag = stats?.sides?.[side];
-      if (!bag?.types) continue;
+    const bag = stats?.sides?.[side];
+    if (bag?.types) {
       for (const t of bag.types) {
         if (!t.ours.rounds && !t.faced.rounds) continue;
         rows.push(rowFromType(t, side));
@@ -166,7 +240,10 @@ export function createRoundListPanel({ escapeHtml }) {
     el.innerHTML = `
       <div class="tm-card-head">
         <h3 class="tm-card-title">Round types</h3>
-        ${mapSelectHtml(maps, mapCode)}
+        <div class="tm-rl-tools">
+          ${sideSwitchHtml(side)}
+          ${mapSelectHtml(maps, mapCode)}
+        </div>
       </div>
       ${table}`;
     bindStatsHScroll(el);
@@ -180,6 +257,14 @@ export function createRoundListPanel({ escapeHtml }) {
   });
 
   el.addEventListener('click', (e) => {
+    const sideBtn = e.target.closest?.('[data-rl-side]');
+    if (sideBtn && el.contains(sideBtn)) {
+      const next = sideBtn.getAttribute('data-rl-side') === 'CT' ? 'CT' : 'T';
+      if (next === state.side) return;
+      state = { ...state, side: next };
+      render();
+      return;
+    }
     const th = e.target.closest?.('[data-sort]');
     if (!th || !el.contains(th)) return;
     const key = th.getAttribute('data-sort') || '';
@@ -204,7 +289,7 @@ export function createRoundListPanel({ escapeHtml }) {
     } else if (!maps.includes(mapCode)) {
       mapCode = maps[0] || '';
     }
-    state = { payload, teamName, maps, mapCode, preferredMap: preferred };
+    state = { ...state, payload, teamName, maps, mapCode, preferredMap: preferred };
     render();
   }
 

@@ -9,7 +9,7 @@
 // runs 2 or 20.
 // ---------------------------------------------------------------------------
 
-import { tagTrigger, teamNameKey } from '../shared/statsMath.js';
+import { aggregatePlayers, indexMaps, tagTrigger, teamNameKey } from '../shared/statsMath.js';
 import { clockAt } from './roundFacts.js';
 import { hasRoundLibrary, roundTypeRows } from './roundLibrary.js';
 import { rowTags } from './roundTags.js';
@@ -17,7 +17,19 @@ import { rowTags } from './roundTags.js';
 const pct = (part, whole) => (whole > 0 ? Math.round((part / whole) * 1000) / 10 : null);
 
 function emptyBag() {
-  return { rounds: 0, wins: 0, at: [], files: new Set() };
+  return { rounds: 0, wins: 0, at: [], files: new Set(), rows: [] };
+}
+
+/** Average of this team's player ratings over the bag, or null when none sat. */
+function teamAvgRating(rows, players, demos, teamName) {
+  if (!rows?.length || !teamName) return null;
+  const withPlayers = rows.filter((row) => row?.p && typeof row.p === 'object');
+  if (!withPlayers.length) return null;
+  const members = aggregatePlayers(withPlayers, players, { teamName }, demos).filter((m) =>
+    Number.isFinite(m.rating)
+  );
+  if (!members.length) return null;
+  return members.reduce((sum, m) => sum + m.rating, 0) / members.length;
 }
 
 const rate = (bag) => pct(bag.wins, bag.rounds);
@@ -41,9 +53,9 @@ function timing(bag) {
  * @typedef {object} RoundTypeStatRow
  * @property {string} key
  * @property {string} label
- * @property {{ rounds: number, wins: number, winrate: number|null, share: number|null }} ours
+ * @property {{ rounds: number, wins: number, winrate: number|null, share: number|null, rating: number|null }} ours
  *   The team running the call on this side.
- * @property {{ rounds: number, wins: number, winrate: number|null, share: number|null, files: string[] }} faced
+ * @property {{ rounds: number, wins: number, winrate: number|null, share: number|null, rating: number|null, files: string[] }} faced
  *   The same call arriving at them from the other side.
  * @property {{ rounds: number, wins: number, winrate: number|null, share: number|null }} league
  *   Every team in the payload, this call on this side.
@@ -97,6 +109,7 @@ export function roundListStats(payload, { mapCode, teamName }) {
     if (ours) ourDemos++;
     for (const row of d.rounds || []) {
       if (!row?.rl) continue;
+      if (!row.d && d.id) row.d = d.id;
       for (const side of ['T', 'CT']) {
         const tags = rowTags(row, side);
         if (!tags.length) continue;
@@ -123,11 +136,13 @@ export function roundListStats(payload, { mapCode, teamName }) {
           if (at !== null) bag.at.push(at);
           const file = String(row.f || '').trim();
           if (file) bag.files.add(file);
+          bag.rows.push(row);
         }
       }
     }
   }
 
+  const indexed = indexMaps(payload);
   const sides = {};
   for (const side of ['T', 'CT']) {
     const b = acc[side];
@@ -145,15 +160,23 @@ export function roundListStats(payload, { mapCode, teamName }) {
         files: [...(bag.files || [])],
         ...extra
       });
+      const ourRating = teamAvgRating(ourBag.rows, indexed.players, indexed.demos, teamName);
+      const facedRating = teamAvgRating(facedBag.rows, indexed.players, indexed.demos, teamName);
       return {
         key: def.key,
         label: def.label,
         desc: def.desc,
-        ours: pack(ourBag, { winrate: rate(ourBag), share: ourShare, timing: timing(ourBag) }),
+        ours: pack(ourBag, {
+          winrate: rate(ourBag),
+          share: ourShare,
+          timing: timing(ourBag),
+          rating: ourRating
+        }),
         faced: pack(facedBag, {
           winrate: rate(facedBag),
           share: facedShare,
-          timing: timing(facedBag)
+          timing: timing(facedBag),
+          rating: facedRating
         }),
         league: pack(leagueBag, {
           winrate: rate(leagueBag),

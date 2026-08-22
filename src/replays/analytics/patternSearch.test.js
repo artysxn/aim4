@@ -21,7 +21,12 @@
 
 import assert from 'node:assert/strict';
 import { aggregateAnalyticsAsync, playerIdsFromFilter } from './analyticsMath.js';
-import { filterWindowsByShapes, releaseTicks, TICK_CACHE_BYTES } from './shapeFilters.js';
+import {
+  filterWindowsByShapes,
+  releaseTicks,
+  windowCanMatchShape,
+  TICK_CACHE_BYTES
+} from './shapeFilters.js';
 import {
   HEADER_BYTES,
   PLAYER_SLOTS,
@@ -29,6 +34,7 @@ import {
   writeHeader,
   writeRecord
 } from '../shared/tickFormat.js';
+import { P } from '../shared/statsMath.js';
 
 const TICK_RATE = 64;
 const KILL_TICK = 5 * TICK_RATE;      // 5 s in: comfortably inside `early`
@@ -105,12 +111,24 @@ function library() {
       const ph = {};
       const p = {};
       for (const pl of players) {
-        ph[pl.id] = { early: { p: new Array(12).fill(0) } };
-        p[pl.id] = new Array(12).fill(0);
+        // The phase bag has to agree with the round's events, because that is
+        // what the index guarantees and what the cheap precondition trusts:
+        // player 0 got the kill in `early`, player 5 died to it.
+        const line = new Array(PLAYER_SLOTS).fill(0);
+        if (pl.id === pid(d, 0)) line[P.KILLS] = 1;
+        if (pl.id === pid(d, 5)) line[P.DEATHS] = 1;
+        ph[pl.id] = { early: { p: line }, mid: { p: new Array(PLAYER_SLOTS).fill(0) } };
+        p[pl.id] = [...line];
       }
       rounds.push({
         f: fileOf(d, r), d: `d${d}`, m: 'DUST2', n: r, w: 1,
-        s1: 'T', s2: 'CT', e1: 4, e2: 4, ph, p
+        // Round 1 is full vs full; 2 and 3 are not. An economy filter has to
+        // cut the scan down to round 1 before anything is fetched.
+        s1: 'T', s2: 'CT',
+        e1: r === 1 ? 4 : 2,
+        e2: r <= 2 ? 4 : 2,
+        ok: pid(d, 0), od: pid(d, 5),
+        ph, p
       });
     }
     demos.push({ id: `d${d}`, map: 'DUST2', players, rounds });
@@ -255,6 +273,97 @@ const filter = () => ({
   assert.equal(out.length, 1, 'the search still answers correctly after a release');
   assert.equal(net.ticks, afterFirst.ticks + 1, 'ticks were re-read');
   assert.equal(net.meta, afterFirst.meta, 'and meta was not, because it was still held');
+}
+
+// ---- the filters on the left cut the scan BEFORE anything is fetched -------
+//
+// Every row-level filter — side, economy, AWP, result, opening, round library —
+// is applied while the phase windows are built, which happens in memory, before
+// `filterWindowsByShapes` opens a single round. So narrowing on the left is not
+// a filter over the search results; it is a smaller search.
+{
+  const net = network();
+  const agg = await aggregateAnalyticsAsync(
+    library(),
+    { ...filter(), econ: 4, oppEcon: 4 },
+    new Map(),
+    { fetchMeta: net.fetchMeta, fetchTicks: net.fetchTicks }
+  );
+  assert.equal(agg.files.length, DEMOS, 'only the full-vs-full round of each demo');
+  assert.equal(
+    net.meta,
+    DEMOS,
+    `and only those rounds were opened (${net.meta} reads, not ${TOTAL_ROUNDS})`
+  );
+}
+
+// ---- a feature that cannot match is not fetched at all ----------------------
+//
+// The kills in this library are all in `early`. Asking where the late-round
+// kills came from is answerable from the phase bags the page already holds:
+// nobody has one, so there is nothing to open.
+{
+  const net = network();
+  const agg = await aggregateAnalyticsAsync(
+    library(),
+    { ...filter(), phases: new Set(['mid']) },
+    new Map(),
+    { fetchMeta: net.fetchMeta, fetchTicks: net.fetchTicks }
+  );
+  assert.equal(agg.files.length, 0, 'no round could have matched');
+  assert.equal(net.meta, 0, 'so no round was read');
+  assert.equal(net.ticks, 0, 'and no tick buffer was pulled');
+}
+
+// ---- ...and the same for a side that did no killing -------------------------
+{
+  const net = network();
+  const agg = await aggregateAnalyticsAsync(
+    library(),
+    { ...filter(), side: 'CT' },
+    new Map(),
+    { fetchMeta: net.fetchMeta, fetchTicks: net.fetchTicks }
+  );
+  assert.equal(agg.files.length, 0, 'the CTs never killed from the box');
+  assert.equal(net.meta, 0, 'and no round was opened to find that out');
+
+  const netT = network();
+  const aggT = await aggregateAnalyticsAsync(
+    library(),
+    { ...filter(), side: 'T' },
+    new Map(),
+    { fetchMeta: netT.fetchMeta, fetchTicks: netT.fetchTicks }
+  );
+  assert.equal(aggT.files.length, TOTAL_ROUNDS, 'the Ts did, in every round');
+}
+
+// ---- the precondition never rejects something that could have passed --------
+{
+  const w = (kills, deaths) => ({
+    playerId: 'a', row: { ok: 'a', od: 'b' },
+    window: { p: Object.assign(new Array(PLAYER_SLOTS).fill(0), { [P.KILLS]: kills, [P.DEATHS]: deaths }) }
+  });
+  const of = (feature) => ({ id: 'x', feature, geometry: BOX, enabled: true });
+
+  assert.equal(windowCanMatchShape(w(1, 0), of('kill_from')), true);
+  assert.equal(windowCanMatchShape(w(0, 0), of('kill_from')), false);
+  assert.equal(windowCanMatchShape(w(0, 1), of('death_from')), true);
+  assert.equal(windowCanMatchShape(w(0, 0), of('death_from')), false);
+  // Standing somewhere leaves no trace in the stats line: never rejected.
+  assert.equal(windowCanMatchShape(w(0, 0), of('player_in')), true);
+  // Neither does a grenade — the index carries no per-round tally.
+  assert.equal(windowCanMatchShape(w(0, 0), of('grenade_in')), true);
+  // The opening duel is two named players and nobody else.
+  assert.equal(windowCanMatchShape(w(0, 0), of('first_duel_in')), true, 'a is the opener');
+  assert.equal(
+    windowCanMatchShape({ ...w(9, 9), playerId: 'c' }, of('first_duel_in')),
+    false,
+    'c was not in it, however well c did'
+  );
+  // A disabled or geometry-less shape has no opinion.
+  assert.equal(windowCanMatchShape(w(0, 0), { feature: 'kill_from', geometry: BOX, enabled: false }), true);
+  // Neither has a payload that predates the columns.
+  assert.equal(windowCanMatchShape({ playerId: 'a', row: {}, window: {} }, of('kill_from')), true);
 }
 
 assert.ok(TICK_CACHE_BYTES > 0, 'there is a budget at all');

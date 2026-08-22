@@ -1,11 +1,12 @@
 // ---------------------------------------------------------------------------
 // site/performanceView.js
-// One player: Summary (rating, cards, roles, form, matches) and Guns.
-// Maps / Compare stay as empty chapters. Team search lists that roster.
+// One player: Summary (rating, cards, roles, form, matches), Guns, and Maps.
+// Maps is the roles grid over again, then a T and a CT round-type table for
+// every map in the library. Team search lists that roster.
 // ---------------------------------------------------------------------------
 
 import { getStatsPayload } from '../replays/statsCache.js';
-import { fetchPeerAverages, fetchRoster, formatApiError } from '../replays/api.js';
+import { fetchPeerAverages, fetchRoster, fetchVrsRanks, formatApiError } from '../replays/api.js';
 import {
   demosForPlayer,
   demosForTeam,
@@ -19,16 +20,21 @@ import {
   CARD_METRICS,
   LAST_MATCH_OPTS,
   PERF_MAPS,
+  curvePath,
+  f2,
   findPlayerByUsername,
   matchSeries,
+  pct,
   playerDemos,
   playerRows,
   playerStats,
   roleGrid,
-  smoothSeries,
-  curvePath
+  signed,
+  smoothSeries
 } from '../replays/performance/performanceMath.js';
 import { aggregateGuns, gunMapForPlayer } from '../replays/performance/gunStats.js';
+import { MAP_ROUND_CODES, mapRoundGrid } from '../replays/performance/mapRoundStats.js';
+import { mapRoundBlocksHtml } from '../replays/performance/mapRoundTables.js';
 import {
   attachTips,
   bindStatsHScroll,
@@ -39,18 +45,14 @@ import { iconImgHtml } from '../replays/viewer/equipmentIcons.js';
 import { setSpinnerLabel, spinnerHtml, statsProgressLabel } from '../lib/spinner.js';
 import calendarIcon from '../icons/icon_calendar.svg?url';
 import { mbWrap } from '../icons/menubuttons.js';
+import { placeRankMenu, rankFilterHtml, syncRankSummary } from '../replays/shared/vrsRanks.js';
 import './performance.css';
 
 const CHAPTERS = [
   { key: 'summary', label: 'Summary' },
   { key: 'guns', label: 'Guns' },
-  { key: 'maps', label: 'Maps' },
-  { key: 'compare', label: 'Compare' }
+  { key: 'maps', label: 'Maps' }
 ];
-
-const f2 = (n) => (Number.isFinite(n) ? n.toFixed(2) : '—');
-const pct = (n) => (Number.isFinite(n) ? `${Math.round(n)}%` : '—');
-const signed = (n) => (Number.isFinite(n) ? `${n > 0 ? '+' : ''}${n.toFixed(2)}` : '—');
 
 function fmtMetric(fmt, n) {
   if (fmt === 'pct') return pct(n);
@@ -151,7 +153,9 @@ export function initPerformanceView({ auth, escapeHtml }) {
     side: '',
     econ: null,
     dateFrom: '',
-    dateTo: ''
+    dateTo: '',
+    rankOwn: '',
+    rankOpp: ''
   };
 
   const maps = () => indexMaps(payload || { demos: [] });
@@ -183,7 +187,7 @@ export function initPerformanceView({ auth, escapeHtml }) {
    * first, and the `rating` contract drops the columns this page never reads.
    */
   async function ensurePayload() {
-    await ensureRoster();
+    await Promise.all([ensureRoster(), fetchVrsRanks().catch(() => {})]);
     const ids = playerId
       ? demosForPlayer(roster, playerId)
       : teamKey
@@ -334,7 +338,12 @@ export function initPerformanceView({ auth, escapeHtml }) {
     </div>`;
   }
 
-  function filtersHtml() {
+  /**
+   * @param {{ withSide?: boolean }} [opts]
+   *   Maps drops the side switch: every table on that chapter already is one
+   *   side, and half of each is deliberately the rounds spent on the other.
+   */
+  function filtersHtml({ withSide = true } = {}) {
     const mapOpts = PERF_MAPS.map(
       (m) =>
         `<option value="${escapeHtml(m.code)}"${ui.map === m.code ? ' selected' : ''}>${escapeHtml(m.name)}</option>`
@@ -361,14 +370,22 @@ export function initPerformanceView({ auth, escapeHtml }) {
         `<select class="site-select" data-pf-filter="map" aria-label="Map">
           <option value=""${!ui.map ? ' selected' : ''}>Map</option>${mapOpts}</select>`
       )}</div>
-      <div class="rp-seg rp-seg-side" role="group" aria-label="Side">
+      <div class="st-filter-group">${rankFilterHtml({
+        own: ui.rankOwn,
+        opp: ui.rankOpp
+      })}</div>
+      ${
+        withSide
+          ? `<div class="rp-seg rp-seg-side" role="group" aria-label="Side">
         <button type="button" class="rp-seg-btn${ui.side === 'T' ? ' active' : ''}" data-pf-side="T" aria-label="T">
           <img src="/icons/icon_t.png" alt="" width="16" height="16" draggable="false" />
         </button>
         <button type="button" class="rp-seg-btn${ui.side === 'CT' ? ' active' : ''}" data-pf-side="CT" aria-label="CT">
           <img src="/icons/icon_ct.png" alt="" width="16" height="16" draggable="false" />
         </button>
-      </div>
+      </div>`
+          : ''
+      }
       <div class="st-filter-group">
         <select class="site-select" data-pf-filter="econ" aria-label="Buy">
           <option value=""${ui.econ == null ? ' selected' : ''}>Buy</option>${econOpts}
@@ -428,6 +445,21 @@ export function initPerformanceView({ auth, escapeHtml }) {
       </div>`;
     };
     return `<div class="pf-roles">${table('T')}${table('CT')}</div>`;
+  }
+
+  // ---- Maps -----------------------------------------------------------------
+
+  function mapsStatsHtml() {
+    const { players, demos } = maps();
+    const codes = ui.map ? MAP_ROUND_CODES.filter((c) => c === ui.map) : MAP_ROUND_CODES;
+    const keep = new Set(codes);
+    const full = roleGrid(payload, playerId, ui, players, demos);
+    const grid = {
+      T: (full.T || []).filter((r) => keep.has(r.map)),
+      CT: (full.CT || []).filter((r) => keep.has(r.map))
+    };
+    const byMap = mapRoundGrid(payload, playerId, ui, players, demos);
+    return `${rolesHtml(grid)}${mapRoundBlocksHtml(byMap, codes, escapeHtml)}`;
   }
 
   function matchesHtml(series) {
@@ -518,6 +550,7 @@ export function initPerformanceView({ auth, escapeHtml }) {
     const rating = stats?.rating;
     return `
       ${filtersHtml()}
+      <div id="pf-stats">
       <div class="pf-hero">
         <div class="pf-identity">
           <h2 class="pf-name">${escapeHtml(playerName || playerId)}</h2>
@@ -531,7 +564,8 @@ export function initPerformanceView({ auth, escapeHtml }) {
       ${cardsHtml(stats, series, peerMetrics)}
       ${rolesHtml(grid)}
       <div class="pf-chart-wrap">${ratingChart(series)}</div>
-      <div class="pf-matches">${matchesHtml(series)}</div>`;
+      <div class="pf-matches">${matchesHtml(series)}</div>
+      </div>`;
   }
 
   function gunsBodyHtml() {
@@ -546,7 +580,11 @@ export function initPerformanceView({ auth, escapeHtml }) {
     const gunByFile = gunMapForPlayer(careerRows, playerId, allIds);
     const rows = playerRows(payload, playerId, ui, players, demos);
     const guns = aggregateGuns(rows, playerId, players, demos, gunByFile);
-    return `${filtersHtml()}${gunsHtml(guns)}`;
+    return `${filtersHtml()}<div id="pf-stats">${gunsHtml(guns)}</div>`;
+  }
+
+  function mapsBodyHtml() {
+    return `${filtersHtml({ withSide: false })}<div id="pf-stats">${mapsStatsHtml()}</div>`;
   }
 
   function bodyHtml() {
@@ -554,9 +592,7 @@ export function initPerformanceView({ auth, escapeHtml }) {
     if (!playerId) {
       return '';
     }
-    if (chapter === 'maps' || chapter === 'compare') {
-      return filtersHtml();
-    }
+    if (chapter === 'maps') return mapsBodyHtml();
     if (chapter === 'guns') return gunsBodyHtml();
     return summaryHtml();
   }
@@ -566,6 +602,49 @@ export function initPerformanceView({ auth, escapeHtml }) {
     bindStatsHScroll(host);
     const chart = host.querySelector('.pf-chart-scroll');
     if (chart) chart.scrollLeft = chart.scrollWidth;
+  }
+
+  function refreshStats() {
+    const slot = host.querySelector('#pf-stats');
+    if (!slot || !playerId) return;
+    if (chapter === 'guns') {
+      const { players, demos } = maps();
+      const careerRows = [];
+      for (const demo of playerDemos(payload, playerId, {})) {
+        for (const row of demo.rounds || []) {
+          if (row.p?.[playerId]) careerRows.push(row);
+        }
+      }
+      const allIds = playerDemos(payload, playerId, {}).map((d) => d.id);
+      const gunByFile = gunMapForPlayer(careerRows, playerId, allIds);
+      const rows = playerRows(payload, playerId, ui, players, demos);
+      slot.innerHTML = gunsHtml(aggregateGuns(rows, playerId, players, demos, gunByFile));
+    } else if (chapter === 'maps') {
+      slot.innerHTML = mapsStatsHtml();
+    } else if (chapter === 'summary') {
+      const { players, demos } = maps();
+      const stats = playerStats(payload, playerId, ui, players, demos);
+      const series = matchSeries(payload, playerId, ui, players, demos);
+      const grid = roleGrid(payload, playerId, ui, players, demos);
+      const peerMetrics = peers?.metrics || {};
+      const rating = stats?.rating;
+      slot.innerHTML = `
+      <div class="pf-hero">
+        <div class="pf-identity">
+          <h2 class="pf-name">${escapeHtml(playerName || playerId)}</h2>
+          ${stats?.teamLabel ? `<span class="pf-team">${escapeHtml(stats.teamLabel)}</span>` : ''}
+        </div>
+        <div class="pf-hero-rating">
+          <span class="pf-hero-value">${f2(rating)}</span>
+          <span class="pf-hero-label">Rating</span>
+        </div>
+      </div>
+      ${cardsHtml(stats, series, peerMetrics)}
+      ${rolesHtml(grid)}
+      <div class="pf-chart-wrap">${ratingChart(series)}</div>
+      <div class="pf-matches">${matchesHtml(series)}</div>`;
+    }
+    bindChrome();
   }
 
   function render() {
@@ -701,6 +780,31 @@ export function initPerformanceView({ auth, escapeHtml }) {
     }
   });
 
+  host.addEventListener(
+    'toggle',
+    (e) => {
+      const details = e.target;
+      if (!(details instanceof HTMLDetailsElement) || !details.classList.contains('st-rank-dd')) {
+        return;
+      }
+      if (details.open) {
+        placeRankMenu(details);
+        requestAnimationFrame(() => placeRankMenu(details));
+      }
+    },
+    true
+  );
+
+  host.addEventListener('input', (e) => {
+    const rank = e.target.closest('[data-rank]');
+    if (!rank) return;
+    const field = String(rank.dataset.rank || '').split('|').pop();
+    if (field !== 'rankOwn' && field !== 'rankOpp') return;
+    ui[field] = rank.value || '';
+    syncRankSummary(rank.closest('details'), ui.rankOwn, ui.rankOpp);
+    refreshStats();
+  });
+
   host.addEventListener('change', (e) => {
     const field = e.target.closest('[data-pf-filter]');
     if (!field) return;
@@ -747,6 +851,9 @@ export function initPerformanceView({ auth, escapeHtml }) {
       const wrap = host.querySelector('.st-date-wrap');
       if (pop) pop.hidden = true;
       wrap?.classList.remove('open');
+    }
+    if (!e.target.closest('details.st-rank-dd')) {
+      for (const d of host.querySelectorAll('details.st-rank-dd[open]')) d.removeAttribute('open');
     }
   });
 

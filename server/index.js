@@ -34,6 +34,7 @@ import { printHostBanner, fetchPublicIp } from './network.js';
 import { seedAdmins } from './entitlements/service.js';
 import { backfillEffectiveEntitlements } from './entitlements/load.js';
 import { startSweep } from './entitlements/sweep.js';
+import { startVrsSync } from './replays/vrsSync.js';
 import { warmCloakBrowserCache } from './ingest/hltv/cloakBrowser.js';
 import { loadConfig as loadIngestConfig } from './ingest/hltv/config.js';
 import { startSupervisor as startIngestSupervisor } from './ingest/hltv/service.js';
@@ -323,6 +324,9 @@ backfillEffectiveEntitlements().then((r) => {
 // warning, and tidies quota counters. Entitlement resolution is time-aware on
 // its own, so a sweep that has not run is a reporting gap, not an access one.
 startSweep();
+// Valve regional standings: bundled snapshot at boot, then a daily GitHub
+// scan copies a newer live/<year> table when one is published.
+startVrsSync();
 // Demo ingest starts Off on every API boot. Ledger/cursor keep progress so an
 // admin turning On resumes the walk. While On, the supervisor restarts a
 // crashed child with backoff; it does not auto-enable after a deploy.

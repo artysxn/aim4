@@ -5,16 +5,23 @@
 import { fetchRoundMeta, fetchRoundTicks } from '../api.js';
 import { phaseAtTick, phaseBounds } from '../coach/roundPhases.js';
 import { readHeader, readRecord } from '../shared/tickFormat.js';
+import { P } from '../shared/statsMath.js';
 import { pointInPiece } from '../zones/zoneGeom.js';
 
-/** @typedef {'player_in'|'kill_from'|'death_from'|'first_duel_in'|'grenade_in'} ShapeFeature */
+/**
+ * @typedef {'player_in'|'kill_from'|'death_from'|'first_duel_in'|'grenade_in'
+ *   |'map_control'} ShapeFeature
+ */
 
 export const SHAPE_FEATURES = [
   { key: 'player_in', label: 'Player in' },
   { key: 'kill_from', label: 'Kill from' },
   { key: 'death_from', label: 'Died in' },
   { key: 'first_duel_in', label: 'First duel in' },
-  { key: 'grenade_in', label: 'Grenade in' }
+  { key: 'grenade_in', label: 'Grenade in' },
+  // The odd one out, and deliberately so: it keeps every round it is given and
+  // reports how they split by who held the ground. See analytics/zoneControl.js.
+  { key: 'map_control', label: 'Map control in' }
 ];
 
 /** The live round on the clock: 1:55. Shape windows are elapsed seconds. */
@@ -118,6 +125,46 @@ function sanitizeWindow(raw) {
   return { from: lo, to: hi };
 }
 
+/**
+ * The utility types one grenade selection is about.
+ *
+ * The four utility buttons used to be a single global switch that every
+ * grenade selection read at search time, so two boxes could not ask different
+ * questions — turning smokes off to draw a molotov box retroactively changed
+ * the smoke box drawn a minute earlier. They are now a snapshot: whatever is
+ * enabled when the box is drawn is what that box means, forever, and the
+ * buttons go back to being what you arm the next box with.
+ *
+ * All four on means "any grenade", and it is stored that way rather than as an
+ * absent field: absent is reserved for a selection drawn before this existed,
+ * which is the only kind that should still follow the live switches. None on
+ * is coerced to all on — a selection that can never match is a footgun, not a
+ * query.
+ *
+ * @returns {Record<string, boolean>|null} null ⇒ this selection has no
+ *   utility of its own (not a grenade selection, or drawn before snapshots).
+ */
+function sanitizeShapeUtility(raw, feature) {
+  if (feature !== 'grenade_in' || !raw || typeof raw !== 'object') return null;
+  let on = UTIL_KEYS.filter((k) => raw[k] === true);
+  if (!on.length) on = [...UTIL_KEYS];
+  const out = {};
+  for (const k of UTIL_KEYS) out[k] = on.includes(k);
+  return out;
+}
+
+/**
+ * The utility keys a grenade selection names, or null when it names none in
+ * particular — all four, or a selection drawn before selections carried them.
+ * @returns {string[]|null}
+ */
+export function shapeUtilityKeys(shape) {
+  const u = sanitizeShapeUtility(shape?.utility, shape?.feature || 'player_in');
+  if (!u) return null;
+  const on = UTIL_KEYS.filter((k) => u[k]);
+  return on.length === UTIL_KEYS.length ? null : on;
+}
+
 function sanitizeShape(raw) {
   if (!raw || typeof raw !== 'object') return null;
   const id = String(raw.id || '').trim() || newShapeId();
@@ -127,12 +174,14 @@ function sanitizeShape(raw) {
   const geom = sanitizeGeometry(raw.geometry);
   if (!geom) return null;
   const window = sanitizeWindow(raw.window);
+  const utility = sanitizeShapeUtility(raw.utility, feature);
   return {
     id,
     name: String(raw.name || '').trim(),
     feature,
     geometry: geom,
     ...(window ? { window } : {}),
+    ...(utility ? { utility } : {}),
     enabled: raw.enabled !== false
   };
 }
@@ -270,6 +319,9 @@ export function shapePassesWindow({
 }) {
   if (!meta || !playerId || !shape?.geometry || shape.enabled === false) return true;
   const feature = shape.feature || 'player_in';
+  // Map control asks a question about the round, not about a player, and it
+  // answers it beside the search rather than inside it. Every round passes.
+  if (feature === 'map_control') return true;
   const bounds = phaseBounds(meta);
   const teamOf = new Map((meta.players || []).map((p) => [p.id, p.team]));
   const scratch = {};
@@ -324,10 +376,13 @@ export function shapePassesWindow({
     // A grenade this player threw that landed inside the shape during the
     // window. Landing point and detonation tick come off the event, so no
     // tick buffer is needed.
+    // This selection's own types when it has them, the global switches only
+    // for one drawn before selections carried their own.
+    const want = sanitizeShapeUtility(shape.utility, feature) || utility;
     for (const g of meta.events?.grenades || []) {
       if (g.player !== playerId) continue;
       const key = utilKeyForType(g.type);
-      if (utility && key && utility[key] === false) continue;
+      if (want && key && want[key] === false) continue;
       const x = Number(g.at?.x);
       const y = Number(g.at?.y);
       if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
@@ -410,8 +465,52 @@ export function shapePassesWindow({
   return true;
 }
 
-/** Shape features that read a player's position out of the tick buffer. */
-const TICK_FEATURES = new Set(['player_in', 'kill_from', 'death_from', 'first_duel_in']);
+/**
+ * Could this window satisfy this shape, judging only by what is already in
+ * memory? `false` is a promise; `true` only means "the round has to be read".
+ *
+ * This is the cheap half of the search, and it runs before a single request.
+ * A `kill_from` selection can only ever match a player who got a kill in that
+ * phase, and the per-phase kill count is sitting in the round row the page
+ * already downloaded — `row.ph[player][phase].p`, filled by the same
+ * `phaseCombatFromMeta` off the same events that `shapePassesWindow` will
+ * re-read. Same for a death, and `first_duel_in` can only be the two players
+ * the row already names in `ok` / `od`.
+ *
+ * So the filters on the left compose into the scan instead of running after
+ * it: pick a side and a phase and the search stops fetching the rounds where
+ * nobody on that side did anything in that phase, which is most of them.
+ *
+ * `grenade_in` has no counterpart here — the index carries no per-round
+ * grenade tally, so a grenade search still has to open every round. It at
+ * least opens them cheaply: `searchNeedsTicks` keeps it to the meta.
+ */
+export function windowCanMatchShape(w, shape) {
+  if (!shape || shape.enabled === false || !shape.geometry) return true;
+  const feature = shape.feature || 'player_in';
+  const line = w?.window?.p;
+
+  if (feature === 'kill_from') return !line || (Number(line[P.KILLS]) || 0) > 0;
+  if (feature === 'death_from') return !line || (Number(line[P.DEATHS]) || 0) > 0;
+  if (feature === 'first_duel_in') {
+    const row = w?.row;
+    // An old payload without the opening columns: no opinion, read the round.
+    if (!row || (row.ok === undefined && row.od === undefined)) return true;
+    // A round whose opening duel is nobody's (no cross-team kill) has none.
+    return w.playerId === row.ok || w.playerId === row.od;
+  }
+  return true;
+}
+
+/** Shape features that read positions out of the tick buffer. */
+const TICK_FEATURES = new Set([
+  'player_in',
+  'kill_from',
+  'death_from',
+  'first_duel_in',
+  // Possession is walked from the same buffer, one sample a second.
+  'map_control'
+]);
 
 /**
  * Does this search need tick buffers at all?
@@ -568,6 +667,7 @@ export function releaseTicks(cache, budget = TICK_CACHE_BYTES) {
  * @param {{ timeWindow?: object, utility?: Record<string, boolean> }|null} [filter]
  * @param {{
  *   onProgress?: (p: { done: number, total: number }) => void,
+ *   onPack?: (file: string, pack: object) => void,
  *   concurrency?: number,
  *   chunk?: number,
  *   tickBudget?: number,
@@ -620,12 +720,23 @@ export async function filterWindowsByShapes(
     return true;
   };
 
+  // What the payload can already rule out, ruled out before anything is
+  // fetched. AND needs every shape to still be possible; OR needs one.
+  const canMatch = (w) => {
+    if (!active.length) return true;
+    return requireAll
+      ? active.every((shape) => windowCanMatchShape(w, shape))
+      : active.some((shape) => windowCanMatchShape(w, shape));
+  };
+
   // Windows grouped by the file they need, so a batch can be evaluated the
-  // moment it lands and its buffers let go of.
+  // moment it lands and its buffers let go of. A file none of whose windows
+  // survived the precondition is never opened at all — that is the difference
+  // between "matching 6,881 rounds" and matching the ones that could match.
   /** @type {Map<string, Array<object>>} */
   const byFile = new Map();
   for (const w of windows) {
-    if (!w?.file) continue;
+    if (!w?.file || !canMatch(w)) continue;
     const list = byFile.get(w.file);
     if (list) list.push(w);
     else byFile.set(w.file, [w]);
@@ -659,6 +770,9 @@ export async function filterWindowsByShapes(
     for (const file of slice) {
       const pack = cache.get(file);
       if (!pack?.meta) continue;
+      // Handed out while the pack is still whole: anything a caller wants to
+      // measure per round has to happen before the batch's ticks are let go.
+      opts.onPack?.(file, pack);
       for (const w of byFile.get(file) || []) {
         if (windowPasses(w, pack)) passed.add(w);
       }

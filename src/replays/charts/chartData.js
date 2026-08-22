@@ -6,6 +6,7 @@
 
 import { ECONOMIES, MAPS, economyLabel } from '../shared/roundId.js';
 import { emptyFilter, factPasses, mergeFilters } from './chartFacts.js';
+import { hasRankFilter, rankSummaryLabel } from '../shared/vrsRanks.js';
 import {
   aggregateMetric,
   findDimension,
@@ -505,6 +506,7 @@ export function filterWords(f) {
   if (f.teams?.length) out.push(`${f.teams.length} team(s)`);
   if (f.players?.length) out.push(`${f.players.length} player(s)`);
   if (f.matches?.length) out.push(`${f.matches.length} match(es)`);
+  if (hasRankFilter(f)) out.push(rankSummaryLabel(f.rankOwn, f.rankOpp));
   return out;
 }
 

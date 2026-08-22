@@ -55,6 +55,15 @@
   margin-bottom: 0;
 }
 
+/* The re-rendered half of every chapter. It is a flex item of .view-pad, so
+   without a column gap of its own everything inside it stacks flush. */
+#pf-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
 .pf-hero {
   display: flex;
   align-items: flex-end;
@@ -183,6 +192,166 @@
   width: 100%;
 }
 
+/* Maps: the roles grid, then a T and a CT round-type table per map. */
+.pf-maps {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+.pf-map-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.pf-map-title {
+  margin: 0;
+  font: 600 15px/1.2 var(--font-body);
+  color: var(--text);
+}
+
+.pf-map-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  align-items: start;
+}
+
+.pf-map-col {
+  min-width: 0;
+}
+
+.st-table.pf-map-table {
+  width: 100%;
+  table-layout: fixed;
+  font-size: 12px;
+}
+
+.pf-mt-col-name {
+  width: 34%;
+}
+
+.pf-mt-col-num {
+  width: 11%;
+}
+
+/* These tables do not scroll, so their headers must not stick: two header rows
+   both pinned to top:0 would paint on top of each other. The selectors carry
+   `.st-table` because that is what the shared rules they override weigh. */
+.st-table.pf-map-table thead tr th {
+  position: static;
+  z-index: auto;
+  padding: 6px 5px;
+  letter-spacing: 0.02em;
+  cursor: default;
+}
+
+.st-table.pf-map-table thead tr.pf-mt-group th {
+  padding-bottom: 1px;
+  border-bottom: 0;
+  text-align: center;
+  letter-spacing: 0.06em;
+}
+
+.st-table.pf-map-table thead tr.pf-mt-group th.pf-mt-side {
+  text-align: left;
+  font-size: 12px;
+}
+
+.pf-mt-side.is-t {
+  color: var(--rv-t);
+}
+
+.pf-mt-side.is-ct {
+  color: #5b9fd4;
+}
+
+.st-table.pf-map-table tbody tr td {
+  padding: 4px 5px;
+}
+
+.st-table.pf-map-table .pf-mt-split {
+  border-left: 1px solid var(--border);
+}
+
+.st-table.pf-map-table .pf-mt-pad td {
+  color: transparent;
+}
+
+.st-table.pf-map-table .pf-mt-name {
+  overflow: visible;
+}
+
+/* Round name: the label, and a hover menu that loads those rounds. */
+.pf-rt {
+  position: relative;
+  display: block;
+  min-width: 0;
+  outline: none;
+}
+
+.pf-rt-text {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* No gap above the panel: the pointer has to reach it without leaving the
+   name it opened from. */
+.pf-rt-menu {
+  position: absolute;
+  top: 100%;
+  left: -4px;
+  z-index: 20;
+  display: none;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px;
+  border-radius: var(--radius-sm);
+  background: #17171a;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.1),
+    0 10px 26px rgba(0, 0, 0, 0.7);
+}
+
+.pf-rt:hover .pf-rt-menu,
+.pf-rt:focus-within .pf-rt-menu {
+  display: flex;
+}
+
+.pf-rt-go {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  height: 24px;
+  padding: 0 6px;
+  border-radius: 6px;
+  color: var(--text);
+  font: 600 12px var(--font-body);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+a.pf-rt-go:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.pf-rt-go.is-off {
+  color: #4a4a50;
+  cursor: default;
+}
+
+.pf-rt-play {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
+}
+
 .pf-chart-wrap {
   min-width: 0;
 }
@@ -263,7 +432,8 @@
 }
 
 @media (max-width: 900px) {
-  .pf-roles {
+  .pf-roles,
+  .pf-map-pair {
     grid-template-columns: 1fr;
   }
 

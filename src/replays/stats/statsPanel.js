@@ -8,7 +8,7 @@
 
 import { formatApiError } from '../api.js';
 import { getStatsPayload } from '../statsCache.js';
-import { fetchAggregate } from '../api.js';
+import { fetchAggregate, fetchVrsRanks } from '../api.js';
 import { scheduleUiJob } from '../../lib/frameBudget.js';
 import {
   attachPlayerRoles,
@@ -60,6 +60,7 @@ import { POSITION_MAPS } from '../roles/teamPositions.js';
 import filtersIcon from '../../icons/icon_filters.svg?url';
 import calendarIcon from '../../icons/icon_calendar.svg?url';
 import { MENU_BTN, mbIcon, mbSummary, mbWrap } from '../../icons/menubuttons.js';
+import { placeRankMenu, rankFilterHtml, syncRankSummary } from '../shared/vrsRanks.js';
 
 /**
  * @param {{
@@ -353,7 +354,9 @@ export function createStatsPanel({
      * about a clock, and most questions are not.
      */
     fromSec: null,
-    toSec: null
+    toSec: null,
+    rankOwn: '',
+    rankOpp: ''
   };
 
   const detachTips = attachTips(el);
@@ -516,7 +519,7 @@ export function createStatsPanel({
   }
 
   function closeRoundMenus(except = null) {
-    for (const d of filtersEl.querySelectorAll('details.st-round-multi[open]')) {
+    for (const d of filtersEl.querySelectorAll('details.st-round-multi[open], details.st-rank-dd[open]')) {
       if (except && d === except) continue;
       d.removeAttribute('open');
     }
@@ -889,6 +892,10 @@ export function createStatsPanel({
     filtersEl.innerHTML = `
       <div class="st-filters-scroll">
         <div class="st-filter-group">${mapSelectHtml()}</div>
+        <div class="st-filter-group">${rankFilterHtml({
+          own: filter.rankOwn,
+          opp: filter.rankOpp
+        })}</div>
         <div class="st-filter-group">${sideSeg}</div>
         ${roundGroups}
         ${roundWindowHtml()}
@@ -1002,11 +1009,18 @@ export function createStatsPanel({
     (e) => {
       const details = e.target;
       if (!(details instanceof HTMLDetailsElement)) return;
-      if (!details.classList.contains('st-round-multi')) return;
+      if (!details.classList.contains('st-round-multi') && !details.classList.contains('st-rank-dd')) {
+        return;
+      }
       if (details.open) {
         closeRoundMenus(details);
-        placeRoundMenu(details);
-        requestAnimationFrame(() => placeRoundMenu(details));
+        if (details.classList.contains('st-rank-dd')) {
+          placeRankMenu(details);
+          requestAnimationFrame(() => placeRankMenu(details));
+        } else {
+          placeRoundMenu(details);
+          requestAnimationFrame(() => placeRoundMenu(details));
+        }
       }
     },
     true
@@ -1080,12 +1094,25 @@ export function createStatsPanel({
       filter.roundOpp = [];
       filter.fromSec = null;
       filter.toSec = null;
+      filter.rankOwn = '';
+      filter.rankOpp = '';
       filter.dateFrom = '';
       filter.dateTo = '';
       filter.minRounds = defaultMinRounds(scopeForMinRounds([]));
       resetListPage();
       scheduleRender({ rebuildFilters: true });
     }
+  });
+
+  filtersEl.addEventListener('input', (e) => {
+    const rank = e.target.closest('[data-rank]');
+    if (!rank) return;
+    const field = String(rank.dataset.rank || '').split('|').pop();
+    if (field !== 'rankOwn' && field !== 'rankOpp') return;
+    filter[field] = rank.value || '';
+    syncRankSummary(rank.closest('details'), filter.rankOwn, filter.rankOpp);
+    resetListPage();
+    scheduleRender({ rebuildFilters: false });
   });
 
   filtersEl.addEventListener('change', (e) => {
@@ -1200,7 +1227,7 @@ export function createStatsPanel({
   });
 
   document.addEventListener('pointerdown', (e) => {
-    const inRoundMenu = e.target.closest?.('details.st-round-multi');
+    const inRoundMenu = e.target.closest?.('details.st-round-multi, details.st-rank-dd');
     if (!inRoundMenu) closeRoundMenus();
 
     if (searchMenuOpen && !e.target.closest?.('#st-search-typeahead')) {
@@ -1218,6 +1245,9 @@ export function createStatsPanel({
     () => {
       for (const d of filtersEl.querySelectorAll('details.st-round-multi[open]')) {
         placeRoundMenu(d);
+      }
+      for (const d of filtersEl.querySelectorAll('details.st-rank-dd[open]')) {
+        placeRankMenu(d);
       }
     },
     true
@@ -1478,6 +1508,8 @@ export function createStatsPanel({
       roundOpp: [...roundKeysOf('opp')],
       fromSec: Number.isFinite(filter.fromSec) ? filter.fromSec : null,
       toSec: Number.isFinite(filter.toSec) ? filter.toSec : null,
+      rankOwn: filter.rankOwn || '',
+      rankOpp: filter.rankOpp || '',
       sortKey: s?.key || (tab === 'teams' ? 'avgRating' : 'rating'),
       sortDir: s?.dir === 'asc' ? 'asc' : 'desc',
       page: Math.max(1, Number(activePage()) || 1),
@@ -1581,6 +1613,8 @@ export function createStatsPanel({
       const raw = String(next.dateTo ?? next.to ?? '').trim();
       filter.dateTo = /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : '';
     }
+    if ('rankOwn' in next) filter.rankOwn = String(next.rankOwn || '');
+    if ('rankOpp' in next) filter.rankOpp = String(next.rankOpp || '');
     if (filter.dateFrom && filter.dateTo && filter.dateFrom > filter.dateTo) {
       const swap = filter.dateFrom;
       filter.dateFrom = filter.dateTo;
@@ -2583,6 +2617,8 @@ export function createStatsPanel({
     filter.minRounds = defaultMinRounds(next);
     filter.result = '';
     filter.advantage = '';
+    filter.rankOwn = '';
+    filter.rankOpp = '';
     entityPick = { players: [], teams: [] };
     searchQuery = '';
     searchMenuOpen = false;
@@ -2595,6 +2631,8 @@ export function createStatsPanel({
     applyViewState(next, { notify: false });
     syncSearchToggle();
     if (searchOpen) renderSearch();
+    await fetchVrsRanks().catch(() => {});
+    if (token !== loadToken) return;
 
     // Server mode. The default view is a filtered table over the library, which
     // the aggregate endpoint answers in milliseconds — so ask for that first,

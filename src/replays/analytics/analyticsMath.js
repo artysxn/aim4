@@ -36,6 +36,8 @@ import {
  * @property {''|'won'|'lost'} [opening]
  * @property {string|string[]} [roundOwn]
  * @property {string|string[]} [roundOpp]
+ * @property {string} [rankOwn]
+ * @property {string} [rankOpp]
  * @property {Set<string>|string[]} [phases]
  * @property {Array<object>} [shapes]
  * @property {'all'|'any'} [shapeMatch]
@@ -143,11 +145,12 @@ export function playerTeamOnRow(payload, row, playerId) {
 /**
  * Does the round pass Analytics round filters for this player?
  */
-export function analyticsRowPasses(row, filter, team) {
+export function analyticsRowPasses(row, filter, team, demo) {
   if (!filter.map || row.m !== filter.map) return false;
   const pid = filter.playerId;
   if (pid && !row.p?.[pid] && !row.ph?.[pid]) return false;
-  if (!rowPasses(row, filter, team)) return false;
+  const demos = demo ? new Map([[demo.id || row.d, demo]]) : null;
+  if (!rowPasses(row, filter, team, null, demos)) return false;
   if (!resultPasses(row, team, filter.result || '')) return false;
   if (pid && !openingPasses(row, pid, filter.opening || '')) return false;
   return true;
@@ -158,8 +161,9 @@ export function analyticsRowPasses(row, filter, team) {
  */
 function roundMatchesAnyone(row, filter, demo) {
   if (!filter.map || row.m !== filter.map) return false;
+  const demos = demo ? new Map([[demo.id || row.d, demo]]) : null;
   for (const team of [1, 2]) {
-    if (!rowPasses(row, filter, team)) continue;
+    if (!rowPasses(row, filter, team, null, demos)) continue;
     if (!resultPasses(row, team, filter.result || '')) continue;
     if (filter.opening === 'won') {
       if (!row.ok || teamOfPlayer(demo, row.ok) !== team) continue;
@@ -210,7 +214,7 @@ export function matchingWindows(payload, filter) {
       if (!team) continue;
       for (const row of demo.rounds || []) {
         const f = { ...filter, playerId: p.id };
-        if (!analyticsRowPasses(row, f, team)) continue;
+        if (!analyticsRowPasses(row, f, team, demo)) continue;
         const bag = row.ph?.[p.id];
         if (!bag) continue;
         for (const phase of phases) {

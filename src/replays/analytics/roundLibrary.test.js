@@ -134,6 +134,23 @@ for (const [code, sides] of Object.entries(ROUND_LIBRARY)) {
   }
 }
 
+{
+  const uniT = ['all-a-hits', 'all-b-hits', 'a-afterplant', 'b-afterplant'];
+  const uniCt = ['all-a-hits', 'all-b-hits', 'a-retake', 'b-retake'];
+  for (const [code, sides] of Object.entries(ROUND_LIBRARY)) {
+    assert.deepEqual(
+      sides.T.slice(0, 4).map((d) => d.key),
+      uniT,
+      `${code} T opens with the universal types`
+    );
+    assert.deepEqual(
+      sides.CT.slice(0, 4).map((d) => d.key),
+      uniCt,
+      `${code} CT opens with the universal types`
+    );
+  }
+}
+
 // Families are written strictest first, so the priority order is the array order.
 {
   const order = ROUND_LIBRARY.NUK.T.map((d) => d.key);
@@ -376,6 +393,7 @@ const mkRound = ({ s1, w, t = [], ct = [] }) => ({
   const unused = ct.types.find((x) => x.key === 'awp-peek');
   assert.equal(unused.ours.rounds, 0, 'a call they never make still has a row');
   assert.equal(unused.index, null, 'with no index, because the library has not run it either');
+  assert.equal(fake.ours.rating, null, 'no player lines, no rating');
 }
 
 assert.equal(
@@ -402,6 +420,53 @@ assert.equal(
   );
   assert.equal(stats.sides.T.ourRounds, 1, 'an untagged round is not counted against the share');
   assert.equal(stats.sides.T.types.find((x) => x.key === 'a-fake').ours.share, 100);
+}
+
+{
+  // Rating is this team's players over the tagged rounds, not the opponent's.
+  const line = (kills, deaths, damage, kast) => [kills, deaths, 0, damage, 10, 5, 1, 0, 0, kast];
+  const stats = roundListStats(
+    {
+      demos: [
+        {
+          id: 'd1',
+          map: 'NUK',
+          name1: 'Vitality',
+          name2: 'FaZe',
+          players: [
+            { id: 'p1', name: 'ZywOo', team: 1 },
+            { id: 'p2', name: 'rain', team: 2 }
+          ],
+          rounds: [
+            {
+              d: 'd1',
+              s1: 'T',
+              s2: 'CT',
+              w: 1,
+              p: { p1: line(3, 0, 200, 1), p2: line(0, 3, 10, 0) },
+              rl: { v: 8, t: [{ k: 'a-fake', m: {} }], ct: [{ k: 'two-ramp', m: {} }] }
+            },
+            {
+              d: 'd1',
+              s1: 'CT',
+              s2: 'T',
+              w: 1,
+              p: { p1: line(1, 1, 80, 1), p2: line(2, 1, 120, 1) },
+              rl: { v: 8, t: [{ k: 'a-fake', m: {} }], ct: [{ k: 'lobby-crunch', m: {} }] }
+            }
+          ]
+        }
+      ]
+    },
+    { mapCode: 'NUK', teamName: 'Vitality' }
+  );
+  const fake = stats.sides.T.types.find((x) => x.key === 'a-fake');
+  assert.ok(Number.isFinite(fake.ours.rating), 'ran rating from our players');
+  assert.ok(Number.isFinite(fake.faced.rating), 'faced rating from our players');
+  assert.ok(
+    fake.ours.rating > fake.faced.rating,
+    'the 3-0 round rates higher than the 1-1'
+  );
 }
 
 // ---------------------------------------------------------------------------

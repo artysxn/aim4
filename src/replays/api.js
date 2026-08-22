@@ -296,6 +296,20 @@ export async function fetchRoster() {
   );
 }
 
+/** Global VRS ladder (three regions pooled by points). Cached for the session. */
+let vrsRanksCache = null;
+
+export async function fetchVrsRanks() {
+  if (vrsRanksCache) return vrsRanksCache;
+  const { ranksFromApiPayload, setVrsRankTable } = await import('./shared/vrsRanks.js');
+  const body = await asJson(
+    await safeFetch(`${API_BASE}/api/replays/vrs`, { headers: await headers() })
+  );
+  vrsRanksCache = ranksFromApiPayload(body);
+  setVrsRankTable(vrsRanksCache);
+  return vrsRanksCache;
+}
+
 /**
  * Library-wide peer averages for the Performance cards. Computed server-side so
  * the page can scope itself to one player's matches without the comparison
@@ -336,6 +350,8 @@ export async function fetchAggregate(filter = {}, opts = {}) {
   if (filter.result) params.set('result', filter.result);
   if (filter.advantage) params.set('advantage', filter.advantage);
   if (filter.teamName) params.set('teamName', filter.teamName);
+  if (filter.rankOwn) params.set('rankOwn', String(filter.rankOwn));
+  if (filter.rankOpp) params.set('rankOpp', String(filter.rankOpp));
   if (filter.dateFrom) params.set('from', filter.dateFrom);
   if (filter.dateTo) params.set('to', filter.dateTo);
   if (Array.isArray(filter.files) && filter.files.length) params.set('files', filter.files.join(','));

@@ -22,6 +22,8 @@ import { UTILITY_FIELDS } from '../../src/replays/shared/utilityMetrics.js';
 import { emptyRating3 } from '../../src/replays/shared/rating3.js';
 import { DUEL_BUCKETS, R3_FIELDS, SEAT } from './statsHotStore.js';
 import { P } from '../../src/replays/shared/statsMath.js';
+import { filterSeatPassesRank, hasRankFilter } from '../../src/replays/shared/vrsRanks.js';
+import { loadGlobalRanks } from './teamStandingsDb.js';
 
 const AKPR_HOLD_SECONDS = 10;
 
@@ -117,6 +119,9 @@ export function aggregateHot(store, filter = {}, allowDemo = null) {
   const wantResult = filter.result || '';
   const wantAdvantage = filter.advantage || '';
   const wantTeamName = filter.teamName ? teamNameKey(filter.teamName) : '';
+  const rankFilter = hasRankFilter(filter)
+    ? { ...filter, vrsRanks: filter.vrsRanks || loadGlobalRanks() }
+    : filter;
   const fromMs = filter.dateFrom ? Date.parse(`${filter.dateFrom}T00:00:00`) : null;
   const toMs = filter.dateTo ? Date.parse(`${filter.dateTo}T23:59:59.999`) : null;
   const sideTId = store.sides.values.indexOf('T');
@@ -174,6 +179,16 @@ export function aggregateHot(store, filter = {}, allowDemo = null) {
 
       const displayName = team === 1 ? demo.name1 : demo.name2;
       if (wantTeamName && teamNameKey(displayName) !== wantTeamName) continue;
+      if (
+        hasRankFilter(rankFilter) &&
+        !filterSeatPassesRank(
+          displayName,
+          team === 1 ? demo.name2 : demo.name1,
+          rankFilter
+        )
+      ) {
+        continue;
+      }
 
       touched[pid] = 1;
       const pBase = pid * STRIDE;
@@ -386,6 +401,9 @@ export function aggregateTeamsHot(store, filter = {}, playerRows = null, allowDe
   const wantResult = filter.result || '';
   const wantAdvantage = filter.advantage || '';
   const wantTeamName = filter.teamName ? teamNameKey(filter.teamName) : '';
+  const rankFilter = hasRankFilter(filter)
+    ? { ...filter, vrsRanks: filter.vrsRanks || loadGlobalRanks() }
+    : filter;
   const fromMs = filter.dateFrom ? Date.parse(`${filter.dateFrom}T00:00:00`) : null;
   const toMs = filter.dateTo ? Date.parse(`${filter.dateTo}T23:59:59.999`) : null;
   const sideTId = store.sides.values.indexOf('T');
@@ -414,6 +432,16 @@ export function aggregateTeamsHot(store, filter = {}, playerRows = null, allowDe
       const key = teamNameKey(displayName, shortId);
       if (!key) continue;
       if (wantTeamName && teamNameKey(displayName) !== wantTeamName) continue;
+      if (
+        hasRankFilter(rankFilter) &&
+        !filterSeatPassesRank(
+          displayName,
+          team === 1 ? demo.name2 : demo.name1,
+          rankFilter
+        )
+      ) {
+        continue;
+      }
 
       const sideIsT = team === 1 ? s1IsT : !s1IsT;
       if (wantSide) {

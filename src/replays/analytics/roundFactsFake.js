@@ -96,7 +96,11 @@ export function fakeSide(side, spec = {}) {
     lastSec: LAST_SEC,
     nades,
     series,
-    regions: { inside: (names, x) => inside(names, x), insideSite: () => false, stacked: false },
+    regions: {
+      inside: (names, x) => inside(names, x),
+      insideSite: (letter, x) => inside([`site:${String(letter || '').toLowerCase()}`], x),
+      stacked: false
+    },
     ptsAt,
     pointAt,
     playersIn,
@@ -109,7 +113,8 @@ export function fakeSide(side, spec = {}) {
       return out;
     },
     playersLower: () => new Set(),
-    playersInSite: () => new Set(),
+    playersInSite: (letter, sec) =>
+      playersIn([`site:${String(letter || '').toLowerCase()}`], sec),
     transitions(fromNames, toNames, { from = 0, to = LAST_SEC } = {}) {
       const seen = new Map();
       const done = new Map();
@@ -134,7 +139,14 @@ export function fakeSide(side, spec = {}) {
       }
       return null;
     },
-    aliveCount: () => 5,
+    aliveCount: (sec = 0) => {
+      if (spec.aliveFromStays) {
+        return ourIds.filter((id) =>
+          stays.some((s) => s.id === id && sec >= s.from && sec <= s.to)
+        ).length;
+      }
+      return Number.isFinite(spec.alive) ? spec.alive : 5;
+    },
     nadesIn: (type, names) =>
       nades.filter(
         (n) => (!type || n.type === type) && n.names.some((x) => names.includes(x))
@@ -163,6 +175,9 @@ export function fakeSide(side, spec = {}) {
         return true;
       });
     },
+    killsInSite: () => [],
+    plantSec: spec.plant?.sec ?? null,
+    plantSite: spec.plant?.site ?? null,
     awper: () => [...awp][0] || '',
     heldAwp: (id) => awp.has(id),
     deathSec: (id) => (id in (spec.deaths || {}) ? spec.deaths[id] : null),
@@ -177,5 +192,20 @@ export function fakeRound(side, spec = {}, enemySpec = {}) {
   const other = fakeSide(side === 'T' ? 'CT' : 'T', enemySpec);
   f.enemy = other;
   other.enemy = f;
+  const plant = spec.plant || enemySpec.plant || null;
+  f.plantSec = plant?.sec ?? null;
+  f.plantSite = plant?.site ?? null;
+  other.plantSec = f.plantSec;
+  other.plantSite = f.plantSite;
+  const kills = [...(spec.killsInSite || []), ...(enemySpec.killsInSite || [])];
+  const killsInSite = (letter, { from = 0, to = LAST_SEC } = {}) =>
+    kills.filter(
+      (k) =>
+        String(k.site || '').toLowerCase() === String(letter || '').toLowerCase() &&
+        k.sec >= from &&
+        k.sec <= to
+    );
+  f.killsInSite = killsInSite;
+  other.killsInSite = killsInSite;
   return f;
 }

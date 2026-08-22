@@ -14,6 +14,7 @@
 import { P } from '../shared/statsMath.js';
 import { buyBucket, econHasAwp } from '../shared/roundId.js';
 import { roleForPlayer } from '../roles/computeRoles.js';
+import { filterSeatPassesRank, hasRankFilter } from '../shared/vrsRanks.js';
 
 /** Clock-based phase cuts, in live seconds after freeze end. */
 export const PHASE_CUTS = { earlyEnd: 40, lateStart: 75 };
@@ -415,7 +416,9 @@ export function emptyFilter() {
     killKinds: [],
     weapons: [],
     /** Role / position labels (Lurk, Pack, A Anchor, …). */
-    roles: []
+    roles: [],
+    rankOwn: '',
+    rankOpp: ''
   };
 }
 
@@ -454,6 +457,7 @@ export function factPasses(fact, f = {}) {
   if (f.oppEcon?.length && !f.oppEcon.includes(fact.oppEcon)) return false;
   if (f.hasAwp && !fact.hasAwp) return false;
   if (f.oppHasAwp && !fact.oppHasAwp) return false;
+  if (hasRankFilter(f) && !filterSeatPassesRank(fact.teamName, fact.oppName, f)) return false;
   if (f.result === 'won' && !fact.won) return false;
   if (f.result === 'lost' && fact.won) return false;
   if (f.opening === '5v4' && !fact.teamOpenKill) return false;

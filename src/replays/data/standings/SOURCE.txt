@@ -1,9 +1,11 @@
-Valve CS regional standings (2026-07-06 snapshot), used to auto-name teams from rosters.
+Valve CS regional standings. Bundled files are the last snapshot copied into
+the repo; the server scans GitHub once a day and keeps a live copy if a newer
+date has been published.
 
 Upstream:
-https://github.com/ValveSoftware/counter-strike_regional_standings/tree/main/live/2026
+https://github.com/ValveSoftware/counter-strike_regional_standings/tree/main/live
 
-Files:
-  standings_europe_2026_07_06.md
-  standings_americas_2026_07_06.md
-  standings_asia_2026_07_06.md
+Current bundled snapshot: 2026_08_03
+  standings_europe_2026_08_03.md
+  standings_americas_2026_08_03.md
+  standings_asia_2026_08_03.md

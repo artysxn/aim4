@@ -23,6 +23,7 @@ import {
   rating3RoundContext,
   rating3RoundFacts
 } from './rating3.js';
+import { filterSeatPassesRank, hasRankFilter } from './vrsRanks.js';
 
 /** Per-player, per-round counters, in the order the index packs them. */
 export const P = {
@@ -74,6 +75,8 @@ const div = (a, b) => (b > 0 ? a / b : 0);
  * @property {string} [dateTo]    inclusive end day (YYYY-MM-DD, local)
  * @property {string|string[]} [roundOwn]  round-library key(s) the subject side must have run (any match)
  * @property {string|string[]} [roundOpp]  round-library key(s) the opposing side must have run (any match)
+ * @property {string} [rankOwn]   VRS global rank spec for the subject ("50", "20-50")
+ * @property {string} [rankOpp]   VRS global rank spec for the opponent
  */
 
 /** Normalize a round-library filter field to a list of non-empty keys. */
@@ -222,6 +225,13 @@ export function rowPasses(row, filter = {}, team = 0, players = null, demos = nu
     if (!demoPassesDate(demo, filter)) return false;
   }
   if (!team) return true;
+  if (hasRankFilter(filter)) {
+    const demo = demos?.get?.(row.d) || null;
+    if (!demo) return false;
+    const ownName = team === 1 ? demo.name1 : demo.name2;
+    const oppName = team === 1 ? demo.name2 : demo.name1;
+    if (!filterSeatPassesRank(ownName, oppName, filter)) return false;
+  }
   const side = team === 1 ? row.s1 : row.s2;
   if (filter.side && side !== filter.side) return false;
   const own = team === 1 ? row.e1 : row.e2;

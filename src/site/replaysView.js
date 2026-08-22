@@ -24,7 +24,8 @@ import {
   setDemoTags,
   setDemoVisibility,
   uploadDemo,
-  uploadImport
+  uploadImport,
+  fetchVrsRanks
 } from '../replays/api.js';
 import {
   ECONOMIES,
@@ -36,6 +37,14 @@ import {
 } from '../replays/shared/roundId.js';
 import { collectRounds, matchesQuery, splitStoredName } from '../replays/shared/roundFilter.js';
 import { clusterTeams } from '../replays/shared/teamClusters.js';
+import {
+  demoPassesRank,
+  hasRankFilter,
+  placeRankMenu,
+  rankFilterHtml,
+  rankNameKey,
+  syncRankSummary
+} from '../replays/shared/vrsRanks.js';
 import { openingSituation, SITUATION_OPTIONS } from '../replays/shared/openingSituation.js';
 import { findRoundDecided } from '../replays/coach/roundDecided.js';
 import { hasRoundLibrary, roundTypeRows } from '../replays/analytics/roundLibrary.js';
@@ -170,6 +179,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
   let roundOwnMenuOpen = false;
   let roundOppMenuOpen = false;
   let mapMenuOpen = false;
+  let rankQueryTimer = 0;
   /** @type {{ key: string, name: string, shortIds: string[] }[]} */
   let teamClusters = [];
   /** @type {Map<string, { key: string, name: string, shortIds: string[] }>} */
@@ -209,7 +219,9 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     libraryScope: 'public',
     /** Demo tags, lowercased. A demo must carry every one that is picked. */
     /** @type {Set<string>} */
-    tags: new Set()
+    tags: new Set(),
+    rankOwn: '',
+    rankOpp: ''
   };
   /** @type {Map<string, object|null>} */
   const roundMetaCache = new Map();
@@ -1586,7 +1598,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
 
   /** Team / player filters must search the whole library, not the demo page. */
   function libraryWideFilters() {
-    return Boolean(filters.teams.size || filters.players.size);
+    return Boolean(filters.teams.size || filters.players.size || hasRankFilter(filters));
   }
 
   function knownPlayers() {
@@ -1652,9 +1664,16 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
    * here was the whole reason "unlisted" looked broken to a teammate: the demo
    * arrived, the default scope threw it away, and nothing said so.
    */
+  function rankSubjectKey() {
+    if (filters.teams.size !== 1) return '';
+    const cluster = teamClustersByKey.get([...filters.teams][0]);
+    return rankNameKey(cluster?.name);
+  }
+
   function demoMatchesScope(d) {
     if (!d) return false;
     if (!demoMatchesTags(d)) return false;
+    if (!demoPassesRank(d, filters.rankOwn, filters.rankOpp, rankSubjectKey())) return false;
     const mine = isOwnDemo(d);
     const vis = demoVisibility(d);
     if (filters.libraryScope === 'mine') return mine || vis === 'unlisted';
@@ -1965,6 +1984,13 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
         ${mapMenuHtml()}
       </div>
       <div class="rp-filter-group">
+        ${rankFilterHtml({
+          own: filters.rankOwn,
+          opp: filters.rankOpp,
+          summaryClass: 'site-select st-rank-summary'
+        })}
+      </div>
+      <div class="rp-filter-group">
         <div class="rp-econ-pair">
           <div class="rp-econ-side">
             ${econSelectHtml('rp-econ-a', filters.econA, "Team 1's buy")}
@@ -2043,6 +2069,14 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     bindAwp('rp-awp-a', 'hasAwpA');
     bindAwp('rp-awp-b', 'hasAwpB');
 
+    filtersEl.querySelectorAll('details.st-rank-dd').forEach((details) => {
+      details.addEventListener('toggle', () => {
+        if (!details.open) return;
+        placeRankMenu(details);
+        requestAnimationFrame(() => placeRankMenu(details));
+      });
+    });
+
     filtersEl.querySelector('#rp-won-by')?.addEventListener('change', (e) => {
       const v = e.target.value;
       filters.wonByMode = v === 'selected' || v === 'opponent' ? v : '';
@@ -2077,6 +2111,8 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       clearRoundTypeFilters();
       filters.libraryScope = 'public';
       filters.tags.clear();
+      filters.rankOwn = '';
+      filters.rankOpp = '';
       // Early is not a valid decided filter anymore.
       teamSearch = '';
       playerSearch = '';
@@ -2129,6 +2165,23 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     }
   }
 
+  window.addEventListener(
+    'scroll',
+    () => {
+      for (const d of filtersEl?.querySelectorAll('details.st-rank-dd[open]') || []) {
+        placeRankMenu(d);
+      }
+    },
+    true
+  );
+
+  document.addEventListener('pointerdown', (e) => {
+    if (e.target.closest?.('details.st-rank-dd')) return;
+    for (const d of filtersEl?.querySelectorAll('details.st-rank-dd[open]') || []) {
+      d.removeAttribute('open');
+    }
+  });
+
   filtersEl?.addEventListener('focusin', (e) => {
     const ownInput = e.target.closest('#rp-round-own-search');
     if (ownInput) {
@@ -2146,6 +2199,17 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
   });
 
   filtersEl?.addEventListener('input', (e) => {
+    const rank = e.target.closest('[data-rank]');
+    if (rank) {
+      const field = String(rank.dataset.rank || '').split('|').pop();
+      if (field === 'rankOwn' || field === 'rankOpp') {
+        filters[field] = rank.value || '';
+        syncRankSummary(rank.closest('details'), filters.rankOwn, filters.rankOpp);
+        clearTimeout(rankQueryTimer);
+        rankQueryTimer = setTimeout(() => runQuery(), 250);
+      }
+      return;
+    }
     const teamInput = e.target.closest('#rp-team-search');
     if (teamInput) {
       teamSearch = teamInput.value;
@@ -2370,7 +2434,8 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
         filters.afterplant ||
         filters.decidedPhases.size ||
         filters.roundOwn.size ||
-        filters.roundOpp.size
+        filters.roundOpp.size ||
+        hasRankFilter(filters)
     );
   }
 
@@ -2575,6 +2640,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
   let queryToken = 0;
   async function runQuery() {
     const token = ++queryToken;
+    if (hasRankFilter(filters)) await fetchVrsRanks().catch(() => {});
     const query = currentQuery();
     // Spinner first so the sidebar can take a click while the library scan runs.
     if (resultEl) {
@@ -3881,6 +3947,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       }
       renderDemos();
       renderFilters();
+      void fetchVrsRanks().catch(() => {});
       // My Uploads needs the full owned list — libraryLimit is only for /demos paging.
       if (subpage === 'upload' || mineDemosLoaded) {
         await refreshMineDemos();

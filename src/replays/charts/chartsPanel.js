@@ -8,7 +8,8 @@
 // the cached facts in memory; nothing here refetches.
 // ---------------------------------------------------------------------------
 
-import { consumeCapability, formatApiError } from '../api.js';
+import { consumeCapability, fetchVrsRanks, formatApiError } from '../api.js';
+import { placeRankMenu, rankFilterHtml, syncRankSummary } from '../shared/vrsRanks.js';
 import { getStatsPayload, statsCacheGeneration, statsCacheKey } from '../statsCache.js';
 import { scheduleUiJob } from '../../lib/frameBudget.js';
 import { CAP } from '../../../shared/entitlements/keys.js';
@@ -571,6 +572,12 @@ export function createChartsPanel({ escapeHtml }) {
       maps.length > 1 && !(scope === 'g' && state.compare?.on)
         ? multiDropdown(scope, 'maps', maps, arr('maps'), 'Map', 'map')
         : '',
+      rankFilterHtml({
+        own: f.rankOwn,
+        opp: f.rankOpp,
+        scope,
+        summaryClass: 'site-select ch-dd-summary st-rank-summary'
+      }),
       sideSegHtml(scope, f),
       src === 'player' || src === 'kill'
         ? multiDropdown(scope, 'roles', roleFilterOptions(f), arr('roles'), 'Role')
@@ -1329,11 +1336,29 @@ export function createChartsPanel({ escapeHtml }) {
     }
   }
 
+  function closeRankMenus(except = null) {
+    for (const d of sideEl.querySelectorAll('details.st-rank-dd[open]')) {
+      if (except && d === except) continue;
+      d.removeAttribute('open');
+    }
+  }
+
   sideEl.addEventListener('toggle', (e) => {
+    const rankDd = e.target.closest?.('details.st-rank-dd');
+    if (rankDd && e.target === rankDd) {
+      if (rankDd.open) {
+        closeDdMenus();
+        closeRankMenus(rankDd);
+        placeRankMenu(rankDd);
+        requestAnimationFrame(() => placeRankMenu(rankDd));
+      }
+      return;
+    }
     const details = e.target.closest?.('details.ch-dd');
     if (!details || e.target !== details) return;
     if (details.open) {
       closeDdMenus(details);
+      closeRankMenus();
       placeDdMenu(details);
     }
   }, true);
@@ -1496,6 +1521,7 @@ export function createChartsPanel({ escapeHtml }) {
   document.addEventListener('pointerdown', (e) => {
     if (!sideEl.contains(e.target)) {
       closeDdMenus();
+      closeRankMenus();
       if (compareCalendarOpen.a || compareCalendarOpen.b) {
         compareCalendarOpen = { a: false, b: false };
         afterChange();
@@ -1513,11 +1539,26 @@ export function createChartsPanel({ escapeHtml }) {
     'scroll',
     () => {
       for (const d of sideEl.querySelectorAll('details.ch-dd[open]')) placeDdMenu(d);
+      for (const d of sideEl.querySelectorAll('details.st-rank-dd[open]')) placeRankMenu(d);
     },
     true
   );
 
   sideEl.addEventListener('input', (e) => {
+    const rank = e.target.dataset?.rank;
+    if (rank) {
+      const [scope, field] = String(rank).split('|');
+      if (
+        (scope === 'g' || scope === 'x' || scope === 'y') &&
+        (field === 'rankOwn' || field === 'rankOpp')
+      ) {
+        const f = filterFor(scope);
+        f[field] = e.target.value;
+        syncRankSummary(e.target.closest('details'), f.rankOwn, f.rankOpp);
+        afterChange({ rebuildSide: false });
+      }
+      return;
+    }
     const slot = e.target.dataset?.compareSearch;
     if (slot === 'a' || slot === 'b') {
       compareSearch[slot] = e.target.value;
@@ -1836,6 +1877,7 @@ export function createChartsPanel({ escapeHtml }) {
     canvasEl.innerHTML = spinnerHtml('Loading charts…');
     const cancelSlow = watchSlowLoad(canvasEl);
     try {
+      await fetchVrsRanks().catch(() => {});
       // Spending happens when Charts first builds facts for this session scope.
       // Warm revisits return earlier; a Database cache hit still spends once.
       await consumeCapability(CAP.ANALYTICS_CHARTS);

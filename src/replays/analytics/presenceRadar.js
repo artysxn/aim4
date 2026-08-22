@@ -1,25 +1,48 @@
 // ---------------------------------------------------------------------------
 // Analytics radar — map + drawn selection outlines + optional draw tools.
 // Supports wheel zoom and drag-pan while zoomed (when not drawing).
+//
+// Drawn selections are also editable here, on the canvas, rather than only in
+// the list beside it: hovering one names it, its corners drag to reshape it,
+// and a × on the shape removes it. The list stays the authority — it owns the
+// clock window, the enable switch and the ordering — but "which box was that,
+// and a bit further left" is a question about the map, and answering it by
+// reading a row of text and deleting and redrawing was the long way round.
 // ---------------------------------------------------------------------------
 
 import { RADAR_SIZE, radarToWorld, worldToRadar } from '../viewer/mapCalibration.js';
 import { loadRadar } from '../viewer/radarRenderer.js';
+import { pointInPiece } from '../zones/zoneGeom.js';
 
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 8;
+
+/** Corner / vertex grab dot: drawn this big, grabbable a little wider. */
+const HANDLE_R = 4;
+const HANDLE_HIT = 10;
+/** The × badge that removes a selection, at the top-right of its bounds. */
+const CLOSE_R = 8;
+/** A rectangle never resizes below this, in world units, so it stays grabbable. */
+const MIN_RECT_WORLD = 48;
 
 /**
  * @param {{
  *   canvas: HTMLCanvasElement,
  *   wrap?: HTMLElement,
- *   onShapeComplete?: (geometry: object) => void
+ *   onShapeComplete?: (geometry: object) => void,
+ *   shapeLabel?: (shape: object, index: number)
+ *     => string | Array<{ text: string, color?: string }>,
+ *   onShapeEdit?: (id: string, geometry: object) => void,
+ *   onShapeDelete?: (id: string) => void
  * }} els
  */
 export function createPresenceRadar(els) {
   const canvas = els.canvas;
   const wrap = els.wrap || canvas?.parentElement;
   const onShapeComplete = els.onShapeComplete || null;
+  const shapeLabel = els.shapeLabel || null;
+  const onShapeEdit = els.onShapeEdit || null;
+  const onShapeDelete = els.onShapeDelete || null;
 
   let mapCode = '';
   /** @type {Array<object>} */
@@ -44,6 +67,21 @@ export function createPresenceRadar(els) {
   /** @type {Array<[number, number]>} world path while lassoing */
   let lassoPath = [];
   let lassoing = false;
+
+  /** The selection under the pointer: its id, and which part of it. */
+  let hoverId = '';
+  /** @type {''|'body'|'handle'|'close'} */
+  let hoverKind = '';
+  let hoverIndex = -1;
+  /** Cursor in canvas space, for the name tag. Null when the pointer is away. */
+  let cursor = null;
+  /**
+   * A corner being dragged: which selection, which handle, and — for a
+   * rectangle — the opposite corner, held fixed for the whole drag so the box
+   * does not jump when it is dragged inside out.
+   * @type {{ id: string, index: number, anchor: {x: number, y: number}|null }|null}
+   */
+  let editing = null;
 
   function clampPan(viewW, viewH) {
     const world = Math.min(viewW, viewH) * zoom;
@@ -79,6 +117,232 @@ export function createPresenceRadar(els) {
   function canvasToWorld(clientX, clientY) {
     const { rx, ry } = canvasToRadar(clientX, clientY);
     return radarToWorld(mapCode, rx, ry, {});
+  }
+
+  /**
+   * World → canvas, outside `paint`, so hit-testing measures against exactly
+   * what was drawn.
+   */
+  function projector() {
+    const { originX, originY, scale } = viewGeom();
+    const pt = { x: 0, y: 0 };
+    return (wx, wy) => {
+      worldToRadar(mapCode, wx, wy, pt);
+      return { x: originX + pt.x * scale, y: originY + pt.y * scale };
+    };
+  }
+
+  /** Pointer in the same space `projector` returns. */
+  function canvasPoint(clientX, clientY) {
+    const rect = canvas.getBoundingClientRect();
+    const { viewW, viewH } = viewGeom();
+    return {
+      x: ((clientX - rect.left) / rect.width) * viewW,
+      y: ((clientY - rect.top) / rect.height) * viewH
+    };
+  }
+
+  /** A rectangle's four corners in WORLD coords, clockwise from the origin. */
+  function rectCorners(g) {
+    return [
+      { x: g.x, y: g.y },
+      { x: g.x + g.w, y: g.y },
+      { x: g.x + g.w, y: g.y + g.h },
+      { x: g.x, y: g.y + g.h }
+    ];
+  }
+
+  /** Grab points for a selection, in world coords. */
+  function handleWorld(geometry) {
+    if (!geometry) return [];
+    if (geometry.type === 'rect') return rectCorners(geometry);
+    if (geometry.type === 'poly') return (geometry.ring || []).map(([x, y]) => ({ x, y }));
+    return [];
+  }
+
+  function shapeBounds(geometry, toCanvas) {
+    const pts = handleWorld(geometry).map((w) => toCanvas(w.x, w.y));
+    if (!pts.length) return null;
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const p of pts) {
+      minX = Math.min(minX, p.x);
+      minY = Math.min(minY, p.y);
+      maxX = Math.max(maxX, p.x);
+      maxY = Math.max(maxY, p.y);
+    }
+    return { minX, minY, maxX, maxY };
+  }
+
+  function closeBadge(geometry, toCanvas) {
+    const b = shapeBounds(geometry, toCanvas);
+    if (!b) return null;
+    return { x: b.maxX + CLOSE_R * 0.6, y: b.minY - CLOSE_R * 0.6, r: CLOSE_R };
+  }
+
+  const near = (ax, ay, bx, by, r) => (ax - bx) ** 2 + (ay - by) ** 2 <= r * r;
+
+  /**
+   * What is under the pointer.
+   *
+   * The selection already hovered is asked first, and about its handles and ×
+   * before its outline, because both sit outside that outline — otherwise
+   * reaching for a corner would drop the hover that revealed it.
+   */
+  function hitTest(cx, cy, wx, wy) {
+    const toCanvas = projector();
+    const drawn = shapes.filter((s) => s?.geometry && s.enabled !== false);
+    const active = drawn.find((s) => s.id === hoverId);
+    const order = active ? [active, ...drawn.filter((s) => s !== active).reverse()] : [...drawn].reverse();
+    for (const shape of order) {
+      if (shape === active) {
+        const badge = closeBadge(shape.geometry, toCanvas);
+        if (badge && near(cx, cy, badge.x, badge.y, badge.r)) {
+          return { shape, kind: 'close', index: -1 };
+        }
+        const pts = handleWorld(shape.geometry);
+        for (let i = 0; i < pts.length; i++) {
+          const p = toCanvas(pts[i].x, pts[i].y);
+          if (near(cx, cy, p.x, p.y, HANDLE_HIT)) return { shape, kind: 'handle', index: i };
+        }
+      }
+      if (pointInPiece(wx, wy, shape.geometry)) return { shape, kind: 'body', index: -1 };
+    }
+    return null;
+  }
+
+  /** The pointer shape for whatever is under it. */
+  function cursorFor(hit, toCanvas) {
+    if (!hit) return drawMode ? 'crosshair' : zoom > 1.001 ? 'grab' : 'default';
+    if (hit.kind === 'close') return 'pointer';
+    if (hit.kind === 'handle') {
+      const g = hit.shape.geometry;
+      if (g.type !== 'rect') return 'move';
+      const pts = handleWorld(g).map((w) => toCanvas(w.x, w.y));
+      const cxm = pts.reduce((n, p) => n + p.x, 0) / pts.length;
+      const cym = pts.reduce((n, p) => n + p.y, 0) / pts.length;
+      const p = pts[hit.index];
+      return (p.x - cxm) * (p.y - cym) > 0 ? 'nwse-resize' : 'nesw-resize';
+    }
+    return drawMode ? 'crosshair' : 'pointer';
+  }
+
+  function applyCursor(hit) {
+    canvas.style.cursor = cursorFor(hit, projector());
+  }
+
+  /** Move one handle of one selection to a world point, in place. */
+  function dragHandleTo(shape, index, anchor, wx, wy) {
+    const g = shape.geometry;
+    if (g.type === 'poly') {
+      if (!g.ring?.[index]) return;
+      g.ring[index] = [wx, wy];
+      return;
+    }
+    if (g.type !== 'rect' || !anchor) return;
+    // Never collapse to nothing: a zero-width box cannot be grabbed again.
+    let px = wx;
+    let py = wy;
+    if (Math.abs(px - anchor.x) < MIN_RECT_WORLD) {
+      px = anchor.x + (px < anchor.x ? -1 : 1) * MIN_RECT_WORLD;
+    }
+    if (Math.abs(py - anchor.y) < MIN_RECT_WORLD) {
+      py = anchor.y + (py < anchor.y ? -1 : 1) * MIN_RECT_WORLD;
+    }
+    g.x = Math.min(px, anchor.x);
+    g.y = Math.min(py, anchor.y);
+    g.w = Math.abs(px - anchor.x);
+    g.h = Math.abs(py - anchor.y);
+  }
+
+  /** The grab dots, the × and the name tag for whatever is hovered. */
+  function paintOverlay(ctx, toCanvas, viewW, viewH) {
+    const shape = shapes.find((s) => s.id === hoverId && s.enabled !== false);
+    if (!shape?.geometry) return;
+    const index = shapes.indexOf(shape);
+
+    for (const w of handleWorld(shape.geometry)) {
+      const p = toCanvas(w.x, w.y);
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, HANDLE_R, 0, Math.PI * 2);
+      ctx.fillStyle = '#0c0e12';
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255, 226, 150, 0.98)';
+      ctx.lineWidth = 1.6;
+      ctx.stroke();
+    }
+
+    const badge = closeBadge(shape.geometry, toCanvas);
+    if (badge) {
+      const hot = hoverKind === 'close';
+      ctx.beginPath();
+      ctx.arc(badge.x, badge.y, badge.r, 0, Math.PI * 2);
+      ctx.fillStyle = hot ? 'rgba(214, 68, 68, 0.95)' : 'rgba(18, 20, 26, 0.9)';
+      ctx.fill();
+      ctx.strokeStyle = hot ? 'rgba(255, 180, 180, 0.95)' : 'rgba(232, 184, 74, 0.85)';
+      ctx.lineWidth = 1.4;
+      ctx.stroke();
+      ctx.strokeStyle = hot ? '#fff' : 'rgba(232, 184, 74, 0.95)';
+      ctx.lineWidth = 1.6;
+      const d = badge.r * 0.42;
+      ctx.beginPath();
+      ctx.moveTo(badge.x - d, badge.y - d);
+      ctx.lineTo(badge.x + d, badge.y + d);
+      ctx.moveTo(badge.x + d, badge.y - d);
+      ctx.lineTo(badge.x - d, badge.y + d);
+      ctx.stroke();
+    }
+
+    // A label may be a string, or lines with their own colour — a map-control
+    // selection reports a T and a CT win rate under its name, and those want
+    // to be the side colours rather than two identical greys.
+    const raw = shapeLabel?.(shape, index);
+    const lines = (Array.isArray(raw)
+      ? raw
+      : String(raw || '')
+          .split('\n')
+          .map((text) => ({ text }))
+    ).filter((l) => l && l.text);
+    if (!lines.length || !cursor) return;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    const padX = 7;
+    const lineH = 15;
+    const font = (i) =>
+      `${i === 0 ? '600' : '500'} 11px var(--font-body, system-ui, sans-serif)`;
+    let w = 0;
+    for (let i = 0; i < lines.length; i++) {
+      ctx.font = font(i);
+      w = Math.max(w, Math.ceil(ctx.measureText(lines[i].text).width));
+    }
+    w += padX * 2;
+    const h = 6 + lines.length * lineH;
+    // Below the pointer, and inside the canvas. Below rather than above
+    // because the × sits at the top-right of the selection, and on a small box
+    // an above-pointer tag lands straight on top of it.
+    const x = Math.min(Math.max(4, cursor.x + 12), viewW - w - 4);
+    let y = cursor.y + 14;
+    if (y + h > viewH - 4) y = Math.max(4, cursor.y - h - 10);
+    ctx.fillStyle = 'rgba(10, 12, 16, 0.94)';
+    ctx.strokeStyle = 'rgba(232, 184, 74, 0.5)';
+    ctx.lineWidth = 1;
+    if (ctx.roundRect) {
+      ctx.beginPath();
+      ctx.roundRect(x, y, w, h, 5);
+      ctx.fill();
+      ctx.stroke();
+    } else {
+      ctx.fillRect(x, y, w, h);
+      ctx.strokeRect(x, y, w, h);
+    }
+    for (let i = 0; i < lines.length; i++) {
+      ctx.font = font(i);
+      ctx.fillStyle =
+        lines[i].color || (i === 0 ? 'rgba(238, 240, 246, 0.98)' : 'rgba(206, 212, 224, 0.95)');
+      ctx.fillText(lines[i].text, x + padX, y + 3 + i * lineH + lineH / 2);
+    }
   }
 
   async function paint() {
@@ -127,13 +391,13 @@ export function createPresenceRadar(els) {
 
     for (const shape of shapes) {
       if (!shape?.geometry || shape.enabled === false) continue;
-      const on = shape.enabled !== false;
+      const lit = shape.id && shape.id === hoverId;
       drawGeometry(
         ctx,
         shape.geometry,
         toCanvas,
-        on ? 'rgba(232, 184, 74, 0.95)' : 'rgba(180, 186, 196, 0.55)',
-        on ? 'rgba(232, 184, 74, 0.22)' : 'rgba(180, 186, 196, 0.1)'
+        lit ? 'rgba(255, 226, 150, 1)' : 'rgba(232, 184, 74, 0.95)',
+        lit ? 'rgba(232, 184, 74, 0.36)' : 'rgba(232, 184, 74, 0.22)'
       );
     }
 
@@ -191,6 +455,8 @@ export function createPresenceRadar(els) {
       ctx.lineWidth = 1.5;
       ctx.stroke();
     }
+
+    paintOverlay(ctx, toCanvas, viewW, viewH);
 
     ctx.restore();
 
@@ -332,6 +598,38 @@ export function createPresenceRadar(els) {
   }
 
   function onPointerDown(e) {
+    // Editing an existing selection wins over starting a new one. The targets
+    // are small and deliberate — a corner dot or the × — so pressing on one is
+    // never an accident, and requiring the draw tool to be off first would
+    // mean a trip to the sidebar to nudge a box.
+    // ...unless a selection is half-drawn, in which case the next click is
+    // part of that and nothing else.
+    const drafting = Boolean(rectStart || lassoing || polyVerts.length);
+    const c = canvasPoint(e.clientX, e.clientY);
+    const w0 = canvasToWorld(e.clientX, e.clientY);
+    const hit = drafting ? null : hitTest(c.x, c.y, w0.x, w0.y);
+    if (hit?.kind === 'close') {
+      const id = hit.shape.id;
+      hoverId = '';
+      hoverKind = '';
+      onShapeDelete?.(id);
+      return;
+    }
+    if (hit?.kind === 'handle') {
+      const g = hit.shape.geometry;
+      editing = {
+        id: hit.shape.id,
+        index: hit.index,
+        anchor: g.type === 'rect' ? rectCorners(g)[(hit.index + 2) % 4] : null
+      };
+      hoverId = hit.shape.id;
+      hoverKind = 'handle';
+      hoverIndex = hit.index;
+      canvas.setPointerCapture?.(e.pointerId);
+      paint();
+      return;
+    }
+
     if (drawMode === 'rect') {
       const w = canvasToWorld(e.clientX, e.clientY);
       rectStart = { x: w.x, y: w.y };
@@ -363,6 +661,16 @@ export function createPresenceRadar(els) {
   }
 
   function onPointerMove(e) {
+    cursor = canvasPoint(e.clientX, e.clientY);
+    if (editing) {
+      const shape = shapes.find((x) => x.id === editing.id);
+      if (shape) {
+        const w = canvasToWorld(e.clientX, e.clientY);
+        dragHandleTo(shape, editing.index, editing.anchor, w.x, w.y);
+        paint();
+      }
+      return;
+    }
     if (drawMode === 'rect' && rectStart) {
       const w = canvasToWorld(e.clientX, e.clientY);
       rectCur = { x: w.x, y: w.y };
@@ -378,7 +686,22 @@ export function createPresenceRadar(els) {
       }
       return;
     }
-    if (!dragging) return;
+    if (!dragging) {
+      // Idle: keep the hover — and its name tag — in step with the pointer.
+      const w = canvasToWorld(e.clientX, e.clientY);
+      const hit = hitTest(cursor.x, cursor.y, w.x, w.y);
+      const id = hit?.shape?.id || '';
+      const kind = hit?.kind || '';
+      const index = hit?.index ?? -1;
+      const moved = id !== hoverId || kind !== hoverKind || index !== hoverIndex;
+      hoverId = id;
+      hoverKind = kind;
+      hoverIndex = index;
+      applyCursor(hit);
+      // Repaint on any move while something is hovered: the tag follows.
+      if (moved || id) paint();
+      return;
+    }
     panX += e.clientX - dragLastX;
     panY += e.clientY - dragLastY;
     dragLastX = e.clientX;
@@ -386,7 +709,34 @@ export function createPresenceRadar(els) {
     paint();
   }
 
+  /** Pointer left the canvas: nothing is hovered, so nothing is labelled. */
+  function onPointerLeave() {
+    if (editing) return;
+    cursor = null;
+    if (!hoverId) return;
+    hoverId = '';
+    hoverKind = '';
+    hoverIndex = -1;
+    canvas.style.cursor = drawMode ? 'crosshair' : zoom > 1.001 ? 'grab' : 'default';
+    paint();
+  }
+
   function onPointerUp(e) {
+    if (editing) {
+      const shape = shapes.find((x) => x.id === editing.id);
+      const done = editing;
+      editing = null;
+      try {
+        canvas.releasePointerCapture?.(e.pointerId);
+      } catch {
+        /* */
+      }
+      // Committed once, at the end: the search re-runs on the new geometry,
+      // not on every pixel of the drag.
+      if (shape) onShapeEdit?.(done.id, shape.geometry);
+      paint();
+      return;
+    }
     if (drawMode === 'lasso' && lassoing) {
       try {
         canvas.releasePointerCapture?.(e.pointerId);
@@ -451,6 +801,7 @@ export function createPresenceRadar(els) {
   canvas.addEventListener('pointermove', onPointerMove);
   canvas.addEventListener('pointerup', onPointerUp);
   canvas.addEventListener('pointercancel', onPointerUp);
+  canvas.addEventListener('pointerleave', onPointerLeave);
   canvas.addEventListener('dblclick', onDblClick);
   window.addEventListener('keydown', onKeyDown);
 
@@ -474,6 +825,7 @@ export function createPresenceRadar(els) {
       canvas.removeEventListener('pointermove', onPointerMove);
       canvas.removeEventListener('pointerup', onPointerUp);
       canvas.removeEventListener('pointercancel', onPointerUp);
+      canvas.removeEventListener('pointerleave', onPointerLeave);
       canvas.removeEventListener('dblclick', onDblClick);
       window.removeEventListener('keydown', onKeyDown);
       resizeObs?.disconnect();

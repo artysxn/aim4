@@ -90,8 +90,13 @@ const RATING_BEARING = new Set(RATING_CORE);
  * Performance need" has one answer that moves with the page.
  */
 export const COLUMN_PRESETS = Object.freeze({
-  /** Performance, player profile: Rating 3.0 plus role / held-gun columns. */
-  rating: [...RATING_CORE, 'coreOpenings', 'roles', 'heldGun'],
+  /**
+   * Performance, player profile: Rating 3.0 plus role / held-gun columns, and
+   * the round-library tags the Maps chapter reads. `roundLibrary` is 81 bytes
+   * a round against this contract's ~5.4 KB, so it rides along rather than
+   * making Maps a second fetch of the same demos.
+   */
+  rating: [...RATING_CORE, 'coreOpenings', 'roles', 'heldGun', 'roundLibrary'],
   /** Rating plus every Premium metric column the Database table adds. */
   full: [...COLUMN_GROUP_IDS],
   /** Round list, antistrat: round shapes, no player metrics at all. */

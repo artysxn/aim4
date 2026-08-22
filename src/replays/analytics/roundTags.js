@@ -27,8 +27,9 @@ import { classifyRoundTypes, hasRoundLibrary } from './roundLibrary.js';
  *      Mid retake retimed
  *   7  Cache; decoys kept in the facts, and grenades matched to a stored spot
  *      regardless of type
+ *   8  Universal All A/B hits and A/B retake/afterplant (key zones, not names)
  */
-export const ROUND_LIBRARY_VERSION = 7;
+export const ROUND_LIBRARY_VERSION = 8;
 
 /**
  * @typedef {{ k: string, m: Record<string, number> }} RoundTag
