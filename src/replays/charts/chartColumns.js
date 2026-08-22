@@ -26,8 +26,8 @@
 import { DIMENSIONS, METRICS } from './chartFields.js';
 import { RATING_CORE } from '../shared/statsColumns.js';
 
-/** Groups whose presence pulls in the whole A4R input set. See statsColumns. */
-const A4R_TRIGGERS = new Set(['swing', 'aim', 'duels']);
+/** Groups whose presence pulls in the whole rating input set. See statsColumns. */
+const A4R_TRIGGERS = new Set(RATING_CORE);
 
 /**
  * Metric key → column groups. Anything reachable from the baseline columns
@@ -37,7 +37,9 @@ export const METRIC_COLUMNS = Object.freeze({
   // ---- player ----
   rounds: [], kills: [], deaths: [], assists: [], damage: [],
   multiKillPct: [], tripleKillPct: [],
-  rating: ['kills'], a4r: [...RATING_CORE], a4or: ['swing'],
+  // Rating 3.0 needs the kill column *and* swing, so in practice it needs the
+  // whole rating core — see RATING_CORE in statsColumns.
+  rating: [...RATING_CORE], a4r: [...RATING_CORE], a4or: ['swing'],
   impact: [], kpr: [], dpr: [], apr: [], adr: [], kd: [], kast: [], opatt: [],
   psdt: ['movement'], dt: ['movement'], survivalPct: [],
   hsPct: [], accuracy: [], awpAcc: [], shots: [], awpShots: [],
@@ -51,7 +53,7 @@ export const METRIC_COLUMNS = Object.freeze({
 
   // ---- round ----
   roundsWon: [],
-  teamRating: ['kills'], teamKills: [], teamDeaths: [], teamAdr: [],
+  teamRating: [...RATING_CORE], teamKills: [], teamDeaths: [], teamAdr: [],
   teamKd: [], teamKast: [],
   teamHsPct: [], teamAccuracy: [], teamAwpAcc: [],
   prw: ['prw'], prwEdge: ['prw'], teamSwing: ['swing'],

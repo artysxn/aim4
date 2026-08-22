@@ -1391,6 +1391,8 @@ export function createStatsPanel({
     }
     if (detail) detailPage = 1;
     else page[tab] = 1;
+    // Reordering rows we already have. No recompute, no request.
+    if (repaintTable()) return;
     scheduleRender({ rebuildFilters: false });
   });
 
@@ -1404,6 +1406,7 @@ export function createStatsPanel({
       if (page[tab] === n) return;
       page[tab] = n;
     }
+    if (repaintTable()) return;
     scheduleRender({ rebuildFilters: false });
   }
 
@@ -2159,6 +2162,49 @@ export function createStatsPanel({
    * sidebar stays clickable during aggregates.
    * @param {{ rebuildFilters?: boolean }} [opts]
    */
+  /**
+   * The rows behind whatever the table last painted.
+   *
+   * Sorting and paging are pure presentation — `statsTableHtml` does both from
+   * the rows it is handed. They used to go through scheduleRender, which
+   * re-derived the whole table: on the payload path that is aggregatePlayers
+   * over every round in the library, and on the server path a fresh request.
+   * Either way a click on a column header cost seconds to reorder rows that
+   * were already computed and sitting in memory.
+   * @type {{ data: any[], opts: object, prefix?: string } | null}
+   */
+  let lastTable = null;
+
+  /** Paint a table and remember what it was painted from. */
+  function paintTable(data, opts, prefix = '') {
+    lastTable = { data, opts, prefix };
+    bodyEl.innerHTML = prefix + statsTableHtml(data, opts);
+  }
+
+  /**
+   * Re-render the current table under a new sort or page, with no recompute.
+   * Returns false when there is nothing cached and the caller must fall back.
+   */
+  function repaintTable() {
+    if (!lastTable) return false;
+    const s = detail ? detailSort : sort[tab];
+    const opts = {
+      ...lastTable.opts,
+      sortKey: s.key,
+      sortDir: s.dir,
+      page: detail ? detailPage : page[tab]
+    };
+    // A table painted with preserveOrder is a fixed list (locked-team map rows,
+    // compare rows); re-sorting it is not meaningful and its own path owns it.
+    if (lastTable.opts.preserveOrder) return false;
+    lastTable = { ...lastTable, opts };
+    bodyEl.innerHTML = (lastTable.prefix || '') + statsTableHtml(lastTable.data, opts);
+    bindStatsHScroll(bodyEl);
+    attachTips(bodyEl);
+    emitViewChange();
+    return true;
+  }
+
   function scheduleRender(opts = {}) {
     const rebuildFilters = opts.rebuildFilters !== false;
     if (!payload) {
@@ -2246,6 +2292,7 @@ export function createStatsPanel({
   /** Render the two tables straight from server rows. */
   function renderFromServer() {
     if (!serverTables) return;
+    lastTable = null;
     syncHead();
     syncFilterChrome();
     const searching = hasEntityPick();
@@ -2255,7 +2302,7 @@ export function createStatsPanel({
       if (minR > 0) data = data.filter((p) => (p.rounds || 0) >= minR);
       let cols = { columns: PLAYER_COLUMNS, fixedCount: PLAYER_FIXED_BASE.length };
       if (omitTeamColumn) cols = omitPlayerTeamColumn(cols);
-      bodyEl.innerHTML = statsTableHtml(data, {
+      paintTable(data, {
         columns: cols.columns,
         fixedCount: cols.fixedCount,
         escapeHtml,
@@ -2270,7 +2317,7 @@ export function createStatsPanel({
     } else {
       let data = serverTables.teams || [];
       if (minR > 0) data = data.filter((t) => (t.rounds || 0) >= minR);
-      bodyEl.innerHTML = statsTableHtml(data, {
+      paintTable(data, {
         columns: TEAM_COLUMNS,
         fixedCount: 2,
         escapeHtml,
@@ -2311,6 +2358,8 @@ export function createStatsPanel({
   }
 
   function render(opts = {}) {
+    // A full render replaces whatever the table was showing.
+    lastTable = null;
     if (!payload) {
       // Server mode: no rounds in the browser, so paint from the endpoint.
       if (serverTables) renderFromServer();
@@ -2361,7 +2410,7 @@ export function createStatsPanel({
           fixedCount: playerCols.fixedCount
         });
       } else {
-        bodyEl.innerHTML = statsTableHtml(data, {
+        paintTable(data, {
           columns: playerCols.columns,
           fixedCount: playerCols.fixedCount,
           escapeHtml,
@@ -2416,7 +2465,7 @@ export function createStatsPanel({
         let data = aggregateTeams(rows, players, demos, active);
         if (minR > 0) data = data.filter((t) => (t.rounds || 0) >= minR);
         data = applyEntityPickTeams(data);
-        bodyEl.innerHTML = statsTableHtml(data, {
+        paintTable(data, {
           columns: TEAM_COLUMNS,
           fixedCount: 2,
           escapeHtml,

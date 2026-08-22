@@ -72,17 +72,18 @@ const BASELINE_BYTES = 414;
 export const RATING_CORE = Object.freeze(['swing', 'kills', 'aim', 'duels']);
 
 /**
- * The groups A4R alone depends on — the ones aim4RatingBreakdown replaces with
- * league averages when they are missing.
+ * Every group a displayed rating depends on. Asking for a subset is refused.
  *
- * `kills` is deliberately not here. It feeds Rating 3.0, and bucketRating
- * degrades honestly without it (the neutral-economy form of the same formula,
- * not a fabricated constant), so asking for `kills` on its own is a legitimate
- * Rating-3.0 contract. The hazard is asking for *some* of these three: that
- * still renders an A4R, quietly pulled toward the mean.
+ * This was briefly loosened to exclude `kills`, on the reasoning that `kills`
+ * feeds Rating 3.0 and bucketRating degrades honestly without it. Measured
+ * against the full contract, that was wrong: Rating 3.0's per-round
+ * accumulator carries swingSum/swingRounds as well, so a `kills`-only payload
+ * produces a rating that differs from the Database's by up to 0.43 — a
+ * plausible number, silently not the same one. Both `kills` and `swing` are
+ * required, and since A4R needs aim and duels on top, the honest rule is the
+ * one this started with: all four, or none.
  */
-const A4R_ONLY = Object.freeze(['swing', 'aim', 'duels']);
-const RATING_BEARING = new Set(A4R_ONLY);
+const RATING_BEARING = new Set(RATING_CORE);
 
 /**
  * Named contracts. A page names one instead of listing columns, so "what does
@@ -96,12 +97,15 @@ export const COLUMN_PRESETS = Object.freeze({
   /** Round list, antistrat: round shapes, no player metrics at all. */
   shapes: ['phase', 'roundLibrary'],
   /**
-   * Pattern Finder: round shapes, team identity, exact Rating 3.0 and utility.
-   * No aim, duels, movement or AWP-hold — a third of the payload it used to
-   * pull, and none of it reaches the screen. `ratingReady` stays false, so
-   * nothing built from this may render A4R.
+   * Pattern Finder: round shapes, utility, and an exact Rating 3.0.
+   *
+   * The statistics card under the radar shows Rating for the matching rounds,
+   * and it has to be the same Rating the Database shows for that player — so
+   * the whole rating core comes along. That makes this nearly the full set;
+   * the saving on this page comes from fetching one map's demos rather than
+   * the library, not from dropping columns.
    */
-  patterns: ['phase', 'roundLibrary', 'kills', 'utility'],
+  patterns: [...RATING_CORE, 'coreOpenings', 'phase', 'roundLibrary', 'utility'],
   /** Team tables: team-level rates, no per-player rating. */
   team: ['prw', 'possession', 'anchor', 'utility'],
   /** Match cards / listings: who played and who won. Baseline only. */

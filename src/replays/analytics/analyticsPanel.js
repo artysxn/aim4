@@ -1295,7 +1295,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     if (payload && payloadScope === stamp && payloadGeneration === statsCacheGeneration()) return;
     setSpinnerLabel(mainEl, 'Loading map…');
     const data = await getStatsPayload(scoped, {
-      columns: 'shapes',
+      columns: 'patterns',
       onProgress: (p) => {
         if (token !== loadToken) return;
         setSpinnerLabel(mainEl, statsProgressLabel(p));
@@ -1333,7 +1333,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
         antistrat?.load();
         return;
       }
-      const cached = peekStatsCache(null, 'shapes');
+      const cached = peekStatsCache(null, 'patterns');
       if (cached) {
         payload = cached;
         payloadGeneration = statsCacheGeneration();
@@ -1346,8 +1346,9 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       mainEl.innerHTML = spinnerHtml('Loading stats…');
       try {
         const data = await getStatsPayload(null, {
-          // Pattern finder works on round shapes; it never shows a player rating.
-          columns: 'shapes',
+          // See loadMapPayload: the statistics card needs the kill column for an
+          // exact Rating 3.0.
+          columns: 'patterns',
           onProgress: (p) => {
             if (token !== loadToken) return;
             setSpinnerLabel(mainEl, statsProgressLabel(p));
@@ -1377,7 +1378,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       antistrat?.load();
       return;
     }
-    const cached = peekStatsCache(null, 'shapes');
+    const cached = peekStatsCache(null, 'patterns');
     if (cached) {
       payload = cached;
       payloadGeneration = statsCacheGeneration();

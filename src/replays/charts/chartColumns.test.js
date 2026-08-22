@@ -66,9 +66,21 @@ assert.ok(columnsForChart({ metric: 'kills', dimension: 'map', source: 'kill' })
 {
   const full = resolveColumns(null).bytesPerRound;
   const cheap = resolveColumns(columnsForChart({ metric: 'kills', dimension: 'roundNo' })).bytesPerRound;
-  const killTime = resolveColumns(columnsForChart({ metric: 'killTime', dimension: 'time', source: 'kill' })).bytesPerRound;
   assert.ok(cheap < full * 0.1, `a scoreboard chart should be under a tenth of full, got ${cheap}/${full}`);
-  assert.ok(killTime < full * 0.15, `a kill-time chart should be well under full, got ${killTime}/${full}`);
+
+  // A chart that touches the kill column pays for the whole rating core, even
+  // though it renders no rating. That is the cost of the all-or-nothing guard:
+  // `kills` is one of Rating 3.0's inputs, and resolveColumns cannot see that
+  // this particular caller is only plotting kill times. Over-fetching here is
+  // the deliberate trade against a contract that could render a wrong rating.
+  const killTime = resolveColumns(
+    columnsForChart({ metric: 'killTime', dimension: 'time', source: 'kill' })
+  ).bytesPerRound;
+  assert.ok(killTime < full, 'a kill-time chart is still narrower than the full set');
+  assert.ok(
+    killTime > full * 0.5,
+    'and it is not narrow, because the rating guard pulls its whole core along'
+  );
 }
 
 console.log(
