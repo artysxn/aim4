@@ -1,0 +1,227 @@
+// The resident store must produce exactly what the shipped aggregator does.
+//
+// This is the whole safety argument for Phase 2: accumulation moved to typed
+// arrays, but derivation still runs through statsMath, so the only thing that
+// can go wrong is filling the buckets differently. That is what this checks —
+// field by field, across every filter dimension rowPasses supports.
+import assert from 'node:assert/strict';
+import { packStore } from './statsHotStore.js';
+import { aggregateHot, aggregateTeamsHot } from './statsHotAggregate.js';
+import { aggregatePlayers, aggregateTeams } from '../../src/replays/shared/statsMath.js';
+
+const MAPS = ['de_nuke', 'de_mirage', 'de_inferno'];
+let seed = 42;
+const rnd = (n) => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed % n; };
+
+function makeEntry(i) {
+  const pids = Array.from({ length: 10 }, (_, j) => `p${(i % 3) * 10 + j}`);
+  const players = pids.map((id, j) => ({ id, name: `name${j}`, team: j < 5 ? 1 : 2, slot: j }));
+  const map = MAPS[i % MAPS.length];
+  const rounds = Array.from({ length: 6 + rnd(6) }, (_, k) => {
+    const p = {}, sw = {}, am = {}, ut = {}, du = {}, mv = {}, aw = {};
+    for (const id of pids) {
+      p[id] = [rnd(4), rnd(2), rnd(2), rnd(140), rnd(30), rnd(14), rnd(5), rnd(6), rnd(3), rnd(2)];
+      sw[id] = rnd(400) / 10 - 20;
+      am[id] = { engagements: rnd(6), crosshairErrorSum: rnd(90), fightsReady: rnd(4),
+        fightsUnaware: rnd(2), shots: rnd(30), hits: rnd(12), shotsInSmoke: rnd(3),
+        firstBullets: rnd(6), firstBulletHits: rnd(4), overflicks: rnd(3), underflicks: rnd(2) };
+      ut[id] = { heThrown: rnd(3), heDamage: rnd(80), fireThrown: rnd(2), fireDamage: rnd(60),
+        flashesThrown: rnd(4), flashesLanded: rnd(3), enemyBlindSeconds: rnd(60) / 10 };
+      if (rnd(10) > 1) {
+        du[id] = { w: (rnd(30) + 1) / 10, p: rnd(100) / 100, n: rnd(3),
+          b: [[rnd(11) / 10, (rnd(20) + 1) / 10, rnd(100) / 100, rnd(2)],
+              [rnd(11) / 10, (rnd(20) + 1) / 10, rnd(100) / 100, rnd(2)]] };
+      }
+      mv[id] = { psdt: rnd(1400), dt: rnd(2600) };
+      aw[id] = rnd(40);
+    }
+    return { f: `d${i}-r${k}`, d: `d${i}`, m: map, n: k + 1, w: (k % 2) + 1,
+      s1: k < 3 ? 'T' : 'CT', s2: k < 3 ? 'CT' : 'T', e1: rnd(6), e2: rnd(6),
+      ok: pids[rnd(10)], od: pids[rnd(10)], p, sw, am, ut, du, mv, aw,
+      cok: rnd(2) ? [pids[rnd(10)]] : [], cod: rnd(2) ? [pids[rnd(10)]] : [],
+      dur: 40 + rnd(50), pt: rnd(2) ? rnd(60) : null,
+      kt: [], ev: [], ph: {}, utt: {}, rl: null,
+      pos1: 0.5, pos2: 0.5, prw1: 0.5, prw2: 0.5, aca1: 0, ack1: 0, aca2: 0, ack2: 0 };
+  });
+  return { id: `d${i}`, v: 19, key: `19|${i}|${i}|${rounds.length}|T${i % 4}|T${(i + 1) % 4}`,
+    map, mapName: map, t1: `t${i % 4}`, t2: `t${(i + 1) % 4}`,
+    name1: `Team ${i % 4}`, name2: `Team ${(i + 1) % 4}`, winner: (i % 2) + 1,
+    uploadedAt: Date.UTC(2026, 0, 1 + (i % 28)), players, rounds,
+    roles: { v: 6, maps: {} }, positions: false, pz: 0 };
+}
+
+const entries = Array.from({ length: 40 }, (_, i) => makeEntry(i));
+const store = packStore(entries);
+
+const players = new Map(), demos = new Map(), rows = [];
+for (const e of entries) {
+  demos.set(e.id, e);
+  for (const p of e.players) players.set(`${e.id}:${p.id}`, { name: p.name, team: p.team });
+  rows.push(...e.rounds);
+}
+
+const FILTERS = [
+  ['no filter', {}],
+  ['one map', { maps: ['de_nuke'] }],
+  ['two maps', { maps: ['de_nuke', 'de_inferno'] }],
+  ['unknown map', { maps: ['de_train'] }],
+  ['side T', { side: 'T' }],
+  ['side CT', { side: 'CT' }],
+  ['econ', { econ: 4 }],
+  ['oppEcon', { oppEcon: 4 }],
+  ['econ + oppEcon', { econ: 4, oppEcon: 4 }],
+  ['won', { result: 'won' }],
+  ['lost', { result: 'lost' }],
+  ['5v4', { advantage: '5v4' }],
+  ['4v5', { advantage: '4v5' }],
+  ['even', { advantage: 'even' }],
+  ['teamName', { teamName: 'Team 1' }],
+  ['date window', { dateFrom: '2026-01-05', dateTo: '2026-01-20' }],
+  ['combined', { maps: ['de_mirage'], side: 'CT', econ: 4, result: 'won' }]
+];
+
+let checked = 0;
+for (const [label, filter] of FILTERS) {
+  const ref = aggregatePlayers(rows, players, filter, demos);
+  const hot = aggregateHot(store, filter);
+  assert.equal(hot.length, ref.length, `${label}: row count`);
+  const byId = new Map(hot.map((r) => [r.id, r]));
+  for (let i = 0; i < ref.length; i++) {
+    const a = ref[i];
+    const b = byId.get(a.id);
+    assert.ok(b, `${label}: missing player ${a.id}`);
+    // Same sort order, since derivePlayers does the sorting for both.
+    assert.equal(hot[i].id, a.id, `${label}: order differs at ${i}`);
+    for (const k of Object.keys(a)) {
+      const x = a[k], y = b[k];
+      if (typeof x === 'number' && Number.isFinite(x)) {
+        assert.ok(
+          Math.abs(x - y) <= Math.max(1e-9, Math.abs(x) * 1e-12),
+          `${label}: ${a.name}.${k} ${x} vs ${y}`
+        );
+        checked++;
+      } else if (typeof x === 'string') {
+        assert.equal(y, x, `${label}: ${a.name}.${k}`);
+        checked++;
+      } else if (x === null) {
+        assert.equal(y, null, `${label}: ${a.name}.${k} should be null`);
+        checked++;
+      }
+    }
+  }
+}
+
+// --- teams -----------------------------------------------------------------
+let teamChecked = 0;
+for (const [label, filter] of FILTERS) {
+  const ref = aggregateTeams(rows, players, demos, filter);
+  const hot = aggregateTeamsHot(store, filter);
+  assert.equal(hot.length, ref.length, `teams ${label}: row count`);
+  for (let i = 0; i < ref.length; i++) {
+    assert.equal(hot[i].key, ref[i].key, `teams ${label}: order at ${i}`);
+    const a = ref[i], b = hot[i];
+    for (const k of Object.keys(a)) {
+      const x = a[k], y = b[k];
+      if (typeof x === 'number' && Number.isFinite(x)) {
+        assert.ok(
+          Math.abs(x - y) <= Math.max(1e-9, Math.abs(x) * 1e-12),
+          `teams ${label}: ${a.name}.${k} ${x} vs ${y}`
+        );
+        teamChecked++;
+      } else if (typeof x === 'string') {
+        assert.equal(y, x, `teams ${label}: ${a.name}.${k}`);
+        teamChecked++;
+      } else if (x === null) {
+        assert.equal(y, null, `teams ${label}: ${a.name}.${k} should be null`);
+        teamChecked++;
+      }
+    }
+    // Members carry the per-player numbers the hover breakdown shows.
+    assert.equal(b.members.length, a.members.length, `teams ${label}: ${a.name} member count`);
+    for (let m = 0; m < a.members.length; m++) {
+      assert.equal(b.members[m].id, a.members[m].id, `teams ${label}: member order`);
+      assert.ok(Math.abs(b.members[m].rating - a.members[m].rating) < 1e-9);
+      teamChecked += 2;
+    }
+    // possessionByMap is an array of per-map cells.
+    assert.equal(b.possessionByMap.length, a.possessionByMap.length, `teams ${label}: map cells`);
+  }
+}
+
+// Passing the player table in must not change the answer.
+{
+  const filter = { side: 'CT' };
+  const shared = aggregateHot(store, filter);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(aggregateTeamsHot(store, filter, shared))),
+    JSON.parse(JSON.stringify(aggregateTeamsHot(store, filter))),
+    'reusing the player table gives the same team rows'
+  );
+}
+
+// --- visibility masking ----------------------------------------------------
+// One store serves every caller, so a masked query must equal a store built
+// from only the demos that caller can read. If these ever diverge, users would
+// see numbers computed over demos they are not allowed to open.
+{
+  const visibleIds = new Set(entries.filter((_, i) => i % 3 !== 0).map((e) => e.id));
+  const mask = new Uint8Array(store.demos.length);
+  store.demos.forEach((d, i) => { if (visibleIds.has(d.id)) mask[i] = 1; });
+
+  const subset = entries.filter((e) => visibleIds.has(e.id));
+  const subStore = packStore(subset);
+  const subRows = [], subPlayers = new Map(), subDemos = new Map();
+  for (const e of subset) {
+    subDemos.set(e.id, e);
+    for (const p of e.players) subPlayers.set(`${e.id}:${p.id}`, { name: p.name, team: p.team });
+    subRows.push(...e.rounds);
+  }
+
+  for (const [label, filter] of FILTERS) {
+    const masked = aggregateHot(store, filter, mask);
+    const ref = aggregatePlayers(subRows, subPlayers, filter, subDemos);
+    assert.equal(masked.length, ref.length, `masked ${label}: row count`);
+    for (let i = 0; i < ref.length; i++) {
+      assert.equal(masked[i].id, ref[i].id, `masked ${label}: order at ${i}`);
+      for (const k of Object.keys(ref[i])) {
+        const x = ref[i][k], y = masked[i][k];
+        if (typeof x === 'number' && Number.isFinite(x)) {
+          assert.ok(
+            Math.abs(x - y) <= Math.max(1e-9, Math.abs(x) * 1e-12),
+            `masked ${label}: ${ref[i].name}.${k} ${x} vs ${y}`
+          );
+        }
+      }
+    }
+    const maskedTeams = aggregateTeamsHot(store, filter, null, mask);
+    const refTeams = aggregateTeams(subRows, subPlayers, subDemos, filter);
+    assert.equal(maskedTeams.length, refTeams.length, `masked teams ${label}: row count`);
+    for (let i = 0; i < refTeams.length; i++) {
+      assert.equal(maskedTeams[i].key, refTeams[i].key, `masked teams ${label}: order`);
+      assert.equal(maskedTeams[i].rounds, refTeams[i].rounds, `masked teams ${label}: rounds`);
+      assert.ok(Math.abs(maskedTeams[i].avgRating - refTeams[i].avgRating) < 1e-9);
+    }
+  }
+
+  // A mask that hides everything yields nothing, not the whole library.
+  assert.deepEqual(aggregateHot(store, {}, new Uint8Array(store.demos.length)), []);
+  assert.deepEqual(aggregateTeamsHot(store, {}, null, new Uint8Array(store.demos.length)), []);
+  // A fully-open mask equals no mask at all.
+  const openMask = new Uint8Array(store.demos.length).fill(1);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(aggregateHot(store, {}, openMask))),
+    JSON.parse(JSON.stringify(aggregateHot(store, {}))),
+    'an all-visible mask changes nothing'
+  );
+}
+
+// A filter that matches nothing returns nothing, rather than everything.
+assert.deepEqual(aggregateHot(store, { maps: ['de_train'] }), []);
+assert.deepEqual(aggregateHot(store, { files: ['nope'] }), []);
+
+assert.deepEqual(aggregateTeamsHot(store, { maps: ['de_train'] }), []);
+
+console.log(
+  `statsHotAggregate.test.js: ${checked.toLocaleString()} player + ` +
+  `${teamChecked.toLocaleString()} team field comparisons across ${FILTERS.length} filters, all exact`
+);

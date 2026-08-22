@@ -8,6 +8,7 @@
 
 import { formatApiError } from '../api.js';
 import { getStatsPayload } from '../statsCache.js';
+import { fetchAggregate } from '../api.js';
 import { scheduleUiJob } from '../../lib/frameBudget.js';
 import {
   attachPlayerRoles,
@@ -372,6 +373,9 @@ export function createStatsPanel({
   // ---- filters ------------------------------------------------------------
 
   function mapsInPayload() {
+    // In server mode there is no payload to scan; the endpoint reports the
+    // library's maps so the filter bar is fully usable without one.
+    if (!payload && serverTables?.maps) return [...serverTables.maps];
     const set = new Set();
     for (const d of payload?.demos || []) {
       for (const r of d.rounds || []) if (r.m) set.add(r.m);
@@ -2157,7 +2161,19 @@ export function createStatsPanel({
    */
   function scheduleRender(opts = {}) {
     const rebuildFilters = opts.rebuildFilters !== false;
-    if (!payload) return Promise.resolve();
+    if (!payload) {
+      // Server mode. An interaction that needs rounds pulls them once and then
+      // behaves exactly as it always did; everything else re-queries.
+      if (needsRawRounds()) {
+        return ensurePayload().then(() => {
+          if (payload) render({ rebuildFilters });
+        });
+      }
+      if (rebuildFilters) renderFilters();
+      else syncFilterChrome();
+      bodyEl.setAttribute('aria-busy', 'true');
+      return refreshServerTables();
+    }
     if (rebuildFilters) {
       // Structural filter changes still need a full filter bar rebuild, but do
       // it after the spinner paints so nav clicks can interrupt.
@@ -2175,8 +2191,131 @@ export function createStatsPanel({
     });
   }
 
+  /**
+   * Tables computed on the server, used while no payload is loaded.
+   *
+   * The Database's default view — a filtered player or team table over the
+   * whole library — is exactly what the aggregate endpoint returns, and it does
+   * not need a single round in the browser. Everything else the panel can do
+   * (per-demo detail, match boards, locked-team map compares, role columns,
+   * roster pinning) does need rounds, so those pull the payload on demand.
+   * @type {{ players: any[], teams: any[]|null, playersTotal: number } | null}
+   */
+  let serverTables = null;
+  let serverToken = 0;
+
+  /** Interactions that cannot be answered from the aggregate endpoint. */
+  function needsRawRounds() {
+    return Boolean(
+      detail ||
+      lockedTeamName ||
+      hasEntityPick() ||
+      filter.role ||
+      scope.files?.length ||
+      (scope.demos?.length && scope.demos.length <= 1)
+    );
+  }
+
+  /**
+   * Pull the library payload, once, for an interaction that needs rounds.
+   * Everything after this point behaves exactly as it did before.
+   */
+  async function ensurePayload() {
+    if (payload) return payload;
+    const token = loadToken;
+    bodyEl.setAttribute('aria-busy', 'true');
+    setSpinnerLabel(bodyEl, 'Loading rounds…');
+    const res = await getStatsPayload(scope.demos || null, {
+      onProgress: (p) => {
+        if (token !== loadToken) return;
+        noteLibraryProgress({ loaded: p?.libraryLoaded, total: p?.libraryTotal });
+      },
+      onBatch: (batch) => {
+        if (token !== loadToken) return;
+        payload = batch.payload;
+        noteLibraryProgress({ loaded: batch.loaded, total: batch.total });
+        setLibraryLoading(Boolean(batch.hasMore));
+      }
+    });
+    if (token !== loadToken) return null;
+    payload = res;
+    setLibraryLoading(false);
+    return payload;
+  }
+
+  /** Render the two tables straight from server rows. */
+  function renderFromServer() {
+    if (!serverTables) return;
+    syncHead();
+    syncFilterChrome();
+    const searching = hasEntityPick();
+    const minR = searching ? 0 : Math.max(0, Number(filter.minRounds) || 0);
+    if (tab === 'players') {
+      let data = serverTables.players || [];
+      if (minR > 0) data = data.filter((p) => (p.rounds || 0) >= minR);
+      let cols = { columns: PLAYER_COLUMNS, fixedCount: PLAYER_FIXED_BASE.length };
+      if (omitTeamColumn) cols = omitPlayerTeamColumn(cols);
+      bodyEl.innerHTML = statsTableHtml(data, {
+        columns: cols.columns,
+        fixedCount: cols.fixedCount,
+        escapeHtml,
+        sortKey: sort.players.key,
+        sortDir: sort.players.dir,
+        page: page.players,
+        pageSize: STATS_PAGE_SIZE,
+        showAverage: true,
+        nameCell: playerNameCell,
+        teamCell: playerTeamCell
+      });
+    } else {
+      let data = serverTables.teams || [];
+      if (minR > 0) data = data.filter((t) => (t.rounds || 0) >= minR);
+      bodyEl.innerHTML = statsTableHtml(data, {
+        columns: TEAM_COLUMNS,
+        fixedCount: 2,
+        escapeHtml,
+        sortKey: sort.teams.key,
+        sortDir: sort.teams.dir,
+        page: page.teams,
+        pageSize: STATS_PAGE_SIZE,
+        showAverage: true,
+        nameCell: teamNameCell,
+        roundWrCell: teamRoundWrCell
+      });
+    }
+    bodyEl.removeAttribute('aria-busy');
+    bindStatsHScroll(bodyEl);
+    attachTips(bodyEl);
+    emitViewChange();
+  }
+
+  /**
+   * Re-query the server for the current filter. Used when the panel is in
+   * server mode and a filter, tab or sort changes.
+   */
+  async function refreshServerTables() {
+    const token = ++serverToken;
+    const active = { ...filter, files: scope.files || null };
+    try {
+      const res = await fetchAggregate(active, {
+        tables: 'players,teams',
+        demos: scope.demos || undefined
+      });
+      if (token !== serverToken) return false;
+      serverTables = res;
+      renderFromServer();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   function render(opts = {}) {
-    if (!payload) return;
+    if (!payload) {
+      // Server mode: no rounds in the browser, so paint from the endpoint.
+      if (serverTables) renderFromServer();
+      return;
+    }
     const rebuildFilters = opts.rebuildFilters !== false;
     syncHead();
     if (rebuildFilters) renderFilters();
@@ -2369,6 +2508,7 @@ export function createStatsPanel({
     lockedTeamName = String(next.teamName || '').trim();
     scopeEl.textContent = next.title || '';
     payload = null;
+    serverTables = null;
     // A re-scoped load counts from zero against a different total.
     resetLibraryProgress();
     setLibraryLoading(false);
@@ -2406,6 +2546,25 @@ export function createStatsPanel({
     applyViewState(next, { notify: false });
     syncSearchToggle();
     if (searchOpen) renderSearch();
+
+    // Server mode. The default view is a filtered table over the library, which
+    // the aggregate endpoint answers in milliseconds — so ask for that first,
+    // with the filters this load resolved to, and only pull rounds when the
+    // view actually needs them.
+    if (!needsRawRounds()) {
+      const served = await refreshServerTables();
+      if (token !== loadToken) return;
+      if (served) {
+        cancelSlow();
+        renderFilters();
+        renderFromServer();
+        return;
+      }
+      // Endpoint unavailable (older server, an error): the payload path below
+      // is still the whole feature, only slower.
+      bodyEl.innerHTML = spinnerHtml('Loading database…');
+    }
+
     try {
       let painted = false;
       const res = await getStatsPayload(scope.demos || null, {

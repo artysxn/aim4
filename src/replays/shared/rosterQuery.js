@@ -103,3 +103,30 @@ export function rosterTeamPlayers(roster, teamKey) {
     .map((p) => ({ id: p.i, name: p.n, maps: p.c }))
     .sort((a, b) => b.maps - a.maps || a.name.localeCompare(b.name));
 }
+
+/** Maps present in the library, from the catalogue rather than a stats pull. */
+export function rosterMaps(roster) {
+  const set = new Set();
+  for (const d of roster?.demos || []) if (d.m) set.add(d.m);
+  return [...set].sort();
+}
+
+/**
+ * Demo ids played on one map, newest first.
+ *
+ * Pattern Finder works on a single map at a time — it will not draw anything
+ * until one is picked — but used to load every round of every map to do it.
+ * This is how it asks for the seventh it needs.
+ */
+export function demosForMap(roster, map) {
+  const want = String(map || '');
+  if (!want) return [];
+  return (roster?.demos || [])
+    // A demo with no map recorded is included rather than dropped. The consumer
+    // filters rounds on `row.m` anyway, so an extra demo costs one fetch, while
+    // excluding one silently removes its rounds from the search — and a missing
+    // `record.map` is a case the rest of the codebase explicitly handles.
+    .filter((d) => d.m === want || !d.m)
+    .sort((a, b) => b.u - a.u)
+    .map((d) => d.id);
+}

@@ -22,6 +22,7 @@ import {
 } from '../../src/replays/shared/statsMath.js';
 import { setDemoTopPlayer } from './demoStore.js';
 import { projectEntry, resolveColumns } from '../../src/replays/shared/statsColumns.js';
+import { forgetColumnar, readColumnar, writeColumnar } from './statsColumnarStore.js';
 import { awpAccuracyFromTicks } from '../../src/replays/shared/awpAccuracy.js';
 import { cappedDamageFromMeta, playerRoundDamage } from '../../src/replays/shared/roundDamage.js';
 import { applyAwpHoldFields } from '../../src/replays/shared/awpHold.js';
@@ -1338,22 +1339,48 @@ export async function statsPayload(io, user, records, demoIds = null, opts = {})
       phase: 'loading',
       id: record.id
     });
-    const entry = await demoIndex(io, user, record, {
-      skipBackgroundEnrichment: true,
-      heldGun: Boolean(wanted && contract.groups.includes('heldGun') && !contract.all),
-      onProgress: (p) =>
-        onProgress?.({
-          done,
-          total,
-          offset,
-          libraryTotal,
-          current: p.current || label,
-          phase: p.phase || 'loading',
-          id: p.id || record.id
-        })
-    });
+    // Fast path: a columnar sidecar built from the current JSON lets this read
+    // touch only the contract's columns instead of parsing the whole index.
+    // It declines (returns null) whenever anything looks stale, so the slow
+    // path below stays the authority — and refreshes the sidecar as it goes.
+    let entry = null;
+    let fromSidecar = false;
+    if (!contract.all && contract.worthColumnar) {
+      const wantsHeldGun = contract.groups.includes('heldGun');
+      const cached = await readColumnar(io, user, record.id, contract.groups, {
+        // heldGun is enriched on demand by the slow path; a sidecar written
+        // before that ran must not stand in for it.
+        require: wantsHeldGun ? ['heldGun'] : []
+      });
+      // The sidecar tracks its JSON, but the JSON must also still describe this
+      // record — a rename or reparse changes the key without touching columns.
+      if (cached && keyMatchesRecord(cached.key, record)) {
+        entry = cached;
+        fromSidecar = true;
+      }
+    }
+
+    if (!entry) {
+      entry = await demoIndex(io, user, record, {
+        skipBackgroundEnrichment: true,
+        heldGun: Boolean(wanted && contract.groups.includes('heldGun') && !contract.all),
+        onProgress: (p) =>
+          onProgress?.({
+            done,
+            total,
+            offset,
+            libraryTotal,
+            current: p.current || label,
+            phase: p.phase || 'loading',
+            id: p.id || record.id
+          })
+      });
+      // Refresh the sidecar off the entry we just paid full price for, so the
+      // next request on any contract reads columns instead of the whole file.
+      if (entry) void writeColumnar(io, user, record.id, entry);
+    }
     done += 1;
-    if (entry) demos.push(projectEntry(entry, contract));
+    if (entry) demos.push(fromSidecar ? entry : projectEntry(entry, contract));
     onProgress?.({
       done,
       total,
@@ -1825,6 +1852,7 @@ export async function forgetDemoIndex(io, user, demoId) {
   memory.delete(demoId);
   try {
     await fsp.rm(path.join(statsDir(io.userDir(user)), `${demoId}.json`), { force: true });
+    await forgetColumnar(io, user, demoId);
   } catch {
     /* nothing cached */
   }

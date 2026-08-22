@@ -314,6 +314,43 @@ export async function fetchPeerAverages(filter = {}) {
   );
 }
 
+/**
+ * Player / team tables for a filter, aggregated on the server.
+ *
+ * The alternative is what the Database used to do: pull every round of every
+ * demo and add them up in the browser. On a four-thousand demo library that is
+ * ~18 s and ~740 MB to produce a screen of rows. This returns the rows.
+ *
+ * @param {object} filter    same shape rowPasses takes
+ * @param {{ tables?: string, limit?: number, offset?: number, demos?: string[] }} [opts]
+ */
+export async function fetchAggregate(filter = {}, opts = {}) {
+  const params = new URLSearchParams();
+  const maps = Array.isArray(filter.maps) ? filter.maps.filter(Boolean) : [];
+  if (maps.length) params.set('maps', maps.join(','));
+  if (filter.side) params.set('side', filter.side);
+  if (filter.econ !== null && filter.econ !== undefined) params.set('econ', String(filter.econ));
+  if (filter.oppEcon !== null && filter.oppEcon !== undefined) {
+    params.set('oppEcon', String(filter.oppEcon));
+  }
+  if (filter.result) params.set('result', filter.result);
+  if (filter.advantage) params.set('advantage', filter.advantage);
+  if (filter.teamName) params.set('teamName', filter.teamName);
+  if (filter.dateFrom) params.set('from', filter.dateFrom);
+  if (filter.dateTo) params.set('to', filter.dateTo);
+  if (Array.isArray(filter.files) && filter.files.length) params.set('files', filter.files.join(','));
+  if (opts.demos?.length) params.set('demos', opts.demos.join(','));
+  if (opts.tables) params.set('tables', opts.tables);
+  if (Number.isFinite(opts.limit)) params.set('limit', String(opts.limit));
+  if (Number.isFinite(opts.offset) && opts.offset > 0) params.set('offset', String(opts.offset));
+  const q = params.toString();
+  return asJson(
+    await safeFetch(`${API_BASE}/api/replays/aggregate${q ? `?${q}` : ''}`, {
+      headers: await headers()
+    })
+  );
+}
+
 function isHtmlOrJsonType(res) {
   const ct = (res.headers.get('content-type') || '').toLowerCase();
   return ct.includes('text/html') || ct.includes('application/json') || ct.includes('text/plain');

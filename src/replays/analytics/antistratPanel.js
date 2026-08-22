@@ -529,8 +529,9 @@ export function createAntistratPanel({ escapeHtml }) {
     el.innerHTML = spinnerHtml('Loading teams…');
     try {
       const data = await getStatsPayload(null, {
-        // Antistrat scans round shapes and tags, not player metrics.
-        columns: 'shapes',
+        // Round-library tags and match identity, nothing else. This scan never
+        // reads the phase bags, which are two thirds of the "shapes" contract.
+        columns: 'roundLibrary',
         onProgress: (p) => {
           if (token !== loadToken) return;
           setSpinnerLabel(el, statsProgressLabel(p));

@@ -27,10 +27,40 @@ const PEER_MIN_ROUNDS = 20;
 
 const CACHE_TTL_MS = 10 * 60_000;
 
+/**
+ * Cap on distinct (map, date-window, library) results held at once.
+ *
+ * The date filters come from a UI with free-form dates, so the key space is
+ * effectively unbounded: without a cap this map grows for the life of the
+ * process, since the TTL is only consulted on a read of that same key.
+ */
+const CACHE_MAX = 64;
+
 /** @type {Map<string, { at: number, stamp: string, value: object }>} */
 const cache = new Map();
 /** @type {Map<string, Promise<object>>} */
 const inflight = new Map();
+
+/**
+ * A short, order-independent digest of which demos a caller can read. Cheap to
+ * compute over a few thousand ids and enough to tell two access levels apart.
+ */
+function setStamp(records) {
+  let h1 = 0x811c9dc5;
+  let h2 = 0;
+  for (const r of records) {
+    const id = String(r.id || '');
+    let h = 0x811c9dc5;
+    for (let i = 0; i < id.length; i++) {
+      h ^= id.charCodeAt(i);
+      h = Math.imul(h, 0x01000193) >>> 0;
+    }
+    // XOR and sum both: order-independent, and less collision-prone than either.
+    h1 ^= h;
+    h2 = (h2 + h) >>> 0;
+  }
+  return `${records.length}:${h1.toString(36)}:${h2.toString(36)}`;
+}
 
 function mean(values) {
   const nums = values.filter((n) => Number.isFinite(n));
@@ -42,6 +72,20 @@ function cacheKey(user, filter, stamp) {
   return [user, filter.map || '', filter.dateFrom || '', filter.dateTo || '', stamp].join('|');
 }
 
+/** Drop expired entries, then the oldest, until the cache is within its cap. */
+function evict() {
+  const now = Date.now();
+  for (const [k, v] of cache) if (v.at <= now - CACHE_TTL_MS) cache.delete(k);
+  if (cache.size <= CACHE_MAX) return;
+  // Map iterates in insertion order, so the front is the oldest.
+  const excess = cache.size - CACHE_MAX;
+  let i = 0;
+  for (const k of cache.keys()) {
+    if (i++ >= excess) break;
+    cache.delete(k);
+  }
+}
+
 /**
  * @param {object} io
  * @param {string} user
@@ -50,7 +94,10 @@ function cacheKey(user, filter, stamp) {
  * @param {{ stamp?: string, onProgress?: (p: object) => void }} [opts]
  */
 export async function peerAverages(io, user, records, filter = {}, opts = {}) {
-  const stamp = opts.stamp || String(records.length);
+  // Identity of the record set, not merely its size. Two callers seeing the
+  // same *number* of demos do not necessarily see the same demos, and keying on
+  // the count alone would serve one of them the other's averages.
+  const stamp = opts.stamp || setStamp(records);
   const key = cacheKey(user, filter, stamp);
   const hit = cache.get(key);
   if (hit && hit.at > Date.now() - CACHE_TTL_MS) return hit.value;
@@ -91,6 +138,7 @@ export async function peerAverages(io, user, records, filter = {}, opts = {}) {
     const out = { sample: list.length, metrics: {} };
     for (const m of CARD_METRICS) out.metrics[m.key] = mean(list.map(m.read));
     cache.set(key, { at: Date.now(), stamp, value: out });
+    evict();
     return out;
   })().finally(() => {
     if (inflight.get(key) === job) inflight.delete(key);

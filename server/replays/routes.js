@@ -70,8 +70,9 @@ import {
 import { cpuProbe, memorySnapshot } from './hostMemory.js';
 import { forgetDemoIndex, loadStoredEntry, refreshLibraryStats, scheduleStatsIndex, STATS_LIBRARY_PAGE, statsPayload } from './statsIndex.js';
 import { ColumnContractError, resolveColumns } from '../../src/replays/shared/statsColumns.js';
-import { getRoster } from './rosterCatalogue.js';
+import { getRoster, scopeRoster } from './rosterCatalogue.js';
 import { peerAverages } from './peerAverages.js';
+import { hotStoreStatus, hotTables } from './statsHotService.js';
 import { isAcceptedUpload, rarSupport } from './archive.js';
 import { allJobs, batchStatus, enqueueParse, forgetJob, getBatch, jobStatus, startIngest } from './jobs.js';
 import { SHARED_LIBRARY, authStatus, identify } from './auth.js';
@@ -151,6 +152,34 @@ function json(res, status, body, extraHeaders = null) {
     ...(extraHeaders || {})
   });
   res.end(payload);
+}
+
+/**
+ * A JSON body big enough to be worth compressing.
+ *
+ * `json` above stays synchronous and uncompressed: most responses here are a
+ * few hundred bytes and gzip would cost more than it saves. This is for the
+ * handful that are not — the roster catalogue and a non-streamed stats page,
+ * both of which run to hundreds of KB or more on a real library.
+ */
+async function jsonBig(res, status, body, req, extraHeaders = null) {
+  let buf = Buffer.from(JSON.stringify(body), 'utf8');
+  const headers = {
+    'Content-Type': 'application/json; charset=utf-8',
+    ...CORS,
+    ...(extraHeaders || {})
+  };
+  const accepts = String(req?.headers['accept-encoding'] || '');
+  if (/\bgzip\b/.test(accepts) && buf.length > 4096) {
+    // Async on purpose, for the same reason `binary` is: this can be a
+    // multi-megabyte body and gzipSync would hold the only thread through it.
+    buf = await gzip(buf, { level: 1 });
+    headers['Content-Encoding'] = 'gzip';
+    headers.Vary = 'Accept-Encoding';
+  }
+  headers['Content-Length'] = buf.length;
+  res.writeHead(status, headers);
+  res.end(buf);
 }
 
 /**
@@ -1117,13 +1146,107 @@ export async function handleReplayRequest(req, res, url) {
   // resolves its demo ids here first, then asks /stats for just those — which
   // is the difference between 4100 demos and thirty.
   if (req.method === 'GET' && p === '/api/replays/roster') {
-    const { allowed } = await readable();
-    const records = allowed.filter((r) => (r.status || 'ready') === 'ready');
-    const roster = await getRoster(statsIo, user, records, {
+    // Built once over the whole library, then narrowed to this caller. Caching
+    // a per-caller catalogue thrashed between access levels and could collide.
+    const { records: allRecords, allowed } = await readable();
+    const ready = allRecords.filter((r) => (r.status || 'ready') === 'ready');
+    const allowedIds = new Set(
+      allowed.filter((r) => (r.status || 'ready') === 'ready').map((r) => r.id)
+    );
+    const full = await getRoster(statsIo, user, ready, {
       readEntry: (u, id) => loadStoredEntry(statsIo, u, id)
     });
-    res.setHeader?.('Cache-Control', 'private, max-age=60');
-    json(res, 200, roster);
+    const roster = allowedIds.size === ready.length ? full : scopeRoster(full, allowedIds);
+    await jsonBig(res, 200, roster, req, { 'Cache-Control': 'private, max-age=60' });
+    return true;
+  }
+
+  // ---- aggregate -----------------------------------------------------------
+  // The player table for a filter, computed here rather than in the browser.
+  //
+  // The old shape of this — ship every round of every demo and let the client
+  // add them up — costs ~18 s and ~740 MB on a 4100-demo library, most of it
+  // spent parsing JSON twice so the browser can produce a few dozen rows. The
+  // rows are what the page wanted; this returns them.
+  if (req.method === 'GET' && p === '/api/replays/aggregate') {
+    // The store is built from the whole library, once, for everybody. What this
+    // caller may read is applied as a mask per query.
+    const { records: allRecords, allowed } = await readable();
+    const ready = allRecords.filter((r) => (r.status || 'ready') === 'ready');
+    const allowedIds = new Set(
+      allowed.filter((r) => (r.status || 'ready') === 'ready').map((r) => r.id)
+    );
+    const only = csv(url, 'demos');
+    const scoped = only?.length ? new Set(only) : null;
+    const filter = {
+      maps: csv(url, 'maps') || [],
+      side: url.searchParams.get('side') || '',
+      econ: url.searchParams.has('econ') ? Number(url.searchParams.get('econ')) : null,
+      oppEcon: url.searchParams.has('oppEcon') ? Number(url.searchParams.get('oppEcon')) : null,
+      result: url.searchParams.get('result') || '',
+      advantage: url.searchParams.get('advantage') || '',
+      teamName: url.searchParams.get('teamName') || '',
+      dateFrom: url.searchParams.get('from') || '',
+      dateTo: url.searchParams.get('to') || '',
+      files: csv(url, 'files') || []
+    };
+    // Which tables the caller wants. Teams cost an extra pass over the rounds,
+    // so a page showing only players should not pay for them.
+    const tabs = (url.searchParams.get('tables') || 'players')
+      .split(',')
+      .map((x) => x.trim())
+      .filter(Boolean);
+    const wantTeams = tabs.includes('teams');
+    const { players, teams, maps } = await hotTables(statsIo, user, ready, filter, {
+      teams: wantTeams,
+      // A demo scope narrows the mask; it never widens what may be read.
+      allowedIds: scoped
+        ? new Set([...allowedIds].filter((id) => scoped.has(id)))
+        : allowedIds
+    });
+
+    // Paged. The table shows a hundred rows; a library with thousands of
+    // players should not ship all of them to render one screen.
+    const page = (rows) => {
+      if (!rows) return undefined;
+      const offset = Math.max(0, Math.floor(Number(url.searchParams.get('offset')) || 0));
+      const rawLimit = url.searchParams.get('limit');
+      if (rawLimit === null || rawLimit === '') return rows;
+      const limit = Math.max(1, Math.min(5000, Math.floor(Number(rawLimit) || 100)));
+      return rows.slice(offset, offset + limit);
+    };
+    const offset = Math.max(0, Math.floor(Number(url.searchParams.get('offset')) || 0));
+
+    // Trimmed to the caller's tier before it leaves the process. This shape —
+    // `{ players, teams }` — is exactly what gateStatsPayload was written for,
+    // and unlike the streamed round payload (which carries `demos` and is
+    // aggregated in the browser) the trim here actually withholds the metric:
+    // a client cannot show a column it was never sent.
+    await jsonBig(
+      res,
+      200,
+      gateStatsPayload(me, {
+        players: page(players),
+        playersTotal: players.length,
+        ...(wantTeams ? { teams: page(teams), teamsTotal: teams.length } : {}),
+        maps,
+        offset
+      }),
+      req
+    );
+    return true;
+  }
+
+  // Diagnostics: what the resident store is holding.
+  if (req.method === 'GET' && p === '/api/replays/aggregate/status') {
+    // Diagnostics: demo, round and player counts plus resident bytes. Harmless
+    // to an operator, but it is a description of the library, so it goes behind
+    // the same admin check as the other status tools.
+    if (!me.admin) {
+      json(res, 403, { error: 'Only site admins can read store status.' });
+      return true;
+    }
+    json(res, 200, { stores: hotStoreStatus() });
     return true;
   }
 
@@ -1140,9 +1263,7 @@ export async function handleReplayRequest(req, res, url) {
       dateFrom: url.searchParams.get('from') || '',
       dateTo: url.searchParams.get('to') || ''
     };
-    const out = await peerAverages(statsIo, user, records, filter, {
-      stamp: String(records.length)
-    });
+    const out = await peerAverages(statsIo, user, records, filter);
     res.setHeader?.('Cache-Control', 'private, max-age=300');
     json(res, 200, out);
     return true;
@@ -1190,21 +1311,56 @@ export async function handleReplayRequest(req, res, url) {
       // The aggregate is computed once and then trimmed to the caller's tier.
       // Trimming here rather than in the client is the point: the client cannot
       // reveal a metric it was never sent.
-      json(res, 200, gateStatsPayload(me, payload));
+      await jsonBig(res, 200, gateStatsPayload(me, payload), req);
       return true;
     }
 
     // NDJSON progress so the Database/Analytics UIs can say which demo is
     // building or rebuilding instead of a silent spinner for minutes.
-    res.writeHead(200, {
+    //
+    // Compressed when the caller can take it. This is the largest response the
+    // server sends by orders of magnitude — a Pattern Finder pull over a 4100
+    // demo library is ~297 MB of JSON, and it is repetitive numeric text, so
+    // level 1 gets ~4.4x for a fraction of the CPU the higher levels cost.
+    // The browser undoes it in the network layer, so fetchStats reads exactly
+    // the same stream either way.
+    const acceptsGzip = /\bgzip\b/.test(String(req.headers['accept-encoding'] || ''));
+    const streamHeaders = {
       'Content-Type': 'application/x-ndjson; charset=utf-8',
       'Cache-Control': 'no-store',
       'X-Accel-Buffering': 'no',
       ...CORS
-    });
+    };
+    /** @type {import('node:zlib').Gzip | null} */
+    let gz = null;
+    if (acceptsGzip) {
+      streamHeaders['Content-Encoding'] = 'gzip';
+      // Without this a shared cache could hand a gzipped body to a client that
+      // never asked for one.
+      streamHeaders.Vary = 'Accept-Encoding';
+      gz = zlib.createGzip({ level: 1 });
+      gz.on('error', () => res.destroy());
+      gz.pipe(res);
+    }
+    const sink = gz || res;
+    res.writeHead(200, streamHeaders);
+
+    // Deflate holds bytes back until it has a block worth emitting, which would
+    // batch the per-demo progress lines into jumps of a hundred-odd demos and
+    // undo the point of having them. A sync flush per line would cost ratio and
+    // CPU on 600 lines a page, so flush on a timer instead: fast enough that
+    // the count looks live, rare enough to be free.
+    let lastFlush = 0;
+    const FLUSH_MS = 50;
     const writeLine = (obj) => {
       if (res.writableEnded) return;
-      res.write(`${JSON.stringify(obj)}\n`);
+      sink.write(`${JSON.stringify(obj)}\n`);
+      if (!gz) return;
+      const now = Date.now();
+      if (now - lastFlush >= FLUSH_MS) {
+        lastFlush = now;
+        gz.flush(zlib.constants.Z_SYNC_FLUSH);
+      }
     };
     try {
       const payload = await statsPayload(statsIo, user, records, only, {
@@ -1236,19 +1392,28 @@ export async function handleReplayRequest(req, res, url) {
         hasMore: payload.hasMore
       });
       // Raw JSON after the NDJSON trailer — not escaped inside another JSON object.
+      // The trailer must reach the client before the body starts, or the UI
+      // sits on "packing" for however long the body takes to ship.
+      if (gz) {
+        lastFlush = Date.now();
+        gz.flush(zlib.constants.Z_SYNC_FLUSH);
+      }
       const body = JSON.stringify(gated);
       const chunk = 64 * 1024;
       for (let i = 0; i < body.length; i += chunk) {
         if (res.writableEnded) break;
         const slice = body.slice(i, i + chunk);
-        if (!res.write(slice)) {
-          await new Promise((resolve) => res.once('drain', resolve));
+        // No per-chunk flush here: the body is one opaque blob to the client,
+        // and letting deflate keep its window is most of the ratio.
+        if (!sink.write(slice)) {
+          await new Promise((resolve) => sink.once('drain', resolve));
         }
       }
     } catch (err) {
       writeLine({ type: 'error', error: err?.message || 'Stats failed.' });
     }
-    res.end();
+    // Ending the gzip stream flushes the tail and ends the response behind it.
+    sink.end();
     return true;
   }
 

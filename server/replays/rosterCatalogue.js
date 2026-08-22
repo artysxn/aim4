@@ -22,7 +22,12 @@ const CACHE_TTL_MS = 60_000;
 /** @type {Map<string, { stamp: string, at: number, value: object }>} */
 const cache = new Map();
 
-/** Cheap identity for a record list: adding, removing or reparsing changes it. */
+/**
+ * Cheap identity for a record list: adding, removing or reparsing changes it.
+ *
+ * Deliberately computed over the *whole* library, never a caller's visible
+ * subset — see `getRoster`.
+ */
 function stampOf(records) {
   let newest = 0;
   let ids = 0;
@@ -66,18 +71,23 @@ export async function buildRoster(io, user, records, opts = {}) {
 
   for (const record of records) {
     let roster = Array.isArray(record.players) ? record.players : [];
-    if (!roster.length && typeof opts.readEntry === 'function') {
+    let map = record.map || '';
+    // A manifest can lack either — statsIndex falls back to the rounds for both
+    // (`record.map || rounds[0]?.m`), so the catalogue must too, or a demo with
+    // no stamped map would be invisible to anything that scopes by map.
+    if ((!roster.length || !map) && typeof opts.readEntry === 'function') {
       // Only the stragglers pay a file read, and only once per cache window.
       try {
         const entry = await opts.readEntry(user, record.id);
-        if (Array.isArray(entry?.players)) roster = entry.players;
+        if (!roster.length && Array.isArray(entry?.players)) roster = entry.players;
+        if (!map) map = entry?.map || entry?.rounds?.[0]?.m || '';
       } catch {
-        /* a record with no resolvable roster simply carries none */
+        /* a record with no resolvable roster or map simply carries none */
       }
     }
     demos.push({
       id: record.id,
-      m: record.map || '',
+      m: map,
       u: Number(record.uploadedAt || record.parsedAt || 0) || 0,
       t1: record.team1?.id || '',
       t2: record.team2?.id || '',
@@ -94,6 +104,13 @@ export async function buildRoster(io, user, records, opts = {}) {
 /**
  * Cached catalogue for one library. Rebuilt when the record set changes or the
  * TTL lapses, so an upload shows up without an explicit invalidation hook.
+ *
+ * `records` must be the whole library, not the caller's visible subset. Caching
+ * a per-caller catalogue under one key went wrong two ways: an admin and a free
+ * account alternating would each invalidate the other's stamp and force a
+ * rebuild every request, and two callers who happened to see the same *number*
+ * of demos would collide on the stamp — serving one of them a catalogue naming
+ * demos they may not open. Visibility is applied by `scopeRoster` afterwards.
  */
 export async function getRoster(io, user, records, opts = {}) {
   const stamp = stampOf(records);
@@ -102,6 +119,43 @@ export async function getRoster(io, user, records, opts = {}) {
   const value = await buildRoster(io, user, records, opts);
   cache.set(user, { stamp, at: Date.now(), value });
   return value;
+}
+
+/**
+ * Narrow a catalogue to the demos one caller may read.
+ *
+ * Players are re-interned so the response never names someone who only appears
+ * in demos this caller cannot open, and the seat indices stay consistent with
+ * the trimmed player list.
+ *
+ * @param {object} roster    full-library catalogue
+ * @param {Set<string>|null} allowedIds  null means "everything"
+ */
+export function scopeRoster(roster, allowedIds) {
+  if (!allowedIds) return roster;
+  const demos = [];
+  /** old player index → new index */
+  const remap = new Map();
+  const players = [];
+  for (const d of roster.demos || []) {
+    if (!allowedIds.has(d.id)) continue;
+    const p = [];
+    for (let i = 0; i < d.p.length; i += 2) {
+      const at = d.p[i];
+      let next = remap.get(at);
+      if (next === undefined) {
+        const src = roster.players[at];
+        if (!src) continue;
+        next = players.length;
+        remap.set(at, next);
+        players.push({ i: src.i, n: src.n, c: 0 });
+      }
+      players[next].c += 1;
+      p.push(next, d.p[i + 1]);
+    }
+    demos.push({ ...d, p });
+  }
+  return { v: roster.v, players, demos, total: demos.length };
 }
 
 export function invalidateRoster(user) {

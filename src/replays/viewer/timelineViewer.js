@@ -3661,9 +3661,13 @@ export function createTimelineViewer({
         side: stratSide,
         playerIds,
         demoRoles: await stratDemoRoles(),
-        // Identity only: this lists matches, it does not measure them.
+        // Identity plus roles. Not identity alone: mergeRolesAcrossDemos reads
+        // `demo.roles.maps[map][side]`, and without it every demo looks
+        // role-less, so the library vote silently returns nothing and seating
+        // falls back to a coin flip. Roles are a per-demo field, not per-round,
+        // so this stays a very small payload.
         libraryDemos: () =>
-          getStatsPayload(null, { columns: 'identity' }).then((p) => p?.demos || []),
+          getStatsPayload(null, { columns: 'roles' }).then((p) => p?.demos || []),
         loadRounds: () => stratScanRounds(mapCode, stratSide, playerIds),
         network
       });

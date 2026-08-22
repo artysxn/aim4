@@ -929,10 +929,17 @@ export function teamNameKey(name, shortId = '') {
  * @param {Map<string, {t1: string, t2: string, name1: string, name2: string, winner: number}>} demos
  * @param {StatsFilter} filter
  */
-export function aggregateTeams(rows, players, demos, filter = {}) {
-  const acc = new Map();
+/**
+ * Accumulator seat for one team. Exported so an alternative accumulation (the
+ * server's resident store) can fill exactly these fields and hand them to
+ * `deriveTeams`, keeping one implementation of the derived statistics.
+ */
+export function createTeamAccumulator() {
+  return new Map();
+}
 
-  const seat = (key, name) => {
+export function teamSeat(acc, key, name) {
+  {
     let s = acc.get(key);
     if (!s) {
       s = {
@@ -964,7 +971,12 @@ export function aggregateTeams(rows, players, demos, filter = {}) {
     const label = String(name || '').trim();
     if (label) s.nameCounts.set(label, (s.nameCounts.get(label) || 0) + 1);
     return s;
-  };
+  }
+}
+
+/** Fold rows into a team accumulator. */
+export function accumulateTeams(acc, rows, players, demos, filter = {}) {
+  const seat = (key, name) => teamSeat(acc, key, name);
 
   for (const row of rows) {
     const demo = demos.get(row.d);
@@ -1028,9 +1040,18 @@ export function aggregateTeams(rows, players, demos, filter = {}) {
     }
   }
 
-  // Player ratings under the same filter, so the team average and its hover
-  // breakdown agree with the players table.
-  const playerRows = aggregatePlayers(rows, players, filter, demos);
+  return acc;
+}
+
+/**
+ * Turn pooled team counters into table rows.
+ *
+ * @param {Map} acc            from accumulateTeams (or an equivalent)
+ * @param {Array} playerRows   player table under the same filter, so the team
+ *   average and its hover breakdown agree with what the players tab shows
+ * @param {Map} demos          demo id → identity, for the map record
+ */
+export function deriveTeams(acc, playerRows, demos) {
   const byPlayer = new Map(playerRows.map((p) => [p.id, p]));
 
   const out = [];
@@ -1141,6 +1162,15 @@ export function aggregateTeams(rows, players, demos, filter = {}) {
   }
   out.sort((a, b) => b.avgRating - a.avgRating);
   return out;
+}
+
+/**
+ * One row per team, pooled across demos. Unchanged behaviour: the
+ * accumulate/derive split above is an internal seam, not a new contract.
+ */
+export function aggregateTeams(rows, players, demos, filter = {}) {
+  const acc = accumulateTeams(createTeamAccumulator(), rows, players, demos, filter);
+  return deriveTeams(acc, aggregatePlayers(rows, players, filter, demos), demos);
 }
 
 /** Rebuild the lookup maps a payload needs, on either side of the wire. */

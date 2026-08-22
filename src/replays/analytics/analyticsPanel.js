@@ -12,6 +12,8 @@
 
 import { consumeCapability, formatApiError } from '../api.js';
 import { getStatsPayload, peekStatsCache, statsCacheGeneration } from '../statsCache.js';
+import { fetchRoster } from '../api.js';
+import { demosForMap, rosterMaps } from '../shared/rosterQuery.js';
 import { CAP } from '../../../shared/entitlements/keys.js';
 import { ECONOMIES, MAPS, economyLabel } from '../shared/roundId.js';
 import { attachTips } from '../stats/statsTables.js';
@@ -210,10 +212,13 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       return;
     }
     if (chapter === 'antistrat') {
+      // Antistrat fetches for itself. It picks a team and then a map, so its
+      // team list has to span the library — handing it Pattern Finder's payload
+      // would quietly limit it to whatever map that panel is showing.
       ensureAntistrat();
       // Prefer the shared payload; if it is not ready yet, antistrat self-fetches
       // so a failed / skipped Players spend cannot leave "Loading teams…" forever.
-      antistrat?.load(payload);
+      antistrat?.load();
       return;
     }
     if (payload) {
@@ -1240,9 +1245,69 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     if (slot && lastResults) slot.innerHTML = renderRounds(lastResults.agg);
   }
 
+  /**
+   * The catalogue: which demos are on which map. A few hundred KB, and it is
+   * what lets this panel ask for one map instead of the whole library.
+   */
+  let roster = null;
+  /** Demo ids the current payload covers, so revisiting a map is free. */
+  let payloadScope = '';
+
+  async function ensureRoster() {
+    if (!roster) roster = await fetchRoster();
+    return roster;
+  }
+
+  /**
+   * Demo ids to fetch shapes for.
+   *
+   * Pattern Finder draws nothing until a map is picked, and then only ever
+   * works on that map — so the other six sevenths of the library were being
+   * downloaded to be ignored. Without a map yet, nothing is fetched at all.
+   */
+  function scopeDemos() {
+    if (!state.map || !roster) return null;
+    return demosForMap(roster, state.map);
+  }
+
   function loadShapesForMap() {
     state.shapes = state.map ? loadShapes(state.map) : [];
     tickCache.clear();
+  }
+
+  /**
+   * Fetch this map's rounds, if they are not already what we hold.
+   *
+   * Changing map is now a fetch rather than a filter over data already in
+   * memory — which is the trade that makes the first load a seventh of the size.
+   * The statsCache keys on the demo set, so going back to a map visited earlier
+   * in the session is served from memory.
+   */
+  async function loadMapPayload(token) {
+    const scoped = scopeDemos();
+    if (!scoped?.length) {
+      payload = { demos: [] };
+      players = [];
+      teams = [];
+      return;
+    }
+    const stamp = scoped.join(',');
+    if (payload && payloadScope === stamp && payloadGeneration === statsCacheGeneration()) return;
+    setSpinnerLabel(mainEl, 'Loading map…');
+    const data = await getStatsPayload(scoped, {
+      columns: 'shapes',
+      onProgress: (p) => {
+        if (token !== loadToken) return;
+        setSpinnerLabel(mainEl, statsProgressLabel(p));
+      }
+    });
+    if (token !== loadToken) return;
+    payload = data;
+    payloadScope = stamp;
+    payloadGeneration = statsCacheGeneration();
+    players = listPlayers(payload);
+    teams = listTeams(payload);
+    state.playerIds = state.playerIds.filter((id) => players.some((p) => p.id === id));
   }
 
   async function load() {
@@ -1265,7 +1330,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     if (chapter === 'antistrat') {
       ensureAntistrat();
       if (payload && cacheFresh()) {
-        antistrat?.load(payload);
+        antistrat?.load();
         return;
       }
       const cached = peekStatsCache(null, 'shapes');
@@ -1275,7 +1340,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
         players = listPlayers(payload);
         teams = listTeams(payload);
         maps = listMaps(payload);
-        antistrat?.load(payload);
+        antistrat?.load();
         return;
       }
       mainEl.innerHTML = spinnerHtml('Loading stats…');
@@ -1294,7 +1359,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
         players = listPlayers(payload);
         teams = listTeams(payload);
         maps = listMaps(payload);
-        antistrat?.load(payload);
+        antistrat?.load();
       } catch (err) {
         if (token !== loadToken) return;
         // Self-fetch path in antistrat surfaces the same error (or succeeds if
@@ -1309,7 +1374,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     if (payload && cacheFresh()) {
       render();
       mountSavedViews();
-      antistrat?.load(payload);
+      antistrat?.load();
       return;
     }
     const cached = peekStatsCache(null, 'shapes');
@@ -1324,7 +1389,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       loadShapesForMap();
       render();
       mountSavedViews();
-      antistrat?.load(payload);
+      antistrat?.load();
       void savedViews.refresh().then(mountSavedViews);
       void savedViews
         .applyShareParam(Object.fromEntries(new URLSearchParams(window.location.search)))
@@ -1342,28 +1407,24 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
         cancelSlow();
         return;
       }
-      const data = await getStatsPayload(null, {
-          // Pattern finder works on round shapes; it never shows a player rating.
-          columns: 'shapes',
-        onProgress: (p) => {
-          if (token !== loadToken) return;
-          setSpinnerLabel(mainEl, statsProgressLabel(p));
-        }
-      });
+      // The map list comes from the catalogue, so the map picker works before a
+      // single round has been fetched.
+      await ensureRoster();
+      if (token !== loadToken) {
+        cancelSlow();
+        return;
+      }
+      maps = rosterMaps(roster);
+      if (state.map && !maps.includes(state.map)) state.map = '';
+
+      await loadMapPayload(token);
       cancelSlow();
       if (token !== loadToken) return;
-      payload = data;
-      payloadGeneration = statsCacheGeneration();
-      players = listPlayers(payload);
-      teams = listTeams(payload);
-      maps = listMaps(payload);
-      state.playerIds = state.playerIds.filter((id) => players.some((p) => p.id === id));
-      if (state.map && !maps.includes(state.map)) state.map = '';
       loadShapesForMap();
       if (token !== loadToken) return;
       render();
       mountSavedViews();
-      antistrat?.load(payload);
+      antistrat?.load();
       void savedViews.refresh().then(mountSavedViews);
       void savedViews
         .applyShareParam(Object.fromEntries(new URLSearchParams(window.location.search)))
@@ -1519,7 +1580,16 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       state.roundOpp = [];
       radarView = { zoom: 1, panX: 0, panY: 0 };
       loadShapesForMap();
-      render();
+      // The rounds for this map may not be loaded yet.
+      const token = loadToken;
+      mainEl.innerHTML = spinnerHtml('Loading map…');
+      void loadMapPayload(token)
+        .then(() => {
+          if (token === loadToken) render();
+        })
+        .catch(() => {
+          if (token === loadToken) render();
+        });
       return;
     }
     const roundBox = t.closest?.('[data-an-round]');

@@ -71,8 +71,18 @@ const BASELINE_BYTES = 414;
  */
 export const RATING_CORE = Object.freeze(['swing', 'kills', 'aim', 'duels']);
 
-/** Groups whose absence changes a displayed rating rather than blanking it. */
-const RATING_BEARING = new Set(RATING_CORE);
+/**
+ * The groups A4R alone depends on — the ones aim4RatingBreakdown replaces with
+ * league averages when they are missing.
+ *
+ * `kills` is deliberately not here. It feeds Rating 3.0, and bucketRating
+ * degrades honestly without it (the neutral-economy form of the same formula,
+ * not a fabricated constant), so asking for `kills` on its own is a legitimate
+ * Rating-3.0 contract. The hazard is asking for *some* of these three: that
+ * still renders an A4R, quietly pulled toward the mean.
+ */
+const A4R_ONLY = Object.freeze(['swing', 'aim', 'duels']);
+const RATING_BEARING = new Set(A4R_ONLY);
 
 /**
  * Named contracts. A page names one instead of listing columns, so "what does
@@ -83,8 +93,15 @@ export const COLUMN_PRESETS = Object.freeze({
   rating: [...RATING_CORE, 'coreOpenings', 'roles', 'heldGun'],
   /** Rating plus every Premium metric column the Database table adds. */
   full: [...COLUMN_GROUP_IDS],
-  /** Round list, pattern finder, antistrat: round shapes, no player ratings. */
+  /** Round list, antistrat: round shapes, no player metrics at all. */
   shapes: ['phase', 'roundLibrary'],
+  /**
+   * Pattern Finder: round shapes, team identity, exact Rating 3.0 and utility.
+   * No aim, duels, movement or AWP-hold — a third of the payload it used to
+   * pull, and none of it reaches the screen. `ratingReady` stays false, so
+   * nothing built from this may render A4R.
+   */
+  patterns: ['phase', 'roundLibrary', 'kills', 'utility'],
   /** Team tables: team-level rates, no per-player rating. */
   team: ['prw', 'possession', 'anchor', 'utility'],
   /** Match cards / listings: who played and who won. Baseline only. */
@@ -115,6 +132,7 @@ export function resolveColumns(requested) {
       entryKeys: null,
       all: true,
       ratingReady: true,
+      worthColumnar: false,
       bytesPerRound:
         BASELINE_BYTES + COLUMN_GROUP_IDS.reduce((n, g) => n + COLUMN_GROUPS[g].bytes, 0)
     };
@@ -143,7 +161,7 @@ export function resolveColumns(requested) {
   // The guard. Partial rating input is worse than none: the number still
   // renders, still sorts, and is quietly pulled toward the league mean.
   const bearing = [...wanted].filter((g) => RATING_BEARING.has(g));
-  if (bearing.length && bearing.length < RATING_CORE.length) {
+  if (bearing.length && !RATING_CORE.every((g) => wanted.has(g))) {
     const missing = RATING_CORE.filter((g) => !wanted.has(g));
     throw new ColumnContractError(
       `Incomplete rating contract: asked for ${bearing.join(', ')} but not ${missing.join(', ')}. ` +
@@ -163,13 +181,23 @@ export function resolveColumns(requested) {
     bytesPerRound += def.bytes;
   }
 
+  const fullBytes =
+    BASELINE_BYTES + COLUMN_GROUP_IDS.reduce((n, g) => n + COLUMN_GROUPS[g].bytes, 0);
   return {
     groups: [...wanted].sort(),
     rowKeys,
     entryKeys,
     all: wanted.size === COLUMN_GROUP_IDS.length,
     ratingReady: RATING_CORE.every((g) => wanted.has(g)),
-    bytesPerRound
+    bytesPerRound,
+    /**
+     * Whether reading this contract column-by-column beats parsing the whole
+     * index. Seeking to a block costs a read and a header parse, so a contract
+     * that wants most of the file pays that overhead for nothing — measured at
+     * ~0.9x for the `rating` preset (65% of the bytes) against 5.9x for
+     * `patterns` (39%). Half the file is where the two cross over.
+     */
+    worthColumnar: bytesPerRound <= fullBytes * 0.5
   };
 }
 
