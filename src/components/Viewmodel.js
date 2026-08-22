@@ -27,6 +27,8 @@ import { getWeapon } from '../weapons/index.js';
 import { buildGunModel } from '../weapons/gunModels.js';
 import { AgentViewmodel } from '../weapons/AgentViewmodel.js';
 import { sharedWeaponAssets, weaponNameFor } from '../agents/weaponAssets.js';
+import { BulletTracers } from '../weapons/bulletTracers.js';
+import { sharedBulletAssets } from '../agents/bulletAssets.js';
 
 const TRACER_POOL = 24;
 const TRACER_LIFE = 0.09; // seconds — quick, just a firing indicator
@@ -55,6 +57,16 @@ export class Viewmodel {
     this._wantVisible = false;
     this._spec = null;
     this._wasReloading = false;
+    /**
+     * When true, `_punchPitch`/`_punchYaw` are being written from outside
+     * every frame (the CS2 recoil model) and this class must not decay them —
+     * see `setAbsolutePunch`.
+     */
+    this._absolutePunch = false;
+    /** CS2's own bullet streak. Falls back to the pooled line below. */
+    this.tracers = new BulletTracers({ camera: engine.camera, assets: sharedBulletAssets() });
+    this.tracers.attach(engine.scene);
+    sharedBulletAssets().load().catch(() => {});
     this.agent = new AgentViewmodel();
     engine.viewmodelRender = (renderer, camera) => this.agent.render(renderer, camera);
     // The pack is already being fetched by main.js; this is only the callback.
@@ -193,6 +205,18 @@ export class Viewmodel {
   }
 
   // ---- Public API ----------------------------------------------------------
+  /**
+   * Is the viewmodel on screen at all?
+   *
+   * `group` is the BLOCKY model's group and is false whenever the CS2 model is
+   * the one drawing, so reading it as "is the gun visible" answers no for
+   * every agent-viewmodel frame. That is what stopped replays firing the
+   * viewmodel at all — see ReplayPlayer._playShot.
+   */
+  get visible() {
+    return this._wantVisible;
+  }
+
   /** True while the CS2 arms and weapon are the ones being drawn. */
   get useAgent() {
     if (this.settings.activeSettings().viewmodel?.agentModels === false) return false;
@@ -278,7 +302,34 @@ export class Viewmodel {
     this._punchYaw += yawRad;
   }
 
+  /**
+   * Take the camera punch from outside instead of springing it here.
+   *
+   * CS2's view punch is state with its own decay law, integrated inside
+   * shared/sim3d/recoil.js at a fixed sub-step — the spring below is a
+   * different, cruder decay, and running both would compound them. The
+   * WeaponController pushes an absolute angle every frame while its CS2 model
+   * is in charge; passing `null` hands the spring back.
+   *
+   * @param {number|null} pitchRad  camera pitch offset, positive UP
+   * @param {number|null} yawRad
+   */
+  setAbsolutePunch(pitchRad, yawRad) {
+    if (pitchRad === null) {
+      this._absolutePunch = false;
+      return;
+    }
+    this._absolutePunch = true;
+    this._punchPitch = pitchRad;
+    this._punchYaw = yawRad;
+  }
+
   _applyPunch(dt) {
+    if (this._absolutePunch) {
+      // The value is already this frame's; only steer the camera by it.
+      this._steerByPunch();
+      return;
+    }
     const spraying = !!this.engine.player?.input?.fireHeld;
     if (spraying) {
       const decay = Math.exp(-dt / this._punchTauSpray);
@@ -300,8 +351,14 @@ export class Viewmodel {
       this._punchYaw = 0;
       return;
     }
-    // Steer the camera by the punch offset. Requires the look input; the gun is
-    // only visible during a run, so this never fights the menu camera.
+    this._steerByPunch();
+  }
+
+  /**
+   * Point the camera at look + punch. Requires the look input; the gun is only
+   * visible during a run, so this never fights the menu camera.
+   */
+  _steerByPunch() {
     const input = this.engine.player?.input;
     if (!input) return;
     this.camera.rotation.x = Math.max(-MAX_PITCH, Math.min(MAX_PITCH, input.pitch + this._punchPitch));
@@ -313,8 +370,26 @@ export class Viewmodel {
     return out.copy(this._muzzle);
   }
 
-  /** Spawn a quick yellow tracer between two world points. */
-  spawnTracer(origin, end) {
+  /**
+   * Send a bullet streak from the muzzle to wherever the round stopped.
+   *
+   * CS2's ribbon when the bullet pack has landed and the caller named the
+   * weapon (it carries `m_nTracerFrequency`, and a silenced gun draws none);
+   * the pooled yellow line otherwise, which is what the trainer has always
+   * drawn and what a cold page still gets.
+   */
+  spawnTracer(origin, end, weapon = null) {
+    if (weapon && this.tracers.ready) {
+      if (this.tracers.fire({ from: origin, to: end, weapon })) return;
+      // The weapon has no tracer at all (a silencer) — draw nothing rather
+      // than falling through to a line the game would not have drawn.
+      if (!(weapon.tracerFrequency ?? 0)) return;
+    }
+    this._spawnLineTracer(origin, end);
+  }
+
+  /** The original pooled line: a fallback now, not the main path. */
+  _spawnLineTracer(origin, end) {
     const tr = this._tracers[this._tracerIdx];
     this._tracerIdx = (this._tracerIdx + 1) % this._tracers.length;
     const pos = tr.line.geometry.getAttribute('position');
@@ -484,6 +559,7 @@ export class Viewmodel {
   // ---- Per-frame -----------------------------------------------------------
   update(dt, motion = {}) {
     this._updateTracers(dt);
+    this.tracers.update(dt);
     this._updateImpactSparks(dt);
     if (!this.engine.replayPlayer?.active) {
       this._applyPunch(dt);

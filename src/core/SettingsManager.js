@@ -148,6 +148,11 @@ export const DEFAULTS = {
     weaponColor: '#3a3f46'
   },
   weapon: {
+    // CS2's own spray pattern, inaccuracy and fire rate, generated from the
+    // weapon's seed (shared/sim3d/recoil.js + inaccuracy.js) rather than the
+    // trainer's hand-authored tables in weapons/*.js. Off, or before the
+    // weapons pack has landed, the old tables decide where a bullet goes.
+    cs2Ballistics: true,
     aimpunch: true, // view-punch camera kick when firing (toggle for those who dislike it)
     customWeapon: 'rifle', // custom games: 'rifle' | 'pistol' | 'tracking' | 'sniper'
     shootBind: 'Mouse0' // Mouse0|Mouse1|Mouse2 or a KeyboardEvent.code

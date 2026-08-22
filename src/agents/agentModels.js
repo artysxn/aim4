@@ -206,11 +206,23 @@ export class AgentModels {
         });
         this.models[side] = { scene: gltf.scene, hitboxes: m.hitboxes, bones: m.bones, name: m.name };
       });
+    // Only the locomotion set is required. `shared` carries the deaths, and a
+    // bot that cannot fall over is still a bot worth having — where an
+    // all-or-nothing load means one dropped connection on a rate-limited CDN
+    // costs the whole feature and falls silently back to the built-in model.
+    const REQUIRED = new Set(['rifle']);
     const clipJobs = this.sets
       .filter((set) => manifest.anims[set])
       .map(async (set) => {
         const a = manifest.anims[set];
-        const gltf = await load(a.file);
+        let gltf;
+        try {
+          gltf = await load(a.file);
+        } catch (e) {
+          if (REQUIRED.has(set)) throw e;
+          console.warn(`aim4: agent clip set "${set}" did not load; bots keep everything else —`, e.message || e);
+          return;
+        }
         const map = new Map();
         for (const clip of gltf.animations) map.set(clip.name, clip);
         this.clips[set] = map;
@@ -218,6 +230,7 @@ export class AgentModels {
       });
     await Promise.all([...modelJobs, ...clipJobs]);
     if (!Object.keys(this.models).length) throw new Error('players pack has none of the requested agents');
+    if (!this.clips.rifle) throw new Error('players pack has no rifle locomotion set');
 
     // The clip skeleton carries helper bones the agents do not have
     // (wpnHand_L/R, attachWorld …). A track aimed at a bone that is not there

@@ -202,7 +202,7 @@ export class BaseScenario {
    * hook still owns hit detection; this method owns aim, spread and the shared
    * weapon juice (flash, kick, tracer, view-punch).
    */
-  shoot(recoil = null, bloom = 0, shotIndex = 0, punch = null) {
+  shoot(recoil = null, bloom = 0, shotIndex = 0, punch = null, cs2 = null) {
     if (!this.running) return;
     this.shotsFired++;
     if (this.weaponId !== 'tracking') this.engine.audio?.playLocalShot();
@@ -219,21 +219,39 @@ export class BaseScenario {
     }
     _dir.normalize();
 
-    // Deterministic recoil pattern: pitch up around camera-right, yaw drift.
-    if (recoil) {
-      _right.crossVectors(_dir, _up).normalize();
-      _dir.applyQuaternion(_quat.setFromAxisAngle(_right, recoil.pitch));
-      _dir.applyQuaternion(_quat.setFromAxisAngle(_up, -recoil.yaw));
-    }
-    const aimX = _dir.x;
-    const aimY = _dir.y;
-    const aimZ = _dir.z;
+    // CS2's own ballistics (src/weapons/cs2Ballistics.js) hand over a finished
+    // direction: the recoil punch is already folded into the view angles and
+    // the inaccuracy cone is already a tangent offset on that basis, which is
+    // exactly how the game composes the two. Nothing below re-applies either.
+    let seed;
+    let aimX;
+    let aimY;
+    let aimZ;
+    if (cs2) {
+      seed = cs2.index;
+      // The aim before the cone, for the telemetry: the punch IS part of the
+      // aim (bullets take all of it), the random draw is not.
+      aimX = _dir.x;
+      aimY = _dir.y;
+      aimZ = _dir.z;
+      _dir.set(cs2.dir.x, cs2.dir.y, cs2.dir.z).normalize();
+    } else {
+      // Deterministic recoil pattern: pitch up around camera-right, yaw drift.
+      if (recoil) {
+        _right.crossVectors(_dir, _up).normalize();
+        _dir.applyQuaternion(_quat.setFromAxisAngle(_right, recoil.pitch));
+        _dir.applyQuaternion(_quat.setFromAxisAngle(_up, -recoil.yaw));
+      }
+      aimX = _dir.x;
+      aimY = _dir.y;
+      aimZ = _dir.z;
 
-    // Random bloom cone on top of the pattern.
-    const seed = (Math.random() * 0xffffffff) >>> 0;
-    if (bloom > 0) {
-      const s = applySpreadToDir({ x: _dir.x, y: _dir.y, z: _dir.z }, bloom, spreadRng(seed));
-      _dir.set(s.x, s.y, s.z).normalize();
+      // Random bloom cone on top of the pattern.
+      seed = (Math.random() * 0xffffffff) >>> 0;
+      if (bloom > 0) {
+        const s = applySpreadToDir({ x: _dir.x, y: _dir.y, z: _dir.z }, bloom, spreadRng(seed));
+        _dir.set(s.x, s.y, s.z).normalize();
+      }
     }
 
     _raycaster.ray.origin.copy(cam.position);
@@ -275,14 +293,16 @@ export class BaseScenario {
         vm.syncMuzzleForShot(motion);
         vm.getMuzzlePosition(_tracerStart);
         tracerOrigin = _tracerStart;
-        vm.spawnTracer(_tracerStart, this._lastImpact);
+        vm.spawnTracer(_tracerStart, this._lastImpact, cs2 ? this.engine.weapon?.cs2.weapon : null);
         if (impactHit) {
           vm.spawnBulletImpact(this._lastImpact, this._lastImpactNormal, {
             decal: isBulletDecalSurface(impactHit.object)
           });
         }
       }
-      if (vmRecoil) {
+      // The CS2 model's camera punch is STATE, pushed every frame by the
+      // WeaponController, not an impulse per shot — so nothing to add here.
+      if (vmRecoil && !cs2) {
         const p = punch || viewPunchImpulse(shotIndex);
         vm.punch(p.pitch, p.yaw);
       }

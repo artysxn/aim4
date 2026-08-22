@@ -167,6 +167,11 @@ export class ReplayPlayer {
       vm.setWeapon(getWeapon(replay.weaponId));
       vm._kick = 0;
       vm._flashT = 0;
+      // Hand the punch back to the viewmodel's own spring. A live run leaves
+      // the CS2 model driving it (WeaponController._pushCameraPunch), and
+      // nothing pushes it during playback — so without this the gun holds
+      // whatever punch the last live frame wrote, forever.
+      vm.setAbsolutePunch(null);
       vm._punchPitch = 0;
       vm._punchYaw = 0;
     }
@@ -464,7 +469,7 @@ export class ReplayPlayer {
       speedHoriz: moving ? PLAYER_RUN_SPEED : 0
     };
 
-    if (vm?.group.visible) {
+    if (vm?.visible) {
       vm.syncMuzzleForShot(motion);
       vm.fire({ recoil });
     }
@@ -472,7 +477,7 @@ export class ReplayPlayer {
     if (ev.o?.length >= 3 && ev.e?.length >= 3) {
       _shotOrigin.set(ev.o[0], ev.o[1], ev.o[2]);
       _shotEnd.set(ev.e[0], ev.e[1], ev.e[2]);
-      if (_shotOrigin.distanceToSquared(_shotEnd) < 1e-8 && vm?.group.visible) {
+      if (_shotOrigin.distanceToSquared(_shotEnd) < 1e-8 && vm?.visible) {
         vm.syncMuzzleForShot(motion);
         vm.getMuzzlePosition(_shotOrigin);
         _shotEnd.copy(_shotOrigin).add(

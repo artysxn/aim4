@@ -13,8 +13,11 @@
 
 import { getWeapon } from './index.js';
 import { lerp } from '../utils/MathUtils.js';
+import { CS2Ballistics } from './cs2Ballistics.js';
+import { sharedWeaponAssets } from '../agents/weaponAssets.js';
 
 const LAND_WINDOW = 0.15; // seconds after landing where shots are penalised
+const DEG = Math.PI / 180;
 
 export class WeaponController {
   constructor({ engine, input, settings, sceneManager, viewmodel }) {
@@ -24,13 +27,43 @@ export class WeaponController {
     this.sceneManager = sceneManager;
     this.viewmodel = viewmodel;
     this.spec = getWeapon();
+    /**
+     * CS2's own recoil and accuracy, over the same weapon rows the 3D map
+     * practice mode shoots with. `ready` is false until the weapons pack has
+     * landed; until then (and whenever the setting is off) the trainer's own
+     * tables in ak47.js / pistol.js / sniper.js decide where a bullet goes.
+     */
+    this.cs2 = new CS2Ballistics({ assets: sharedWeaponAssets() });
     this.reset();
+  }
+
+  /**
+   * Is this shot decided by CS2's numbers?
+   *
+   * Competitive runs are deliberately NOT special-cased: the whole point of
+   * the mode is to be the game, and a leaderboard split between two different
+   * spray patterns would be worse than one that moved once.
+   *
+   * **Multiplayer is.** The server re-derives every bullet from the aim, the
+   * shooter's stance and a spread seed (`server/lobby.js` `_shoot` →
+   * `resolveShotDirection`) using the TRAINER's cone, and validates the hit
+   * against its own answer. A client shooting CS2's pattern would send an aim
+   * the server then bends a different way — every spray bullet lands somewhere
+   * else on the server than it did on screen, and hits are rejected with
+   * nothing to show why. The two models have to move together, and that is a
+   * protocol change, not this one.
+   */
+  get useCS2() {
+    if (this.settings.activeSettings().weapon?.cs2Ballistics === false) return false;
+    if (this.sceneManager.current?.isMultiplayer) return false;
+    return this.cs2.ready;
   }
 
   reset() {
     // Pick up the active scenario's weapon (defaults to rifle outside a run).
     this.spec = getWeapon(this.sceneManager?.current?.weaponId);
     this.viewmodel?.setWeapon(this.spec);
+    this.cs2.setSpec(this.spec);
 
     this.magSize = this.spec.magSize;
     this.ammo = this.magSize;
@@ -224,7 +257,23 @@ export class WeaponController {
 
     const now = performance.now();
     const spec = this.spec;
-    const shotIntervalMs = spec.shotInterval * 1000;
+    // The cadence is part of the pattern, not separate from it: the spray is
+    // what the damped punch does when the table is fed in at the weapon's own
+    // rate, so CS2's `m_flCycleTime` comes along with CS2's recoil or neither
+    // does. (AK: 0.1 s either way. USP: 0.17 in the game against the trainer's
+    // 0.09. AWP: 1.455 against 1.463.)
+    const shotIntervalMs = (this.useCS2 ? this.cs2.cycleTime() : spec.shotInterval) * 1000;
+
+    // Let the punch settle and the accuracy penalty recover, whether or not a
+    // trigger is down — the recovery between sprays is the model's too.
+    if (this.cs2.ready) {
+      this.cs2.setMode(this.scopeLevel > 0 ? 1 : 0);
+      this.cs2.update(dt, this._accuracyState(), now / 1000);
+      if (this.useCS2) this._pushCameraPunch();
+      // Turned off mid-run: hand the punch back to the viewmodel's own spring,
+      // or it freezes at whatever the last CS2 frame wrote.
+      else if (this.viewmodel?._absolutePunch) this.viewmodel.setAbsolutePunch(null);
+    }
 
     // Track landing so a just-landed shot is penalised.
     const player = this.engine.player;
@@ -305,12 +354,64 @@ export class WeaponController {
     if (this.ammo === 0 && !this.reloading && !this._infiniteAmmo()) this.reload();
   }
 
+  /** The player's stance, for whichever accuracy model is in charge. */
+  _accuracyState() {
+    const player = this.engine.player;
+    const state = player?.enabled ? player.getAccuracyState() : { onGround: true, speedHoriz: 0 };
+    state.reloading = this.reloading;
+    return state;
+  }
+
+  /**
+   * Hand the camera the punch CS2 says it should be showing.
+   *
+   * An absolute angle every frame, not an impulse: the game's view punch is
+   * state that decays on its own clock inside the recoil model, and the
+   * viewmodel's own spring would be a second, different decay layered on top.
+   * `Viewmodel.setAbsolutePunch` turns that spring off for as long as this is
+   * being fed.
+   */
+  _pushCameraPunch() {
+    const vm = this.viewmodel;
+    if (!vm) return;
+    const sc = this.sceneManager.current;
+    // The scenario may suppress the kick, and so may the player: `aimpunch` is
+    // checked here rather than in `Viewmodel.punch`, which this path no longer
+    // goes through.
+    const off = (sc && sc.viewmodelRecoil === false) || this.settings.activeSettings().weapon?.aimpunch === false;
+    if (off) {
+      vm.setAbsolutePunch(0, 0);
+      return;
+    }
+    const p = this.cs2.cameraPunchDeg();
+    // Source QAngle → the trainer's camera: pitch+ is DOWN there and UP here.
+    vm.setAbsolutePunch(-p[0] * DEG, -p[1] * DEG);
+  }
+
   _fireOne(sc) {
     const idx = this._shotIndex;
     const player = this.engine.player;
-    const state = player ? player.getAccuracyState() : { onGround: true, speedHoriz: 0 };
+    const state = this._accuracyState();
     this._withScopeState(state);
     const recentlyLanded = performance.now() < this._landedUntil;
+
+    // ---- CS2's own ballistics ---------------------------------------------
+    if (this.useCS2) {
+      const input = this.engine.player?.input;
+      const shot = this.cs2.fire({
+        yaw: input ? input.yaw : this.engine.camera.rotation.y,
+        pitch: input ? input.pitch : this.engine.camera.rotation.x,
+        player: state,
+        now: performance.now() / 1000
+      });
+      if (this.spec.automatic) {
+        this._sustainLevel = Math.min(this.spec.sustainCap, this._sustainLevel + 1);
+      }
+      sc.shoot(null, 0, idx, null, shot);
+      this._pushCameraPunch();
+      this._afterShot(sc);
+      return;
+    }
 
     const offset = this.spec.patternOffset(idx);
     const level = this.spec.automatic ? this._sustainLevel : idx;
@@ -325,7 +426,11 @@ export class WeaponController {
     }
 
     sc.shoot(offset, bloom, idx, punch); // flash, kick, tracer + view-punch live in shoot()
+    this._afterShot(sc);
+  }
 
+  /** Everything a shot does after the bullet has gone, either model. */
+  _afterShot(sc) {
     // Bolt cycle: a scoped shot drops the scope while the next round chambers,
     // then re-scopes to the same level automatically (CS AWP behaviour).
     if (this.spec.zoom && this.scopeLevel > 0) {

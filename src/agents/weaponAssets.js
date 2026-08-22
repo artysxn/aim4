@@ -25,17 +25,11 @@ import { packBase, packLoader, readManifest, packVersionQuery, loadGlb } from '.
 
 export const WEAPONS_PACK_VERSION = 4;
 
-/** Trainer weapon model id (weapons/index.js `model`) → the CS2 weapon it is. */
-export const TRAINER_WEAPONS = Object.freeze({
-  rifle: 'ak47',
-  pistol: 'usp_silencer',
-  sniper: 'awp'
-});
-
-/** The CS2 weapon a trainer weapon spec should be drawn as. */
-export function weaponNameFor(spec) {
-  return TRAINER_WEAPONS[spec?.model] || TRAINER_WEAPONS.rifle;
-}
+// The trainer → CS2 weapon mapping lives in its own import-free module so the
+// ballistics and the tests can read it without the pack loader; re-exported
+// here because this is where callers expect to find it.
+import { TRAINER_WEAPONS } from './trainerWeapons.js';
+export { TRAINER_WEAPONS, weaponNameFor } from './trainerWeapons.js';
 
 export class WeaponAssets {
   constructor({ base } = {}) {

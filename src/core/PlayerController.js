@@ -48,7 +48,16 @@ export class PlayerController {
   getAccuracyState() {
     return {
       onGround: this.onGround,
-      speedHoriz: Math.hypot(this.vel.x, this.vel.z)
+      speedHoriz: Math.hypot(this.vel.x, this.vel.z),
+      // The rest is what CS2's own accuracy model reads
+      // (shared/sim3d/inaccuracy.js, via src/weapons/cs2Ballistics.js): the
+      // air penalty is a function of vertical SPEED and is smallest at the
+      // apex of a jump, the crouch penalty follows the body rather than the
+      // key, and walking takes the movement ramp linearly instead of to the
+      // quarter power — which is most of what shift buys.
+      velY: this.velY,
+      crouchAmt: this.crouchAmt,
+      walking: !!this.input?.walkHeld
     };
   }
 
