@@ -8,7 +8,7 @@
 
 import { formatApiError } from '../api.js';
 import { getStatsPayload } from '../statsCache.js';
-import { fetchAggregate, fetchVrsRanks } from '../api.js';
+import { fetchAggregate, fetchAggregateMatches, fetchRoster, fetchVrsRanks } from '../api.js';
 import { scheduleUiJob } from '../../lib/frameBudget.js';
 import {
   attachPlayerRoles,
@@ -33,6 +33,13 @@ import {
 } from '../shared/statsMath.js';
 import { hasRoundLibrary, roundTypeRows } from '../analytics/roundLibrary.js';
 import { listPlayers, listTeams } from '../analytics/analyticsMath.js';
+import {
+  demosForPlayer,
+  demosForTeam,
+  rosterPlayers,
+  rosterTeamPlayers,
+  rosterTeams
+} from '../shared/rosterQuery.js';
 import { clockAt, secondsAtClock } from '../analytics/roundFacts.js';
 import { ROUND_SECONDS } from '../viewer/roundClock.js';
 import {
@@ -140,10 +147,7 @@ export function createStatsPanel({
         ${
           usePageHead
             ? ''
-            : `<span class="st-busy" data-st-busy hidden role="status" aria-live="polite" aria-label="Recalculating the table">
-          <span class="spinner spinner-sm" aria-hidden="true"></span>
-        </span>
-        <button type="button" class="btn btn-sm st-filters-toggle" data-st-filters-toggle aria-expanded="false" aria-controls="st-filters">
+            : `<button type="button" class="btn btn-sm st-filters-toggle" data-st-filters-toggle aria-expanded="false" aria-controls="st-filters">
           <img src="${filtersIcon}" alt="" width="16" height="16" draggable="false" />
           Filters
         </button>
@@ -172,9 +176,6 @@ export function createStatsPanel({
         <button type="button" class="seg-tab active" data-tab="players">${mbIcon('player')}Players</button>
         <button type="button" class="seg-tab" data-tab="teams">${mbIcon('team')}Teams</button>
       </div>
-      <span class="st-busy" data-st-busy hidden role="status" aria-live="polite" aria-label="Recalculating the table">
-        <span class="spinner spinner-sm" aria-hidden="true"></span>
-      </span>
       <button type="button" class="btn btn-sm st-filters-toggle" data-st-filters-toggle aria-expanded="false" aria-controls="st-filters">
         <img src="${filtersIcon}" alt="" width="16" height="16" draggable="false" />
         Filters
@@ -203,7 +204,7 @@ export function createStatsPanel({
     document.getElementById('page-head-actions')?.replaceChildren(pageHeadEl);
     syncTabButtons();
     syncSearchToggle();
-    paintBusy();
+    paintLoadRing();
     filtersToggleEl?.classList.toggle('active', filtersOpen);
     filtersToggleEl?.setAttribute('aria-expanded', filtersOpen ? 'true' : 'false');
   }
@@ -223,33 +224,67 @@ export function createStatsPanel({
    * @type {{ loaded: number, total: number }}
    */
   let libraryProgress = { loaded: 0, total: 0 };
+  /** Library pages still arriving. */
+  let libraryStreaming = false;
 
   const countFmt = new Intl.NumberFormat();
 
-  function libraryProgressText() {
+  /**
+   * Recomputes in flight.
+   *
+   * A filter change re-queries the library or re-aggregates every round in the
+   * browser, and until it lands the table sits there showing the old numbers —
+   * which reads as "the click did nothing". Counted rather than a flag, because
+   * a library load and a render can overlap and the first to finish must not
+   * clear the other's mark.
+   */
+  let busyCount = 0;
+
+  /**
+   * What the one ring is currently saying.
+   *
+   * There used to be two: a library-progress ring by the tabs and a second
+   * "recalculating" ring by the Filters button. Two spinners for one wait is a
+   * puzzle, not a status — the reader has to work out which is which and why
+   * one of them is not moving. Both reasons now live on this ring, and the tip
+   * says which applies.
+   */
+  function loadRingText() {
     const { loaded, total } = libraryProgress;
-    if (!total) return 'Loading matches…';
-    const shown = Math.min(loaded, total);
-    return (
-      `${countFmt.format(shown)} of ${countFmt.format(total)} matches loaded\n` +
-      'Tables update as the rest arrive.'
-    );
+    if (libraryStreaming && total) {
+      const shown = Math.min(loaded, total);
+      return (
+        `${countFmt.format(shown)} of ${countFmt.format(total)} matches loaded\n` +
+        (busyCount > 0
+          ? 'Updating the tables with what has arrived.'
+          : 'Tables update as the rest arrive.')
+      );
+    }
+    if (libraryStreaming) return 'Loading matches…';
+    return 'Updating the tables for these filters.';
   }
 
-  /** Push the current count onto every copy of the spinner. */
-  function paintLibraryProgress() {
+  /** One line, no UI hints, for assistive tech. */
+  function loadRingLabel() {
+    const { loaded, total } = libraryProgress;
+    if (libraryStreaming && total) {
+      return `Loading matches, ${Math.min(loaded, total)} of ${total} loaded`;
+    }
+    if (libraryStreaming) return 'Loading more matches';
+    return 'Updating the tables';
+  }
+
+  /** Visibility and text of every copy of the ring. */
+  function paintLoadRing() {
+    const on = libraryStreaming || busyCount > 0;
+    const text = loadRingText();
+    const label = loadRingLabel();
     const roots = [el, pageHeadEl].filter(Boolean);
-    const text = libraryProgressText();
     for (const root of roots) {
       root.querySelectorAll('[data-st-library-load]').forEach((mark) => {
+        mark.hidden = !on;
         mark.dataset.tip = text;
-        // One line for assistive tech; the tip's second line is UI hint only.
-        mark.setAttribute(
-          'aria-label',
-          libraryProgress.total
-            ? `Loading matches, ${Math.min(libraryProgress.loaded, libraryProgress.total)} of ${libraryProgress.total} loaded`
-            : 'Loading more matches'
-        );
+        mark.setAttribute('aria-label', label);
       });
     }
   }
@@ -270,25 +305,18 @@ export function createStatsPanel({
       loaded: Math.min(Math.max(libraryProgress.loaded, nextLoaded), nextTotal || nextLoaded),
       total: nextTotal
     };
-    paintLibraryProgress();
+    paintLoadRing();
   }
 
   function resetLibraryProgress() {
     libraryProgress = { loaded: 0, total: 0 };
-    paintLibraryProgress();
+    paintLoadRing();
   }
 
   function setLibraryLoading(on) {
-    const roots = [el, pageHeadEl].filter(Boolean);
-    for (const root of roots) {
-      root.querySelectorAll('[data-st-library-load]').forEach((mark) => {
-        mark.hidden = !on;
-      });
-    }
-    if (on) {
-      paintLibraryProgress();
-      setLibraryRetry(false);
-    }
+    libraryStreaming = Boolean(on);
+    if (libraryStreaming) setLibraryRetry(false);
+    paintLoadRing();
   }
 
   function setLibraryRetry(on) {
@@ -299,35 +327,15 @@ export function createStatsPanel({
   }
 
   /**
-   * Recomputes in flight.
-   *
-   * A filter change re-queries the library or re-aggregates every round in the
-   * browser, and until it lands the table sits there showing the old numbers —
-   * which reads as "the click did nothing". A ring next to Filters says the
-   * work is running. Counted rather than a flag, because a library load and a
-   * render can overlap and the first to finish must not clear the other's mark.
-   */
-  let busyCount = 0;
-
-  function paintBusy() {
-    const roots = [el, pageHeadEl].filter(Boolean);
-    for (const root of roots) {
-      root.querySelectorAll('[data-st-busy]').forEach((mark) => {
-        mark.hidden = busyCount <= 0;
-      });
-    }
-  }
-
-  /**
-   * Hold the busy ring up for as long as `job` runs. Returns `job` itself, so
+   * Hold the ring up for as long as `job` runs. Returns `job` itself, so
    * callers keep the promise (and its rejection) they already had.
    */
   function trackBusy(job) {
     busyCount += 1;
-    paintBusy();
+    paintLoadRing();
     const done = () => {
       busyCount = Math.max(0, busyCount - 1);
-      paintBusy();
+      paintLoadRing();
     };
     if (job && typeof job.then === 'function') job.then(done, done);
     else done();
@@ -358,6 +366,17 @@ export function createStatsPanel({
   let calendarOpen = false;
 
   let payload = null;
+  /**
+   * The roster catalogue: who played in which demo, without any stats index.
+   *
+   * The Search box used to read its suggestions off `payload`, which meant
+   * picking a name required the whole library in the browser first — a ~0.9 GB
+   * download to answer "show me this player". The catalogue answers the same
+   * question in one small request, and the picked demos then scope the server
+   * aggregate, so Search never touches a round.
+   */
+  let roster = null;
+  let rosterLoading = null;
   let scope = {};
   /** When set, only players/rounds under this team display name are counted. */
   let lockedTeamName = '';
@@ -412,7 +431,13 @@ export function createStatsPanel({
   }
 
   function roleMode() {
-    if (!payloadHasRoles(payload)) return '';
+    // Server mode has no payload to inspect; the rows themselves say whether
+    // the library has roles, because the endpoint only attaches them when it
+    // found a role table to read.
+    const has = payload
+      ? payloadHasRoles(payload)
+      : (serverTables?.players || []).some((p) => p.roleT || p.roleCT || p.posT || p.posCT);
+    if (!has) return '';
     return singleMap() ? 'position' : 'tactical';
   }
 
@@ -617,12 +642,34 @@ export function createStatsPanel({
     searchEl.hidden = !searchOpen;
     if (searchOpen) {
       renderSearch();
+      // Suggestions come from the catalogue; fetch it on the way in rather
+      // than on the first keystroke so the menu is populated when it opens.
+      void ensureRoster().then(() => {
+        if (searchOpen) refreshSearchMenu();
+      });
       searchEl.querySelector('#st-entity-search')?.focus?.();
     } else {
       searchMenuOpen = false;
       searchQuery = '';
     }
     syncSearchToggle();
+  }
+
+  /** Load the catalogue once. A failure leaves suggestions on the payload path. */
+  function ensureRoster() {
+    if (roster) return Promise.resolve(roster);
+    if (!rosterLoading) {
+      rosterLoading = fetchRoster()
+        .then((res) => {
+          roster = res;
+          return res;
+        })
+        .catch(() => null)
+        .finally(() => {
+          rosterLoading = null;
+        });
+    }
+    return rosterLoading;
   }
 
   function entitySuggestions(q) {
@@ -633,8 +680,22 @@ export function createStatsPanel({
     const selectedTeams = new Set(entityPick.teams.map((t) => String(t.key)));
     /** @type {{ kind: 'team'|'player', key: string, label: string, sub?: string }[]} */
     const out = [];
-    const teams = payload ? listTeams(payload) : [];
-    const players = payload ? listPlayers(payload) : [];
+    // Catalogue first; the payload is only a fallback for a roster that failed
+    // to load, and both expose the same { key/id, name } shape.
+    const teams = roster
+      ? rosterTeams(roster, '', Infinity).map((t) => ({
+          key: t.key,
+          name: t.name,
+          playerIds: null
+        }))
+      : payload
+        ? listTeams(payload)
+        : [];
+    const players = roster
+      ? rosterPlayers(roster, '', Infinity)
+      : payload
+        ? listPlayers(payload)
+        : [];
 
     const teamHits = teams
       .filter((t) => !selectedTeams.has(String(t.key)))
@@ -646,7 +707,7 @@ export function createStatsPanel({
       )
       .slice(0, needle ? 8 : 12);
     for (const t of teamHits) {
-      const n = t.playerIds?.length || 0;
+      const n = t.playerIds?.length ?? (roster ? rosterTeamPlayers(roster, t.key).length : 0);
       out.push({
         kind: 'team',
         key: t.key,
@@ -752,10 +813,18 @@ export function createStatsPanel({
 
   function pickEntity(kind, key) {
     const id = String(key || '').trim();
-    if (!id || !payload) return;
+    // Either source can name the entity. This used to require `payload`, from
+    // when a pick could not be resolved without the whole library in memory —
+    // with suggestions now coming from the catalogue, that guard silently
+    // swallowed every click.
+    if (!id || (!payload && !roster)) return;
     if (kind === 'team') {
       if (entityPick.teams.some((t) => t.key === id)) return;
-      const hit = listTeams(payload).find((t) => t.key === id);
+      const hit = roster
+        ? rosterTeams(roster, '', Infinity).find((t) => String(t.key) === id)
+        : payload
+          ? listTeams(payload).find((t) => t.key === id)
+          : null;
       entityPick.teams.push({ key: id, name: hit?.name || id });
       if (tab !== 'teams' && !entityPick.players.length) {
         tab = 'teams';
@@ -763,7 +832,11 @@ export function createStatsPanel({
       }
     } else if (kind === 'player') {
       if (entityPick.players.some((p) => p.id === id)) return;
-      const hit = listPlayers(payload).find((p) => p.id === id);
+      const hit = roster
+        ? rosterPlayers(roster, '', Infinity).find((p) => String(p.id) === id)
+        : payload
+          ? listPlayers(payload).find((p) => p.id === id)
+          : null;
       entityPick.players.push({ id, name: hit?.name || id });
       if (tab !== 'players' && !entityPick.teams.length) {
         tab = 'players';
@@ -808,11 +881,15 @@ export function createStatsPanel({
   function allowedPlayerIds() {
     if (!hasEntityPick()) return null;
     const ids = new Set(entityPick.players.map((p) => String(p.id)));
-    if (entityPick.teams.length && payload) {
-      const teamKeys = new Set(entityPick.teams.map((t) => String(t.key)));
-      for (const t of listTeams(payload)) {
-        if (!teamKeys.has(String(t.key))) continue;
-        for (const id of t.playerIds || []) ids.add(String(id));
+    if (entityPick.teams.length) {
+      for (const pick of entityPick.teams) {
+        if (roster) {
+          for (const p of rosterTeamPlayers(roster, pick.key)) ids.add(String(p.id));
+          continue;
+        }
+        if (!payload) continue;
+        const hit = listTeams(payload).find((t) => String(t.key) === String(pick.key));
+        for (const id of hit?.playerIds || []) ids.add(String(id));
       }
     }
     return ids;
@@ -822,15 +899,47 @@ export function createStatsPanel({
   function allowedTeamKeys() {
     if (!hasEntityPick()) return null;
     const keys = new Set(entityPick.teams.map((t) => String(t.key)));
-    if (entityPick.players.length && payload) {
+    if (entityPick.players.length) {
       const playerIds = new Set(entityPick.players.map((p) => String(p.id)));
-      for (const t of listTeams(payload)) {
+      const teams = roster
+        ? rosterTeams(roster, '', Infinity).map((t) => ({
+            key: t.key,
+            playerIds: rosterTeamPlayers(roster, t.key).map((p) => p.id)
+          }))
+        : payload
+          ? listTeams(payload)
+          : [];
+      for (const t of teams) {
         if ((t.playerIds || []).some((id) => playerIds.has(String(id)))) {
           keys.add(String(t.key));
         }
       }
     }
     return keys;
+  }
+
+  /**
+   * Demo ids the current search picks cover, or null when unrestricted.
+   *
+   * This is what turns a pick from a library download into a scoped query: a
+   * player only has rounds in their own matches, so aggregating over just those
+   * demos gives the identical row the whole-library pass would have given.
+   */
+  function entityDemoIds() {
+    if (!hasEntityPick() || !roster) return null;
+    const ids = new Set();
+    for (const p of entityPick.players) for (const id of demosForPlayer(roster, p.id)) ids.add(id);
+    for (const t of entityPick.teams) for (const id of demosForTeam(roster, t.key)) ids.add(id);
+    return ids.size ? [...ids] : null;
+  }
+
+  /**
+   * Demos the server aggregate should be restricted to: an explicit caller
+   * scope wins, then the search picks, then the whole library.
+   */
+  function serverDemoScope() {
+    if (scope.demos?.length) return scope.demos;
+    return entityDemoIds() || undefined;
   }
 
   function applyEntityPickPlayers(data) {
@@ -2350,6 +2459,7 @@ export function createStatsPanel({
       if (rebuildFilters) renderFilters();
       else syncFilterChrome();
       bodyEl.setAttribute('aria-busy', 'true');
+      if (detail) return refreshServerDetail();
       return refreshServerTables();
     }
     if (rebuildFilters) {
@@ -2381,15 +2491,37 @@ export function createStatsPanel({
    */
   let serverTables = null;
   let serverToken = 0;
+  /** Per-match rows for the open detail, from the server. `{ key, rows }`. */
+  let serverDetail = null;
+  let detailToken = 0;
 
   /** Interactions that cannot be answered from the aggregate endpoint. */
+  /**
+   * Interactions that cannot be answered from the aggregate endpoint.
+   *
+   * Search picks used to be on this list. They are not any more: the catalogue
+   * resolves a pick to demo ids and the aggregate is scoped to them, so the
+   * answer arrives in one request instead of the whole library. A pick made
+   * before the catalogue landed still falls back here, because without it there
+   * is no way to turn a name into a demo list.
+   *
+   * A `files` scope is off the list too. `aggregateHot` has always honoured
+   * `filter.files`, and the endpoint has always accepted a round-id list — the
+   * Pattern Finder sends tens of thousands of them — so "the Database for these
+   * selected rounds" was downloading the library to compute something the
+   * server was already able to answer. fetchAggregate switches to POST once the
+   * list outgrows a URL.
+   *
+   * So is the Role filter. Roles were never computed in the browser — the stats
+   * index writes them per (map, side, player) and the browser only read that
+   * table — so the store can carry them and the server can hand back rows that
+   * already know their role.
+   */
   function needsRawRounds() {
     return Boolean(
-      detail ||
+      (detail && !roster) ||
       lockedTeamName ||
-      hasEntityPick() ||
-      filter.role ||
-      scope.files?.length ||
+      (hasEntityPick() && !roster) ||
       (scope.demos?.length && scope.demos.length <= 1)
     );
   }
@@ -2403,22 +2535,35 @@ export function createStatsPanel({
     const token = loadToken;
     bodyEl.setAttribute('aria-busy', 'true');
     setSpinnerLabel(bodyEl, 'Loading rounds…');
-    const res = await getStatsPayload(scope.demos || null, {
-      onProgress: (p) => {
-        if (token !== loadToken) return;
-        noteLibraryProgress({ loaded: p?.libraryLoaded, total: p?.libraryTotal });
-      },
-      onBatch: (batch) => {
-        if (token !== loadToken) return;
-        payload = batch.payload;
-        noteLibraryProgress({ loaded: batch.loaded, total: batch.total });
-        setLibraryLoading(Boolean(batch.hasMore));
+    try {
+      const res = await getStatsPayload(scope.demos || null, {
+        onProgress: (p) => {
+          if (token !== loadToken) return;
+          noteLibraryProgress({ loaded: p?.libraryLoaded, total: p?.libraryTotal });
+        },
+        onBatch: (batch) => {
+          if (token !== loadToken) return;
+          payload = batch.payload;
+          noteLibraryProgress({ loaded: batch.loaded, total: batch.total });
+          setLibraryLoading(Boolean(batch.hasMore));
+        }
+      });
+      if (token !== loadToken) return null;
+      payload = res;
+      setLibraryLoading(false);
+      return payload;
+    } catch (err) {
+      // A page that fails mid-stream used to leave the ring turning for the
+      // rest of the session: nothing below the await ran, so the "still
+      // loading" mark was never cleared and the count froze wherever it had
+      // got to. Stop the ring, offer Retry (resumeLibrary picks up from the
+      // last merged page), and let the caller see the failure.
+      if (token === loadToken) {
+        setLibraryLoading(false);
+        setLibraryRetry(true);
       }
-    });
-    if (token !== loadToken) return null;
-    payload = res;
-    setLibraryLoading(false);
-    return payload;
+      throw err;
+    }
   }
 
   /** Render the two tables straight from server rows. */
@@ -2432,7 +2577,13 @@ export function createStatsPanel({
     if (tab === 'players') {
       let data = serverTables.players || [];
       if (minR > 0) data = data.filter((p) => (p.rounds || 0) >= minR);
-      let cols = { columns: PLAYER_COLUMNS, fixedCount: PLAYER_FIXED_BASE.length };
+      // Scoping the query to the picked demos also returns everyone else who
+      // played in them; the pick still decides which rows are shown.
+      data = applyEntityPickPlayers(data);
+      const mode = roleMode();
+      let cols = mode
+        ? playerColumnsWithRoles(mode)
+        : { columns: PLAYER_COLUMNS, fixedCount: PLAYER_FIXED_BASE.length };
       if (omitTeamColumn) cols = omitPlayerTeamColumn(cols);
       paintTable(data, {
         columns: cols.columns,
@@ -2449,6 +2600,7 @@ export function createStatsPanel({
     } else {
       let data = serverTables.teams || [];
       if (minR > 0) data = data.filter((t) => (t.rounds || 0) >= minR);
+      data = applyEntityPickTeams(data);
       paintTable(data, {
         columns: TEAM_COLUMNS,
         fixedCount: 2,
@@ -2468,17 +2620,122 @@ export function createStatsPanel({
     emitViewChange();
   }
 
+  /** Demos the open detail covers, from the catalogue. */
+  function detailDemoIds() {
+    if (!detail || !roster) return null;
+    return detail.kind === 'team'
+      ? demosForTeam(roster, detail.name)
+      : demosForPlayer(roster, detail.id);
+  }
+
+  /**
+   * Pull the open detail's per-match rows from the server.
+   *
+   * The rows come back already aggregated per match, so the browser holds one
+   * row per game instead of every round of every game the entity played.
+   */
+  async function refreshServerDetail() {
+    const token = ++detailToken;
+    const ids = detailDemoIds();
+    if (!ids?.length) {
+      serverDetail = { key: detailKey(), rows: [] };
+      renderServerDetail();
+      return true;
+    }
+    const active = { ...filter, files: scope.files || null };
+    try {
+      const res = await fetchAggregateMatches(
+        detail.kind === 'team' ? { kind: 'team', id: detail.name } : { kind: 'player', id: detail.id },
+        ids,
+        active
+      );
+      if (token !== detailToken) return false;
+      serverDetail = { key: detailKey(), rows: res?.rows || res?.players || [] };
+      renderServerDetail();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Identity of the detail a cached row set belongs to. */
+  function detailKey() {
+    if (!detail) return '';
+    return `${detail.kind}:${detail.kind === 'team' ? detail.name : detail.id}`;
+  }
+
+  /**
+   * Paint per-match rows that came from the server.
+   *
+   * The identity columns — score, result, opponent — are derived here rather
+   * than server-side because they depend on which side the entity was on, and
+   * the row already carries the demo's two team names and winner.
+   */
+  function renderServerDetail() {
+    if (!detail || !serverDetail) return;
+    syncHead();
+    syncFilterChrome();
+    // `side`, `scoreLabel` and `scoreSort` are stamped server-side: the score
+    // has to be the FILTERED round record, and only the query that applied the
+    // filter knows it.
+    const data = serverDetail.rows.map((row) => ({
+      ...row,
+      mapName: MAPS[row.map]?.name || row.map || '—',
+      opponent: (row.side === 2 ? row.name1 : row.name2) || '—',
+      result: row.winner === row.side ? 'W' : row.winner ? 'L' : '—',
+      scoreLabel: row.scoreLabel || '',
+      scoreSort: row.scoreSort ?? 0,
+      uploadedAt: row.uploadedAt || 0
+    }));
+    if (detail.label === (detail.id || detail.name)) {
+      const named = data.find((r) => r.name);
+      if (named?.name) detail.label = named.name;
+    }
+    const cols = detail.kind === 'team' ? teamMatchColumns() : playerMatchColumns();
+    const profileLink =
+      detail.kind === 'player'
+        ? `<p class="st-profile-link">
+        <a href="/performance?player=${encodeURIComponent(detail.id)}&name=${encodeURIComponent(
+          detail.label || detail.id
+        )}">Open player profile</a>
+      </p>`
+        : '';
+    paintTable(
+      data,
+      {
+        columns: cols.columns,
+        fixedCount: cols.fixedCount,
+        escapeHtml,
+        sortKey: detailSort.key,
+        sortDir: detailSort.dir,
+        page: detailPage,
+        pageSize: STATS_PAGE_SIZE,
+        showAverage: true,
+        opponentCell: (r) =>
+          r.opponent && r.opponent !== '—' ? teamLink(r.opponent) : escapeHtml(r.opponent || '—')
+      },
+      profileLink
+    );
+    bodyEl.removeAttribute('aria-busy');
+    bindStatsHScroll(bodyEl);
+    attachTips(bodyEl);
+    syncHead();
+    emitViewChange();
+  }
+
   /**
    * Re-query the server for the current filter. Used when the panel is in
    * server mode and a filter, tab or sort changes.
    */
   async function refreshServerTables() {
     const token = ++serverToken;
-    const active = { ...filter, files: scope.files || null };
+    // `roles: true` asks for the role columns even with no role chip set: the
+    // table shows a Role column whenever the library has roles at all.
+    const active = { ...filter, files: scope.files || null, roles: true };
     try {
       const res = await fetchAggregate(active, {
         tables: 'players,teams',
-        demos: scope.demos || undefined
+        demos: serverDemoScope()
       });
       if (token !== serverToken) return false;
       serverTables = res;
@@ -2494,6 +2751,10 @@ export function createStatsPanel({
     lastTable = null;
     if (!payload) {
       // Server mode: no rounds in the browser, so paint from the endpoint.
+      if (detail) {
+        if (serverDetail) renderServerDetail();
+        return;
+      }
       if (serverTables) renderFromServer();
       return;
     }
@@ -2694,6 +2955,9 @@ export function createStatsPanel({
     scopeEl.textContent = next.title || '';
     payload = null;
     serverTables = null;
+    // Start the catalogue now; it is awaited below, before the panel decides
+    // whether it needs raw rounds.
+    const rosterReady = ensureRoster();
     // A re-scoped load counts from zero against a different total.
     resetLibraryProgress();
     setLibraryLoading(false);
@@ -2733,7 +2997,11 @@ export function createStatsPanel({
     applyViewState(next, { notify: false });
     syncSearchToggle();
     if (searchOpen) renderSearch();
-    await fetchVrsRanks().catch(() => {});
+    // The catalogue decides whether a detail view or a search pick can be
+    // answered by the server. It is ~14 KB and arrives in tens of milliseconds;
+    // deciding without it means defaulting to a library download, which is the
+    // thing it exists to avoid. Both requests are already in flight.
+    await Promise.all([fetchVrsRanks().catch(() => {}), rosterReady]);
     if (token !== loadToken) return;
 
     // Server mode. The default view is a filtered table over the library, which
@@ -2741,12 +3009,15 @@ export function createStatsPanel({
     // with the filters this load resolved to, and only pull rounds when the
     // view actually needs them.
     if (!needsRawRounds()) {
-      const served = await refreshServerTables();
+      // A detail view opened straight from a URL asks the matches endpoint
+      // instead; both paint without a round reaching the browser.
+      const served = detail ? await refreshServerDetail() : await refreshServerTables();
       if (token !== loadToken) return;
       if (served) {
         cancelSlow();
         renderFilters();
-        renderFromServer();
+        if (detail) renderServerDetail();
+        else renderFromServer();
         return;
       }
       // Endpoint unavailable (older server, an error): the payload path below

@@ -3995,21 +3995,6 @@ body.rv-open {
   display: none;
 }
 
-/* Recalculating after a filter / tab / search change. Sits immediately before
-   the Filters button so the ring reads as "these filters are being applied". */
-.st-busy {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 32px;
-  flex: 0 0 auto;
-}
-
-.st-busy[hidden] {
-  display: none;
-}
-
 .st-page-actions [data-st-library-retry],
 .st-tabs-row [data-st-library-retry] {
   height: 32px;

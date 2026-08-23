@@ -24,6 +24,7 @@ import { DUEL_BUCKETS, R3_FIELDS, SEAT } from './statsHotStore.js';
 import { P } from '../../src/replays/shared/statsMath.js';
 import { filterSeatPassesRank, hasRankFilter } from '../../src/replays/shared/vrsRanks.js';
 import { loadGlobalRanks } from './teamStandingsDb.js';
+import { attachPlayerRoles, playerMatchesRoleFilter } from '../../src/replays/roles/assignRoles.js';
 
 const AKPR_HOLD_SECONDS = 10;
 
@@ -512,4 +513,152 @@ export function aggregateTeamsHot(store, filter = {}, playerRows = null, allowDe
 
   const demoMap = new Map(store.demos.map((d) => [d.id, d]));
   return deriveTeams(acc, playerRows || aggregateHot(store, filter, allowDemo), demoMap);
+}
+
+// ---------------------------------------------------------------------------
+// Per-match rows
+// ---------------------------------------------------------------------------
+
+/**
+ * One aggregated row per demo, for a single player or team.
+ *
+ * This is what the Database's player/team detail view shows, and it used to be
+ * the reason opening a name downloaded the whole library: the browser needed
+ * every raw round to aggregate each match separately. The store can do it
+ * without shipping anything.
+ *
+ * Deliberately a loop over `aggregateHot` / `aggregateTeamsHot` rather than a
+ * second accumulator. Those two functions are where every metric is defined,
+ * and a per-match variant that re-implemented the per-seat folding would be one
+ * refactor away from disagreeing with the table above it — the failure nobody
+ * notices, because both numbers look plausible. One demo at a time costs an
+ * extra scan per match; correctness by construction is worth more than the
+ * scans, and `demoIds` is a single entity's history, not the library.
+ *
+ * @param {object} store
+ * @param {string[]} demoIds demos to produce a row for
+ * @param {object} filter
+ * @param {Uint8Array|null} allowDemo visibility mask
+ * @param {{ kind: 'player'|'team', id: string }} want
+ * @returns {Array<object>} rows, each stamped with the demo it came from
+ */
+export function aggregateHotMatches(store, demoIds, filter, allowDemo, want) {
+  const byId = new Map(store.demos.map((d, i) => [d.id, i]));
+  const wantKey = want?.kind === 'team' ? teamNameKey(String(want.id || '')) : '';
+  const wantPlayer = String(want?.id || '');
+  const out = [];
+
+  for (const demoId of demoIds || []) {
+    const idx = byId.get(demoId);
+    if (idx === undefined) continue;
+    if (allowDemo && !allowDemo[idx]) continue;
+    // A mask of exactly this demo. Cheaper than re-slicing the store, and it
+    // rides the same filter path every other query uses.
+    const only = new Uint8Array(store.demos.length);
+    only[idx] = 1;
+
+    const demo = store.demos[idx];
+    const players = aggregateHot(store, filter, only);
+    // Team rows come along for the score. They are the only place the filtered
+    // round record lives — "13:9" has to mean the rounds this filter kept, not
+    // the scoreline on the scoreboard, or a side filter would leave every match
+    // claiming a result it did not have under that filter.
+    const teams = aggregateTeamsHot(store, filter, players, only);
+
+    let row = null;
+    let side = 0;
+    if (want?.kind === 'team') {
+      row = teams.find((t) => t.key === wantKey) || null;
+      side = teamNameKey(demo.name1, demo.t1) === wantKey
+        ? 1
+        : teamNameKey(demo.name2, demo.t2) === wantKey
+          ? 2
+          : 0;
+    } else {
+      row = players.find((pl) => String(pl.id) === wantPlayer) || null;
+      const seat = (demo.players || []).find((pl) => String(pl.id) === wantPlayer);
+      side = seat?.team === 2 ? 2 : seat ? 1 : 0;
+    }
+    if (!row || !(row.rounds > 0)) continue;
+
+    const ownKey = side === 2
+      ? teamNameKey(demo.name2, demo.t2)
+      : teamNameKey(demo.name1, demo.t1);
+    const own = teams.find((t) => t.key === ownKey) || null;
+    const mine = own?.roundsWon ?? 0;
+    const theirs = own ? own.rounds - own.roundsWon : 0;
+
+    out.push({
+      ...row,
+      demoId: demo.id,
+      side,
+      scoreLabel: own ? `${mine}:${theirs}` : '',
+      scoreSort: mine - theirs
+    });
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Roles
+// ---------------------------------------------------------------------------
+
+/**
+ * Attach roleT / roleCT / posT / posCT to server-computed player rows.
+ *
+ * Roles are not derived here. They are written once during indexing, stored per
+ * (map, side, player) on the demo, and `attachPlayerRoles` in the browser only
+ * ever read that table — so this hands the very same function the very same
+ * table and gets the very same answer. The only thing computed here is which
+ * (demo, map) pairs survived the filter, and the two conditions that decides on
+ * — map and file — are exactly the two `attachPlayerRoles` applies itself.
+ *
+ * @param {object} store
+ * @param {object} filter
+ * @param {Uint8Array|null} allowDemo
+ * @param {object[]} playerRows rows from aggregateHot
+ * @returns {object[]} the same rows, with role fields
+ */
+export function attachRolesHot(store, filter = {}, allowDemo = null, playerRows = []) {
+  const { nRounds, rDemo, rMap, rFileIdx } = store;
+  const mapIds = filter.maps?.length
+    ? new Set(filter.maps.map((m) => store.maps.find(m)).filter((i) => i >= 0))
+    : null;
+  const fileIds = filter.files?.length
+    ? new Set(filter.files.map((f) => store.files.find(f)).filter((i) => i >= 0))
+    : null;
+
+  /** demo index → the map codes it still has rounds on. */
+  const mapsByDemo = new Map();
+  for (let r = 0; r < nRounds; r++) {
+    if (mapIds && !mapIds.has(rMap[r])) continue;
+    if (fileIds && !fileIds.has(rFileIdx[r])) continue;
+    const d = rDemo[r];
+    if (allowDemo && !allowDemo[d]) continue;
+    let set = mapsByDemo.get(d);
+    if (!set) mapsByDemo.set(d, (set = new Set()));
+    set.add(rMap[r]);
+  }
+
+  // A payload shaped just enough for attachPlayerRoles: it reads `demo.roles`
+  // and groups rounds by `r.m`, so one stub round per surviving map is the
+  // whole of what it needs.
+  const demos = [];
+  for (const [d, mapSet] of mapsByDemo) {
+    const demo = store.demos[d];
+    if (!demo?.roles?.maps) continue;
+    const rounds = [];
+    for (const mi of mapSet) rounds.push({ m: store.maps.lookup(mi) });
+    demos.push({ id: demo.id, map: demo.map, roles: demo.roles, rounds });
+  }
+  if (!demos.length) return playerRows;
+  // Filters are already applied above; passing `maps` through keeps the
+  // single-map "position" mode, which changes which labels come back.
+  return attachPlayerRoles(playerRows, { demos }, { maps: filter.maps || [] });
+}
+
+/** Drop rows the role chip excludes. Same predicate the browser used. */
+export function filterRolesHot(playerRows, role) {
+  if (!role?.side || !role?.value) return playerRows;
+  return playerRows.filter((p) => playerMatchesRoleFilter(p, role));
 }

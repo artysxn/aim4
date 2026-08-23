@@ -544,10 +544,23 @@ a {
   color: var(--text);
 }
 
+/*
+ * Above everything the view paints under it.
+ *
+ * `backdrop-filter` makes this a stacking context, so a menu opened from the
+ * head — the Performance player/team search, the Database's tabs — can never
+ * rise above the head's own z-index no matter what it asks for. At 10 that put
+ * those menus under the filter bar (20), sticky table headers (21-26) and the
+ * date popover (80), which is why the search dropdown came out sliced into
+ * bands by whatever happened to be behind it.
+ *
+ * 90 clears all of that and still sits below the auth modal (100), the
+ * impersonation banner and toasts.
+ */
 .page-head {
   position: sticky;
   top: 0;
-  z-index: 10;
+  z-index: 90;
   display: flex;
   align-items: center;
   justify-content: space-between;

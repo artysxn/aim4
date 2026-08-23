@@ -434,10 +434,20 @@ a.pf-rt-go:hover {
   filter: brightness(0) invert(1);
 }
 
-.pf-team-pick {
+/* The roster strip under a team's cards. */
+.pf-team-roster {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
+}
+
+.pf-section-title {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .pf-team-list {

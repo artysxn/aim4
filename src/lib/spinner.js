@@ -96,8 +96,15 @@ export const SLOW_LOAD_HINT =
   'No response from the server yet. Check that the API is running and your connection is up.';
 
 /**
- * After `delayMs`, append a hint under the first `.is-loading` in `host`
- * (or replace `host` contents if it is the loader). Cleared via the return value.
+ * After `delayMs`, append a hint under the first `.is-loading` in `host`.
+ * Cleared via the return value, which also removes the hint if it was added.
+ *
+ * Only ever speaks when `host` is actually showing a loader. A refresh that
+ * repaints in place — Load more, a filter change — leaves the previous results
+ * on screen while it runs, and this used to fall back to `host` itself and
+ * append "no response from the server" to the bottom of a fully rendered list.
+ * Cancelling only stopped the timer, so once that paragraph was in the DOM it
+ * sat under real content until something else happened to rewrite the host.
  *
  * Skips the hint when the spinner label has already been updated with real
  * progress (that label is the honest status; a second vague line is noise).
@@ -117,10 +124,12 @@ export function watchSlowLoad(host, opts = {}) {
       return '';
     }
   })();
+  /** @type {HTMLElement|null} */
+  let added = null;
   const timer = globalThis.setTimeout?.(() => {
     try {
       if (typeof host.isConnected === 'boolean' && !host.isConnected) return;
-      const loading = host.querySelector?.('.is-loading') || host;
+      const loading = host.querySelector?.('.is-loading');
       if (!loading || loading.querySelector?.('.load-slow-hint')) return;
       const labelNow = loading.querySelector?.('[data-load-label]')?.textContent || '';
       // Progress already replaced the placeholder. Do not stack a second hint.
@@ -128,17 +137,16 @@ export function watchSlowLoad(host, opts = {}) {
       const hint = document.createElement('p');
       hint.className = 'view-empty load-slow-hint';
       hint.textContent = message;
-      if (loading.classList?.contains('is-loading')) {
-        loading.insertAdjacentElement('afterend', hint);
-      } else {
-        loading.appendChild(hint);
-      }
+      loading.insertAdjacentElement('afterend', hint);
+      added = hint;
     } catch {
       /* host may have been replaced */
     }
   }, delayMs);
   return () => {
     if (timer) globalThis.clearTimeout?.(timer);
+    added?.remove();
+    added = null;
   };
 }
 

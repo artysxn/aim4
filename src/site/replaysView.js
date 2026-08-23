@@ -103,6 +103,15 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
   /** Total stored demos on the server (from the last library fetch). */
   let demoTotal = 0;
   let demoHasMore = false;
+  /**
+   * A Load more page is in flight.
+   *
+   * Two jobs: it makes the button say so, and it tells runQuery to leave the
+   * current rows on screen. Growing the page only ever adds demos to the
+   * bottom, so blanking the list to a spinner for the round of it throws away
+   * what the reader was looking at to show them the same thing plus fifty.
+   */
+  let loadingMoreDemos = false;
 
   let demos = [];
   /**
@@ -2644,9 +2653,11 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     if (hasRankFilter(filters)) await fetchVrsRanks().catch(() => {});
     const query = currentQuery();
     // Spinner first so the sidebar can take a click while the library scan runs.
+    // Load more is the exception: it only appends, so the rows already on
+    // screen stay correct and are worth more than a spinner.
     if (resultEl) {
       resultEl.setAttribute('aria-busy', 'true');
-      resultEl.innerHTML = spinnerHtml('Updating…');
+      if (!loadingMoreDemos) resultEl.innerHTML = spinnerHtml('Updating…');
     }
     await yieldToPaint();
     if (token !== queryToken) return;
@@ -2951,7 +2962,9 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
 
     const shownStored = Math.min(libraryLimit, demoTotal);
     const loadMoreBtn = demoHasMore
-      ? `<button type="button" class="btn btn-sm" data-load-more-demos>Load more</button>`
+      ? `<button type="button" class="btn btn-sm" data-load-more-demos${
+          loadingMoreDemos ? ' disabled' : ''
+        }>${loadingMoreDemos ? 'Loading…' : 'Load more'}</button>`
       : '';
     const pageNote =
       demoTotal > 0 && !wide
@@ -3976,10 +3989,38 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     }
   }
 
-  function loadMoreDemos() {
-    if (!demoHasMore) return;
+  /**
+   * Grow the library page.
+   *
+   * The button is marked busy synchronously, before anything is awaited: a
+   * click that only bumps a counter and calls refresh() lands on a list that
+   * looks exactly as it did, and the honest reading of that is that nothing
+   * happened. The re-entry guard is the other half — a second click while the
+   * first page is still arriving used to queue a whole extra refresh through
+   * refreshAgain rather than being ignored.
+   */
+  async function loadMoreDemos() {
+    if (!demoHasMore || loadingMoreDemos) return;
+    loadingMoreDemos = true;
+    paintLoadMoreState();
     libraryLimit += LIBRARY_PAGE;
-    refresh();
+    try {
+      await refresh();
+    } finally {
+      loadingMoreDemos = false;
+      // The refresh repainted the buttons while the flag was still set, so
+      // clearing it is not enough on its own — without this they stay disabled
+      // on "Loading…" and the next page can never be asked for.
+      paintLoadMoreState();
+    }
+  }
+
+  /** Write the current busy state onto whatever Load more buttons are on screen. */
+  function paintLoadMoreState() {
+    resultEl?.querySelectorAll('[data-load-more-demos]').forEach((btn) => {
+      btn.disabled = loadingMoreDemos;
+      btn.textContent = loadingMoreDemos ? 'Loading…' : 'Load more';
+    });
   }
 
   function setLocked(locked) {

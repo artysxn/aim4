@@ -4,7 +4,13 @@
 // ---------------------------------------------------------------------------
 
 import { createPacker } from './statsHotStore.js';
-import { aggregateHot, aggregateTeamsHot } from './statsHotAggregate.js';
+import {
+  aggregateHot,
+  aggregateHotMatches,
+  aggregateTeamsHot,
+  attachRolesHot,
+  filterRolesHot
+} from './statsHotAggregate.js';
 import { loadStoredEntry } from './statsIndex.js';
 
 /**
@@ -174,13 +180,50 @@ function visibilityMask(store, allowedIds) {
 export async function hotTables(io, user, records, filter = {}, opts = {}) {
   const store = await getHotStore(io, user, records, opts);
   const allow = visibilityMask(store, opts.allowedIds || null);
-  const players = aggregateHot(store, filter, allow);
+  let players = aggregateHot(store, filter, allow);
+  // Roles ride along whenever the caller asked for them or is filtering on
+  // them. Teams are built from the UNFILTERED player rows on purpose: a team's
+  // numbers are the whole side's, and narrowing to one role would quietly turn
+  // the Teams tab into "these teams, counting only their AWPers".
   const teams =
     opts.teams === false ? null : aggregateTeamsHot(store, filter, players, allow);
+  if (opts.roles || filter.role) {
+    players = attachRolesHot(store, filter, allow, players);
+    if (filter.role) players = filterRolesHot(players, filter.role);
+  }
   // The filter bar's map list comes from the library, not from the filtered
   // result — otherwise picking a map would leave you unable to pick another.
   const maps = [...store.maps.values].filter(Boolean).sort();
   return { players, teams, maps };
+}
+
+/**
+ * Per-match rows for one player or team, computed against the resident store.
+ *
+ * `demoIds` bounds the work: the caller already knows which matches the entity
+ * played from the roster catalogue, so this never walks the library looking.
+ */
+export async function hotMatches(io, user, records, demoIds, filter = {}, opts = {}) {
+  const store = await getHotStore(io, user, records, opts);
+  const allow = visibilityMask(store, opts.allowedIds || null);
+  const rows = aggregateHotMatches(store, demoIds, filter, allow, opts.want || {});
+  const demoById = new Map(store.demos.map((d) => [d.id, d]));
+  // Stamp each row with the match it describes. The client needs the same
+  // identity columns the payload path gave it — map, score, result, opponent —
+  // and only the store knows which side the entity was on.
+  return rows.map((row) => {
+    const demo = demoById.get(row.demoId) || {};
+    return {
+      ...row,
+      map: demo.map || '',
+      name1: demo.name1 || '',
+      name2: demo.name2 || '',
+      t1: demo.t1 || '',
+      t2: demo.t2 || '',
+      winner: demo.winner || 0,
+      uploadedAt: demo.uploadedAt || 0
+    };
+  });
 }
 
 /** What the store currently holds, for diagnostics. */

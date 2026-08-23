@@ -239,7 +239,12 @@ export function createPacker(capacityRounds = 1024) {
       name2: e.name2 || '',
       winner: e.winner || 0,
       uploadedAt: e.uploadedAt || 0,
-      players: e.players || []
+      players: e.players || [],
+      // Role assignments are computed once during indexing and stored per
+      // (map, side, player). Carrying the table here — a few hundred bytes a
+      // demo — is what lets the Role filter be answered from the store instead
+      // of shipping every round so the browser can read the same table.
+      roles: e.roles || null
     });
     const roster = e.players || [];
     const teamById = new Map(roster.map((p) => [p.id, p.team]));

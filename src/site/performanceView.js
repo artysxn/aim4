@@ -6,7 +6,13 @@
 // ---------------------------------------------------------------------------
 
 import { getStatsPayload } from '../replays/statsCache.js';
-import { fetchPeerAverages, fetchRoster, fetchVrsRanks, formatApiError } from '../replays/api.js';
+import {
+  fetchAggregate,
+  fetchPeerAverages,
+  fetchRoster,
+  fetchVrsRanks,
+  formatApiError
+} from '../replays/api.js';
 import {
   demosForPlayer,
   demosForTeam,
@@ -20,7 +26,11 @@ import {
   CARD_METRICS,
   LAST_MATCH_OPTS,
   PERF_MAPS,
+  TEAM_CARD_METRICS,
+  TEAM_HERO,
+  TEAM_PEER_MIN_ROUNDS,
   curvePath,
+  f1,
   f2,
   findPlayerByUsername,
   matchSeries,
@@ -30,7 +40,9 @@ import {
   playerStats,
   roleGrid,
   signed,
-  smoothSeries
+  smoothSeries,
+  teamMatchSeries,
+  teamStats
 } from '../replays/performance/performanceMath.js';
 import { aggregateGuns, gunMapForPlayer } from '../replays/performance/gunStats.js';
 import { MAP_ROUND_CODES, mapRoundGrid } from '../replays/performance/mapRoundStats.js';
@@ -40,7 +52,8 @@ import {
   attachTips,
   bindStatsHScroll,
   playerMatchColumns,
-  statsTableHtml
+  statsTableHtml,
+  teamMatchColumns
 } from '../replays/stats/statsTables.js';
 import { iconImgHtml } from '../replays/viewer/equipmentIcons.js';
 import { setSpinnerLabel, spinnerHtml, statsProgressLabel } from '../lib/spinner.js';
@@ -58,6 +71,7 @@ const CHAPTERS = [
 function fmtMetric(fmt, n) {
   if (fmt === 'pct') return pct(n);
   if (fmt === 'signed') return signed(n);
+  if (fmt === 'num1') return f1(n);
   return f2(n);
 }
 
@@ -82,14 +96,19 @@ function sparkline(values) {
       stroke-linejoin="round" stroke-linecap="round" /></svg>`;
 }
 
-function ratingChart(points) {
+/**
+ * Match-by-match trend: the raw line plus a 5-match moving average.
+ *
+ * `read` picks the metric off a series point, so the same chart serves the
+ * player page (rating) and the team page (round win rate) rather than each
+ * growing its own copy.
+ */
+function trendChart(points, { read = (p) => p.rating, label = 'Rating' } = {}) {
   if (points.length < 2) return '<p class="view-empty">Not enough matches for a trend.</p>';
-  const values = points.map((p) => p.rating).filter((n) => Number.isFinite(n));
+  const raw = points.map(read);
+  const values = raw.filter((n) => Number.isFinite(n));
   if (values.length < 2) return '<p class="view-empty">Not enough matches for a trend.</p>';
-  const smooth = smoothSeries(
-    points.map((p) => p.rating),
-    5
-  );
+  const smooth = smoothSeries(raw, 5);
   const w = Math.max(1, points.length) * 40;
   const h = 180;
   const padL = 36;
@@ -118,8 +137,8 @@ function ratingChart(points) {
   }
   return `<div class="pf-chart-scroll" style="--pf-n:${points.length}">
     <svg class="pf-chart" viewBox="0 0 ${w} ${h}" role="img"
-      aria-label="Rating over ${points.length} matches">
-      <path d="${line(points.map((p) => p.rating))}" fill="none" class="pf-chart-raw" />
+      aria-label="${label} over ${points.length} matches">
+      <path d="${line(raw)}" fill="none" class="pf-chart-raw" />
       <path d="${curvePath(trendPts)}" fill="none" class="pf-chart-trend" />
       ${ticks.join('')}
     </svg>
@@ -139,6 +158,17 @@ export function initPerformanceView({ auth, escapeHtml }) {
   let scopedTo = '';
   /** Server-computed library averages for the summary cards. */
   let peers = { metrics: {}, sample: 0 };
+  /**
+   * Library averages across TEAMS, for the team cards.
+   *
+   * Not the player peers endpoint and not derivable from `payload`: the payload
+   * is scoped to this team's own matches, so averaging it would compare a team
+   * against the handful of opponents it happened to play. The aggregate
+   * endpoint already computes every team's row library-wide for the Database.
+   */
+  let teamPeers = { metrics: {}, sample: 0 };
+  /** Filter stamp the team peers were fetched for. */
+  let teamPeersFor = '';
   let playerId = '';
   let playerName = '';
   let teamKey = '';
@@ -187,6 +217,17 @@ export function initPerformanceView({ auth, escapeHtml }) {
    * demos, to draw six cards for one person. The roster resolves the matches
    * first, and the `rating` contract drops the columns this page never reads.
    */
+  /**
+   * Cache key for the scoped payload.
+   *
+   * The column contract belongs in it, not just the demo ids: a team and one of
+   * its players can resolve to the same matches, and reusing a payload fetched
+   * under the other contract would silently leave half the page's metrics blank.
+   */
+  function scopeStamp(ids) {
+    return `${playerId ? 'rating' : 'teamRating'}:${ids.join(',')}`;
+  }
+
   async function ensurePayload() {
     await Promise.all([ensureRoster(), fetchVrsRanks().catch(() => {})]);
     const ids = playerId
@@ -201,11 +242,14 @@ export function initPerformanceView({ auth, escapeHtml }) {
       scopedTo = '';
       return payload;
     }
-    const stamp = ids.join(',');
+    const stamp = scopeStamp(ids);
     if (payload && scopedTo === stamp) return payload;
     if (!loading) {
       loading = getStatsPayload(ids, {
-        columns: 'rating',
+        // A team's page reads team rates (PRW, AC%, utility damage) that the
+        // player contract does not carry; a player's page reads roles and held
+        // guns that the team contract does not.
+        columns: playerId ? 'rating' : 'teamRating',
         onProgress: (p) => {
           if (host) setSpinnerLabel(host, statsProgressLabel(p));
         }
@@ -234,6 +278,55 @@ export function initPerformanceView({ auth, escapeHtml }) {
       peers = { metrics: {}, sample: 0 };
     }
     return peers;
+  }
+
+  /**
+   * Library averages across teams, one request, cached per filter stamp.
+   *
+   * Only the filters the endpoint understands are sent. `last` (last-N matches)
+   * is deliberately not among them: it scopes THIS team's history, and applying
+   * it to the comparison line would move the baseline every time the reader
+   * changed how far back they were looking.
+   */
+  async function ensureTeamPeers() {
+    const stamp = [ui.map || '', ui.side || '', ui.dateFrom || '', ui.dateTo || ''].join('|');
+    if (teamPeersFor === stamp) return false;
+    try {
+      const res = await fetchAggregate(
+        {
+          maps: ui.map ? [ui.map] : [],
+          side: ui.side || '',
+          dateFrom: ui.dateFrom || '',
+          dateTo: ui.dateTo || ''
+        },
+        { tables: 'teams' }
+      );
+      const list = (res?.teams || []).filter((t) => (t.rounds || 0) >= TEAM_PEER_MIN_ROUNDS);
+      const metrics = {};
+      for (const m of [TEAM_HERO, ...TEAM_CARD_METRICS]) {
+        const vals = list.map(m.read).filter((n) => Number.isFinite(n));
+        metrics[m.key] = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+      }
+      teamPeers = { metrics, sample: list.length };
+      teamPeersFor = stamp;
+    } catch {
+      teamPeers = { metrics: {}, sample: 0 };
+    }
+    return true;
+  }
+
+  /**
+   * Re-render after a filter change, then again if the team comparison line
+   * had to be refetched for the new filter. Two paints rather than one, but the
+   * team's own numbers appear immediately instead of waiting on the library.
+   */
+  function renderAfterFilterChange() {
+    render();
+    if (playerId || !teamKey) return;
+    const before = teamKey;
+    void ensureTeamPeers().then((fetched) => {
+      if (fetched && teamKey === before) render();
+    });
   }
 
   function writeUrl() {
@@ -537,13 +630,12 @@ export function initPerformanceView({ auth, escapeHtml }) {
     </table>`;
   }
 
-  function teamPickerHtml() {
-    const team = rosterTeams(roster, '', Infinity).find((t) => t.key === teamKey);
-    if (!team) return `<p class="view-empty">That team is not in the library.</p>`;
+  /** The roster strip, kept from the old team page: every name opens that player. */
+  function teamRosterHtml() {
     const people = rosterTeamPlayers(roster, teamKey);
-    if (!people.length) return `<p class="view-empty">No players on ${escapeHtml(team.name)}.</p>`;
-    return `<div class="pf-team-pick">
-      <h2 class="pf-name">${escapeHtml(team.name)}</h2>
+    if (!people.length) return '';
+    return `<section class="pf-team-roster">
+      <h3 class="pf-section-title">Roster</h3>
       <div class="pf-team-list">
         ${people
           .map(
@@ -552,7 +644,111 @@ export function initPerformanceView({ auth, escapeHtml }) {
           )
           .join('')}
       </div>
+    </section>`;
+  }
+
+  /**
+   * Cards for a team.
+   *
+   * Same shape as the player cards — value, sparkline, comparison notch — over
+   * a different metric list. Kept as its own function rather than a parameter
+   * on cardsHtml because the two differ in what "comp" means: a player is
+   * measured against other players, a team against other teams.
+   */
+  function teamCardsHtml(stats, series, peerMetrics) {
+    return `<div class="pf-cards">
+      ${TEAM_CARD_METRICS.map((m) => {
+        const value = m.read(stats);
+        const comp = peerMetrics?.[m.key];
+        const spark = sparkline(series.map((p) => p[m.key]));
+        const max = Math.max(Math.abs(Number(value) || 0), Math.abs(Number(comp) || 0), 0.01) * 1.25;
+        const fill = Number.isFinite(value) ? Math.max(0, Math.min(100, (Math.abs(value) / max) * 100)) : 0;
+        const notch = Number.isFinite(comp) ? Math.max(0, Math.min(100, (Math.abs(comp) / max) * 100)) : null;
+        const above = Number.isFinite(value) && Number.isFinite(comp) ? value >= comp : true;
+        return `<article class="pf-card">
+          <div class="pf-card-top">
+            <span class="pf-card-label">${escapeHtml(m.label)}</span>
+            ${spark}
+          </div>
+          <div class="pf-card-value">${withDeltaHtml(
+            fmtMetric(m.fmt, value),
+            value,
+            comp,
+            DELTA_BANDS[m.band]
+          )}</div>
+          <div class="pf-bar ${above ? 'is-up' : 'is-down'}">
+            <span class="pf-bar-fill" style="width:${fill.toFixed(1)}%"></span>
+            ${notch != null ? `<i class="pf-bar-notch" style="left:${notch.toFixed(1)}%"></i>` : ''}
+          </div>
+          <div class="pf-card-comp">Comp. ${fmtMetric(m.fmt, comp)}</div>
+        </article>`;
+      }).join('')}
     </div>`;
+  }
+
+  /** Per-match table for a team: the Database's team match columns. */
+  function teamMatchesHtml(series) {
+    const rows = series.map((p) => ({
+      ...p.stats,
+      demoId: p.demoId,
+      map: p.map,
+      mapName: MAPS[p.map]?.name || p.map,
+      opponent: p.opponent || '\u2014',
+      result: p.result || '\u2014',
+      uploadedAt: p.when,
+      scoreLabel: p.scoreLabel || '',
+      scoreSort: p.scoreSort ?? 0
+    }));
+    const cols = teamMatchColumns();
+    return statsTableHtml(rows, {
+      columns: cols.columns,
+      fixedCount: cols.fixedCount,
+      escapeHtml,
+      sortKey: matchSort.key,
+      sortDir: matchSort.dir,
+      showAverage: true
+    });
+  }
+
+  function teamSummaryHtml() {
+    const team = rosterTeams(roster, '', Infinity).find((t) => t.key === teamKey);
+    if (!team) return `<p class="view-empty">That team is not in the library.</p>`;
+    const { players, demos } = maps();
+    const stats = teamStats(payload, teamKey, ui, players, demos);
+    const series = teamMatchSeries(payload, teamKey, ui, players, demos);
+    if (!stats) {
+      return `${filtersHtml()}<div id="pf-stats">
+        <div class="pf-hero">
+          <div class="pf-identity"><h2 class="pf-name">${escapeHtml(team.name)}</h2></div>
+        </div>
+        <p class="view-empty">No rounds for ${escapeHtml(team.name)} in this selection.</p>
+        ${teamRosterHtml()}
+      </div>`;
+    }
+    const peerMetrics = teamPeers?.metrics || {};
+    const record =
+      stats.maps > 0 ? `${stats.mapWins}\u2013${stats.mapLosses} in ${stats.maps} maps` : '';
+    return `
+      ${filtersHtml()}
+      <div id="pf-stats">
+      <div class="pf-hero">
+        <div class="pf-identity">
+          <h2 class="pf-name">${escapeHtml(team.name)}</h2>
+          ${record ? `<span class="pf-team">${escapeHtml(record)}</span>` : ''}
+        </div>
+        <div class="pf-hero-rating">
+          <span class="pf-hero-value">${pct(TEAM_HERO.read(stats))}</span>
+          <span class="pf-hero-label">${escapeHtml(TEAM_HERO.label)}</span>
+        </div>
+      </div>
+      ${teamCardsHtml(stats, series, peerMetrics)}
+      ${teamRosterHtml()}
+      <div class="pf-chart-wrap">${trendChart(series, {
+        read: (p) => p.roundWinrate,
+        label: 'Round win rate'
+      })}</div>
+      <div class="pf-matches">${teamMatchesHtml(series)}</div>
+      </div>`;
   }
 
   function summaryHtml() {
@@ -577,7 +773,7 @@ export function initPerformanceView({ auth, escapeHtml }) {
       </div>
       ${cardsHtml(stats, series, peerMetrics)}
       ${rolesHtml(grid)}
-      <div class="pf-chart-wrap">${ratingChart(series)}</div>
+      <div class="pf-chart-wrap">${trendChart(series)}</div>
       <div class="pf-matches">${matchesHtml(series)}</div>
       </div>`;
   }
@@ -602,7 +798,7 @@ export function initPerformanceView({ auth, escapeHtml }) {
   }
 
   function bodyHtml() {
-    if (!playerId && teamKey) return teamPickerHtml();
+    if (!playerId && teamKey) return teamSummaryHtml();
     if (!playerId) {
       return '';
     }
@@ -655,7 +851,7 @@ export function initPerformanceView({ auth, escapeHtml }) {
       </div>
       ${cardsHtml(stats, series, peerMetrics)}
       ${rolesHtml(grid)}
-      <div class="pf-chart-wrap">${ratingChart(series)}</div>
+      <div class="pf-chart-wrap">${trendChart(series)}</div>
       <div class="pf-matches">${matchesHtml(series)}</div>`;
     }
     bindChrome();
@@ -685,7 +881,7 @@ export function initPerformanceView({ auth, escapeHtml }) {
       : teamKey
         ? demosForTeam(roster, teamKey)
         : [];
-    if (ids.length && scopedTo !== ids.join(',')) {
+    if (ids.length && scopedTo !== scopeStamp(ids)) {
       host.innerHTML = `<div class="is-loading" role="status">${spinnerHtml()}</div>`;
       try {
         await ensurePayload();
@@ -703,6 +899,11 @@ export function initPerformanceView({ auth, escapeHtml }) {
       const before = playerId;
       ensurePeers().then(() => {
         if (playerId === before) render();
+      });
+    } else if (teamKey) {
+      const before = teamKey;
+      ensureTeamPeers().then((fetched) => {
+        if (fetched && teamKey === before) render();
       });
     }
   }
@@ -761,7 +962,7 @@ export function initPerformanceView({ auth, escapeHtml }) {
     const side = e.target.closest('[data-pf-side]');
     if (side) {
       ui.side = ui.side === side.dataset.pfSide ? '' : side.dataset.pfSide;
-      render();
+      renderAfterFilterChange();
       return;
     }
     const cal = e.target.closest('[data-pf-calendar]');
@@ -834,7 +1035,7 @@ export function initPerformanceView({ auth, escapeHtml }) {
       }
       calendarOpen = true;
     }
-    render();
+    renderAfterFilterChange();
   });
 
   document.getElementById('page-head-actions')?.addEventListener('input', (e) => {

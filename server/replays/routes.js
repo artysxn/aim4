@@ -72,7 +72,7 @@ import { forgetDemoIndex, loadStoredEntry, refreshLibraryStats, scheduleStatsInd
 import { ColumnContractError, resolveColumns } from '../../src/replays/shared/statsColumns.js';
 import { getRoster, scopeRoster } from './rosterCatalogue.js';
 import { peerAverages } from './peerAverages.js';
-import { hotStoreStatus, hotTables } from './statsHotService.js';
+import { hotStoreStatus, hotMatches, hotTables } from './statsHotService.js';
 import { isAcceptedUpload, rarSupport } from './archive.js';
 import { allJobs, batchStatus, enqueueParse, forgetJob, getBatch, jobStatus, startIngest } from './jobs.js';
 import { SHARED_LIBRARY, authStatus, identify } from './auth.js';
@@ -1232,7 +1232,17 @@ export async function handleReplayRequest(req, res, url) {
       rankOpp: arg('rankOpp') || '',
       dateFrom: arg('from') || '',
       dateTo: arg('to') || '',
-      files: argList('files') || []
+      files: argList('files') || [],
+      // "T:AWPer" / "CT:Anchor". Roles are stored on the index; the store
+      // carries them, so this no longer forces the caller to download rounds.
+      role: (() => {
+        const raw = String(arg('role') || '').trim();
+        if (!raw) return null;
+        const [side, ...rest] = raw.split(':');
+        const value = rest.join(':').trim();
+        if ((side !== 'T' && side !== 'CT') || !value) return null;
+        return { side, value };
+      })()
     };
     // A `files` filter that matched nothing must return nothing, not the whole
     // library — an empty list here means "these rounds", and there are none.
@@ -1249,6 +1259,7 @@ export async function handleReplayRequest(req, res, url) {
     const wantTeams = tabs.includes('teams');
     const { players, teams, maps } = await hotTables(statsIo, user, ready, filter, {
       teams: wantTeams,
+      roles: argHas('roles') || Boolean(filter.role),
       // A demo scope narrows the mask; it never widens what may be read.
       allowedIds: scoped
         ? new Set([...allowedIds].filter((id) => scoped.has(id)))
@@ -1284,6 +1295,73 @@ export async function handleReplayRequest(req, res, url) {
       }),
       req
     );
+    return true;
+  }
+
+  // ---- per-match rows for one player or team -------------------------------
+  //
+  // The detail view under a name in the Database. Same store, same filters, one
+  // row per match instead of one row per entity — so opening a name costs a
+  // request rather than the library.
+  if (
+    (req.method === 'GET' || req.method === 'POST') &&
+    p === '/api/replays/aggregate/matches'
+  ) {
+    let body = null;
+    if (req.method === 'POST') {
+      try {
+        body = await readJson(req, 4 * 1024 * 1024);
+      } catch (err) {
+        json(res, 400, { error: err?.message || 'Invalid JSON body.' });
+        return true;
+      }
+    }
+    const arg = (key) => (body ? body[key] : url.searchParams.get(key));
+    const argList = (key) => {
+      if (!body) return csv(url, key);
+      const v = body[key];
+      if (Array.isArray(v)) return v.map(String).filter(Boolean);
+      return typeof v === 'string' && v ? v.split(',').map((x) => x.trim()).filter(Boolean) : undefined;
+    };
+    const argHas = (key) =>
+      body ? body[key] !== undefined && body[key] !== null : url.searchParams.has(key);
+
+    const playerId = String(arg('player') || '').trim();
+    const teamKey = String(arg('team') || '').trim();
+    if (!playerId && !teamKey) {
+      json(res, 400, { error: 'Pass player= or team=.' });
+      return true;
+    }
+    const demoIds = argList('demos') || [];
+    if (!demoIds.length) {
+      json(res, 200, { rows: [] });
+      return true;
+    }
+
+    const { records: allRecords, allowed } = await readable();
+    const ready = allRecords.filter((r) => (r.status || 'ready') === 'ready');
+    const allowedIds = new Set(
+      allowed.filter((r) => (r.status || 'ready') === 'ready').map((r) => r.id)
+    );
+    const scoped = new Set(demoIds);
+    const filter = {
+      maps: argList('maps') || [],
+      side: arg('side') || '',
+      econ: argHas('econ') ? Number(arg('econ')) : null,
+      oppEcon: argHas('oppEcon') ? Number(arg('oppEcon')) : null,
+      result: arg('result') || '',
+      advantage: arg('advantage') || '',
+      rankOwn: arg('rankOwn') || '',
+      rankOpp: arg('rankOpp') || '',
+      dateFrom: arg('from') || '',
+      dateTo: arg('to') || '',
+      files: argList('files') || []
+    };
+    const rows = await hotMatches(statsIo, user, ready, demoIds, filter, {
+      allowedIds: new Set([...allowedIds].filter((id) => scoped.has(id))),
+      want: teamKey ? { kind: 'team', id: teamKey } : { kind: 'player', id: playerId }
+    });
+    await jsonBig(res, 200, gateStatsPayload(me, { players: rows, rows }), req);
     return true;
   }
 

@@ -6,8 +6,15 @@
 // field by field, across every filter dimension rowPasses supports.
 import assert from 'node:assert/strict';
 import { packStore } from './statsHotStore.js';
-import { aggregateHot, aggregateTeamsHot } from './statsHotAggregate.js';
-import { aggregatePlayers, aggregateTeams } from '../../src/replays/shared/statsMath.js';
+import {
+  aggregateHot,
+  aggregateHotMatches,
+  aggregateTeamsHot,
+  attachRolesHot,
+  filterRolesHot
+} from './statsHotAggregate.js';
+import { aggregatePlayers, aggregateTeams, teamNameKey } from '../../src/replays/shared/statsMath.js';
+import { attachPlayerRoles } from '../../src/replays/roles/assignRoles.js';
 
 const MAPS = ['de_nuke', 'de_mirage', 'de_inferno'];
 let seed = 42;
@@ -47,7 +54,26 @@ function makeEntry(i) {
     map, mapName: map, t1: `t${i % 4}`, t2: `t${(i + 1) % 4}`,
     name1: `Team ${i % 4}`, name2: `Team ${(i + 1) % 4}`, winner: (i % 2) + 1,
     uploadedAt: Date.UTC(2026, 0, 1 + (i % 28)), players, rounds,
-    roles: { v: 6, maps: {} }, positions: false, pz: 0 };
+    roles: {
+      v: 6,
+      maps: {
+        [map]: {
+          T: Object.fromEntries(
+            pids.slice(0, 5).map((id, j) => [
+              id,
+              { label: ['Mid', 'A Lurk', 'Street', 'AWPer', 'B Lurk'][j], tactical: j === 3 ? 'AWPer' : j % 2 ? 'Lurk' : 'Pack' }
+            ])
+          ),
+          CT: Object.fromEntries(
+            pids.slice(5).map((id, j) => [
+              id,
+              { label: ['Mid', 'B Cave', 'B Site', 'AWPer', 'Mid / A'][j], tactical: j === 3 ? 'AWPer' : j % 2 ? 'Anchor' : 'Rotation' }
+            ])
+          )
+        }
+      }
+    },
+    positions: false, pz: 0 };
 }
 
 const entries = Array.from({ length: 40 }, (_, i) => makeEntry(i));
@@ -220,6 +246,105 @@ assert.deepEqual(aggregateHot(store, { maps: ['de_train'] }), []);
 assert.deepEqual(aggregateHot(store, { files: ['nope'] }), []);
 
 assert.deepEqual(aggregateTeamsHot(store, { maps: ['de_train'] }), []);
+
+
+// ---------------------------------------------------------------------------
+// Per-match rows must equal aggregating each demo on its own.
+//
+// The detail view under a name used to be built in the browser out of raw
+// rounds. It is now one server query, and "one row per match" has to keep
+// meaning exactly what it meant: the same aggregation, scoped to one demo.
+// ---------------------------------------------------------------------------
+{
+  const NUM = ['rating', 'adr', 'kast', 'kd', 'rounds', 'kills', 'deaths', 'prwSwing', 'tfw', 'xk'];
+  const TNUM = ['rounds', 'roundsWon', 'roundWinrate', 'avgRating', 'opkRate', 'conv5v4', 'conv4v5'];
+  let matchChecks = 0;
+
+  const somePlayer = entries[0].players[0].id;
+  const playerDemos = entries.filter((e) => e.players.some((p) => p.id === somePlayer)).map((e) => e.id);
+  const fromStore = aggregateHotMatches(store, playerDemos, {}, null, {
+    kind: 'player',
+    id: somePlayer
+  });
+  const byDemo = new Map(fromStore.map((r) => [r.demoId, r]));
+  for (const e of entries) {
+    if (!playerDemos.includes(e.id)) continue;
+    const want = aggregatePlayers(e.rounds, players, {}, demos).find((p) => p.id === somePlayer);
+    const got = byDemo.get(e.id);
+    if (!want?.rounds) continue;
+    assert.ok(got, `per-match row missing for ${e.id}`);
+    for (const f of NUM) {
+      assert.equal(got[f], want[f], `${e.id} ${f}`);
+      matchChecks++;
+    }
+  }
+
+  const teamName = entries[0].name1;
+  const key = teamNameKey(teamName);
+  const teamDemos = entries
+    .filter((e) => teamNameKey(e.name1, e.t1) === key || teamNameKey(e.name2, e.t2) === key)
+    .map((e) => e.id);
+  const teamRows = aggregateHotMatches(store, teamDemos, {}, null, { kind: 'team', id: teamName });
+  const teamBy = new Map(teamRows.map((r) => [r.demoId, r]));
+  for (const e of entries) {
+    if (!teamDemos.includes(e.id)) continue;
+    const want = aggregateTeams(e.rounds, players, demos, {}).find((t) => t.key === key);
+    const got = teamBy.get(e.id);
+    if (!want?.rounds) continue;
+    assert.ok(got, `per-match team row missing for ${e.id}`);
+    for (const f of TNUM) {
+      assert.equal(got[f], want[f], `${e.id} ${f}`);
+      matchChecks++;
+    }
+    // The score is the FILTERED round record, so it must add up to the rounds
+    // the same query counted.
+    const [mine, theirs] = String(got.scoreLabel).split(':').map(Number);
+    assert.equal(mine + theirs, got.rounds, `${e.id} score adds up to counted rounds`);
+  }
+
+  // Demos outside the requested list never appear, whatever the mask says.
+  assert.deepEqual(aggregateHotMatches(store, [], {}, null, { kind: 'player', id: somePlayer }), []);
+  const hidden = new Uint8Array(store.demos.length);
+  assert.deepEqual(
+    aggregateHotMatches(store, playerDemos, {}, hidden, { kind: 'player', id: somePlayer }),
+    [],
+    'a mask that hides every demo yields no match rows'
+  );
+
+  console.log(`  per-match rows: ${matchChecks} field comparisons, all exact`);
+}
+
+// ---------------------------------------------------------------------------
+// Roles from the store must equal roles read the way the browser read them.
+// ---------------------------------------------------------------------------
+{
+  const payload = { demos: entries };
+  let roleChecks = 0;
+  for (const filter of [{}, { maps: [MAPS[0]] }, { maps: [MAPS[1]] }]) {
+    const base = aggregatePlayers(rows, players, filter, demos);
+    const want = attachPlayerRoles(base, payload, filter);
+    const got = attachRolesHot(store, filter, null, aggregateHot(store, filter));
+    const gotBy = new Map(got.map((p) => [String(p.id), p]));
+    for (const w of want) {
+      const g = gotBy.get(String(w.id));
+      assert.ok(g, `role row missing for ${w.id}`);
+      for (const f of ['roleT', 'roleCT', 'posT', 'posCT', 'roleMode']) {
+        assert.equal(g[f] || '', w[f] || '', `${w.id} ${f} under ${JSON.stringify(filter)}`);
+        roleChecks++;
+      }
+    }
+  }
+
+  // The chip narrows rows and never invents them.
+  const all = attachRolesHot(store, {}, null, aggregateHot(store, {}));
+  const awpers = filterRolesHot(all, { side: 'T', value: 'AWPer' });
+  assert.ok(awpers.length > 0, 'the fixture has AWPers');
+  assert.ok(awpers.length < all.length, 'the chip actually excludes somebody');
+  for (const p of awpers) assert.equal(p.roleT, 'AWPer');
+  assert.equal(filterRolesHot(all, null).length, all.length, 'no chip changes nothing');
+
+  console.log(`  roles: ${roleChecks} field comparisons against the browser path, all exact`);
+}
 
 console.log(
   `statsHotAggregate.test.js: ${checked.toLocaleString()} player + ` +
