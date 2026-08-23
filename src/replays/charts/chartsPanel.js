@@ -134,7 +134,14 @@ export function createChartsPanel({ escapeHtml }) {
     binStep: 5,
     normalize: false,
     trendline: true,
-    minRounds: 5,
+    /**
+     * Minimum rounds a subject needs to appear.
+     *
+     * 400 rather than a handful: on a full library the interesting question is
+     * who is consistently good, and a five-round subject sitting at the extreme
+     * of both axes is noise that stretches every scale and drags the trendline.
+     */
+    minRounds: 400,
     maxCats: 24,
     filter: emptyFilter(),
     /** Two sides (A/B), each a player or team, optionally narrowed to maps or games. */
@@ -1052,8 +1059,10 @@ export function createChartsPanel({ escapeHtml }) {
 
   function detailsHtml(model) {
     if (model.kind === 'scatter') {
+      // Every subject, not a first-N slice: the table is the list of what is on
+      // the chart, and a chart with 562 points whose table stops at 40 is
+      // missing the ones a reader is most likely hunting for. It scrolls.
       const rows = model.points
-        .slice(0, 40)
         .map(
           (p, i) =>
             `<tr data-row="${i}"><td class="ch-name">${subjectCellHtml(p)}</td><td>${subCellHtml(
@@ -1081,7 +1090,6 @@ export function createChartsPanel({ escapeHtml }) {
               }</td></tr>`
           )
       )
-      .slice(0, 60)
       .join('');
     return `<table class="ch-table"><thead><tr><th>${escapeHtml(
       model.xLabel
