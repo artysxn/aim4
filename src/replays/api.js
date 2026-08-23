@@ -773,25 +773,59 @@ export const STATS_LIBRARY_PAGE = 300;
  * @param {string[]} [demoIds] limit to these demos; omit for the whole library
  * @param {{ onProgress?: (p: object) => void, offset?: number, limit?: number }} [opts]
  */
+/**
+ * Above this many demo ids, the scope goes in a POST body instead of the URL.
+ *
+ * Node caps the request line plus headers at 16 KB and an id costs 17 bytes,
+ * so ~950 ids is where a GET stops arriving at all — it comes back 431 and the
+ * caller sees an empty result, not an error it can explain. A per-map Pattern
+ * Finder scope on a popular map is well past that. 600 leaves room for the
+ * rest of the query and for any proxy with a tighter limit than Node's.
+ */
+const STATS_POST_DEMOS = 600;
+
 export async function fetchStats(demoIds = null, opts = {}) {
   const onProgress = typeof opts.onProgress === 'function' ? opts.onProgress : null;
-  const params = new URLSearchParams();
-  if (demoIds?.length) params.set('demos', demoIds.join(','));
-  params.set('stream', '1');
+  const ids = demoIds?.length ? demoIds : null;
   const offset = Math.max(0, Math.floor(Number(opts.offset) || 0));
   const limit = Math.max(0, Math.floor(Number(opts.limit) || 0));
-  if (offset) params.set('offset', String(offset));
-  if (limit) params.set('limit', String(limit));
-  // Column contract. Omitted → the server ships every column, which is the
-  // old behaviour and what the admin tools still want.
   const columns = opts.columns;
-  if (columns) {
-    params.set('fields', Array.isArray(columns) ? columns.join(',') : String(columns));
+  const fields = columns
+    ? Array.isArray(columns)
+      ? columns.join(',')
+      : String(columns)
+    : null;
+
+  const usePost = Boolean(ids && ids.length > STATS_POST_DEMOS);
+  let res;
+  if (usePost) {
+    res = await safeFetch(`${API_BASE}/api/replays/stats`, {
+      method: 'POST',
+      headers: await headers({
+        Accept: 'application/x-ndjson, application/json',
+        'Content-Type': 'application/json'
+      }),
+      body: JSON.stringify({
+        demos: ids,
+        stream: '1',
+        ...(offset ? { offset } : {}),
+        ...(limit ? { limit } : {}),
+        ...(fields ? { fields } : {})
+      })
+    });
+  } else {
+    const params = new URLSearchParams();
+    if (ids) params.set('demos', ids.join(','));
+    params.set('stream', '1');
+    if (offset) params.set('offset', String(offset));
+    if (limit) params.set('limit', String(limit));
+    // Column contract. Omitted → the server ships every column, which is the
+    // old behaviour and what the admin tools still want.
+    if (fields) params.set('fields', fields);
+    res = await safeFetch(`${API_BASE}/api/replays/stats?${params}`, {
+      headers: await headers({ Accept: 'application/x-ndjson, application/json' })
+    });
   }
-  const url = `${API_BASE}/api/replays/stats?${params}`;
-  const res = await safeFetch(url, {
-    headers: await headers({ Accept: 'application/x-ndjson, application/json' })
-  });
   const type = String(res.headers.get('content-type') || '');
   if (!res.ok) return asJson(res);
   if (!/ndjson/i.test(type) || !res.body || typeof res.body.getReader !== 'function') {

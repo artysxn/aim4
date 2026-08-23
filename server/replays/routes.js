@@ -1402,28 +1402,62 @@ export async function handleReplayRequest(req, res, url) {
   // count (statsIndex.js STATS_PAGE_BYTES). The
   // client paints the first page, then asks for the next. Filtering still
   // happens in the browser against whatever has arrived so far.
-  if (req.method === 'GET' && p === '/api/replays/stats') {
-    const only = csv(url, 'demos');
+  //
+  // POST takes the identical arguments in a body, for one reason: the `demos`
+  // scope. A per-map Pattern Finder pull names every demo on that map, and on
+  // the game's most-played maps that is over a thousand ids — ~17 KB of query
+  // string, past Node's 16 KB request-line-plus-headers limit, so the request
+  // never reached this handler at all. It came back 431 and the map simply
+  // never loaded. Everything else about the two is the same.
+  if (
+    (req.method === 'GET' || req.method === 'POST') &&
+    p === '/api/replays/stats'
+  ) {
+    let body = null;
+    if (req.method === 'POST') {
+      try {
+        // Big enough for a whole map's demo list: ~200k ids at ~17 bytes.
+        body = await readJson(req, 4 * 1024 * 1024);
+      } catch (err) {
+        json(res, 400, { error: err?.message || 'Invalid JSON body.' });
+        return true;
+      }
+    }
+    /** Query for GET, body for POST. Same names, same meanings. */
+    const arg = (key) => (body ? body[key] : url.searchParams.get(key));
+    const argList = (key) => {
+      if (!body) return csv(url, key);
+      const v = body[key];
+      if (Array.isArray(v)) return v.map(String).filter(Boolean);
+      return typeof v === 'string' && v
+        ? v.split(',').map((x) => x.trim()).filter(Boolean)
+        : undefined;
+    };
+    const only = argList('demos');
     const { allowed } = await readable();
     const records = allowed.filter((r) => (r.status || 'ready') === 'ready');
+    const streamArg = arg('stream');
     const stream =
-      url.searchParams.get('stream') === '1' ||
-      url.searchParams.get('stream') === 'true' ||
+      streamArg === '1' ||
+      streamArg === 'true' ||
+      streamArg === 1 ||
+      streamArg === true ||
       /application\/x-ndjson/i.test(String(req.headers.accept || ''));
-    const offset = Math.max(0, Math.floor(Number(url.searchParams.get('offset') || 0) || 0));
-    const rawLimit = url.searchParams.get('limit');
+    const offset = Math.max(0, Math.floor(Number(arg('offset') || 0) || 0));
+    const rawLimit = arg('limit');
     // No demo-count clamp here any more: `statsPayload` cuts the page by what
     // the response will WEIGH (STATS_PAGE_BYTES), using the contract's own
     // bytes-per-round and each record's round count. Clamping to 300 on top of
     // that is what made a Pattern Finder scope — a fifth the size per demo —
     // arrive in four round trips instead of one.
     const limit =
-      rawLimit === null || rawLimit === ''
+      rawLimit === null || rawLimit === undefined || rawLimit === ''
         ? only?.length || STATS_LIBRARY_PAGE
         : Math.max(1, Math.floor(Number(rawLimit) || STATS_LIBRARY_PAGE));
     // Column contract. Absent → the full set, so an old client build keeps
     // working; a bad one is a 400 rather than a silently wrong rating.
-    const fields = url.searchParams.get('fields');
+    const rawFields = arg('fields');
+    const fields = Array.isArray(rawFields) ? rawFields.join(',') : rawFields;
     let pageOpts;
     try {
       pageOpts = { offset, limit, columns: fields };

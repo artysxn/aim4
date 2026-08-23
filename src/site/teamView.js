@@ -865,17 +865,38 @@ export function initTeamView({ auth, escapeHtml }) {
     paintOverviewMaps();
   }
 
+  /** Lean payload for the overview round list, keyed by the team demo set. */
+  let overviewRoundListPayload = null;
+  let overviewRoundListFor = '';
+
   /**
-   * The round library panel reads the stats panel's payload rather than
-   * fetching again. Map picks stay on this team's demos.
+   * The round library panel needs each round's `rl` tag, and used to read the
+   * stats panel's payload for it. The stats panel is served by the aggregate
+   * endpoint now and holds no rounds, so the list fetches its own — under the
+   * `roundLibrary` contract (81 bytes a round), scoped to this team's demos,
+   * and cached by statsCache like every other scoped pull.
    */
   function paintRoundList() {
     if (!overviewRoundList) return;
-    overviewRoundList.update({
-      preferredMap: overviewMapFilter,
-      teamName: team?.name || '',
-      payload: overviewStatsPanel?.getPayload?.() || null
-    });
+    const ids = demosForTeam().map((d) => d.id).filter(Boolean);
+    const key = ids.join(',');
+    const paint = () =>
+      overviewRoundList.update({
+        preferredMap: overviewMapFilter,
+        teamName: team?.name || '',
+        payload: overviewRoundListFor === key ? overviewRoundListPayload : null
+      });
+    paint();
+    if (!ids.length || overviewRoundListFor === key) return;
+    void getStatsPayload(ids, { columns: 'roundLibrary' })
+      .then((payload) => {
+        const now = demosForTeam().map((d) => d.id).filter(Boolean).join(',');
+        if (now !== key) return;
+        overviewRoundListPayload = payload;
+        overviewRoundListFor = key;
+        paint();
+      })
+      .catch(() => {});
   }
 
   function applyOverviewMapToStats() {

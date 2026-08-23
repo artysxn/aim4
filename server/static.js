@@ -61,6 +61,10 @@ const SITE_VIEW_PATHS = new Set([
   '/charts',
   '/patterns',
   '/performance',
+  // A player page is shared as /player/<id>; without these two entries the
+  // link works only as an in-app navigation and a cold load falls through to
+  // the trainer.
+  '/player',
   '/uploads',
   '/team',
   '/account',
@@ -80,7 +84,7 @@ const SITE_VIEW_PATHS = new Set([
 
 // Shell-owned subtrees: /team/*, /account/* (sub-pages), /i/* (invites),
 // /s2/* (shared 2D rounds), /d/* (shared documents).
-const SITE_VIEW_PREFIXES = ['/team/', '/account/', '/i/', '/s2/', '/d/'];
+const SITE_VIEW_PREFIXES = ['/team/', '/account/', '/i/', '/s2/', '/d/', '/player/'];
 
 function isSiteViewPath(rel) {
   return SITE_VIEW_PATHS.has(rel) || SITE_VIEW_PREFIXES.some((p) => rel.startsWith(p));

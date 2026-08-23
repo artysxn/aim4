@@ -2460,6 +2460,7 @@ export function createStatsPanel({
       else syncFilterChrome();
       bodyEl.setAttribute('aria-busy', 'true');
       if (detail) return refreshServerDetail();
+      if (lockedTeamName) return refreshServerLocked();
       return refreshServerTables();
     }
     if (rebuildFilters) {
@@ -2494,6 +2495,13 @@ export function createStatsPanel({
   /** Per-match rows for the open detail, from the server. `{ key, rows }`. */
   let serverDetail = null;
   let detailToken = 0;
+  /**
+   * Server rows for the locked-team (Team Overview) views: the pinned player
+   * roster, the per-map team rows, and the one-map comparison. Each piece is a
+   * scoped aggregate query, so the overview never downloads its team's rounds.
+   */
+  let serverLocked = null;
+  let lockedToken = 0;
 
   /** Interactions that cannot be answered from the aggregate endpoint. */
   /**
@@ -2520,7 +2528,7 @@ export function createStatsPanel({
   function needsRawRounds() {
     return Boolean(
       (detail && !roster) ||
-      lockedTeamName ||
+      (lockedTeamName && !roster) ||
       (hasEntityPick() && !roster) ||
       (scope.demos?.length && scope.demos.length <= 1)
     );
@@ -2658,6 +2666,205 @@ export function createStatsPanel({
     }
   }
 
+  /** Map codes the locked team has played, read off the roster catalogue. */
+  function lockedTeamMaps() {
+    if (!roster || !lockedTeamName) return [];
+    const inScope = scope.demos?.length ? new Set(scope.demos) : null;
+    const want = teamNameKey(lockedTeamName);
+    const played = new Set();
+    for (const d of roster.demos || []) {
+      if (inScope && !inScope.has(d.id)) continue;
+      if (teamNameKey(d.n1, d.t1) !== want && teamNameKey(d.n2, d.t2) !== want) continue;
+      if (d.m) played.add(String(d.m).toUpperCase());
+    }
+    const order = POSITION_MAPS.map((m) => m.code);
+    return [...played].sort((a, b) => {
+      const ia = order.indexOf(a);
+      const ib = order.indexOf(b);
+      if (ia < 0 && ib < 0) return a.localeCompare(b);
+      if (ia < 0) return 1;
+      if (ib < 0) return -1;
+      return ia - ib;
+    });
+  }
+
+  /**
+   * Fetch everything the locked-team views paint, as scoped aggregates.
+   *
+   * Three shapes, all queries the endpoint already answers:
+   *  - players, twice: once under the active filters and once under only
+   *    map/file scope, so the roster pin can show a player the filter zeroed
+   *    out as dashes instead of dropping them;
+   *  - teams once per played map (the Any-map per-map table);
+   *  - on a single map, the library-wide teams table for the comparison.
+   */
+  async function refreshServerLocked() {
+    const token = ++lockedToken;
+    const demos = serverDemoScope();
+    const maps = Array.isArray(filter.maps) ? filter.maps.filter(Boolean) : [];
+    const oneMap = maps.length === 1 ? String(maps[0]) : '';
+    const active = { ...filter, files: scope.files || null, teamName: lockedTeamName, roles: true };
+    const rosterActive = {
+      maps: filter.maps,
+      files: scope.files || null,
+      teamName: lockedTeamName,
+      roles: true
+    };
+    try {
+      const jobs = {
+        players: fetchAggregate(active, { tables: 'players', demos }),
+        rosterPlayers: fetchAggregate(rosterActive, { tables: 'players', demos }),
+        mapRows: oneMap
+          ? Promise.resolve([])
+          : Promise.all(
+              lockedTeamMaps().map(async (code) => {
+                const res = await fetchAggregate(
+                  { ...active, maps: [code] },
+                  { tables: 'teams', demos }
+                );
+                const row = (res?.teams || [])[0];
+                if (!row || !(row.rounds > 0)) return null;
+                return {
+                  ...row,
+                  name: MAPS[code]?.name || POSITION_MAPS.find((m) => m.code === code)?.name || code,
+                  mapCode: code,
+                  mapRow: true,
+                  key: `${row.key}|${code}`
+                };
+              })
+            ),
+        libraryTeams: oneMap
+          ? fetchAggregate({ ...filter, teamName: '', files: null, maps: [oneMap] }, { tables: 'teams' })
+          : Promise.resolve(null),
+        usRow: oneMap
+          ? fetchAggregate({ ...active, maps: [oneMap] }, { tables: 'teams', demos })
+          : Promise.resolve(null)
+      };
+      const [players, rosterPlayers, mapRows, libraryTeams, usRow] = await Promise.all([
+        jobs.players,
+        jobs.rosterPlayers,
+        jobs.mapRows,
+        jobs.libraryTeams,
+        jobs.usRow
+      ]);
+      if (token !== lockedToken) return false;
+      serverLocked = {
+        players: players?.players || [],
+        rosterPlayers: rosterPlayers?.players || [],
+        mapRows: (mapRows || []).filter(Boolean),
+        libraryTeams: libraryTeams?.teams || null,
+        usRow: (usRow?.teams || [])[0] || null,
+        oneMap
+      };
+      renderServerLocked();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Paint the locked-team views from the fetched aggregate rows. */
+  function renderServerLocked() {
+    if (!lockedTeamName || !serverLocked) return;
+    syncHead();
+    syncFilterChrome();
+    const searching = hasEntityPick();
+    const minR = searching ? 0 : Math.max(0, Number(filter.minRounds) || 0);
+
+    if (tab === 'players') {
+      // Pin exactly the way the payload path pins: the roster query decides
+      // which players appear (and their order), the filtered query supplies
+      // the numbers, and a filtered-out player shows as dashes.
+      let rosterRows = serverLocked.rosterPlayers;
+      if (minR > 0) rosterRows = rosterRows.filter((p) => (p.rounds || 0) >= minR);
+      const byId = new Map(serverLocked.players.map((p) => [p.id, p]));
+      let data = rosterRows.length
+        ? rosterRows.map((base) => byId.get(base.id) || absentPlayerRow(base))
+        : minR > 0
+          ? serverLocked.players.filter((p) => (p.rounds || 0) >= minR)
+          : serverLocked.players;
+      data = applyEntityPickPlayers(data);
+      const mode = roleModeOf(data);
+      let cols = mode
+        ? playerColumnsWithRoles(mode)
+        : { columns: PLAYER_COLUMNS, fixedCount: PLAYER_FIXED_BASE.length };
+      if (omitTeamColumn) cols = omitPlayerTeamColumn(cols);
+      paintTable(data, {
+        columns: cols.columns,
+        fixedCount: cols.fixedCount,
+        escapeHtml,
+        sortKey: sort.players.key,
+        sortDir: sort.players.dir,
+        page: page.players,
+        pageSize: STATS_PAGE_SIZE,
+        showAverage: true,
+        nameCell: playerNameCell,
+        teamCell: playerTeamCell
+      });
+    } else if (!serverLocked.oneMap) {
+      let data = applyEntityPickTeams(serverLocked.mapRows);
+      setBodyHtml(statsTableHtml(data, {
+        columns: TEAM_MAP_COLUMNS,
+        fixedCount: 2,
+        escapeHtml,
+        preserveOrder: true,
+        showAverage: true,
+        nameCell: teamNameCell,
+        roundWrCell: teamRoundWrCell
+      }));
+    } else {
+      // One map: worst / best / middle / us, footer averaged over every team
+      // that played the map — the same selection lockedTeamMapCompare made,
+      // over rows the library-wide aggregate already computed.
+      let all = serverLocked.libraryTeams || [];
+      all = minR > 0 ? all.filter((t) => (t.rounds || 0) >= minR) : all.filter((t) => (t.rounds || 0) > 0);
+      const byWr = [...all].sort(
+        (a, b) =>
+          (b.roundWinrate || 0) - (a.roundWinrate || 0) ||
+          String(a.name).localeCompare(String(b.name))
+      );
+      const want = teamNameKey(lockedTeamName);
+      const us = byWr.find((t) => teamNameKey(t.name) === want) || serverLocked.usRow || null;
+      const display = [];
+      const seen = new Set();
+      const push = (row, role) => {
+        if (!row) return;
+        const k = row.key || teamNameKey(row.name);
+        if (!k || seen.has(k)) return;
+        seen.add(k);
+        display.push({ ...row, compareRole: role });
+      };
+      if (byWr.length) {
+        push(byWr[byWr.length - 1], 'worst');
+        push(byWr[0], 'best');
+        push(byWr[Math.floor((byWr.length - 1) / 2)], 'mid');
+      }
+      push(us, 'us');
+      const data = applyEntityPickTeams(display);
+      setBodyHtml(statsTableHtml(data, {
+        columns: TEAM_COLUMNS,
+        fixedCount: 2,
+        escapeHtml,
+        preserveOrder: true,
+        showAverage: true,
+        averageRows: searching ? undefined : byWr,
+        nameCell: teamNameCell,
+        roundWrCell: teamRoundWrCell
+      }));
+    }
+    bodyEl.removeAttribute('aria-busy');
+    bindStatsHScroll(bodyEl);
+    attachTips(bodyEl);
+    emitViewChange();
+  }
+
+  /** Role column mode for rows that came back from the server. */
+  function roleModeOf(rows) {
+    const has = (rows || []).some((p) => p.roleT || p.roleCT || p.posT || p.posCT);
+    if (!has) return '';
+    return singleMap() ? 'position' : 'tactical';
+  }
+
   /** Identity of the detail a cached row set belongs to. */
   function detailKey() {
     if (!detail) return '';
@@ -2753,6 +2960,10 @@ export function createStatsPanel({
       // Server mode: no rounds in the browser, so paint from the endpoint.
       if (detail) {
         if (serverDetail) renderServerDetail();
+        return;
+      }
+      if (lockedTeamName) {
+        if (serverLocked) renderServerLocked();
         return;
       }
       if (serverTables) renderFromServer();
@@ -2955,6 +3166,8 @@ export function createStatsPanel({
     scopeEl.textContent = next.title || '';
     payload = null;
     serverTables = null;
+    serverDetail = null;
+    serverLocked = null;
     // Start the catalogue now; it is awaited below, before the panel decides
     // whether it needs raw rounds.
     const rosterReady = ensureRoster();
@@ -3009,14 +3222,20 @@ export function createStatsPanel({
     // with the filters this load resolved to, and only pull rounds when the
     // view actually needs them.
     if (!needsRawRounds()) {
-      // A detail view opened straight from a URL asks the matches endpoint
-      // instead; both paint without a round reaching the browser.
-      const served = detail ? await refreshServerDetail() : await refreshServerTables();
+      // A detail view opened straight from a URL asks the matches endpoint,
+      // a locked team (Team Overview) its aggregate pieces; all paint without
+      // a round reaching the browser.
+      const served = detail
+        ? await refreshServerDetail()
+        : lockedTeamName
+          ? await refreshServerLocked()
+          : await refreshServerTables();
       if (token !== loadToken) return;
       if (served) {
         cancelSlow();
         renderFilters();
         if (detail) renderServerDetail();
+        else if (lockedTeamName) renderServerLocked();
         else renderFromServer();
         return;
       }
@@ -3165,41 +3384,11 @@ export function createStatsPanel({
     applyViewState(opts);
   }
 
-  /**
-   * Expand a team-scoped payload to the full library once (for map compare).
-   * No-op when already unscoped. Preserves filters / locked team name.
-   */
-  async function ensureLibraryPayload() {
-    if (!scope.demos?.length && !scope.files?.length) return false;
-    const snap = viewState();
-    await load({
-      title: scope.title || '',
-      teamName: lockedTeamName || '',
-      tab: snap.tab || tab,
-      maps: snap.maps,
-      side: snap.side,
-      result: snap.result,
-      advantage: snap.advantage,
-      econ: snap.econ,
-      oppEcon: snap.oppEcon,
-      hasAwp: snap.hasAwp,
-      oppHasAwp: snap.oppHasAwp,
-      minRounds: snap.minRounds,
-      dateFrom: snap.dateFrom,
-      dateTo: snap.dateTo,
-      role: snap.role,
-      searchPlayers: snap.searchPlayers,
-      searchTeams: snap.searchTeams
-    });
-    return true;
-  }
-
   return {
     el,
     load,
     applyView,
     applyViewState,
-    ensureLibraryPayload,
     mountPageHead,
     /** The loaded payload, so panels beside this one can reuse the fetch. */
     getPayload: () => payload,
