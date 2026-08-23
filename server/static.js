@@ -46,7 +46,12 @@ const PAGE_ALIASES = {
 };
 
 // Paths owned by the site shell (index.html): its menu views live here.
-const SITE_VIEW_PATHS = new Set([
+//
+// This list governs the self-hosted server only. Production is served by
+// Vercel, which routes from vercel.json — a path added here and not there
+// 404s (or falls through to the trainer) on aim4.io while working perfectly
+// on localhost. staticRoutes.test.js fails when the two drift apart.
+export const SITE_VIEW_PATHS = new Set([
   '/tools',
   // Admin-only deck; the view refuses everyone else. Without this entry the
   // deep link serves the trainer shell instead of the SPA.
@@ -91,7 +96,7 @@ const SITE_VIEW_PATHS = new Set([
 
 // Shell-owned subtrees: /team/*, /account/* (sub-pages), /i/* (invites),
 // /s2/* (shared 2D rounds), /d/* (shared documents).
-const SITE_VIEW_PREFIXES = ['/team/', '/account/', '/i/', '/s2/', '/d/', '/player/'];
+export const SITE_VIEW_PREFIXES = ['/team/', '/account/', '/i/', '/s2/', '/d/', '/player/'];
 
 function isSiteViewPath(rel) {
   return SITE_VIEW_PATHS.has(rel) || SITE_VIEW_PREFIXES.some((p) => rel.startsWith(p));
