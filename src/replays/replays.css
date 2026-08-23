@@ -7718,6 +7718,24 @@ table.ch-table th {
   z-index: 1;
 }
 
+/* Averages, pinned under the subject list. Sticky for the same reason the head
+   is: the table scrolls, and a summary you have to scroll to find is one nobody
+   reads. */
+table.ch-table tfoot tr.ch-avg-row td {
+  position: sticky;
+  bottom: 0;
+  background: var(--surface-solid);
+  border-top: 1px solid var(--border-strong, rgba(255, 255, 255, 0.16));
+  border-bottom: 0;
+  color: var(--text);
+  font-weight: 600;
+}
+
+table.ch-table tfoot tr.ch-avg-row td.ch-avg-n {
+  color: var(--muted);
+  font-weight: 500;
+}
+
 table.ch-table tbody tr:hover {
   background: var(--surface-hover);
   cursor: default;

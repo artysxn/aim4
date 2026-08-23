@@ -958,6 +958,98 @@ export function createChartsPanel({ escapeHtml }) {
     return escapeHtml(text);
   }
 
+  /** Mean of the finite values in `list`, or null when there are none. */
+  function meanOf(list) {
+    let sum = 0;
+    let n = 0;
+    for (const v of list) {
+      if (!Number.isFinite(v)) continue;
+      sum += v;
+      n++;
+    }
+    return n ? sum / n : null;
+  }
+
+  /**
+   * Most series worth breaking the average down by.
+   *
+   * A per-series row is useful while the series are a handful of lines you are
+   * comparing. Series by team on a full library is 116 of them, and a
+   * hundred-row "footer" under a forty-row table is not a summary of anything —
+   * past this, the overall average is the statistic and the breakdown is noise.
+   */
+  const SERIES_AVG_MAX = 8;
+
+  /**
+   * Average row(s) under the subject table.
+   *
+   * Averaged over EVERY point in the model, not the forty or sixty rows the
+   * table prints. A footer that only averaged what fits on screen would move
+   * when the table was truncated, which is worse than not showing one — the
+   * number would look like the chart's average and be the visible slice's. The
+   * count on each row says what it covers, for exactly that reason.
+   */
+  function averageRowsHtml(model) {
+    /** @type {{ label: string, n: number, cells: string[] }[]} */
+    const rows = [];
+    const rowHtml = (r) =>
+      `<tr class="ch-avg-row"><td class="ch-name">${escapeHtml(r.label)}</td><td class="ch-avg-n">over ${
+        r.n
+      }</td>${r.cells.map((c) => `<td>${c}</td>`).join('')}</tr>`;
+
+    if (model.kind === 'scatter') {
+      const cells = (pts) => [
+        escapeHtml(formatValue(meanOf(pts.map((p) => p.x)), model.xFmt)),
+        escapeHtml(formatValue(meanOf(pts.map((p) => p.y)), model.yFmt)),
+        escapeHtml(formatValue(meanOf(pts.map((p) => p.rounds)), 'num1'))
+      ];
+      if (!model.points.length) return '';
+      const bySeries = new Map();
+      for (const p of model.points) {
+        const key = p.seriesLabel || '';
+        if (!bySeries.has(key)) bySeries.set(key, []);
+        bySeries.get(key).push(p);
+      }
+      if (bySeries.size > 1 && bySeries.size <= SERIES_AVG_MAX) {
+        for (const [label, pts] of bySeries) {
+          rows.push({ label: `Average · ${label || 'Unlabelled'}`, n: pts.length, cells: cells(pts) });
+        }
+      }
+      rows.push({
+        label: rows.length ? 'Average · all series' : 'Average',
+        n: model.points.length,
+        cells: cells(model.points)
+      });
+      return rows.map(rowHtml).join('');
+    }
+
+    const cells = (pts) => [
+      escapeHtml(formatValue(meanOf(pts.map((p) => p.y)), model.yFmt)),
+      escapeHtml(formatValue(meanOf(pts.map((p) => p.n)), 'num1')),
+      escapeHtml(formatValue(meanOf(pts.map((p) => p.rounds)), 'num1'))
+    ];
+    const withPoints = model.seriesList
+      .map((sr) => ({ label: sr.label || '', pts: (sr.points || []).filter((p) => p.y !== null) }))
+      .filter((sr) => sr.pts.length);
+    if (!withPoints.length) return '';
+    if (withPoints.length > 1 && withPoints.length <= SERIES_AVG_MAX) {
+      for (const sr of withPoints) {
+        rows.push({
+          label: `Average · ${sr.label || 'Unlabelled'}`,
+          n: sr.pts.length,
+          cells: cells(sr.pts)
+        });
+      }
+    }
+    const all = withPoints.flatMap((sr) => sr.pts);
+    rows.push({
+      label: rows.length ? 'Average · all series' : 'Average',
+      n: all.length,
+      cells: cells(all)
+    });
+    return rows.map(rowHtml).join('');
+  }
+
   function detailsHtml(model) {
     if (model.kind === 'scatter') {
       const rows = model.points
@@ -973,7 +1065,8 @@ export function createChartsPanel({ escapeHtml }) {
         .join('');
       return `<table class="ch-table"><thead><tr><th>Subject</th><th></th><th>${escapeHtml(
         model.xLabel
-      )}</th><th>${escapeHtml(model.yLabel)}</th><th>Rounds</th></tr></thead><tbody>${rows}</tbody></table>`;
+      )}</th><th>${escapeHtml(model.yLabel)}</th><th>Rounds</th></tr></thead><tbody>${rows}</tbody>
+      <tfoot>${averageRowsHtml(model)}</tfoot></table>`;
     }
     const rows = model.seriesList
       .flatMap((s) =>
@@ -994,7 +1087,8 @@ export function createChartsPanel({ escapeHtml }) {
       model.xLabel
     )}</th><th>Series</th><th>${escapeHtml(
       model.yLabel
-    )}</th><th>Sample</th><th>Rounds</th></tr></thead><tbody>${rows}</tbody></table>`;
+    )}</th><th>Sample</th><th>Rounds</th></tr></thead><tbody>${rows}</tbody>
+    <tfoot>${averageRowsHtml(model)}</tfoot></table>`;
   }
 
   /**
