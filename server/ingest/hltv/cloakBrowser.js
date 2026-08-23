@@ -31,9 +31,11 @@ import {
   loadProxyPool,
   markProxyFailed,
   normalizeProxyUrl,
+  probeProxyReachable,
   readWorkingProxies,
   recordWorkingProxy,
-  redactProxy
+  redactProxy,
+  resolvePinnedProxy
 } from './proxyPool.js';
 import { looksLikeMissingPage, pageTitle } from './classify.js';
 
@@ -471,7 +473,8 @@ export function createCloakSession(cfg = {}) {
         const pool = await loadProxyPool(cfg);
         if (cfg.cloakProxyOnly && pool.length === 1) {
           preferredProxyCount = 1;
-          log(`Proxy pinned: ${redactProxy(pool[0])} (only; AIM4_CLOAK_PROXY ignored)`);
+          const pin = resolvePinnedProxy(cfg);
+          log(`Proxy pinned: ${redactProxy(pin.url)} (only; ${pin.source})`);
           return pool;
         }
         const working = await readWorkingProxies(cfg);
@@ -509,6 +512,16 @@ export function createCloakSession(cfg = {}) {
   async function context() {
     if (closed) throw new Error('CloakBrowser session is closed');
     if (!contextPromise) {
+      if (activeProxy) {
+        const reachable = await probeProxyReachable(activeProxy);
+        if (!reachable) {
+          const err = new Error(
+            `Proxy ${redactProxy(activeProxy)} is unreachable (TCP connect failed)`
+          );
+          err.proxyRetryable = true;
+          throw err;
+        }
+      }
       log('Launching CloakBrowser');
       const downloadsPath = downloadsPathFor(cfg);
       const profilePath = profilePathFor(cfg);
@@ -633,19 +646,30 @@ export function createCloakSession(cfg = {}) {
     );
     // One bonus slot so the default exit can still run after a full 5-attempt
     // pool burn when every public proxy is challenged.
-    const hardMax = maxAttempts + (fallbackProxy ? 1 : 0);
+    const hardMax = maxAttempts + (fallbackProxy ? 1 : 0) + 1;
     const used = new Set();
     let lastErr;
     let displayRetries = 0;
     let consecutiveFails = 0;
+    let forceDirect = false;
+    let triedDirect = false;
     for (let i = 0; i < hardMax; i++) {
       if (opts.signal?.aborted) throw abortError(opts.signal);
       const wantFallback =
+        !forceDirect &&
         Boolean(fallbackProxy) &&
         consecutiveFails >= FALLBACK_AFTER_CONSECUTIVE_FAILURES &&
         !used.has(fallbackProxy);
-      if (!wantFallback && i >= maxAttempts) break;
-      const proxy = wantFallback ? fallbackProxy : pickProxy(pool, used, random);
+      if (!forceDirect && !wantFallback && i >= maxAttempts) break;
+      const proxy = forceDirect
+        ? undefined
+        : wantFallback
+          ? fallbackProxy
+          : pickProxy(pool, used, random);
+      if (forceDirect) {
+        log('Pin/proxy failed to reach HLTV; retrying without proxy (direct exit)');
+        forceDirect = false;
+      }
       if (wantFallback) {
         log(
           `${consecutiveFails} proxies failed in a row; trying default fallback ` +
@@ -719,6 +743,12 @@ export function createCloakSession(cfg = {}) {
         const canRetry =
           isProxyRetryable(err) && (i < maxAttempts - 1 || fallbackPending);
         if (!canRetry) {
+          if (!triedDirect && isProxyRetryable(err)) {
+            triedDirect = true;
+            forceDirect = true;
+            await resetContext();
+            continue;
+          }
           // Leave blocked/proxyRetryable for the pipeline to back off on the
           // same demo id. fatal here used to kill the whole ingester.
           throw err;
@@ -747,7 +777,7 @@ export function createCloakSession(cfg = {}) {
       try {
         log(`Opening ${url}`);
         const response = await page.goto(url, {
-          waitUntil: 'domcontentloaded',
+          waitUntil: 'commit',
           timeout
         });
         if (opts.signal?.aborted) throw abortError(opts.signal);
@@ -892,7 +922,7 @@ export function createCloakSession(cfg = {}) {
       progressTimer.unref?.();
 
       const navigationPromise = page
-        .goto(url, { waitUntil: 'domcontentloaded', timeout })
+        .goto(url, { waitUntil: 'commit', timeout })
         .catch((err) => {
           // Chromium aborts navigation when the response becomes a download.
           // The download event is the authoritative result in that case.

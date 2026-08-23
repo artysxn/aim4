@@ -21,7 +21,7 @@ import {
   seekCursor
 } from './cursor.js';
 import { MissingDemoError } from './classify.js';
-import { isTransientDownloadError } from './transient.js';
+import { classifyTransientReason, isTransientDownloadError } from './transient.js';
 import { PARSER_REVISION } from '../../demoparser/schema.js';
 
 /**
@@ -447,13 +447,9 @@ export function createPipeline({ cfg, ledger, source, onEvent = () => {} }) {
         });
         await ledger.save();
         const errText = String(err.message || err);
-        const sessionLimit =
-          Boolean(err?.sessionLimit) || /session limit reached/i.test(errText);
-        const infra =
-          sessionLimit ||
-          /Missing X server|without having a XServer|ozone_platform_x11|\$DISPLAY|spawn ETXTBSY|profile is already in use|Opening in existing browser session/i.test(
-            errText
-          );
+        const reason = classifyTransientReason(err);
+        const sessionLimit = reason === 'session-limit';
+        const infra = reason === 'infra';
         // Pro seats drop slowly after SIGKILL. Wait minutes, not 15s.
         const waitMs = sessionLimit
           ? Math.max(Number(cfg.sessionLimitWaitMs) || 180_000, 120_000)
@@ -476,21 +472,21 @@ export function createPipeline({ cfg, ledger, source, onEvent = () => {} }) {
           demoId: id,
           nextCheckInMs: waitMs,
           error: errText,
-          reason: sessionLimit ? 'session-limit' : infra ? 'infra' : 'challenge'
+          reason
         });
         current = {
           matchId,
           label: `demo/${id}`,
           demoId: id,
           stage: 'waiting',
-          reason: sessionLimit ? 'session-limit' : infra ? 'infra' : 'challenge'
+          reason
         };
         return {
           advanced: false,
           missing: false,
           blocked: true,
           waitMs,
-          reason: sessionLimit ? 'session-limit' : infra ? 'infra' : 'challenge'
+          reason
         };
       }
 

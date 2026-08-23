@@ -31,3 +31,24 @@ export function isTransientDownloadError(err) {
     /proxy/i.test(msg)
   );
 }
+
+/** Split transient failures so logs do not call a dead proxy a Cloudflare challenge. */
+export function classifyTransientReason(err) {
+  const msg = String(err?.message || err || '');
+  if (err?.sessionLimit || /session limit reached/i.test(msg)) return 'session-limit';
+  if (
+    /Missing X server|without having a XServer|ozone_platform_x11|\$DISPLAY|spawn ETXTBSY|profile is already in use|Opening in existing browser session/i.test(
+      msg
+    )
+  ) {
+    return 'infra';
+  }
+  if (
+    /net::ERR_TIMED_OUT|ERR_TUNNEL|ERR_PROXY|ETIMEDOUT|ECONNREFUSED|unreachable \(TCP/i.test(
+      msg
+    )
+  ) {
+    return 'timeout';
+  }
+  return 'challenge';
+}

@@ -9,6 +9,7 @@
 
 import fsp from 'node:fs/promises';
 import https from 'node:https';
+import net from 'node:net';
 import path from 'node:path';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import { SocksProxyAgent } from 'socks-proxy-agent';
@@ -238,8 +239,70 @@ export async function applyProxySettings(cfg) {
 }
 
 /**
+ * Pin used when cloakProxyOnly is on.
+ * AIM4_CLOAK_PIN_PROXY wins, then AIM4_CLOAK_PROXY, then the office default.
+ */
+export function resolvePinnedProxy(cfg = {}) {
+  const fromPin = normalizeProxyUrl(
+    cfg.cloakPinProxy || process.env.AIM4_CLOAK_PIN_PROXY || ''
+  );
+  if (fromPin) return { url: fromPin, source: 'AIM4_CLOAK_PIN_PROXY' };
+  const fromProxy = normalizeProxyUrl(
+    cfg.cloakProxy || process.env.AIM4_CLOAK_PROXY || ''
+  );
+  if (fromProxy) return { url: fromProxy, source: 'AIM4_CLOAK_PROXY' };
+  return { url: DEFAULT_FALLBACK_PROXY, source: 'office-default' };
+}
+
+/**
+ * TCP connect to the proxy host. Does not send HTTP CONNECT. Used to skip a
+ * dead pin before launching Chromium (ERR_TIMED_OUT on HLTV otherwise).
+ */
+export function probeProxyReachable(proxyUrl, timeoutMs = 4000) {
+  return new Promise((resolve) => {
+    const normalized = normalizeProxyUrl(proxyUrl);
+    if (!normalized) {
+      resolve(false);
+      return;
+    }
+    let u;
+    try {
+      u = new URL(normalized);
+    } catch {
+      resolve(false);
+      return;
+    }
+    const port = Number(u.port) || (u.protocol === 'https:' ? 443 : 80);
+    if (!u.hostname || !port) {
+      resolve(false);
+      return;
+    }
+    let settled = false;
+    const done = (ok) => {
+      if (settled) return;
+      settled = true;
+      resolve(ok);
+    };
+    const socket = net.connect({ host: u.hostname, port });
+    socket.setTimeout(timeoutMs);
+    socket.once('connect', () => {
+      socket.destroy();
+      done(true);
+    });
+    socket.once('timeout', () => {
+      socket.destroy();
+      done(false);
+    });
+    socket.once('error', () => {
+      socket.destroy();
+      done(false);
+    });
+  });
+}
+
+/**
  * Pool order: working winners, optional AIM4_CLOAK_PROXY, last fetch cache, file.
- * When cloakProxyOnly is set (default), return only the office pin.
+ * When cloakProxyOnly is set (default), return only the resolved pin.
  */
 export async function loadProxyPool(cfg = {}) {
   const only =
@@ -247,13 +310,7 @@ export async function loadProxyPool(cfg = {}) {
       ? Boolean(cfg.cloakProxyOnly)
       : !/^(0|false|no|off)$/i.test(process.env.AIM4_CLOAK_PROXY_ONLY || 'true');
   if (only) {
-    const pin =
-      normalizeProxyUrl(
-        cfg.cloakPinProxy ||
-          process.env.AIM4_CLOAK_PIN_PROXY ||
-          DEFAULT_FALLBACK_PROXY
-      ) || DEFAULT_FALLBACK_PROXY;
-    return [pin];
+    return [resolvePinnedProxy(cfg).url];
   }
 
   const single = normalizeProxyUrl(cfg.cloakProxy || process.env.AIM4_CLOAK_PROXY || '');

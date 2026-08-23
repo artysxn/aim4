@@ -213,6 +213,7 @@ export function foldEvent(status, event, ledger) {
         event.reason !== 'frontier' &&
         event.reason !== 'challenge' &&
         event.reason !== 'infra' &&
+        event.reason !== 'timeout' &&
         event.reason !== 'session-limit'
       ) {
         s.current = null;

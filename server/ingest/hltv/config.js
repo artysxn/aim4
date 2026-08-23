@@ -9,7 +9,6 @@
 
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { DEFAULT_FALLBACK_PROXY } from './proxyPool.js';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
@@ -62,16 +61,17 @@ export function loadConfig(overrides = {}) {
     cloakLicenseKey: env.AIM4_CLOAK_LICENSE_KEY || env.CLOAKBROWSER_LICENSE_KEY || '',
     cloakGeoip: !/^(0|false|no|off)$/i.test(env.AIM4_CLOAK_GEOIP || 'true'),
     /**
-     * Exclusive pin used when cloakProxyOnly is on. Defaults to the office
-     * exit. AIM4_CLOAK_PROXY is ignored here on purpose: Coolify often still
-     * has a burned public proxy in that env var.
-     * Override with AIM4_CLOAK_PIN_PROXY only.
+     * Exclusive pin when cloakProxyOnly is on. Empty means "not set"; the
+     * resolver then uses AIM4_CLOAK_PROXY, then the office default.
+     * Coolify often still has a burned public proxy in AIM4_CLOAK_PROXY, so
+     * prefer AIM4_CLOAK_PIN_PROXY when you want a specific exit.
      */
-    cloakPinProxy: env.AIM4_CLOAK_PIN_PROXY || DEFAULT_FALLBACK_PROXY,
+    cloakPinProxy: env.AIM4_CLOAK_PIN_PROXY || '',
     /**
-     * Pool-mode single proxy (only when cloakProxyOnly=off).
+     * Preferred proxy. Used as the pin when cloakProxyOnly is on and
+     * AIM4_CLOAK_PIN_PROXY is unset. Also the pool-mode single proxy.
      */
-    cloakProxy: env.AIM4_CLOAK_PROXY || DEFAULT_FALLBACK_PROXY,
+    cloakProxy: env.AIM4_CLOAK_PROXY || '',
     /**
      * When true (default), ignore working-proxy cache / public list / file and
      * use only cloakPinProxy. Set AIM4_CLOAK_PROXY_ONLY=off to restore the pool.

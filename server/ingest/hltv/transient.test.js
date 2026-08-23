@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { isTransientDownloadError } from './transient.js';
+import { classifyTransientReason, isTransientDownloadError } from './transient.js';
 
 assert.equal(isTransientDownloadError(new Error('page.goto: Timeout 120000ms exceeded.')), true);
 assert.equal(isTransientDownloadError(new Error('CloakBrowser received a Cloudflare challenge page')), true);
@@ -19,7 +19,9 @@ assert.equal(
 );
 assert.equal(
   isTransientDownloadError(
-    new Error('Opening in existing browser session. This usually means that the profile is already in use')
+    new Error(
+      'Opening in existing browser session. This usually means that the profile is already in use'
+    )
   ),
   true
 );
@@ -28,5 +30,27 @@ assert.equal(
     new Error('Looks like you launched a headed browser without having a XServer running.')
   ),
   true
+);
+assert.equal(
+  isTransientDownloadError(
+    new Error('page.goto: net::ERR_TIMED_OUT at https://www.hltv.org/download/demo/109021')
+  ),
+  true
+);
+assert.equal(
+  classifyTransientReason(
+    new Error('page.goto: net::ERR_TIMED_OUT at https://www.hltv.org/download/demo/109021')
+  ),
+  'timeout'
+);
+assert.equal(
+  classifyTransientReason(
+    new Error('Proxy 130.17.12.137:3128 is unreachable (TCP connect failed)')
+  ),
+  'timeout'
+);
+assert.equal(
+  classifyTransientReason(new Error('CloakBrowser received a Cloudflare challenge page')),
+  'challenge'
 );
 console.log('transient.test.js OK');

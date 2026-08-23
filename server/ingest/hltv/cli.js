@@ -196,9 +196,19 @@ function logEvent(e, verbose) {
       break;
     case 'challenge':
       console.log(
-        `${e.reason === 'infra' ? 'infra hold' : 'challenge'} on demo/${e.demoId}; ` +
+        `${
+          e.reason === 'infra'
+            ? 'infra hold'
+            : e.reason === 'timeout'
+              ? 'timeout'
+              : e.reason === 'session-limit'
+                ? 'session-limit'
+                : 'challenge'
+        } on demo/${e.demoId}; ` +
           `retry in ${Math.round((e.nextCheckInMs || 0) / 1000)}s` +
-          (e.reason === 'infra' && e.error ? ` (${String(e.error).split('\n')[0]})` : '')
+          ((e.reason === 'infra' || e.reason === 'timeout') && e.error
+            ? ` (${String(e.error).split('\n')[0]})`
+            : '')
       );
       break;
     case 'cursor':
@@ -244,7 +254,10 @@ function logEvent(e, verbose) {
           ? `waiting for demo/${e.demoId}` +
               `${e.lookedAheadTo != null ? ` (checked through ${e.lookedAheadTo})` : ''}` +
               `; next check in ${Math.round(e.nextPollInMs / 1000)}s`
-          : e.reason === 'challenge' || e.reason === 'infra' || e.reason === 'disk'
+          : e.reason === 'challenge' ||
+              e.reason === 'infra' ||
+              e.reason === 'timeout' ||
+              e.reason === 'disk'
             ? `waiting after ${e.reason} on demo/${e.demoId}; next try in ${Math.round(e.nextPollInMs / 1000)}s`
             : `idle; next poll in ${Math.round(e.nextPollInMs / 1000)}s`
       );
