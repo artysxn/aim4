@@ -76,6 +76,7 @@ import {
   listCoachSmokeMaps,
   saveCoachSmokes
 } from '../coachSmokesStore.js';
+import { countPitchEdits, getPitchText, savePitchText } from '../pitchStore.js';
 
 const statsIo = {
   userDir,
@@ -1381,6 +1382,32 @@ async function route(req, res, url, me) {
         offset: Number(q.get('offset') || 0)
       })
     });
+    return true;
+  }
+
+  // ---- pitch deck wording -------------------------------------------------
+  // The deck reads its text from GET /api/pitch, which is public. Only the
+  // write lives here. The store validates the shape; a saved edit can replace a
+  // sentence that already exists and can do nothing else.
+  if (req.method === 'GET' && p === '/api/admin/pitch') {
+    json(res, req, 200, await getPitchText());
+    return true;
+  }
+
+  if (req.method === 'POST' && p === '/api/admin/pitch') {
+    const body = await readJson(req);
+    const record = await savePitchText(body.text ?? body, me.id);
+    await writeAudit({
+      actorId: me.id,
+      action: 'pitch.save',
+      targetUser: '',
+      payload: {
+        slides: Object.keys(record.text).length,
+        edits: countPitchEdits(record.text)
+      },
+      req
+    });
+    json(res, req, 200, record);
     return true;
   }
 

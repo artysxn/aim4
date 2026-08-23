@@ -112,6 +112,11 @@ async function resolveActor(req) {
         user = Object.freeze({
           id,
           username: usernameOf(body),
+          // For the account page only. Never sent anywhere except /api/me,
+          // and never used to key anything: the id is the identity.
+          email: String(body.email || ''),
+          provider: String(body.app_metadata?.provider || ''),
+          createdAt: String(body.created_at || ''),
           signedIn: true,
           admin,
           entitlements,

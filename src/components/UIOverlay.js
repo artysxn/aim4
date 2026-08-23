@@ -5178,7 +5178,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     return `<div class="upgrade-gate">
       <p class="upgrade-gate-message">${message}</p>
       <div class="upgrade-gate-actions">
-        <a class="btn btn-primary upgrade-gate-btn" href="/#pricing">Upgrade</a>
+        <a class="btn btn-primary upgrade-gate-btn" href="/account/subscription">Upgrade</a>
       </div>
     </div>`;
   }

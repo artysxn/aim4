@@ -18,6 +18,7 @@ import { userDetail } from './userDetail.js';
 import { coachSmokesPanel } from './coachSmokesPanel.js';
 import { uploadsPanel } from './uploadsPanel.js';
 import { perfPanel } from './perfPanel.js';
+import { pitchPanel } from './pitchPanel.js';
 import { spinnerNode } from '../../lib/spinner.js';
 
 const TABS = [
@@ -28,6 +29,7 @@ const TABS = [
   { id: 'models', label: 'Models' },
   { id: 'smokes', label: 'Utility' },
   { id: 'perf', label: 'Performance' },
+  { id: 'pitch', label: 'Pitch' },
   { id: 'audit', label: 'Audit' }
 ];
 
@@ -87,6 +89,11 @@ export function initAdminView(host) {
       panel.appendChild(livePanel);
     } else if (tab === 'perf') {
       livePanel = perfPanel();
+      panel.appendChild(livePanel);
+    } else if (tab === 'pitch') {
+      // Not polling, but it registers a beforeunload guard for unsaved text and
+      // uses the same hook to drop it when the tab changes.
+      livePanel = pitchPanel();
       panel.appendChild(livePanel);
     } else if (openUserId) {
       panel.appendChild(

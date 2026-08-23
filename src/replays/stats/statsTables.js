@@ -73,6 +73,39 @@ function ratingTip(p) {
   return tip(lines);
 }
 
+function expectedRatingTip(p) {
+  if (!Number.isFinite(p.expectedRating)) {
+    return 'No team with a 75% majority in recent games.';
+  }
+  return tip([
+    `Expected rating: ${f2(p.expectedRating)}`,
+    p.clubName ? `Team: ${p.clubName}` : '',
+    Number.isFinite(p.clubWinrate) ? `Round WR: ${pct(p.clubWinrate)}` : ''
+  ]);
+}
+
+function expectedRatingOpTip(p) {
+  if (!Number.isFinite(p.expectedRatingOp)) {
+    return 'No team with a 75% majority in recent games.';
+  }
+  return tip([
+    `Expected rating overperformance: ${Math.round(p.expectedRatingOp)}%`,
+    `Rating: ${f2(p.rating)}`,
+    `Expected: ${f2(p.expectedRating)}`
+  ]);
+}
+
+function trueRatingTip(p) {
+  if (!Number.isFinite(p.trueRating)) {
+    return 'No team with a 75% majority in recent games.';
+  }
+  return tip([
+    `True rating: ${f2(p.trueRating)}`,
+    `Rating: ${f2(p.rating)}`,
+    `Expected: ${f2(p.expectedRating)}`
+  ]);
+}
+
 /** Frozen left columns (before roles). */
 export const PLAYER_FIXED_BASE = [
   {
@@ -113,9 +146,9 @@ export const PLAYER_FIXED_BASE = [
 
 /**
  * Scrollable metric columns (after fixed + optional roles).
- * Order: Rating, A4R, Swing, KD, xK, Duel Win%, ADR, KAST, OPKD, Impact, A4OR,
- * Opatt, OR, PFW, PFO, Aim, Acc, C°, R%, AA%, 1st%, O%, U%, DT, PSDT, util,
- * 5k…0k, aKPR.
+ * Order: Rating, xRtg, xRtg%, True, A4R, Swing, KD, xK, Duel Win%, ADR, KAST,
+ * OPKD, Impact, A4OR, Opatt, OR, PFW, PFO, Aim, Acc, C°, R%, AA%, 1st%, O%, U%,
+ * DT, PSDT, util, 5k…0k, aKPR.
  */
 export const PLAYER_METRIC_COLUMNS = [
   {
@@ -127,6 +160,38 @@ export const PLAYER_METRIC_COLUMNS = [
     avgFormat: f2,
     strong: true,
     tip: (p) => ratingTip(p)
+  },
+  {
+    key: 'expectedRating',
+    label: 'xRtg',
+    headerTitle: 'Expected rating',
+    get: (p) => (Number.isFinite(p.expectedRating) ? p.expectedRating : -Infinity),
+    cell: (p) => f2(p.expectedRating),
+    avgOf: (p) => (Number.isFinite(p.expectedRating) ? p.expectedRating : null),
+    avgFormat: f2,
+    tip: (p) => expectedRatingTip(p)
+  },
+  {
+    key: 'expectedRatingOp',
+    label: 'xRtg%',
+    headerTitle: 'Expected rating overperformance',
+    get: (p) => (Number.isFinite(p.expectedRatingOp) ? p.expectedRatingOp : -Infinity),
+    cell: (p) =>
+      Number.isFinite(p.expectedRatingOp) ? `${Math.round(p.expectedRatingOp)}%` : '—',
+    avgOf: (p) => (Number.isFinite(p.expectedRatingOp) ? p.expectedRatingOp : null),
+    avgFormat: (n) => (Number.isFinite(n) ? `${Math.round(n)}%` : '—'),
+    tip: (p) => expectedRatingOpTip(p)
+  },
+  {
+    key: 'trueRating',
+    label: 'True',
+    headerTitle: 'True rating',
+    get: (p) => (Number.isFinite(p.trueRating) ? p.trueRating : -Infinity),
+    cell: (p) => f2(p.trueRating),
+    avgOf: (p) => (Number.isFinite(p.trueRating) ? p.trueRating : null),
+    avgFormat: f2,
+    strong: true,
+    tip: (p) => trueRatingTip(p)
   },
   {
     key: 'a4r',
@@ -1173,8 +1238,17 @@ export function statsTableHtml(rows, opts) {
     /** Keep input order (no column sort). Used for fixed comparison layouts. */
     preserveOrder = false,
     /** Optional extra class on each body row (e.g. T/CT tint). */
-    rowClass = null
+    rowClass = null,
+    /**
+     * Column keys the caller's plan does not include, with the plan that does:
+     * `{ keys: Set<string>, plan: string }`. The server already strips the
+     * VALUES; without this the columns rendered as bare dashes, which reads as
+     * missing data rather than a locked feature. Locked, never hidden.
+     */
+    lockedCols = null
   } = opts;
+  const lockedKeys = lockedCols?.keys || null;
+  const lockedTip = lockedCols?.plan ? `Available on ${lockedCols.plan}` : 'Not on your plan';
   if (!rows.length) {
     return '<p class="view-empty">Nothing matches these filters.</p>';
   }
@@ -1195,10 +1269,17 @@ export function statsTableHtml(rows, opts) {
       const stick = i < sticky ? ` st-sticky st-sticky-${i + 1}` : '';
       const sortAttr = preserveOrder ? '' : ` data-sort="${c.key}"`;
       const sortName = c.headerTitle || c.label;
-      const title = preserveOrder ? escapeHtml(sortName) : `Sort by ${escapeHtml(sortName)}`;
+      const locked = lockedKeys?.has(c.key);
+      const title = locked
+        ? escapeHtml(lockedTip)
+        : preserveOrder
+          ? escapeHtml(sortName)
+          : `Sort by ${escapeHtml(sortName)}`;
       const extra = c.colClass ? ` ${c.colClass}` : '';
-      return `<th class="${c.align === 'left' ? 'left' : ''}${active ? ' sorted' : ''}${stick}${extra}"${sortAttr}
-        title="${title}">${escapeHtml(c.label)}${arrow}</th>`;
+      return `<th class="${c.align === 'left' ? 'left' : ''}${active ? ' sorted' : ''}${stick}${extra}${
+        locked ? ' st-col-locked' : ''
+      }"${locked ? '' : sortAttr}
+        title="${title}">${escapeHtml(c.label)}${locked ? ' 🔒' : ''}${locked ? '' : arrow}</th>`;
     })
     .join('');
 

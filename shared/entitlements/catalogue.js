@@ -45,6 +45,27 @@ export const PLAN_NAMES = Object.freeze({
   team_elite: 'Team Elite'
 });
 
+/**
+ * Display prices, EUR per month. The one place prices are written down; the
+ * pricing page and any upsell copy read from here. `yearlyMonthly` is the
+ * effective monthly price on the annual term (two months free). Placeholder
+ * numbers until billing goes live: change them here and every surface follows.
+ */
+export const PLAN_PRICES = Object.freeze({
+  free: { monthly: 0, yearlyMonthly: 0 },
+  premium: { monthly: 9.99, yearlyMonthly: 8.33 },
+  team_premium: { monthly: 29.99, yearlyMonthly: 24.99 },
+  team_elite: { monthly: 59.99, yearlyMonthly: 49.99 }
+});
+
+/** One line under each plan name on the pricing page. */
+export const PLAN_TAGLINES = Object.freeze({
+  free: 'Watch, browse, and try the tools.',
+  premium: 'Full personal stats and unlimited analytics.',
+  team_premium: 'One team, seven seats, the team toolkit.',
+  team_elite: 'Two teams, the models, and everything else.'
+});
+
 /** Seats a plan may lend out, and teams it may create. Mirrors plans table. */
 export const PLAN_CAPACITY = Object.freeze({
   free: { seat_capacity: 0, team_capacity: 0 },

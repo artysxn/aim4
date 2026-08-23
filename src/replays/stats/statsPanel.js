@@ -40,6 +40,7 @@ import {
   rosterTeamPlayers,
   rosterTeams
 } from '../shared/rosterQuery.js';
+import { attachExpectedRatings } from '../shared/expectedRating.js';
 import { clockAt, secondsAtClock } from '../analytics/roundFacts.js';
 import { ROUND_SECONDS } from '../viewer/roundClock.js';
 import {
@@ -63,6 +64,7 @@ import {
   watchSlowLoad
 } from '../../lib/spinner.js';
 import { createSavedViews } from '../savedViews.js';
+import { upgradePrompt } from '../../site/upgradeGate.js';
 import { POSITION_MAPS } from '../roles/teamPositions.js';
 import filtersIcon from '../../icons/icon_filters.svg?url';
 import calendarIcon from '../../icons/icon_calendar.svg?url';
@@ -1978,6 +1980,12 @@ export function createStatsPanel({
       kast: null,
       impact: null,
       rating: null,
+      expectedRating: null,
+      expectedRatingOp: null,
+      trueRating: null,
+      clubKey: '',
+      clubName: '',
+      clubWinrate: null,
       ratingT: null,
       ratingCT: null,
       ratingWon: null,
@@ -2574,6 +2582,26 @@ export function createStatsPanel({
     }
   }
 
+  /**
+   * Which metric columns the caller's plan withholds, per table.
+   *
+   * The server strips the values and stamps `entitlements` on the response;
+   * these mark the matching columns as locked so a free user sees a padlock
+   * and the plan that includes the metric, not a column of dashes that looks
+   * like a parse failure.
+   */
+  function lockedColsFor(table) {
+    const ent = serverTables?.entitlements || payload?.entitlements;
+    if (!ent) return null;
+    if (table === 'players' && ent.playerMetricsFull === false) {
+      return { keys: new Set(['dt', 'psdt', 'accuracy']), plan: 'Premium' };
+    }
+    if (table === 'teams' && ent.teamMetricsFull === false) {
+      return { keys: new Set(['prw', 'possession']), plan: 'Team Elite' };
+    }
+    return null;
+  }
+
   /** Render the two tables straight from server rows. */
   function renderFromServer() {
     if (!serverTables) return;
@@ -2603,9 +2631,27 @@ export function createStatsPanel({
         pageSize: STATS_PAGE_SIZE,
         showAverage: true,
         nameCell: playerNameCell,
-        teamCell: playerTeamCell
+        teamCell: playerTeamCell,
+        lockedCols: lockedColsFor('players')
       });
     } else {
+      // Team statistics are withheld entirely below Team Premium: the server
+      // sends no teams table at all. Without this branch the tab said
+      // "Nothing matches these filters", which is a lie — the data exists,
+      // the plan does not include it. Locked, never hidden.
+      const ent = serverTables.entitlements;
+      if (ent && ent.teamStatistics === false && !Array.isArray(serverTables.teams)) {
+        bodyEl.innerHTML = '';
+        bodyEl.appendChild(
+          upgradePrompt({
+            message: 'Team statistics are available on Team Premium.',
+            requiredTier: 'team_premium'
+          })
+        );
+        bodyEl.removeAttribute('aria-busy');
+        emitViewChange();
+        return;
+      }
       let data = serverTables.teams || [];
       if (minR > 0) data = data.filter((t) => (t.rounds || 0) >= minR);
       data = applyEntityPickTeams(data);
@@ -2619,7 +2665,8 @@ export function createStatsPanel({
         pageSize: STATS_PAGE_SIZE,
         showAverage: true,
         nameCell: teamNameCell,
-        roundWrCell: teamRoundWrCell
+        roundWrCell: teamRoundWrCell,
+        lockedCols: lockedColsFor('teams')
       });
     }
     bodyEl.removeAttribute('aria-busy');
@@ -2712,8 +2759,8 @@ export function createStatsPanel({
     };
     try {
       const jobs = {
-        players: fetchAggregate(active, { tables: 'players', demos }),
-        rosterPlayers: fetchAggregate(rosterActive, { tables: 'players', demos }),
+        players: fetchAggregate(active, { tables: 'players,teams', demos }),
+        rosterPlayers: fetchAggregate(rosterActive, { tables: 'players,teams', demos }),
         mapRows: oneMap
           ? Promise.resolve([])
           : Promise.all(
@@ -3004,6 +3051,7 @@ export function createStatsPanel({
       const filtered = enrichedPlayers(rows, players, active, demos);
       let data = pinTeamRoster(rows, players, active, demos, filtered, minR);
       data = applyEntityPickPlayers(data);
+      attachExpectedRatings(data, aggregateTeams(rows, players, demos, active));
       const matchDemo = singleMatchDemo(payload, scope);
       if (matchDemo) {
         setBodyHtml(matchBoardsHtml(data, matchDemo, {

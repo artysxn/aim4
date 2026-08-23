@@ -514,6 +514,16 @@ const ROUTES = {
   'replay-viewer': { title: 'Replay Viewer', path: '/replay-viewer', shell: 'replay-viewer' },
   football: { title: 'Football', path: '/football', shell: 'football' },
   tools: { title: 'Tools', path: '/tools', shell: 'tools' },
+  // Admin-only, chromeless. The view refuses non-admins itself; the route
+  // entry only stops the deep link from falling through to the trainer.
+  pitchdeck: { title: 'Pitch deck', path: '/tools/pitchdeck', shell: 'pitchdeck' },
+  // The talking version: minimal slides plus a transcript, for presenting over.
+  pitchtalk: { title: 'Pitch talk', path: '/tools/pitchtalk', shell: 'pitchdeck' },
+  // The same two decks, shareable. Same shell and controller; the view reads
+  // the path and skips the admin gate on these. The title is what a link
+  // preview shows, so it reads as the pitch rather than as an internal tool.
+  'public-pitch': { title: 'Aim for trophies', path: '/public-pitch', shell: 'pitchdeck' },
+  'public-talk': { title: 'Aim for trophies', path: '/public-talk', shell: 'pitchdeck' },
   routines: { title: 'Routines', path: '/routines', shell: 'routines' },
   achievements: { title: 'Achievements', path: '/achievements', shell: 'achievements' },
   'map-practice': { title: 'Map Practice', path: '/map-practice', shell: 'map-practice' },
@@ -830,6 +840,12 @@ viewControllers.team = lazyController(async () => {
 viewControllers['strategy-creator'] = lazyController(async () => {
   const { initStrategyCreatorView } = await import('./strategyCreatorView.js');
   return initStrategyCreatorView({ auth, escapeHtml });
+});
+viewControllers.pitchdeck = lazyController(async () => {
+  const { initPitchDeckView } = await import('./pitchDeckView.js');
+  // The deck switch (full ↔ talking) is a route change, not a reload: both
+  // routes share this shell, so setView swaps the content in place.
+  return initPitchDeckView({ escapeHtml, openRoute: (name) => setView(name, true, {}) });
 });
 viewControllers.admin = lazyController(async () => {
   const { initAdminView } = await import('./admin/adminView.js');

@@ -12,6 +12,7 @@
 
 import {
   createTeamAccumulator,
+  demoTimestamp,
   derivePlayers,
   deriveTeams,
   teamNameKey,
@@ -103,6 +104,8 @@ export function aggregateHot(store, filter = {}, allowDemo = null) {
   const nameCounts = new Array(nPlayers).fill(null);
   /** @type {Array<Map<string, {name: string, rounds: number}>|null>} */
   const teamRounds = new Array(nPlayers).fill(null);
+  /** @type {Array<Array<{ at: number, key: string, name: string }>|null>} */
+  const clubGames = new Array(nPlayers).fill(null);
 
   const mapIds = filter.maps?.length
     ? new Set(filter.maps.map((m) => store.maps.find(m)).filter((i) => i >= 0))
@@ -283,6 +286,8 @@ export function aggregateHot(store, filter = {}, allowDemo = null) {
       }
 
       // One name vote per player per demo, and team rounds per team key.
+      const shortId = team === 1 ? demo.t1 : demo.t2;
+      const tkey = teamNameKey(displayName, shortId) || `${demo.id}:${team}`;
       if (lastDemo[pid] !== demoIdx) {
         lastDemo[pid] = demoIdx;
         const label = store.names.lookup(sName[seat]);
@@ -291,9 +296,20 @@ export function aggregateHot(store, filter = {}, allowDemo = null) {
           if (!counts) nameCounts[pid] = counts = new Map();
           counts.set(label, (counts.get(label) || 0) + 1);
         }
+        const clubKey = teamNameKey(displayName, shortId);
+        if (clubKey) {
+          let cg = clubGames[pid];
+          if (!cg) clubGames[pid] = cg = [];
+          cg.push({
+            at: demoTimestamp(demo),
+            key: clubKey,
+            name:
+              String(displayName || '').trim() ||
+              String(shortId || '').trim() ||
+              `Team ${team}`
+          });
+        }
       }
-      const shortId = team === 1 ? demo.t1 : demo.t2;
-      const tkey = teamNameKey(displayName, shortId) || `${demo.id}:${team}`;
       let tr = teamRounds[pid];
       if (!tr) teamRounds[pid] = tr = new Map();
       let hit = tr.get(tkey);
@@ -351,6 +367,7 @@ export function aggregateHot(store, filter = {}, allowDemo = null) {
       state.duelBuckets.set(bi / 10, { weight: acc[at], predSum: acc[at + 1], wins: acc[at + 2] });
     }
     state.teamRounds = teamRounds[pid] || new Map();
+    state.clubGames = clubGames[pid] || [];
     out.set(id, state);
   }
 

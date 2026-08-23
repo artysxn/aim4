@@ -2206,6 +2206,325 @@ body.is-impersonating .ingest-off-toast {
 }
 
 .admin-tier-line,
+/* ---- Account redesign ------------------------------------------------- */
+
+.account-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 980px;
+}
+
+.account-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 18px 20px;
+}
+
+.account-card-title {
+  margin: 0 0 4px;
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.account-identity {
+  display: flex;
+  align-items: flex-start;
+  gap: 18px;
+}
+
+.account-avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 64px;
+  height: 64px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--accent-dim, rgba(230, 6, 17, 0.18));
+  border: 1px solid var(--accent-border, rgba(230, 6, 17, 0.4));
+  font: 700 26px var(--font-display);
+  color: var(--text);
+}
+
+.account-identity-main {
+  min-width: 0;
+  flex: 1;
+}
+
+.account-username {
+  margin: 0 0 6px;
+  font-family: var(--font-display);
+  font-size: 22px;
+}
+
+.account-plan-badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: rgba(255, 255, 255, 0.04);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.account-plan-badge.tier-premium,
+.account-plan-badge.tier-team_premium,
+.account-plan-badge.tier-team_elite {
+  border-color: var(--accent-border, rgba(230, 6, 17, 0.45));
+  color: var(--text);
+}
+
+.account-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 12px;
+}
+
+.account-meta-row {
+  display: flex;
+  gap: 14px;
+  font-size: 13px;
+}
+
+.account-meta-label {
+  width: 110px;
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.account-meta-value {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.account-meta-value.is-mono {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.account-connections {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.account-conn {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.account-conn-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  border-radius: 8px;
+  border: 1px solid var(--border-strong);
+  font: 700 15px var(--font-display);
+}
+
+.account-conn-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.account-conn-name {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.account-conn-detail {
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.account-conn-state {
+  flex: 0 0 auto;
+  font-size: 12px;
+  color: var(--muted);
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+}
+
+.account-conn-state.is-on {
+  color: #6fcf97;
+  border-color: rgba(111, 207, 151, 0.4);
+}
+
+/* ---- Pricing ----------------------------------------------------------- */
+
+.account-sub-current {
+  margin: 2px 0 4px;
+  font-family: var(--font-display);
+  font-size: 20px;
+}
+
+.plan-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 12px;
+}
+
+.plan-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 18px 16px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.plan-card.is-popular {
+  border-color: var(--accent-border, rgba(230, 6, 17, 0.5));
+}
+
+.plan-card.is-current {
+  outline: 1px solid var(--border-strong);
+}
+
+.plan-flag {
+  position: absolute;
+  top: -9px;
+  left: 14px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.plan-name {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 15px;
+}
+
+.plan-price {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.plan-price-value {
+  font: 700 26px var(--font-display);
+}
+
+.plan-price-unit,
+.plan-price-yearly {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.plan-price-yearly {
+  margin: -4px 0 0;
+}
+
+.plan-tagline {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12.5px;
+  min-height: 32px;
+}
+
+.plan-points {
+  margin: 0;
+  padding: 0 0 0 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12.5px;
+  flex: 1;
+}
+
+.plan-cta {
+  margin-top: 10px;
+}
+
+.plan-cta.is-current-label {
+  text-align: center;
+  color: var(--muted);
+  font-size: 12px;
+  padding: 8px 0 2px;
+}
+
+.plan-matrix-scroll {
+  overflow-x: auto;
+  margin-top: 10px;
+}
+
+table.plan-matrix {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+table.plan-matrix th,
+table.plan-matrix td {
+  padding: 8px 12px;
+  text-align: center;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+table.plan-matrix th.left,
+table.plan-matrix td.left {
+  text-align: left;
+}
+
+table.plan-matrix th {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+table.plan-matrix .is-current {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+table.plan-matrix .plan-matrix-group td {
+  padding-top: 16px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  text-align: left;
+  border-bottom-color: var(--border-strong);
+}
+
+.plan-yes {
+  color: #6fcf97;
+}
+
+.plan-no {
+  color: var(--muted);
+  opacity: 0.6;
+}
+
 .account-name-row {
   display: flex;
   align-items: flex-end;
@@ -2238,6 +2557,131 @@ body.is-impersonating .ingest-off-toast {
   padding: 8px 12px;
   margin-bottom: 10px;
   font-size: 13px;
+}
+
+/* ---- admin: pitch deck wording ------------------------------------------- */
+
+.admin-pitch {
+  min-width: 0;
+}
+
+.admin-pitch-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 16px;
+}
+
+.admin-pitch-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.admin-pitch-slide {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: var(--surface-2, rgba(255, 255, 255, 0.02));
+}
+
+.admin-pitch-slide > summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.admin-pitch-slide[open] > summary {
+  border-bottom: 1px solid var(--border);
+}
+
+.admin-pitch-num {
+  min-width: 22px;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.admin-pitch-name {
+  flex: 1;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.admin-pitch-id {
+  color: var(--muted);
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+}
+
+.admin-pitch-badge {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.admin-pitch-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 12px;
+  padding: 12px;
+}
+
+.admin-pitch-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.admin-pitch-field-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.admin-pitch-label {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.admin-pitch-revert {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--accent);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.admin-pitch-field textarea {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.4;
+  resize: vertical;
+}
+
+/* An edited line is marked in the panel, not in the deck: the point is to see
+   at a glance which sentences no longer match the code. */
+.admin-pitch-field textarea.is-edited {
+  border-color: var(--accent);
 }
 
 /* ---- admin: demo ingest -------------------------------------------------- */
@@ -2969,4 +3413,683 @@ body.is-impersonating .ingest-off-toast {
 .mp-play:hover {
   background: rgba(245, 37, 37, 0.24);
   color: #fff;
+}
+
+/* ---- Pitch deck --------------------------------------------------------- */
+
+/* Chromeless: the deck is a presentation, not a page in the app shell. */
+body.deck-mode .site-sidebar,
+body.deck-mode .page-head {
+  display: none;
+}
+
+body.deck-mode .site-shell {
+  grid-template-columns: minmax(0, 1fr);
+  display: block;
+}
+
+body.deck-mode .site-main {
+  padding: 0;
+}
+
+.pd-deck {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 6vh 8vw;
+  background: #050505;
+  color: var(--text);
+  outline: none;
+  overflow: hidden;
+  cursor: default;
+  user-select: none;
+}
+
+.pd-deck:fullscreen {
+  min-height: 100%;
+}
+
+.pd-slide {
+  position: relative;
+  z-index: 1;
+  max-width: 1080px;
+}
+
+.pd-kicker {
+  display: inline-block;
+  margin-bottom: 14px;
+  color: var(--accent);
+  font: 700 13px var(--font-display);
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+}
+
+.pd-title {
+  margin: 0 0 18px;
+  font-family: var(--font-display);
+  font-size: clamp(30px, 4.6vw, 58px);
+  line-height: 1.06;
+  letter-spacing: -0.01em;
+}
+
+.pd-lead {
+  margin: 0 0 22px;
+  max-width: 760px;
+  color: var(--muted);
+  font-size: clamp(15px, 1.5vw, 20px);
+  line-height: 1.5;
+}
+
+.pd-points {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 860px;
+  font-size: clamp(14px, 1.4vw, 19px);
+  line-height: 1.45;
+}
+
+.pd-points li {
+  padding-left: 22px;
+  position: relative;
+}
+
+.pd-points li::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0.55em;
+  width: 8px;
+  height: 8px;
+  background: var(--accent);
+}
+
+.pd-columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 22px;
+  margin-top: 8px;
+}
+
+.pd-col h3 {
+  margin: 0 0 10px;
+  font-family: var(--font-display);
+  font-size: 17px;
+  color: var(--accent);
+}
+
+.pd-col .pd-points {
+  font-size: clamp(13px, 1.1vw, 16px);
+  gap: 8px;
+}
+
+.pd-table-wrap {
+  overflow-x: auto;
+  margin-top: 6px;
+}
+
+.pd-table {
+  border-collapse: collapse;
+  font-size: clamp(12px, 1.05vw, 15px);
+  min-width: 720px;
+}
+
+.pd-table th,
+.pd-table td {
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.pd-table thead th {
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 0.85em;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.pd-table tr.pd-us th,
+.pd-table tr.pd-us td {
+  background: rgba(230, 6, 17, 0.1);
+  border-bottom-color: var(--accent-border, rgba(230, 6, 17, 0.4));
+  font-weight: 600;
+}
+
+.pd-big {
+  position: absolute;
+  right: -2vw;
+  bottom: -7vh;
+  z-index: 0;
+  font: 800 clamp(120px, 18vw, 280px) var(--font-display);
+  color: rgba(255, 255, 255, 0.04);
+  pointer-events: none;
+}
+
+.pd-chrome {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 22px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  opacity: 0.35;
+  transition: opacity 0.15s ease;
+}
+
+.pd-deck:hover .pd-chrome,
+.pd-deck:focus-within .pd-chrome {
+  opacity: 1;
+}
+
+.pd-nav,
+.pd-full {
+  background: none;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  color: var(--text);
+  width: 34px;
+  height: 30px;
+  font-size: 16px;
+  cursor: pointer;
+}
+
+.pd-dots {
+  display: flex;
+  gap: 7px;
+}
+
+.pd-dot {
+  width: 9px;
+  height: 9px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.22);
+  cursor: pointer;
+}
+
+.pd-dot.active {
+  background: var(--accent);
+}
+
+.pd-count {
+  position: absolute;
+  right: 22px;
+  top: 18px;
+  z-index: 2;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Slide tones, inside the brand palette: red, black, grey, white and nothing
+   else. A strength is accent red, a weakness recedes to grey, an ask steps
+   forward in white. Same job as colour-coding, without leaving the palette. */
+.pd-tone-plus .pd-kicker {
+  color: var(--accent);
+}
+
+.pd-tone-minus .pd-kicker {
+  color: var(--muted);
+}
+
+.pd-tone-ask .pd-kicker {
+  color: #fff;
+}
+
+.pd-tone-plus .pd-points li::before {
+  background: var(--accent);
+}
+
+.pd-tone-minus .pd-points li::before {
+  background: var(--muted);
+}
+
+.pd-tone-minus .pd-title {
+  color: #d6d6d6;
+}
+
+.pd-tone-ask .pd-points li::before {
+  background: #fff;
+}
+
+.pd-tone-ask .pd-col-tag {
+  background: #fff;
+  color: #000;
+}
+
+.pd-slide.is-center {
+  text-align: center;
+  margin: 0 auto;
+}
+
+.pd-slide.is-center .pd-lead {
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.pd-quote {
+  margin: 0 0 10px;
+  font-family: var(--font-display);
+  font-size: clamp(24px, 3.4vw, 44px);
+  line-height: 1.15;
+  color: var(--text);
+}
+
+.pd-quote::before {
+  content: '\201C';
+}
+
+.pd-quote::after {
+  content: '\201D';
+}
+
+.pd-quote-by {
+  margin: 0 0 22px;
+  color: var(--muted);
+  font-size: clamp(13px, 1.2vw, 16px);
+}
+
+.pd-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 34px;
+  margin: 4px 0 22px;
+}
+
+.pd-stat {
+  display: flex;
+  flex-direction: column;
+}
+
+.pd-stat-value {
+  font: 800 clamp(28px, 3.6vw, 52px) var(--font-display);
+  line-height: 1;
+  color: var(--accent);
+}
+
+.pd-stat-label {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: clamp(11px, 1vw, 14px);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.pd-slide.is-center .pd-stats {
+  justify-content: center;
+}
+
+.pd-col-tag {
+  display: inline-block;
+  margin-bottom: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* The pricing-model columns lead with the price as the heading, so it needs
+   the weight of a number rather than a label. */
+.pd-columns .pd-col h3 {
+  font-size: clamp(16px, 1.8vw, 23px);
+}
+
+.pd-col-lead {
+  margin: 0;
+  color: var(--muted);
+  font-size: clamp(12px, 1.1vw, 15px);
+  line-height: 1.45;
+}
+
+.pd-note {
+  margin: 18px 0 0;
+  max-width: 780px;
+  color: var(--muted);
+  font-size: clamp(12px, 1.15vw, 15px);
+  font-style: italic;
+}
+
+.pd-slide.is-center .pd-note {
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* A table of prose (the skill-tier ladder) rather than of values. Wrapping
+   beats the default nowrap here: a presented slide must not need a horizontal
+   scrollbar to be read. */
+.pd-table.is-wrap {
+  min-width: 0;
+  width: 100%;
+  table-layout: fixed;
+}
+
+.pd-table.is-wrap th,
+.pd-table.is-wrap td {
+  white-space: normal;
+  vertical-align: top;
+  line-height: 1.35;
+  padding: 10px 14px 10px 0;
+}
+
+.pd-table.is-wrap thead th:first-child,
+.pd-table.is-wrap tbody th {
+  width: 14%;
+}
+
+/* The feature inventory: every capability on one slide. It is wider and a size
+   down than the rest of the deck on purpose — the length of the list is the
+   argument, so the slide has to hold all of it without scrolling. */
+.pd-slide.is-dense {
+  max-width: 1440px;
+}
+
+.pd-slide.is-dense .pd-title {
+  margin-bottom: 10px;
+  font-size: clamp(26px, 3.4vw, 42px);
+}
+
+.pd-slide.is-dense .pd-lead {
+  margin-bottom: 16px;
+  max-width: 900px;
+  font-size: clamp(13px, 1.2vw, 16px);
+}
+
+.pd-slide.is-dense .pd-columns {
+  grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
+  gap: 16px 26px;
+}
+
+.pd-slide.is-dense .pd-col h3 {
+  margin-bottom: 6px;
+  font-size: clamp(13px, 1.15vw, 15px);
+}
+
+.pd-slide.is-dense .pd-col .pd-points {
+  gap: 5px;
+  font-size: clamp(11px, 0.92vw, 13.5px);
+}
+
+.pd-slide.is-dense .pd-col .pd-points li {
+  padding-left: 14px;
+}
+
+.pd-slide.is-dense .pd-col .pd-points li::before {
+  top: 0.5em;
+  width: 5px;
+  height: 5px;
+}
+
+.pd-slide.is-dense .pd-note {
+  margin-top: 14px;
+}
+
+/* ---- the talking deck ---------------------------------------------------- */
+/* Thirteen slides of labels, presented over. Everything below is sized to be
+   read from the back of a room, not from a laptop. */
+
+.pd-deck.is-talk .pd-title {
+  font-size: clamp(34px, 5vw, 64px);
+}
+
+.pd-deck.is-talk .pd-stat-value {
+  font-size: clamp(32px, 4.4vw, 62px);
+}
+
+/* Grouped lists: an inventory, read as a list. Same red marker as the rest of
+   the deck's bullets, one size down, because these are labels not sentences. */
+.pd-lists {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(230px, 100%), 1fr));
+  gap: 20px 34px;
+  margin-top: 8px;
+}
+
+.pd-list-group h3 {
+  margin: 0 0 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+  color: var(--accent);
+  font-family: var(--font-display);
+  font-size: clamp(12px, 1.1vw, 15px);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.pd-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: clamp(12px, 1.15vw, 16px);
+  line-height: 1.35;
+}
+
+.pd-list li {
+  position: relative;
+  padding-left: 17px;
+}
+
+.pd-list li::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0.5em;
+  width: 6px;
+  height: 6px;
+  background: var(--accent);
+}
+
+.pd-slide.is-dense .pd-list {
+  gap: 5px;
+  font-size: clamp(11px, 0.95vw, 14px);
+}
+
+.pd-slide.is-dense .pd-list li {
+  padding-left: 14px;
+}
+
+.pd-slide.is-dense .pd-list li::before {
+  width: 5px;
+  height: 5px;
+}
+
+/* Flow: a loop, drawn as steps with arrows between them. */
+.pd-flow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin: 4px 0 26px;
+}
+
+.pd-flow-step {
+  padding: 9px 16px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-xs);
+  font-family: var(--font-display);
+  font-size: clamp(13px, 1.5vw, 20px);
+  white-space: nowrap;
+}
+
+.pd-flow-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.pd-flow-arrow {
+  color: var(--muted);
+  font-size: clamp(14px, 1.6vw, 22px);
+}
+
+/* Bars: magnitudes, scaled against the largest on the slide so two columns can
+   be compared by eye instead of by reading the numbers. */
+.pd-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.pd-bar-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 5px;
+  font-size: clamp(11px, 1.05vw, 15px);
+}
+
+.pd-bar-value {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.pd-bar-track {
+  height: 10px;
+  background: rgba(255, 255, 255, 0.07);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.pd-bar-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
+.pd-col-foot {
+  margin: 16px 0 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-strong);
+  font-family: var(--font-display);
+  font-size: clamp(14px, 1.5vw, 20px);
+}
+
+/* The transcript. Off the right edge until the pointer goes looking for it, so
+   the slide is never competing with a wall of text while it is being read. */
+.pd-edge {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  border-left: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 10px;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  pointer-events: none;
+  opacity: 0.55;
+  transition: opacity 0.15s ease;
+}
+
+.pd-edge span {
+  writing-mode: vertical-rl;
+}
+
+.pd-deck.is-transcript .pd-edge {
+  opacity: 0;
+}
+
+.pd-script {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 3;
+  width: min(440px, 40vw);
+  padding: 30px 28px 40px;
+  overflow-y: auto;
+  background: #0b0b0b;
+  border-left: 1px solid var(--border-strong);
+  transform: translateX(101%);
+  transition: transform 0.18s ease;
+  user-select: text;
+}
+
+.pd-deck.is-transcript .pd-script {
+  transform: none;
+}
+
+.pd-script-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.pd-script-kicker {
+  color: var(--accent);
+  font: 700 11px var(--font-display);
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+}
+
+.pd-script-num {
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.pd-script-title {
+  margin: 0 0 14px;
+  font-family: var(--font-display);
+  font-size: 19px;
+  line-height: 1.2;
+}
+
+.pd-script p {
+  margin: 0 0 13px;
+  color: #cfcfcf;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.pd-script-hint,
+.pd-script-empty {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.pd-switch {
+  padding: 0 12px;
+  height: 30px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: none;
+  color: var(--text);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.pd-full.is-on {
+  border-color: var(--accent);
+  color: var(--accent);
 }

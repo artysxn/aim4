@@ -146,7 +146,10 @@ async function route(req, res, url, me) {
         signedIn: me.signedIn,
         id: me.id,
         username: me.username,
-        admin: me.admin
+        admin: me.admin,
+        email: me.email || '',
+        provider: me.provider || '',
+        createdAt: me.createdAt || ''
       },
       entitlements: me.entitlements,
       impersonating: me.impersonating,

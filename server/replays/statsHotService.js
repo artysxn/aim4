@@ -12,6 +12,7 @@ import {
   filterRolesHot
 } from './statsHotAggregate.js';
 import { loadStoredEntry } from './statsIndex.js';
+import { attachExpectedRatings } from '../../src/replays/shared/expectedRating.js';
 
 /**
  * @type {Map<string, {
@@ -191,6 +192,10 @@ export async function hotTables(io, user, records, filter = {}, opts = {}) {
     players = attachRolesHot(store, filter, allow, players);
     if (filter.role) players = filterRolesHot(players, filter.role);
   }
+  if (teams) attachExpectedRatings(players, teams);
+  else {
+    for (const p of players) delete p.clubGames;
+  }
   // The filter bar's map list comes from the library, not from the filtered
   // result — otherwise picking a map would leave you unable to pick another.
   const maps = [...store.maps.values].filter(Boolean).sort();
@@ -215,6 +220,7 @@ export async function hotMatches(io, user, records, demoIds, filter = {}, opts =
     const demo = demoById.get(row.demoId) || {};
     return {
       ...row,
+      clubGames: undefined,
       map: demo.map || '',
       name1: demo.name1 || '',
       name2: demo.name2 || '',

@@ -24,6 +24,7 @@ import { handleTeamRequest } from './replays/teamRoutes.js';
 import { handleAdminRequest } from './admin/routes.js';
 import { handleSimRequest } from './sim/routes.js';
 import { handleAccountRequest } from './account/routes.js';
+import { handlePitchRequest } from './pitchRoutes.js';
 import { handleBillingRequest } from './billing/routes.js';
 import { handleFaceitWebhookRequest } from './ingest/faceit/webhookRoutes.js';
 import { handleCs3dRequest } from './cs3d/routes.js';
@@ -160,6 +161,12 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (await handleAccountRequest(req, res, url)) {
+      return;
+    }
+
+    // The pitch deck's live wording. Public, read-only, and cacheable, which is
+    // none of the things the generic no-store JSON reply below is.
+    if (await handlePitchRequest(req, res, url)) {
       return;
     }
 

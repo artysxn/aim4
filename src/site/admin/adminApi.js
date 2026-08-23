@@ -169,6 +169,10 @@ export const adminApi = {
 
   content: (store, op, payload) => send('POST', `/api/admin/content/${store}/${op}`, payload),
 
+  /** Live pitch-deck wording. The deck itself reads the public GET /api/pitch. */
+  pitch: () => get('/api/admin/pitch'),
+  savePitch: (text) => send('POST', '/api/admin/pitch', { text }),
+
   /** Private Autocoach smoke landing spots (per map). */
   coachSmokeMaps: () => get('/api/admin/coach-smokes'),
   coachSmokes: async (map) => {

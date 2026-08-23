@@ -48,6 +48,13 @@ const PAGE_ALIASES = {
 // Paths owned by the site shell (index.html): its menu views live here.
 const SITE_VIEW_PATHS = new Set([
   '/tools',
+  // Admin-only deck; the view refuses everyone else. Without this entry the
+  // deep link serves the trainer shell instead of the SPA.
+  '/tools/pitchdeck',
+  '/tools/pitchtalk',
+  // The public, shareable copies of both decks. Open to anyone with the link.
+  '/public-pitch',
+  '/public-talk',
   '/training',
   '/leaderboards',
   '/football',

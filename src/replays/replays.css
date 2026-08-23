@@ -5159,6 +5159,17 @@ body.rv-open {
   color: var(--text);
 }
 
+/* A column the plan does not include. Present, dimmed, and honest about why. */
+.st-table th.st-col-locked {
+  color: var(--muted);
+  opacity: 0.55;
+  cursor: default;
+}
+
+.st-table th.st-col-locked:hover {
+  color: var(--muted);
+}
+
 .st-table th.sorted {
   color: var(--text);
 }

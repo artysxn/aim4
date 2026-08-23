@@ -517,6 +517,9 @@ export function accumulatePlayers(acc, rows, players, filter = {}, demos = null)
         nameCounts: new Map(),
         /** Demo ids already counted toward nameCounts (one vote per match). */
         nameVoted: new Set(),
+        /** One entry per demo: { at, key, name }. Used for expected rating. */
+        clubGames: [],
+        clubVoted: new Set(),
         all: emptyBucket(),
         T: emptyBucket(),
         CT: emptyBucket(),
@@ -702,6 +705,13 @@ export function accumulatePlayers(acc, rows, players, filter = {}, demos = null)
           String(displayName || '').trim() ||
           String(shortId || '').trim() ||
           `Team ${team}`;
+        if (!s.clubVoted.has(row.d)) {
+          s.clubVoted.add(row.d);
+          const clubKey = teamNameKey(displayName, shortId);
+          if (clubKey) {
+            s.clubGames.push({ at: demoTimestamp(demo), key: clubKey, name: label });
+          }
+        }
         let tr = s.teamRounds.get(key);
         if (!tr) {
           tr = { name: label, rounds: 0 };
@@ -794,6 +804,8 @@ export function derivePlayers(acc) {
       name: s.name,
       teams,
       teamLabel,
+      /** Per-demo club sides, newest not guaranteed. attachExpectedRatings consumes this. */
+      clubGames: s.clubGames || [],
       rounds: all.rounds,
       kills: s.all.kills,
       deaths: s.all.deaths,

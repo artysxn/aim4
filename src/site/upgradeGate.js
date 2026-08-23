@@ -16,7 +16,12 @@
 
 import { PLAN_NAMES } from '../../shared/entitlements/catalogue.js';
 
-const PRICING_URL = '/#pricing';
+/**
+ * Where every Upgrade button lands. This used to be '/#pricing', an anchor
+ * that never existed on any page: the button scrolled nowhere and the whole
+ * upsell path dead-ended. The subscription tab is the pricing page.
+ */
+const PRICING_URL = '/account/subscription';
 
 function el(tag, className, text) {
   const node = document.createElement(tag);

@@ -14,6 +14,7 @@ import {
   filterRolesHot
 } from './statsHotAggregate.js';
 import { aggregatePlayers, aggregateTeams, teamNameKey } from '../../src/replays/shared/statsMath.js';
+import { attachExpectedRatings } from '../../src/replays/shared/expectedRating.js';
 import { attachPlayerRoles } from '../../src/replays/roles/assignRoles.js';
 
 const MAPS = ['de_nuke', 'de_mirage', 'de_inferno'];
@@ -134,6 +135,28 @@ for (const [label, filter] of FILTERS) {
         checked++;
       }
     }
+  }
+}
+
+{
+  const refP = aggregatePlayers(rows, players, {}, demos);
+  const hotP = aggregateHot(store, {});
+  const sortGames = (g) =>
+    [...(g || [])].sort((a, b) => (b.at - a.at) || String(a.key).localeCompare(String(b.key)));
+  for (let i = 0; i < refP.length; i++) {
+    assert.deepEqual(
+      sortGames(hotP[i].clubGames),
+      sortGames(refP[i].clubGames),
+      `clubGames ${refP[i].name}`
+    );
+  }
+  attachExpectedRatings(refP, aggregateTeams(rows, players, demos, {}));
+  attachExpectedRatings(hotP, aggregateTeamsHot(store, {}));
+  for (let i = 0; i < refP.length; i++) {
+    assert.equal(hotP[i].expectedRating, refP[i].expectedRating, `${refP[i].name} expectedRating`);
+    assert.equal(hotP[i].expectedRatingOp, refP[i].expectedRatingOp, `${refP[i].name} expectedRatingOp`);
+    assert.equal(hotP[i].trueRating, refP[i].trueRating, `${refP[i].name} trueRating`);
+    assert.equal(hotP[i].clubGames, undefined);
   }
 }
 
