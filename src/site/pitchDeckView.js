@@ -24,6 +24,7 @@
 
 import { PITCH_SLIDES, applyPitchText } from './pitchContent.js';
 import { TALK_SLIDES } from './pitchTalk.js';
+import { LANGS, localeText, normalizeLang, scopeOverrides, uiText } from './pitchLocales.js';
 import { getEntitlements } from '../lib/entitlements.js';
 
 const API_BASE = (import.meta.env?.VITE_API_URL || '').replace(/\/$/, '');
@@ -72,6 +73,8 @@ export function initPitchDeckView({ escapeHtml, openRoute }) {
   /** Saved overrides, kept so switching decks does not need a second fetch. */
   let overrides = null;
   let textLoaded = false;
+  /** Presentation language. English is the source; the rest are overlays. */
+  let lang = 'en';
   /** Transcript: open follows the pointer, pinned survives it leaving. */
   let transcriptOpen = false;
   let transcriptPinned = false;
@@ -94,9 +97,36 @@ export function initPitchDeckView({ escapeHtml, openRoute }) {
     textLoaded = true;
   }
 
+  /**
+   * Build the deck on screen: English source, then the translation for the
+   * chosen language, then whatever the admin panel has saved for that same
+   * language. Order matters — an edit must be able to correct a translation,
+   * and editing Russian must never touch English.
+   */
   function applyDeck() {
-    slides = applyPitchText(baseSlides(), overrides);
+    const translated = applyPitchText(baseSlides(), localeText(lang, variant.deck));
+    slides = applyPitchText(translated, scopeOverrides(overrides, lang));
     if (index > slides.length - 1) index = slides.length - 1;
+  }
+
+  /** The language in the URL, e.g. /public-talk?lang=ru. */
+  function langFromUrl() {
+    return normalizeLang(new URLSearchParams(window.location.search).get('lang'));
+  }
+
+  /** ?lang= for everything but English, which owns the bare address. */
+  function langQuery(id = lang) {
+    return id === 'en' ? '' : `?lang=${id}`;
+  }
+
+  function setLang(next) {
+    const id = normalizeLang(next);
+    if (id === lang) return;
+    lang = id;
+    const target = window.location.pathname + langQuery() + window.location.hash;
+    window.history.replaceState(window.history.state, '', target);
+    applyDeck();
+    render();
   }
 
   // ---- rendering ----------------------------------------------------------
@@ -236,18 +266,18 @@ export function initPitchDeckView({ escapeHtml, openRoute }) {
     const script = slide.script || [];
     const body = script.length
       ? script.map((p) => `<p>${esc(p)}</p>`).join('')
-      : '<p class="pd-script-empty">No script for this slide yet.</p>';
+      : `<p class="pd-script-empty">${esc(uiText(lang, 'empty'))}</p>`;
     return `
-      <div class="pd-edge" aria-hidden="true"><span>Transcript</span></div>
+      <div class="pd-edge" aria-hidden="true"><span>${esc(uiText(lang, 'transcript'))}</span></div>
       <aside class="pd-script" data-pd-script-panel>
         <div class="pd-script-head">
-          <span class="pd-script-kicker">Transcript</span>
+          <span class="pd-script-kicker">${esc(uiText(lang, 'transcript'))}</span>
           <span class="pd-script-num">${index + 1} / ${slides.length}</span>
         </div>
         <h2 class="pd-script-title">${esc(slide.title)}</h2>
         ${body}
         <p class="pd-script-hint">${
-          transcriptPinned ? 'Pinned · press T to unpin' : 'Press T to pin'
+          esc(uiText(lang, transcriptPinned ? 'pinned' : 'pin'))
         }</p>
       </aside>`;
   }
@@ -283,6 +313,12 @@ export function initPitchDeckView({ escapeHtml, openRoute }) {
           <button type="button" class="pd-switch" data-pd-switch title="Switch deck">${esc(
             variant.otherLabel
           )}</button>
+          <span class="pd-langs">${LANGS.map(
+            (l) =>
+              `<button type="button" class="pd-lang${
+                l.id === lang ? ' active' : ''
+              }" data-pd-lang="${l.id}" title="${esc(l.name)}">${esc(l.label)}</button>`
+          ).join('')}</span>
           ${
             variant.gated
               ? '<button type="button" class="pd-full" data-pd-share title="Copy the public link">🔗</button>'
@@ -292,6 +328,9 @@ export function initPitchDeckView({ escapeHtml, openRoute }) {
         <span class="pd-count">${index + 1} / ${slides.length}</span>
       </div>`;
     host.querySelector('.pd-deck')?.focus({ preventScroll: true });
+    // The router set the title in English before this ran; a link shared in
+    // Russian should not preview as English.
+    if (slides[0]?.title) document.title = `AIM4.io - ${slides[0].title}`;
   }
 
   // ---- navigation ---------------------------------------------------------
@@ -318,8 +357,8 @@ export function initPitchDeckView({ escapeHtml, openRoute }) {
 
   /** The other deck for this audience. Falls back to a plain load off-router. */
   function switchDeck() {
-    if (typeof openRoute === 'function') openRoute(variant.other);
-    else window.location.assign(ROUTE_PATHS[variant.other] || '/');
+    if (typeof openRoute === 'function') openRoute(variant.other, lang);
+    else window.location.assign((ROUTE_PATHS[variant.other] || '/') + langQuery());
   }
 
   function setTranscript(open, pin = transcriptPinned) {
@@ -332,7 +371,7 @@ export function initPitchDeckView({ escapeHtml, openRoute }) {
     deck.classList.toggle('is-transcript', transcriptOpen);
     host.querySelector('[data-pd-script]')?.classList.toggle('is-on', transcriptPinned);
     const hint = host.querySelector('.pd-script-hint');
-    if (hint) hint.textContent = transcriptPinned ? 'Pinned · press T to unpin' : 'Press T to pin';
+    if (hint) hint.textContent = uiText(lang, transcriptPinned ? 'pinned' : 'pin');
   }
 
   function onKey(e) {
@@ -380,7 +419,7 @@ export function initPitchDeckView({ escapeHtml, openRoute }) {
   /** Copy the shareable address of the deck on screen, at the slide on screen. */
   async function copyShareLink(btn) {
     const hash = index === 0 ? '' : `#${index + 1}`;
-    const link = `${window.location.origin}${variant.share}${hash}`;
+    const link = `${window.location.origin}${variant.share}${langQuery()}${hash}`;
     try {
       await navigator.clipboard.writeText(link);
       btn.textContent = '✓';
@@ -400,6 +439,8 @@ export function initPitchDeckView({ escapeHtml, openRoute }) {
     if (e.target.closest('[data-pd-next]')) return go(index + 1);
     if (e.target.closest('[data-pd-full]')) return toggleFullscreen();
     if (e.target.closest('[data-pd-switch]')) return switchDeck();
+    const langBtn = e.target.closest('[data-pd-lang]');
+    if (langBtn) return setLang(langBtn.dataset.pdLang);
     if (e.target.closest('[data-pd-script]')) {
       return setTranscript(!transcriptPinned, !transcriptPinned);
     }
@@ -430,6 +471,7 @@ export function initPitchDeckView({ escapeHtml, openRoute }) {
     async onShow() {
       mounted = true;
       variant = currentVariant();
+      lang = langFromUrl();
       transcriptOpen = false;
       transcriptPinned = false;
       document.body.classList.add('deck-mode');

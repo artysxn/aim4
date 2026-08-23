@@ -3438,7 +3438,10 @@ body.deck-mode .site-main {
   flex-direction: column;
   justify-content: center;
   min-height: 100vh;
-  padding: 6vh 8vw;
+  /* The extra bottom room is the chrome band: translations run longer than
+     the English they replace, and a table that grows must not slide under the
+     navigation buttons. */
+  padding: 6vh 8vw max(9vh, 78px);
   background: #050505;
   color: var(--text);
   outline: none;
@@ -4092,4 +4095,29 @@ body.deck-mode .site-main {
 .pd-full.is-on {
   border-color: var(--accent);
   color: var(--accent);
+}
+
+/* Language switch. Three short labels, so the active one has to be obvious
+   without borrowing a colour from outside the palette. */
+.pd-langs {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.pd-lang {
+  padding: 0 8px;
+  height: 30px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: none;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+}
+
+.pd-lang.active {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
 }

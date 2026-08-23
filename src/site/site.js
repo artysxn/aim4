@@ -845,7 +845,12 @@ viewControllers.pitchdeck = lazyController(async () => {
   const { initPitchDeckView } = await import('./pitchDeckView.js');
   // The deck switch (full ↔ talking) is a route change, not a reload: both
   // routes share this shell, so setView swaps the content in place.
-  return initPitchDeckView({ escapeHtml, openRoute: (name) => setView(name, true, {}) });
+  return initPitchDeckView({
+    escapeHtml,
+    // The deck switch keeps the presentation language: setView rebuilds the
+    // query string, so the lang param has to be handed back to it.
+    openRoute: (name, lang) => setView(name, true, lang && lang !== 'en' ? { lang } : {})
+  });
 });
 viewControllers.admin = lazyController(async () => {
   const { initAdminView } = await import('./admin/adminView.js');

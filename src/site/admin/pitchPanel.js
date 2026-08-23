@@ -15,8 +15,9 @@
 
 import { adminApi } from './adminApi.js';
 import { button, el, notice, render } from './dom.js';
-import { PITCH_SLIDES, textLeaves } from '../pitchContent.js';
+import { PITCH_SLIDES, applyPitchText, textLeaves } from '../pitchContent.js';
 import { TALK_SLIDES } from '../pitchTalk.js';
+import { LANGS, localeText, overrideKey } from '../pitchLocales.js';
 
 /** Both decks, edited from one panel. Slide ids are unique across the pair. */
 const DECKS = [
@@ -164,9 +165,28 @@ export function pitchPanel() {
   let statusNode = null;
   /** Which deck's slide cards are listed. */
   let deckId = DECKS[0].id;
+  /** Which language is being edited. Edits are stored per language. */
+  let langId = LANGS[0].id;
 
-  const editedCount = () =>
-    Object.values(draft).reduce((n, patch) => n + Object.keys(patch).length, 0);
+  /** Edits belonging to one language, across both decks. */
+  function langCount(lang) {
+    let n = 0;
+    for (const deck of DECKS) {
+      for (const slide of deck.slides) n += Object.keys(draft[overrideKey(lang, slide.id)] || {}).length;
+    }
+    return n;
+  }
+
+  const editedCount = () => langCount(langId);
+
+  /**
+   * The deck as this language sees it: English structure with the translation
+   * already applied, so the boxes start from the Russian or Ukrainian wording
+   * and "revert" goes back to the translation rather than to English.
+   */
+  function slidesFor(deck) {
+    return applyPitchText(deck.slides, localeText(langId, deck.id));
+  }
 
   function setStatus(text, kind = '') {
     if (!statusNode) return;
@@ -181,14 +201,15 @@ export function pitchPanel() {
 
   /** Record or clear one override. Equal to the source means no override. */
   function setValue(slideId, path, original, value) {
+    const key = overrideKey(langId, slideId);
     if (value === original) {
-      if (draft[slideId]) {
-        delete draft[slideId][path];
-        if (!Object.keys(draft[slideId]).length) delete draft[slideId];
+      if (draft[key]) {
+        delete draft[key][path];
+        if (!Object.keys(draft[key]).length) delete draft[key];
       }
     } else {
-      draft[slideId] = draft[slideId] || {};
-      draft[slideId][path] = value;
+      draft[key] = draft[key] || {};
+      draft[key][path] = value;
     }
     markDirty();
   }
@@ -199,7 +220,7 @@ export function pitchPanel() {
     const summary = el('summary');
     summary.appendChild(el('span', 'admin-pitch-num', `${i + 1}`));
     summary.appendChild(el('span', 'admin-pitch-name', slide.title));
-    const edits = Object.keys(draft[slide.id] || {}).length;
+    const edits = Object.keys(draft[overrideKey(langId, slide.id)] || {}).length;
     if (edits) summary.appendChild(el('span', 'admin-pitch-badge', `${edits} edited`));
     summary.appendChild(el('span', 'admin-pitch-id', slide.id));
     card.appendChild(summary);
@@ -226,7 +247,7 @@ export function pitchPanel() {
       const area = document.createElement('textarea');
       area.rows = boxRows(leaf.value);
       area.spellcheck = true;
-      area.value = draft[slide.id]?.[leaf.path] ?? leaf.value;
+      area.value = draft[overrideKey(langId, slide.id)]?.[leaf.path] ?? leaf.value;
       const changed = area.value !== leaf.value;
       area.classList.toggle('is-edited', changed);
       revert.hidden = !changed;
@@ -269,14 +290,24 @@ export function pitchPanel() {
   }
 
   async function revertAll(btn) {
-    if (!window.confirm('Discard every saved edit and go back to the wording in the code?')) return;
-    draft = {};
+    const label = LANGS.find((l) => l.id === langId)?.name || langId;
+    if (!window.confirm(`Discard every saved edit for ${label} and go back to the wording in the code?`)) {
+      return;
+    }
+    // Only this language: the other two are separate work and are not the
+    // thing the button is pointing at.
+    for (const deck of DECKS) {
+      for (const slide of deck.slides) delete draft[overrideKey(langId, slide.id)];
+    }
     await save(btn);
   }
 
   /** Which deck's cards are on screen. Edits to both are held in one draft. */
   function deckEdits(deck) {
-    return deck.slides.reduce((n, s) => n + Object.keys(draft[s.id] || {}).length, 0);
+    return deck.slides.reduce(
+      (n, s) => n + Object.keys(draft[overrideKey(langId, s.id)] || {}).length,
+      0
+    );
   }
 
   function draw() {
@@ -288,11 +319,27 @@ export function pitchPanel() {
       el(
         'p',
         'admin-hint',
-        'Every sentence in both decks, editable. Saved text is served to the in-site decks and to the public share links. The talking deck also carries the spoken script shown in its transcript panel.'
+        'Every sentence in both decks, in every language, editable. Saved text is served to the in-site decks and to the public share links. Each language is stored separately, so editing Russian never touches English.'
       )
     );
 
     // Deck switch. One draft covers both, so switching never loses typing.
+    const langs = el('div', 'admin-row admin-pitch-decks');
+    for (const l of LANGS) {
+      const n = langCount(l.id);
+      langs.appendChild(
+        button(
+          `${l.name}${n ? ` · ${n} edited` : ''}`,
+          () => {
+            langId = l.id;
+            draw();
+          },
+          `admin-tab${l.id === langId ? ' active' : ''}`
+        )
+      );
+    }
+    head.appendChild(langs);
+
     const decks = el('div', 'admin-row admin-pitch-decks');
     for (const d of DECKS) {
       const n = deckEdits(d);
@@ -312,14 +359,15 @@ export function pitchPanel() {
     bar.appendChild(button('Save changes', (e) => save(e.currentTarget), 'btn primary'));
     bar.appendChild(button('Revert everything', (e) => revertAll(e.currentTarget), 'btn'));
 
+    const langQuery = langId === 'en' ? '' : `?lang=${langId}`;
     const openDeck = el('a', 'btn', `Open ${deck.label.toLowerCase()}`);
-    openDeck.href = deck.view;
+    openDeck.href = deck.view + langQuery;
     openDeck.target = '_blank';
     openDeck.rel = 'noopener';
     bar.appendChild(openDeck);
 
     const openPublic = el('a', 'btn', 'Open the public link');
-    openPublic.href = deck.share;
+    openPublic.href = deck.share + langQuery;
     openPublic.target = '_blank';
     openPublic.rel = 'noopener';
     bar.appendChild(openPublic);
@@ -330,7 +378,7 @@ export function pitchPanel() {
     wrap.appendChild(head);
 
     const list = el('div', 'admin-pitch-list');
-    deck.slides.forEach((slide, i) => list.appendChild(slideCard(slide, i)));
+    slidesFor(deck).forEach((slide, i) => list.appendChild(slideCard(slide, i)));
     wrap.appendChild(list);
 
     render(root, wrap);
