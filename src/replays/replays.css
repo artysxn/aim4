@@ -3995,6 +3995,21 @@ body.rv-open {
   display: none;
 }
 
+/* Recalculating after a filter / tab / search change. Sits immediately before
+   the Filters button so the ring reads as "these filters are being applied". */
+.st-busy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 32px;
+  flex: 0 0 auto;
+}
+
+.st-busy[hidden] {
+  display: none;
+}
+
 .st-page-actions [data-st-library-retry],
 .st-tabs-row [data-st-library-retry] {
   height: 32px;
@@ -10452,6 +10467,10 @@ table.rp-mine-table tbody tr {
   flex-wrap: wrap;
 }
 
+.ms-maps {
+  --sb-zoom: 1;
+}
+
 .ms-map {
   gap: 0;
   padding: 0;
@@ -10470,8 +10489,12 @@ table.rp-mine-table tbody tr {
   color: #f2f2f2;
 }
 
+/* Zoom the rows, not the card. Same split as the Stratbook, where `zoom` sits
+   on .sb-section and not .sb-map: the map heading is the label you scroll past
+   looking for a map, and shrinking it with the table only makes it harder to find. */
 .ms-table-scroll {
   overflow-x: auto;
+  zoom: var(--sb-zoom);
 }
 
 .ms-table {

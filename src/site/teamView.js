@@ -2171,6 +2171,29 @@ export function initTeamView({ auth, escapeHtml }) {
       </div>`;
   }
 
+  /**
+   * Commit a zoom step from the slider.
+   *
+   * Wired to both `input` (live while dragging) and `change` (the release, and
+   * keyboard steps). Writes `--sb-zoom` onto every zoom root on the page —
+   * Stratbook's `.sb-maps` and My Strategies' `.ms-maps` — rather than
+   * re-rendering, so dragging the slider does not rebuild the tables.
+   */
+  function applyStratZoom(rangeEl) {
+    const next = SB_ZOOM_STEPS[Number(rangeEl.value)] ?? 100;
+    stratbookZoom = next;
+    try {
+      localStorage.setItem(SB_ZOOM_KEY, String(next));
+    } catch {
+      /* ignore */
+    }
+    shellEl.querySelectorAll('[data-sb-zoom-root]').forEach((root) => {
+      root.style.setProperty('--sb-zoom', String(next / 100));
+    });
+    const label = shellEl.querySelector('[data-sb-zoom-label]');
+    if (label) label.textContent = `${next}%`;
+  }
+
   function stratbookZoomIndex() {
     const i = SB_ZOOM_STEPS.indexOf(stratbookZoom);
     return i >= 0 ? i : SB_ZOOM_STEPS.indexOf(100);
@@ -2188,13 +2211,13 @@ export function initTeamView({ auth, escapeHtml }) {
 
     const colorVars = stratColorVarsStyle();
     return `
-      ${headerHtml('', stratSettingsPanelHtml({ showZoomView: true }))}
+      ${headerHtml('', stratSettingsPanelHtml({ showZoom: true, showView: true }))}
       ${
         team?.isAdmin
           ? ''
           : '<p class="tm-note">Only team admins can edit the stratbook.</p>'
       }
-      <div class="sb-maps is-${stratbookView}" data-sb-color-root style="--sb-zoom: ${
+      <div class="sb-maps is-${stratbookView}" data-sb-color-root data-sb-zoom-root style="--sb-zoom: ${
         stratbookZoom / 100
       };${colorVars}">${maps}</div>`;
   }
@@ -2414,8 +2437,16 @@ export function initTeamView({ auth, escapeHtml }) {
     </label>`;
   }
 
-  function stratSettingsPanelHtml({ showZoomView }) {
-    const zoomBlock = showZoomView
+  /**
+   * The gear panel shared by Stratbook and My Strategies.
+   *
+   * Zoom is on both — the tables are the same wall of rows either way, and the
+   * setting is one number under one key, so a zoom picked on one page is the
+   * zoom the other opens at. Compact/Full is Stratbook-only: it drives
+   * `.sb-maps.is-full`, and My Strategies has no such layout to switch.
+   */
+  function stratSettingsPanelHtml({ showZoom = false, showView = false } = {}) {
+    const zoomBlock = showZoom
       ? `<div class="sb-settings-block">
           <div class="sb-settings-title">Zoom</div>
           <div class="sb-zoom">
@@ -2424,8 +2455,10 @@ export function initTeamView({ auth, escapeHtml }) {
             }" step="1" value="${stratbookZoomIndex()}" data-sb-zoom />
             <span class="sb-zoom-value" data-sb-zoom-label>${stratbookZoom}%</span>
           </div>
-        </div>
-        <div class="sb-settings-block">
+        </div>`
+      : '';
+    const viewBlock = showView
+      ? `<div class="sb-settings-block">
           <div class="sb-settings-title">View</div>
           <select class="site-select sb-view-select" data-sb-view>
             <option value="compact"${stratbookView === 'compact' ? ' selected' : ''}>Compact view</option>
@@ -2442,6 +2475,7 @@ export function initTeamView({ auth, escapeHtml }) {
         </button>
         <div class="sb-settings-panel" data-sb-settings-panel>
           ${zoomBlock}
+          ${viewBlock}
           <div class="sb-settings-block">
             <div class="sb-settings-head">
               <div class="sb-settings-title">Economy colors</div>
@@ -2521,8 +2555,10 @@ export function initTeamView({ auth, escapeHtml }) {
     const mapsHtml = POSITION_MAPS.map((m) => myStratMapHtml(m, strategiesPlayerId)).join('');
 
     return `
-      ${headerHtml('', stratSettingsPanelHtml({ showZoomView: false }))}
-      <div data-sb-color-root style="${stratColorVarsStyle()}">
+      ${headerHtml('', stratSettingsPanelHtml({ showZoom: true }))}
+      <div class="ms-maps" data-sb-color-root data-sb-zoom-root style="--sb-zoom: ${
+        stratbookZoom / 100
+      };${stratColorVarsStyle()}">
       <section class="tm-card">
         <div class="tm-card-head">
           <h3 class="tm-card-title">Player</h3>
@@ -3077,17 +3113,7 @@ export function initTeamView({ auth, escapeHtml }) {
 
     const zoom = t.closest?.('[data-sb-zoom]');
     if (zoom) {
-      const next = SB_ZOOM_STEPS[Number(zoom.value)] ?? 100;
-      stratbookZoom = next;
-      try {
-        localStorage.setItem(SB_ZOOM_KEY, String(next));
-      } catch {
-        /* ignore */
-      }
-      const maps = shellEl.querySelector('.sb-maps');
-      if (maps) maps.style.setProperty('--sb-zoom', String(next / 100));
-      const label = shellEl.querySelector('[data-sb-zoom-label]');
-      if (label) label.textContent = `${next}%`;
+      applyStratZoom(zoom);
       return;
     }
 
@@ -3278,17 +3304,7 @@ export function initTeamView({ auth, escapeHtml }) {
     }
     const zoom = e.target.closest?.('[data-sb-zoom]');
     if (zoom) {
-      const next = SB_ZOOM_STEPS[Number(zoom.value)] ?? 100;
-      stratbookZoom = next;
-      try {
-        localStorage.setItem(SB_ZOOM_KEY, String(next));
-      } catch {
-        /* ignore */
-      }
-      const maps = shellEl.querySelector('.sb-maps');
-      if (maps) maps.style.setProperty('--sb-zoom', String(next / 100));
-      const label = shellEl.querySelector('[data-sb-zoom-label]');
-      if (label) label.textContent = `${next}%`;
+      applyStratZoom(zoom);
       return;
     }
     const ta = e.target.closest?.('textarea.sb-role-note');

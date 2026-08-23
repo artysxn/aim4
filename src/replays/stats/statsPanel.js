@@ -140,7 +140,10 @@ export function createStatsPanel({
         ${
           usePageHead
             ? ''
-            : `<button type="button" class="btn btn-sm st-filters-toggle" data-st-filters-toggle aria-expanded="false" aria-controls="st-filters">
+            : `<span class="st-busy" data-st-busy hidden role="status" aria-live="polite" aria-label="Recalculating the table">
+          <span class="spinner spinner-sm" aria-hidden="true"></span>
+        </span>
+        <button type="button" class="btn btn-sm st-filters-toggle" data-st-filters-toggle aria-expanded="false" aria-controls="st-filters">
           <img src="${filtersIcon}" alt="" width="16" height="16" draggable="false" />
           Filters
         </button>
@@ -169,6 +172,9 @@ export function createStatsPanel({
         <button type="button" class="seg-tab active" data-tab="players">${mbIcon('player')}Players</button>
         <button type="button" class="seg-tab" data-tab="teams">${mbIcon('team')}Teams</button>
       </div>
+      <span class="st-busy" data-st-busy hidden role="status" aria-live="polite" aria-label="Recalculating the table">
+        <span class="spinner spinner-sm" aria-hidden="true"></span>
+      </span>
       <button type="button" class="btn btn-sm st-filters-toggle" data-st-filters-toggle aria-expanded="false" aria-controls="st-filters">
         <img src="${filtersIcon}" alt="" width="16" height="16" draggable="false" />
         Filters
@@ -197,6 +203,7 @@ export function createStatsPanel({
     document.getElementById('page-head-actions')?.replaceChildren(pageHeadEl);
     syncTabButtons();
     syncSearchToggle();
+    paintBusy();
     filtersToggleEl?.classList.toggle('active', filtersOpen);
     filtersToggleEl?.setAttribute('aria-expanded', filtersOpen ? 'true' : 'false');
   }
@@ -289,6 +296,42 @@ export function createStatsPanel({
     root.querySelectorAll('[data-st-library-retry]').forEach((btn) => {
       btn.hidden = !on;
     });
+  }
+
+  /**
+   * Recomputes in flight.
+   *
+   * A filter change re-queries the library or re-aggregates every round in the
+   * browser, and until it lands the table sits there showing the old numbers —
+   * which reads as "the click did nothing". A ring next to Filters says the
+   * work is running. Counted rather than a flag, because a library load and a
+   * render can overlap and the first to finish must not clear the other's mark.
+   */
+  let busyCount = 0;
+
+  function paintBusy() {
+    const roots = [el, pageHeadEl].filter(Boolean);
+    for (const root of roots) {
+      root.querySelectorAll('[data-st-busy]').forEach((mark) => {
+        mark.hidden = busyCount <= 0;
+      });
+    }
+  }
+
+  /**
+   * Hold the busy ring up for as long as `job` runs. Returns `job` itself, so
+   * callers keep the promise (and its rejection) they already had.
+   */
+  function trackBusy(job) {
+    busyCount += 1;
+    paintBusy();
+    const done = () => {
+      busyCount = Math.max(0, busyCount - 1);
+      paintBusy();
+    };
+    if (job && typeof job.then === 'function') job.then(done, done);
+    else done();
+    return job;
   }
 
   function bindLibraryRetry() {
@@ -1260,19 +1303,6 @@ export function createStatsPanel({
     return el.contains(sel.anchorNode) || el.contains(sel.focusNode);
   }
 
-  function activateNameLink(link) {
-    if (!link || selectionInside(link)) return false;
-    if (link.dataset.stPlayer != null) {
-      openPlayerDetail(link.dataset.stPlayer, link.textContent || '');
-      return true;
-    }
-    if (link.dataset.stTeam != null) {
-      openTeamDetail(link.dataset.stTeam, link.textContent || '');
-      return true;
-    }
-    return false;
-  }
-
   /** Aggregation key for a team row (strip per-map suffix used in locked-team map lists). */
   function teamAggKey(r) {
     if (r?.mapRow && r.mapCode) {
@@ -1415,8 +1445,14 @@ export function createStatsPanel({
       void openTeamRounds(wrLink);
       return;
     }
-    const nameLink = e.target.closest('[data-st-player], [data-st-team]');
-    if (nameLink && activateNameLink(nameLink)) return;
+    // Names are plain links; the browser (and site.js) owns them. The one
+    // thing to catch is a drag that selected text inside one — that is a
+    // selection, not a click on the link.
+    const nameLink = e.target.closest('a.st-link');
+    if (nameLink) {
+      if (selectionInside(nameLink)) e.preventDefault();
+      return;
+    }
     const pageBtn = e.target.closest('[data-page]');
     if (pageBtn) {
       if (pageBtn.disabled) return;
@@ -1490,12 +1526,8 @@ export function createStatsPanel({
     if (wrLink && e.target === wrLink && onPlayRounds) {
       e.preventDefault();
       void openTeamRounds(wrLink);
-      return;
     }
-    const nameLink = e.target.closest?.('[data-st-player], [data-st-team]');
-    if (!nameLink || e.target !== nameLink) return;
-    e.preventDefault();
-    activateNameLink(nameLink);
+    // Name links are anchors: Enter already activates them.
   });
 
   // ---- view state (URL / share) -------------------------------------------
@@ -1996,16 +2028,29 @@ export function createStatsPanel({
     return out;
   }
 
+  /**
+   * Names are addresses, not drill-downs.
+   *
+   * A name in the table is the point where someone stops asking about the
+   * library and starts asking about a person or a team, and Performance is the
+   * page that answers that. Real `<a href>`s, so the browser gives them
+   * middle-click, copy-link and the back button; site.js routes them in place.
+   */
+  function performanceHref(params) {
+    const q = new URLSearchParams();
+    for (const [k, v] of Object.entries(params)) if (v) q.set(k, String(v));
+    return `/performance?${q}`;
+  }
+
   function playerLink(id, name) {
-    return `<span class="st-link" role="link" tabindex="0" data-st-player="${escapeHtml(
-      id
-    )}">${escapeHtml(name)}</span>`;
+    const href = performanceHref({ player: id, name: name && name !== id ? name : '' });
+    return `<a class="st-link" href="${escapeHtml(href)}">${escapeHtml(name)}</a>`;
   }
 
   function teamLink(name) {
-    return `<span class="st-link" role="link" tabindex="0" data-st-team="${escapeHtml(
-      name
-    )}">${escapeHtml(name)}</span>`;
+    return `<a class="st-link" href="${escapeHtml(
+      performanceHref({ team: name })
+    )}">${escapeHtml(name)}</a>`;
   }
 
   function playerNameCell(r) {
@@ -2141,7 +2186,7 @@ export function createStatsPanel({
           detail.label || detail.id
         )}">Open player profile</a>
       </p>`;
-      bodyEl.innerHTML = profileLink + statsTableHtml(data, {
+      setBodyHtml(profileLink + statsTableHtml(data, {
         columns: cols.columns,
         fixedCount: cols.fixedCount,
         escapeHtml,
@@ -2152,7 +2197,7 @@ export function createStatsPanel({
         showAverage: true,
         opponentCell: (r) =>
           r.opponent && r.opponent !== '—' ? teamLink(r.opponent) : escapeHtml(r.opponent || '—')
-      });
+      }));
       return;
     }
     let data = buildTeamMatchRows(detail.name, active, players, demos);
@@ -2161,7 +2206,7 @@ export function createStatsPanel({
       if (named?.name) detail.label = named.name;
     }
     const cols = teamMatchColumns();
-    bodyEl.innerHTML = statsTableHtml(data, {
+    setBodyHtml(statsTableHtml(data, {
       columns: cols.columns,
       fixedCount: cols.fixedCount,
       escapeHtml,
@@ -2172,7 +2217,7 @@ export function createStatsPanel({
       showAverage: true,
       opponentCell: (r) =>
         r.opponent && r.opponent !== '—' ? teamLink(r.opponent) : escapeHtml(r.opponent || '—')
-    });
+    }));
   }
 
   /** @type {{ current: number }} */
@@ -2230,10 +2275,37 @@ export function createStatsPanel({
    */
   let lastTable = null;
 
+  /**
+   * Replace the table, keeping the columns the reader had scrolled to.
+   *
+   * Every repaint builds a fresh scroller, and a fresh scroller starts at the
+   * far left. Sorting on a metric you had to scroll right to reach used to
+   * snap the table back to the name columns and take the header you just
+   * clicked off screen — the sort worked, but the click looked like it did
+   * nothing. Same for paging and for a filter answered from the server.
+   */
+  function setBodyHtml(html) {
+    const keep = bodyEl.querySelector('[data-st-hscroll-body]')?.scrollLeft || 0;
+    bodyEl.innerHTML = html;
+    if (!keep) return;
+    const apply = () => {
+      const scroller = bodyEl.querySelector('[data-st-hscroll-body]');
+      if (!scroller) return;
+      const max = Math.max(0, scroller.scrollWidth - scroller.clientWidth);
+      scroller.scrollLeft = Math.min(keep, max);
+      const bar = bodyEl.querySelector('[data-st-hscroll-bar]');
+      if (bar) bar.scrollLeft = scroller.scrollLeft;
+    };
+    apply();
+    // Sticky column widths are measured a frame later (bindStatsHScroll), and
+    // the scrollable width only settles once they are written.
+    requestAnimationFrame(() => requestAnimationFrame(apply));
+  }
+
   /** Paint a table and remember what it was painted from. */
   function paintTable(data, opts, prefix = '') {
     lastTable = { data, opts, prefix };
-    bodyEl.innerHTML = prefix + statsTableHtml(data, opts);
+    setBodyHtml(prefix + statsTableHtml(data, opts));
   }
 
   /**
@@ -2253,14 +2325,19 @@ export function createStatsPanel({
     // compare rows); re-sorting it is not meaningful and its own path owns it.
     if (lastTable.opts.preserveOrder) return false;
     lastTable = { ...lastTable, opts };
-    bodyEl.innerHTML = (lastTable.prefix || '') + statsTableHtml(lastTable.data, opts);
+    setBodyHtml((lastTable.prefix || '') + statsTableHtml(lastTable.data, opts));
     bindStatsHScroll(bodyEl);
     attachTips(bodyEl);
     emitViewChange();
     return true;
   }
 
+  /** Every re-render the panel schedules, with the busy ring around it. */
   function scheduleRender(opts = {}) {
+    return trackBusy(runScheduledRender(opts));
+  }
+
+  function runScheduledRender(opts = {}) {
     const rebuildFilters = opts.rebuildFilters !== false;
     if (!payload) {
       // Server mode. An interaction that needs rounds pulls them once and then
@@ -2457,13 +2534,13 @@ export function createStatsPanel({
       data = applyEntityPickPlayers(data);
       const matchDemo = singleMatchDemo(payload, scope);
       if (matchDemo) {
-        bodyEl.innerHTML = matchBoardsHtml(data, matchDemo, {
+        setBodyHtml(matchBoardsHtml(data, matchDemo, {
           escapeHtml,
           sortKey: sort.players.key,
           sortDir: sort.players.dir,
           columns: playerCols.columns,
           fixedCount: playerCols.fixedCount
-        });
+        }));
       } else {
         paintTable(data, {
           columns: playerCols.columns,
@@ -2486,7 +2563,7 @@ export function createStatsPanel({
         // Any map: one row per map for the locked team.
         let data = lockedTeamPerMapRows(rows, players, demos, active);
         data = applyEntityPickTeams(data);
-        bodyEl.innerHTML = statsTableHtml(data, {
+        setBodyHtml(statsTableHtml(data, {
           columns: TEAM_MAP_COLUMNS,
           fixedCount: 2,
           escapeHtml,
@@ -2494,7 +2571,7 @@ export function createStatsPanel({
           showAverage: true,
           nameCell: teamNameCell,
           roundWrCell: teamRoundWrCell
-        });
+        }));
       } else if (lockedTeamName && oneMap) {
         // One map: us vs best / mid / worst on that map; footer = all-team average.
         const compared = lockedTeamMapCompare(
@@ -2506,7 +2583,7 @@ export function createStatsPanel({
           minR
         );
         const data = applyEntityPickTeams(compared.rows);
-        bodyEl.innerHTML = statsTableHtml(data, {
+        setBodyHtml(statsTableHtml(data, {
           columns: TEAM_COLUMNS,
           fixedCount: 2,
           escapeHtml,
@@ -2515,7 +2592,7 @@ export function createStatsPanel({
           averageRows: searching ? undefined : compared.averageRows,
           nameCell: teamNameCell,
           roundWrCell: teamRoundWrCell
-        });
+        }));
       } else {
         let data = aggregateTeams(rows, players, demos, active);
         if (minR > 0) data = data.filter((t) => (t.rounds || 0) >= minR);
@@ -2602,7 +2679,11 @@ export function createStatsPanel({
    *   role?: object|string|null
    * }} next
    */
-  async function load(next = {}) {
+  function load(next = {}) {
+    return trackBusy(loadLibrary(next));
+  }
+
+  async function loadLibrary(next = {}) {
     const token = ++loadToken;
     scope = {
       demos: Array.isArray(next.demos) ? [...next.demos] : undefined,
