@@ -8,10 +8,12 @@
 import { MAPS, MAP_CODES } from '../shared/roundId.js';
 import {
   aggregatePlayers,
+  aggregateTeams,
   allRows,
   demoPassesDate,
   demoTimestamp,
-  rowPasses
+  rowPasses,
+  teamNameKey
 } from '../shared/statsMath.js';
 import { attachPlayerRoles } from '../roles/assignRoles.js';
 import { normalizePlayerName } from '../shared/teamStandings.js';
@@ -30,9 +32,12 @@ export const LAST_MATCH_OPTS = [
 ];
 
 const PEER_MIN_ROUNDS = 20;
+/** A team needs more than a part-half before its rates mean anything. */
+export const TEAM_PEER_MIN_ROUNDS = 30;
 
 /** Two decimals, or an em dash. The Performance page's number formats. */
 export const f2 = (n) => (Number.isFinite(n) ? n.toFixed(2) : '\u2014');
+export const f1 = (n) => (Number.isFinite(n) ? n.toFixed(1) : '\u2014');
 export const pct = (n) => (Number.isFinite(n) ? `${Math.round(n)}%` : '\u2014');
 export const signed = (n) => (Number.isFinite(n) ? `${n > 0 ? '+' : ''}${n.toFixed(2)}` : '\u2014');
 
@@ -140,6 +145,177 @@ export const CARD_METRICS = [
   { key: 'tfw', label: 'Fight win', fmt: 'pct', band: 'pct', read: (p) => p?.tfw },
   { key: 'pfw', label: 'PFW', fmt: 'pct', band: 'pct', read: (p) => p?.pfw }
 ];
+
+// ---------------------------------------------------------------------------
+// Teams
+//
+// A team's page answers a different question from a player's. Nobody asks how
+// well a team fragged; they ask whether it wins, and then which part of a round
+// it wins or loses in. So the hero is the match record and the cards walk in
+// from there: rounds, then the model's view of those rounds, then the three
+// moments a round turns on (the opening duel and the two man-advantages), then
+// what the team does with utility.
+//
+// Every number here comes from statsMath's team aggregation — the same rows the
+// Database's Teams tab shows — so a team's page and its table row can never
+// disagree.
+// ---------------------------------------------------------------------------
+
+/** The hero metric: matches won, not rounds. */
+export const TEAM_HERO = {
+  key: 'mapWinrate',
+  label: 'Win rate',
+  read: (t) => t?.mapWinrate
+};
+
+export const TEAM_CARD_METRICS = [
+  { key: 'roundWinrate', label: 'Round WR', fmt: 'pct', band: 'winrate', read: (t) => t?.roundWinrate },
+  { key: 'prw', label: 'PRW', fmt: 'pct', band: 'winrate', read: (t) => t?.prw },
+  { key: 'opkRate', label: 'OPK WR', fmt: 'pct', band: 'winrate', read: (t) => t?.opkRate },
+  { key: 'conv5v4', label: '5v4', fmt: 'pct', band: 'winrate', read: (t) => t?.conv5v4 },
+  { key: 'conv4v5', label: '4v5', fmt: 'pct', band: 'winrate', read: (t) => t?.conv4v5 },
+  { key: 'utilDmg', label: 'Util dmg', fmt: 'num1', band: 'utilDmg', read: (t) => t?.utilDmgPerRound },
+  { key: 'ac', label: 'AC%', fmt: 'pct', band: 'winrate', read: (t) => t?.ac }
+];
+
+/** Which side (1 or 2) a team played in a demo, or 0 if it is not in it. */
+export function teamSideOf(demo, key) {
+  if (!demo || !key) return 0;
+  if (teamNameKey(demo.name1, demo.t1) === key) return 1;
+  if (teamNameKey(demo.name2, demo.t2) === key) return 2;
+  return 0;
+}
+
+/** Demos this team played, newest first, after the date window. */
+export function teamDemos(payload, teamKey, dateFilter = {}) {
+  const key = teamNameKey(teamKey);
+  return (payload?.demos || [])
+    .filter((d) => teamSideOf(d, key) !== 0)
+    .filter((d) => demoPassesDate(d, dateFilter))
+    .sort((a, b) => demoTimestamp(b) - demoTimestamp(a) || String(b.id).localeCompare(String(a.id)));
+}
+
+/** Newest `n` demo ids for this team that still have a passing round (0 = all). */
+export function lastTeamDemoIds(payload, teamKey, n, filter = {}, players = null, demos = null) {
+  const key = teamNameKey(teamKey);
+  const list = teamDemos(payload, teamKey, filter);
+  const matched = [];
+  for (const demo of list) {
+    const side = teamSideOf(demo, key);
+    if (!side) continue;
+    if (!players) {
+      matched.push(demo);
+      continue;
+    }
+    const hit = (demo.rounds || []).some((row) => rowPasses(row, filter, side, players, demos));
+    if (hit) matched.push(demo);
+  }
+  const slice = n > 0 ? matched.slice(0, n) : matched;
+  return new Set(slice.map((d) => d.id));
+}
+
+/** Rows for this team after map / side / buy / date / last-N. */
+export function teamRows(payload, teamKey, ui, players, demos) {
+  const key = teamNameKey(teamKey);
+  const active = statsFilterFrom(ui);
+  const allowed = lastTeamDemoIds(payload, teamKey, Number(ui.last) || 0, active, players, demos);
+  const out = [];
+  for (const row of allRows(payload)) {
+    if (!allowed.has(row.d)) continue;
+    const demo = demos.get(row.d);
+    const side = teamSideOf(demo, key);
+    if (!side) continue;
+    if (!rowPasses(row, active, side, players, demos)) continue;
+    out.push(row);
+  }
+  return out;
+}
+
+/**
+ * The aggregated row for one team.
+ *
+ * aggregateTeams returns every team present in `rows`, and a team's own rounds
+ * necessarily carry its opponents too, so the row has to be picked out by key
+ * rather than assumed to be the only one.
+ */
+export function teamStats(payload, teamKey, ui, players, demos) {
+  const key = teamNameKey(teamKey);
+  const rows = teamRows(payload, teamKey, ui, players, demos);
+  if (!rows.length) return null;
+  const all = aggregateTeams(rows, players, demos, {});
+  return all.find((t) => t.key === key) || null;
+}
+
+/** One point per match for a team, oldest first. */
+export function teamMatchSeries(payload, teamKey, ui, players, demos) {
+  const key = teamNameKey(teamKey);
+  const active = statsFilterFrom(ui);
+  const allowed = lastTeamDemoIds(payload, teamKey, Number(ui.last) || 0, active, players, demos);
+  const points = [];
+  for (const demo of payload?.demos || []) {
+    if (!allowed.has(demo.id)) continue;
+    const side = teamSideOf(demo, key);
+    if (!side) continue;
+    const rows = (demo.rounds || []).filter((row) => rowPasses(row, active, side, players, demos));
+    if (!rows.length) continue;
+    const t = aggregateTeams(rows, players, demos, {}).find((x) => x.key === key);
+    if (!t?.rounds) continue;
+    let mine = 0;
+    let theirs = 0;
+    for (const row of rows) {
+      if (row.w === side) mine++;
+      else if (row.w === 1 || row.w === 2) theirs++;
+    }
+    const opp = side === 1 ? demo.name2 : demo.name1;
+    const won = demo.winner === side;
+    points.push({
+      demoId: demo.id,
+      when: demoTimestamp(demo),
+      // The per-match "win rate" is the match itself: 100 or 0. Averaged over a
+      // series that is exactly the record, and it keeps the hero metric and the
+      // chart on one scale.
+      mapWinrate: demo.winner ? (won ? 100 : 0) : null,
+      roundWinrate: t.roundWinrate,
+      prw: t.prw,
+      opkRate: t.opkRate,
+      conv5v4: t.conv5v4,
+      conv4v5: t.conv4v5,
+      utilDmg: t.utilDmgPerRound,
+      ac: t.ac,
+      map: demo.map || '',
+      opponent: opp || '',
+      result: demo.winner ? (won ? 'W' : 'L') : '',
+      scoreLabel: `${mine}:${theirs}`,
+      scoreSort: mine - theirs,
+      stats: t
+    });
+  }
+  points.sort((a, b) => a.when - b.when || String(a.demoId).localeCompare(String(b.demoId)));
+  return points;
+}
+
+/**
+ * Library averages for the team cards.
+ *
+ * Teams with too few rounds are dropped for the same reason players are: a side
+ * that played nine rounds of one half is noise, and it drags the line every
+ * real team is being measured against.
+ */
+export function teamPeerAverages(payload, ui, players, demos) {
+  const active = statsFilterFrom(ui);
+  const rows = allRows(payload).filter((row) => {
+    const demo = demos.get(row.d);
+    if (!demoPassesDate(demo, active)) return false;
+    if (active.maps?.length && !active.maps.includes(row.m)) return false;
+    return true;
+  });
+  const list = aggregateTeams(rows, players, demos, {}).filter(
+    (t) => t.rounds >= TEAM_PEER_MIN_ROUNDS
+  );
+  const out = {};
+  for (const m of [TEAM_HERO, ...TEAM_CARD_METRICS]) out[m.key] = mean(list.map(m.read));
+  return out;
+}
 
 /** Library averages for the summary cards (peers with enough rounds). */
 export function peerAverages(payload, ui, players, demos) {

@@ -17,7 +17,9 @@ export const DELTA_BANDS = {
   kpr: { none: 0.04, mid: 0.12 },
   xk: { none: 0.04, mid: 0.12 },
   pct: { none: 1.6, mid: 4.1 },
-  winrate: { none: 2.1, mid: 8 }
+  winrate: { none: 2.1, mid: 8 },
+  /** Grenade damage per round: single digits are the whole useful range. */
+  utilDmg: { none: 1.2, mid: 3.5 }
 };
 
 const UP = '#6fcf97';

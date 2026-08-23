@@ -338,7 +338,29 @@ export async function fetchPeerAverages(filter = {}) {
  * @param {object} filter    same shape rowPasses takes
  * @param {{ tables?: string, limit?: number, offset?: number, demos?: string[] }} [opts]
  */
+/**
+ * Above this many round ids, the same query goes as a POST body.
+ *
+ * A URL has a practical ceiling somewhere around 8 KB and round ids are ~14
+ * bytes each, so a few hundred of them is already past what a GET will carry.
+ * The server reads the identical argument names either way.
+ */
+const AGGREGATE_POST_FILES = 200;
+
 export async function fetchAggregate(filter = {}, opts = {}) {
+  const files = Array.isArray(filter.files) ? filter.files.filter(Boolean) : [];
+  if (files.length > AGGREGATE_POST_FILES) {
+    return asJson(
+      await safeFetch(`${API_BASE}/api/replays/aggregate`, {
+        method: 'POST',
+        headers: await headers({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          ...aggregateBody(filter, opts),
+          files
+        })
+      })
+    );
+  }
   const params = new URLSearchParams();
   const maps = Array.isArray(filter.maps) ? filter.maps.filter(Boolean) : [];
   if (maps.length) params.set('maps', maps.join(','));
@@ -350,6 +372,10 @@ export async function fetchAggregate(filter = {}, opts = {}) {
   if (filter.result) params.set('result', filter.result);
   if (filter.advantage) params.set('advantage', filter.advantage);
   if (filter.teamName) params.set('teamName', filter.teamName);
+  if (filter.role?.side && filter.role?.value) {
+    params.set('role', `${filter.role.side}:${filter.role.value}`);
+  }
+  if (filter.roles) params.set('roles', '1');
   if (filter.rankOwn) params.set('rankOwn', String(filter.rankOwn));
   if (filter.rankOpp) params.set('rankOpp', String(filter.rankOpp));
   if (filter.dateFrom) params.set('from', filter.dateFrom);
@@ -365,6 +391,53 @@ export async function fetchAggregate(filter = {}, opts = {}) {
       headers: await headers()
     })
   );
+}
+
+/**
+ * One aggregated row per match for a single player or team.
+ *
+ * `demos` is required and comes from the roster catalogue: the caller already
+ * knows which matches the entity played, and passing them means the server
+ * never scans the library to find out.
+ */
+export async function fetchAggregateMatches(want, demos, filter = {}) {
+  const list = [...new Set((demos || []).filter(Boolean))];
+  if (!list.length) return { rows: [] };
+  return asJson(
+    await safeFetch(`${API_BASE}/api/replays/aggregate/matches`, {
+      method: 'POST',
+      headers: await headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({
+        ...aggregateBody(filter, {}),
+        ...(want?.kind === 'team' ? { team: want.id } : { player: want?.id }),
+        demos: list
+      })
+    })
+  );
+}
+
+/** The GET params as a POST body. Same names, same meanings, no length limit. */
+function aggregateBody(filter = {}, opts = {}) {
+  const body = {};
+  const maps = Array.isArray(filter.maps) ? filter.maps.filter(Boolean) : [];
+  if (maps.length) body.maps = maps;
+  if (filter.side) body.side = filter.side;
+  if (filter.econ !== null && filter.econ !== undefined) body.econ = filter.econ;
+  if (filter.oppEcon !== null && filter.oppEcon !== undefined) body.oppEcon = filter.oppEcon;
+  if (filter.result) body.result = filter.result;
+  if (filter.advantage) body.advantage = filter.advantage;
+  if (filter.teamName) body.teamName = filter.teamName;
+  if (filter.role?.side && filter.role?.value) body.role = `${filter.role.side}:${filter.role.value}`;
+  if (filter.roles) body.roles = 1;
+  if (filter.rankOwn) body.rankOwn = filter.rankOwn;
+  if (filter.rankOpp) body.rankOpp = filter.rankOpp;
+  if (filter.dateFrom) body.from = filter.dateFrom;
+  if (filter.dateTo) body.to = filter.dateTo;
+  if (opts.demos?.length) body.demos = opts.demos;
+  if (opts.tables) body.tables = opts.tables;
+  if (Number.isFinite(opts.limit)) body.limit = opts.limit;
+  if (Number.isFinite(opts.offset) && opts.offset > 0) body.offset = opts.offset;
+  return body;
 }
 
 /**
@@ -700,25 +773,59 @@ export const STATS_LIBRARY_PAGE = 300;
  * @param {string[]} [demoIds] limit to these demos; omit for the whole library
  * @param {{ onProgress?: (p: object) => void, offset?: number, limit?: number }} [opts]
  */
+/**
+ * Above this many demo ids, the scope goes in a POST body instead of the URL.
+ *
+ * Node caps the request line plus headers at 16 KB and an id costs 17 bytes,
+ * so ~950 ids is where a GET stops arriving at all — it comes back 431 and the
+ * caller sees an empty result, not an error it can explain. A per-map Pattern
+ * Finder scope on a popular map is well past that. 600 leaves room for the
+ * rest of the query and for any proxy with a tighter limit than Node's.
+ */
+const STATS_POST_DEMOS = 600;
+
 export async function fetchStats(demoIds = null, opts = {}) {
   const onProgress = typeof opts.onProgress === 'function' ? opts.onProgress : null;
-  const params = new URLSearchParams();
-  if (demoIds?.length) params.set('demos', demoIds.join(','));
-  params.set('stream', '1');
+  const ids = demoIds?.length ? demoIds : null;
   const offset = Math.max(0, Math.floor(Number(opts.offset) || 0));
   const limit = Math.max(0, Math.floor(Number(opts.limit) || 0));
-  if (offset) params.set('offset', String(offset));
-  if (limit) params.set('limit', String(limit));
-  // Column contract. Omitted → the server ships every column, which is the
-  // old behaviour and what the admin tools still want.
   const columns = opts.columns;
-  if (columns) {
-    params.set('fields', Array.isArray(columns) ? columns.join(',') : String(columns));
+  const fields = columns
+    ? Array.isArray(columns)
+      ? columns.join(',')
+      : String(columns)
+    : null;
+
+  const usePost = Boolean(ids && ids.length > STATS_POST_DEMOS);
+  let res;
+  if (usePost) {
+    res = await safeFetch(`${API_BASE}/api/replays/stats`, {
+      method: 'POST',
+      headers: await headers({
+        Accept: 'application/x-ndjson, application/json',
+        'Content-Type': 'application/json'
+      }),
+      body: JSON.stringify({
+        demos: ids,
+        stream: '1',
+        ...(offset ? { offset } : {}),
+        ...(limit ? { limit } : {}),
+        ...(fields ? { fields } : {})
+      })
+    });
+  } else {
+    const params = new URLSearchParams();
+    if (ids) params.set('demos', ids.join(','));
+    params.set('stream', '1');
+    if (offset) params.set('offset', String(offset));
+    if (limit) params.set('limit', String(limit));
+    // Column contract. Omitted → the server ships every column, which is the
+    // old behaviour and what the admin tools still want.
+    if (fields) params.set('fields', fields);
+    res = await safeFetch(`${API_BASE}/api/replays/stats?${params}`, {
+      headers: await headers({ Accept: 'application/x-ndjson, application/json' })
+    });
   }
-  const url = `${API_BASE}/api/replays/stats?${params}`;
-  const res = await safeFetch(url, {
-    headers: await headers({ Accept: 'application/x-ndjson, application/json' })
-  });
   const type = String(res.headers.get('content-type') || '');
   if (!res.ok) return asJson(res);
   if (!/ndjson/i.test(type) || !res.body || typeof res.body.getReader !== 'function') {

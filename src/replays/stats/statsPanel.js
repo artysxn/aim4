@@ -8,7 +8,7 @@
 
 import { formatApiError } from '../api.js';
 import { getStatsPayload } from '../statsCache.js';
-import { fetchAggregate, fetchVrsRanks } from '../api.js';
+import { fetchAggregate, fetchAggregateMatches, fetchRoster, fetchVrsRanks } from '../api.js';
 import { scheduleUiJob } from '../../lib/frameBudget.js';
 import {
   attachPlayerRoles,
@@ -33,6 +33,13 @@ import {
 } from '../shared/statsMath.js';
 import { hasRoundLibrary, roundTypeRows } from '../analytics/roundLibrary.js';
 import { listPlayers, listTeams } from '../analytics/analyticsMath.js';
+import {
+  demosForPlayer,
+  demosForTeam,
+  rosterPlayers,
+  rosterTeamPlayers,
+  rosterTeams
+} from '../shared/rosterQuery.js';
 import { clockAt, secondsAtClock } from '../analytics/roundFacts.js';
 import { ROUND_SECONDS } from '../viewer/roundClock.js';
 import {
@@ -197,6 +204,7 @@ export function createStatsPanel({
     document.getElementById('page-head-actions')?.replaceChildren(pageHeadEl);
     syncTabButtons();
     syncSearchToggle();
+    paintLoadRing();
     filtersToggleEl?.classList.toggle('active', filtersOpen);
     filtersToggleEl?.setAttribute('aria-expanded', filtersOpen ? 'true' : 'false');
   }
@@ -216,33 +224,67 @@ export function createStatsPanel({
    * @type {{ loaded: number, total: number }}
    */
   let libraryProgress = { loaded: 0, total: 0 };
+  /** Library pages still arriving. */
+  let libraryStreaming = false;
 
   const countFmt = new Intl.NumberFormat();
 
-  function libraryProgressText() {
+  /**
+   * Recomputes in flight.
+   *
+   * A filter change re-queries the library or re-aggregates every round in the
+   * browser, and until it lands the table sits there showing the old numbers —
+   * which reads as "the click did nothing". Counted rather than a flag, because
+   * a library load and a render can overlap and the first to finish must not
+   * clear the other's mark.
+   */
+  let busyCount = 0;
+
+  /**
+   * What the one ring is currently saying.
+   *
+   * There used to be two: a library-progress ring by the tabs and a second
+   * "recalculating" ring by the Filters button. Two spinners for one wait is a
+   * puzzle, not a status — the reader has to work out which is which and why
+   * one of them is not moving. Both reasons now live on this ring, and the tip
+   * says which applies.
+   */
+  function loadRingText() {
     const { loaded, total } = libraryProgress;
-    if (!total) return 'Loading matches…';
-    const shown = Math.min(loaded, total);
-    return (
-      `${countFmt.format(shown)} of ${countFmt.format(total)} matches loaded\n` +
-      'Tables update as the rest arrive.'
-    );
+    if (libraryStreaming && total) {
+      const shown = Math.min(loaded, total);
+      return (
+        `${countFmt.format(shown)} of ${countFmt.format(total)} matches loaded\n` +
+        (busyCount > 0
+          ? 'Updating the tables with what has arrived.'
+          : 'Tables update as the rest arrive.')
+      );
+    }
+    if (libraryStreaming) return 'Loading matches…';
+    return 'Updating the tables for these filters.';
   }
 
-  /** Push the current count onto every copy of the spinner. */
-  function paintLibraryProgress() {
+  /** One line, no UI hints, for assistive tech. */
+  function loadRingLabel() {
+    const { loaded, total } = libraryProgress;
+    if (libraryStreaming && total) {
+      return `Loading matches, ${Math.min(loaded, total)} of ${total} loaded`;
+    }
+    if (libraryStreaming) return 'Loading more matches';
+    return 'Updating the tables';
+  }
+
+  /** Visibility and text of every copy of the ring. */
+  function paintLoadRing() {
+    const on = libraryStreaming || busyCount > 0;
+    const text = loadRingText();
+    const label = loadRingLabel();
     const roots = [el, pageHeadEl].filter(Boolean);
-    const text = libraryProgressText();
     for (const root of roots) {
       root.querySelectorAll('[data-st-library-load]').forEach((mark) => {
+        mark.hidden = !on;
         mark.dataset.tip = text;
-        // One line for assistive tech; the tip's second line is UI hint only.
-        mark.setAttribute(
-          'aria-label',
-          libraryProgress.total
-            ? `Loading matches, ${Math.min(libraryProgress.loaded, libraryProgress.total)} of ${libraryProgress.total} loaded`
-            : 'Loading more matches'
-        );
+        mark.setAttribute('aria-label', label);
       });
     }
   }
@@ -263,25 +305,18 @@ export function createStatsPanel({
       loaded: Math.min(Math.max(libraryProgress.loaded, nextLoaded), nextTotal || nextLoaded),
       total: nextTotal
     };
-    paintLibraryProgress();
+    paintLoadRing();
   }
 
   function resetLibraryProgress() {
     libraryProgress = { loaded: 0, total: 0 };
-    paintLibraryProgress();
+    paintLoadRing();
   }
 
   function setLibraryLoading(on) {
-    const roots = [el, pageHeadEl].filter(Boolean);
-    for (const root of roots) {
-      root.querySelectorAll('[data-st-library-load]').forEach((mark) => {
-        mark.hidden = !on;
-      });
-    }
-    if (on) {
-      paintLibraryProgress();
-      setLibraryRetry(false);
-    }
+    libraryStreaming = Boolean(on);
+    if (libraryStreaming) setLibraryRetry(false);
+    paintLoadRing();
   }
 
   function setLibraryRetry(on) {
@@ -289,6 +324,22 @@ export function createStatsPanel({
     root.querySelectorAll('[data-st-library-retry]').forEach((btn) => {
       btn.hidden = !on;
     });
+  }
+
+  /**
+   * Hold the ring up for as long as `job` runs. Returns `job` itself, so
+   * callers keep the promise (and its rejection) they already had.
+   */
+  function trackBusy(job) {
+    busyCount += 1;
+    paintLoadRing();
+    const done = () => {
+      busyCount = Math.max(0, busyCount - 1);
+      paintLoadRing();
+    };
+    if (job && typeof job.then === 'function') job.then(done, done);
+    else done();
+    return job;
   }
 
   function bindLibraryRetry() {
@@ -315,6 +366,17 @@ export function createStatsPanel({
   let calendarOpen = false;
 
   let payload = null;
+  /**
+   * The roster catalogue: who played in which demo, without any stats index.
+   *
+   * The Search box used to read its suggestions off `payload`, which meant
+   * picking a name required the whole library in the browser first — a ~0.9 GB
+   * download to answer "show me this player". The catalogue answers the same
+   * question in one small request, and the picked demos then scope the server
+   * aggregate, so Search never touches a round.
+   */
+  let roster = null;
+  let rosterLoading = null;
   let scope = {};
   /** When set, only players/rounds under this team display name are counted. */
   let lockedTeamName = '';
@@ -369,7 +431,13 @@ export function createStatsPanel({
   }
 
   function roleMode() {
-    if (!payloadHasRoles(payload)) return '';
+    // Server mode has no payload to inspect; the rows themselves say whether
+    // the library has roles, because the endpoint only attaches them when it
+    // found a role table to read.
+    const has = payload
+      ? payloadHasRoles(payload)
+      : (serverTables?.players || []).some((p) => p.roleT || p.roleCT || p.posT || p.posCT);
+    if (!has) return '';
     return singleMap() ? 'position' : 'tactical';
   }
 
@@ -574,12 +642,34 @@ export function createStatsPanel({
     searchEl.hidden = !searchOpen;
     if (searchOpen) {
       renderSearch();
+      // Suggestions come from the catalogue; fetch it on the way in rather
+      // than on the first keystroke so the menu is populated when it opens.
+      void ensureRoster().then(() => {
+        if (searchOpen) refreshSearchMenu();
+      });
       searchEl.querySelector('#st-entity-search')?.focus?.();
     } else {
       searchMenuOpen = false;
       searchQuery = '';
     }
     syncSearchToggle();
+  }
+
+  /** Load the catalogue once. A failure leaves suggestions on the payload path. */
+  function ensureRoster() {
+    if (roster) return Promise.resolve(roster);
+    if (!rosterLoading) {
+      rosterLoading = fetchRoster()
+        .then((res) => {
+          roster = res;
+          return res;
+        })
+        .catch(() => null)
+        .finally(() => {
+          rosterLoading = null;
+        });
+    }
+    return rosterLoading;
   }
 
   function entitySuggestions(q) {
@@ -590,8 +680,22 @@ export function createStatsPanel({
     const selectedTeams = new Set(entityPick.teams.map((t) => String(t.key)));
     /** @type {{ kind: 'team'|'player', key: string, label: string, sub?: string }[]} */
     const out = [];
-    const teams = payload ? listTeams(payload) : [];
-    const players = payload ? listPlayers(payload) : [];
+    // Catalogue first; the payload is only a fallback for a roster that failed
+    // to load, and both expose the same { key/id, name } shape.
+    const teams = roster
+      ? rosterTeams(roster, '', Infinity).map((t) => ({
+          key: t.key,
+          name: t.name,
+          playerIds: null
+        }))
+      : payload
+        ? listTeams(payload)
+        : [];
+    const players = roster
+      ? rosterPlayers(roster, '', Infinity)
+      : payload
+        ? listPlayers(payload)
+        : [];
 
     const teamHits = teams
       .filter((t) => !selectedTeams.has(String(t.key)))
@@ -603,7 +707,7 @@ export function createStatsPanel({
       )
       .slice(0, needle ? 8 : 12);
     for (const t of teamHits) {
-      const n = t.playerIds?.length || 0;
+      const n = t.playerIds?.length ?? (roster ? rosterTeamPlayers(roster, t.key).length : 0);
       out.push({
         kind: 'team',
         key: t.key,
@@ -709,10 +813,18 @@ export function createStatsPanel({
 
   function pickEntity(kind, key) {
     const id = String(key || '').trim();
-    if (!id || !payload) return;
+    // Either source can name the entity. This used to require `payload`, from
+    // when a pick could not be resolved without the whole library in memory —
+    // with suggestions now coming from the catalogue, that guard silently
+    // swallowed every click.
+    if (!id || (!payload && !roster)) return;
     if (kind === 'team') {
       if (entityPick.teams.some((t) => t.key === id)) return;
-      const hit = listTeams(payload).find((t) => t.key === id);
+      const hit = roster
+        ? rosterTeams(roster, '', Infinity).find((t) => String(t.key) === id)
+        : payload
+          ? listTeams(payload).find((t) => t.key === id)
+          : null;
       entityPick.teams.push({ key: id, name: hit?.name || id });
       if (tab !== 'teams' && !entityPick.players.length) {
         tab = 'teams';
@@ -720,7 +832,11 @@ export function createStatsPanel({
       }
     } else if (kind === 'player') {
       if (entityPick.players.some((p) => p.id === id)) return;
-      const hit = listPlayers(payload).find((p) => p.id === id);
+      const hit = roster
+        ? rosterPlayers(roster, '', Infinity).find((p) => String(p.id) === id)
+        : payload
+          ? listPlayers(payload).find((p) => p.id === id)
+          : null;
       entityPick.players.push({ id, name: hit?.name || id });
       if (tab !== 'players' && !entityPick.teams.length) {
         tab = 'players';
@@ -765,11 +881,15 @@ export function createStatsPanel({
   function allowedPlayerIds() {
     if (!hasEntityPick()) return null;
     const ids = new Set(entityPick.players.map((p) => String(p.id)));
-    if (entityPick.teams.length && payload) {
-      const teamKeys = new Set(entityPick.teams.map((t) => String(t.key)));
-      for (const t of listTeams(payload)) {
-        if (!teamKeys.has(String(t.key))) continue;
-        for (const id of t.playerIds || []) ids.add(String(id));
+    if (entityPick.teams.length) {
+      for (const pick of entityPick.teams) {
+        if (roster) {
+          for (const p of rosterTeamPlayers(roster, pick.key)) ids.add(String(p.id));
+          continue;
+        }
+        if (!payload) continue;
+        const hit = listTeams(payload).find((t) => String(t.key) === String(pick.key));
+        for (const id of hit?.playerIds || []) ids.add(String(id));
       }
     }
     return ids;
@@ -779,15 +899,47 @@ export function createStatsPanel({
   function allowedTeamKeys() {
     if (!hasEntityPick()) return null;
     const keys = new Set(entityPick.teams.map((t) => String(t.key)));
-    if (entityPick.players.length && payload) {
+    if (entityPick.players.length) {
       const playerIds = new Set(entityPick.players.map((p) => String(p.id)));
-      for (const t of listTeams(payload)) {
+      const teams = roster
+        ? rosterTeams(roster, '', Infinity).map((t) => ({
+            key: t.key,
+            playerIds: rosterTeamPlayers(roster, t.key).map((p) => p.id)
+          }))
+        : payload
+          ? listTeams(payload)
+          : [];
+      for (const t of teams) {
         if ((t.playerIds || []).some((id) => playerIds.has(String(id)))) {
           keys.add(String(t.key));
         }
       }
     }
     return keys;
+  }
+
+  /**
+   * Demo ids the current search picks cover, or null when unrestricted.
+   *
+   * This is what turns a pick from a library download into a scoped query: a
+   * player only has rounds in their own matches, so aggregating over just those
+   * demos gives the identical row the whole-library pass would have given.
+   */
+  function entityDemoIds() {
+    if (!hasEntityPick() || !roster) return null;
+    const ids = new Set();
+    for (const p of entityPick.players) for (const id of demosForPlayer(roster, p.id)) ids.add(id);
+    for (const t of entityPick.teams) for (const id of demosForTeam(roster, t.key)) ids.add(id);
+    return ids.size ? [...ids] : null;
+  }
+
+  /**
+   * Demos the server aggregate should be restricted to: an explicit caller
+   * scope wins, then the search picks, then the whole library.
+   */
+  function serverDemoScope() {
+    if (scope.demos?.length) return scope.demos;
+    return entityDemoIds() || undefined;
   }
 
   function applyEntityPickPlayers(data) {
@@ -1260,19 +1412,6 @@ export function createStatsPanel({
     return el.contains(sel.anchorNode) || el.contains(sel.focusNode);
   }
 
-  function activateNameLink(link) {
-    if (!link || selectionInside(link)) return false;
-    if (link.dataset.stPlayer != null) {
-      openPlayerDetail(link.dataset.stPlayer, link.textContent || '');
-      return true;
-    }
-    if (link.dataset.stTeam != null) {
-      openTeamDetail(link.dataset.stTeam, link.textContent || '');
-      return true;
-    }
-    return false;
-  }
-
   /** Aggregation key for a team row (strip per-map suffix used in locked-team map lists). */
   function teamAggKey(r) {
     if (r?.mapRow && r.mapCode) {
@@ -1415,8 +1554,14 @@ export function createStatsPanel({
       void openTeamRounds(wrLink);
       return;
     }
-    const nameLink = e.target.closest('[data-st-player], [data-st-team]');
-    if (nameLink && activateNameLink(nameLink)) return;
+    // Names are plain links; the browser (and site.js) owns them. The one
+    // thing to catch is a drag that selected text inside one — that is a
+    // selection, not a click on the link.
+    const nameLink = e.target.closest('a.st-link');
+    if (nameLink) {
+      if (selectionInside(nameLink)) e.preventDefault();
+      return;
+    }
     const pageBtn = e.target.closest('[data-page]');
     if (pageBtn) {
       if (pageBtn.disabled) return;
@@ -1490,12 +1635,8 @@ export function createStatsPanel({
     if (wrLink && e.target === wrLink && onPlayRounds) {
       e.preventDefault();
       void openTeamRounds(wrLink);
-      return;
     }
-    const nameLink = e.target.closest?.('[data-st-player], [data-st-team]');
-    if (!nameLink || e.target !== nameLink) return;
-    e.preventDefault();
-    activateNameLink(nameLink);
+    // Name links are anchors: Enter already activates them.
   });
 
   // ---- view state (URL / share) -------------------------------------------
@@ -1996,16 +2137,29 @@ export function createStatsPanel({
     return out;
   }
 
+  /**
+   * Names are addresses, not drill-downs.
+   *
+   * A name in the table is the point where someone stops asking about the
+   * library and starts asking about a person or a team, and Performance is the
+   * page that answers that. Real `<a href>`s, so the browser gives them
+   * middle-click, copy-link and the back button; site.js routes them in place.
+   */
+  function performanceHref(params) {
+    const q = new URLSearchParams();
+    for (const [k, v] of Object.entries(params)) if (v) q.set(k, String(v));
+    return `/performance?${q}`;
+  }
+
   function playerLink(id, name) {
-    return `<span class="st-link" role="link" tabindex="0" data-st-player="${escapeHtml(
-      id
-    )}">${escapeHtml(name)}</span>`;
+    const href = performanceHref({ player: id, name: name && name !== id ? name : '' });
+    return `<a class="st-link" href="${escapeHtml(href)}">${escapeHtml(name)}</a>`;
   }
 
   function teamLink(name) {
-    return `<span class="st-link" role="link" tabindex="0" data-st-team="${escapeHtml(
-      name
-    )}">${escapeHtml(name)}</span>`;
+    return `<a class="st-link" href="${escapeHtml(
+      performanceHref({ team: name })
+    )}">${escapeHtml(name)}</a>`;
   }
 
   function playerNameCell(r) {
@@ -2141,7 +2295,7 @@ export function createStatsPanel({
           detail.label || detail.id
         )}">Open player profile</a>
       </p>`;
-      bodyEl.innerHTML = profileLink + statsTableHtml(data, {
+      setBodyHtml(profileLink + statsTableHtml(data, {
         columns: cols.columns,
         fixedCount: cols.fixedCount,
         escapeHtml,
@@ -2152,7 +2306,7 @@ export function createStatsPanel({
         showAverage: true,
         opponentCell: (r) =>
           r.opponent && r.opponent !== '—' ? teamLink(r.opponent) : escapeHtml(r.opponent || '—')
-      });
+      }));
       return;
     }
     let data = buildTeamMatchRows(detail.name, active, players, demos);
@@ -2161,7 +2315,7 @@ export function createStatsPanel({
       if (named?.name) detail.label = named.name;
     }
     const cols = teamMatchColumns();
-    bodyEl.innerHTML = statsTableHtml(data, {
+    setBodyHtml(statsTableHtml(data, {
       columns: cols.columns,
       fixedCount: cols.fixedCount,
       escapeHtml,
@@ -2172,7 +2326,7 @@ export function createStatsPanel({
       showAverage: true,
       opponentCell: (r) =>
         r.opponent && r.opponent !== '—' ? teamLink(r.opponent) : escapeHtml(r.opponent || '—')
-    });
+    }));
   }
 
   /** @type {{ current: number }} */
@@ -2230,10 +2384,37 @@ export function createStatsPanel({
    */
   let lastTable = null;
 
+  /**
+   * Replace the table, keeping the columns the reader had scrolled to.
+   *
+   * Every repaint builds a fresh scroller, and a fresh scroller starts at the
+   * far left. Sorting on a metric you had to scroll right to reach used to
+   * snap the table back to the name columns and take the header you just
+   * clicked off screen — the sort worked, but the click looked like it did
+   * nothing. Same for paging and for a filter answered from the server.
+   */
+  function setBodyHtml(html) {
+    const keep = bodyEl.querySelector('[data-st-hscroll-body]')?.scrollLeft || 0;
+    bodyEl.innerHTML = html;
+    if (!keep) return;
+    const apply = () => {
+      const scroller = bodyEl.querySelector('[data-st-hscroll-body]');
+      if (!scroller) return;
+      const max = Math.max(0, scroller.scrollWidth - scroller.clientWidth);
+      scroller.scrollLeft = Math.min(keep, max);
+      const bar = bodyEl.querySelector('[data-st-hscroll-bar]');
+      if (bar) bar.scrollLeft = scroller.scrollLeft;
+    };
+    apply();
+    // Sticky column widths are measured a frame later (bindStatsHScroll), and
+    // the scrollable width only settles once they are written.
+    requestAnimationFrame(() => requestAnimationFrame(apply));
+  }
+
   /** Paint a table and remember what it was painted from. */
   function paintTable(data, opts, prefix = '') {
     lastTable = { data, opts, prefix };
-    bodyEl.innerHTML = prefix + statsTableHtml(data, opts);
+    setBodyHtml(prefix + statsTableHtml(data, opts));
   }
 
   /**
@@ -2253,14 +2434,19 @@ export function createStatsPanel({
     // compare rows); re-sorting it is not meaningful and its own path owns it.
     if (lastTable.opts.preserveOrder) return false;
     lastTable = { ...lastTable, opts };
-    bodyEl.innerHTML = (lastTable.prefix || '') + statsTableHtml(lastTable.data, opts);
+    setBodyHtml((lastTable.prefix || '') + statsTableHtml(lastTable.data, opts));
     bindStatsHScroll(bodyEl);
     attachTips(bodyEl);
     emitViewChange();
     return true;
   }
 
+  /** Every re-render the panel schedules, with the busy ring around it. */
   function scheduleRender(opts = {}) {
+    return trackBusy(runScheduledRender(opts));
+  }
+
+  function runScheduledRender(opts = {}) {
     const rebuildFilters = opts.rebuildFilters !== false;
     if (!payload) {
       // Server mode. An interaction that needs rounds pulls them once and then
@@ -2273,6 +2459,8 @@ export function createStatsPanel({
       if (rebuildFilters) renderFilters();
       else syncFilterChrome();
       bodyEl.setAttribute('aria-busy', 'true');
+      if (detail) return refreshServerDetail();
+      if (lockedTeamName) return refreshServerLocked();
       return refreshServerTables();
     }
     if (rebuildFilters) {
@@ -2304,15 +2492,44 @@ export function createStatsPanel({
    */
   let serverTables = null;
   let serverToken = 0;
+  /** Per-match rows for the open detail, from the server. `{ key, rows }`. */
+  let serverDetail = null;
+  let detailToken = 0;
+  /**
+   * Server rows for the locked-team (Team Overview) views: the pinned player
+   * roster, the per-map team rows, and the one-map comparison. Each piece is a
+   * scoped aggregate query, so the overview never downloads its team's rounds.
+   */
+  let serverLocked = null;
+  let lockedToken = 0;
 
   /** Interactions that cannot be answered from the aggregate endpoint. */
+  /**
+   * Interactions that cannot be answered from the aggregate endpoint.
+   *
+   * Search picks used to be on this list. They are not any more: the catalogue
+   * resolves a pick to demo ids and the aggregate is scoped to them, so the
+   * answer arrives in one request instead of the whole library. A pick made
+   * before the catalogue landed still falls back here, because without it there
+   * is no way to turn a name into a demo list.
+   *
+   * A `files` scope is off the list too. `aggregateHot` has always honoured
+   * `filter.files`, and the endpoint has always accepted a round-id list — the
+   * Pattern Finder sends tens of thousands of them — so "the Database for these
+   * selected rounds" was downloading the library to compute something the
+   * server was already able to answer. fetchAggregate switches to POST once the
+   * list outgrows a URL.
+   *
+   * So is the Role filter. Roles were never computed in the browser — the stats
+   * index writes them per (map, side, player) and the browser only read that
+   * table — so the store can carry them and the server can hand back rows that
+   * already know their role.
+   */
   function needsRawRounds() {
     return Boolean(
-      detail ||
-      lockedTeamName ||
-      hasEntityPick() ||
-      filter.role ||
-      scope.files?.length ||
+      (detail && !roster) ||
+      (lockedTeamName && !roster) ||
+      (hasEntityPick() && !roster) ||
       (scope.demos?.length && scope.demos.length <= 1)
     );
   }
@@ -2326,22 +2543,35 @@ export function createStatsPanel({
     const token = loadToken;
     bodyEl.setAttribute('aria-busy', 'true');
     setSpinnerLabel(bodyEl, 'Loading rounds…');
-    const res = await getStatsPayload(scope.demos || null, {
-      onProgress: (p) => {
-        if (token !== loadToken) return;
-        noteLibraryProgress({ loaded: p?.libraryLoaded, total: p?.libraryTotal });
-      },
-      onBatch: (batch) => {
-        if (token !== loadToken) return;
-        payload = batch.payload;
-        noteLibraryProgress({ loaded: batch.loaded, total: batch.total });
-        setLibraryLoading(Boolean(batch.hasMore));
+    try {
+      const res = await getStatsPayload(scope.demos || null, {
+        onProgress: (p) => {
+          if (token !== loadToken) return;
+          noteLibraryProgress({ loaded: p?.libraryLoaded, total: p?.libraryTotal });
+        },
+        onBatch: (batch) => {
+          if (token !== loadToken) return;
+          payload = batch.payload;
+          noteLibraryProgress({ loaded: batch.loaded, total: batch.total });
+          setLibraryLoading(Boolean(batch.hasMore));
+        }
+      });
+      if (token !== loadToken) return null;
+      payload = res;
+      setLibraryLoading(false);
+      return payload;
+    } catch (err) {
+      // A page that fails mid-stream used to leave the ring turning for the
+      // rest of the session: nothing below the await ran, so the "still
+      // loading" mark was never cleared and the count froze wherever it had
+      // got to. Stop the ring, offer Retry (resumeLibrary picks up from the
+      // last merged page), and let the caller see the failure.
+      if (token === loadToken) {
+        setLibraryLoading(false);
+        setLibraryRetry(true);
       }
-    });
-    if (token !== loadToken) return null;
-    payload = res;
-    setLibraryLoading(false);
-    return payload;
+      throw err;
+    }
   }
 
   /** Render the two tables straight from server rows. */
@@ -2355,7 +2585,13 @@ export function createStatsPanel({
     if (tab === 'players') {
       let data = serverTables.players || [];
       if (minR > 0) data = data.filter((p) => (p.rounds || 0) >= minR);
-      let cols = { columns: PLAYER_COLUMNS, fixedCount: PLAYER_FIXED_BASE.length };
+      // Scoping the query to the picked demos also returns everyone else who
+      // played in them; the pick still decides which rows are shown.
+      data = applyEntityPickPlayers(data);
+      const mode = roleMode();
+      let cols = mode
+        ? playerColumnsWithRoles(mode)
+        : { columns: PLAYER_COLUMNS, fixedCount: PLAYER_FIXED_BASE.length };
       if (omitTeamColumn) cols = omitPlayerTeamColumn(cols);
       paintTable(data, {
         columns: cols.columns,
@@ -2372,6 +2608,7 @@ export function createStatsPanel({
     } else {
       let data = serverTables.teams || [];
       if (minR > 0) data = data.filter((t) => (t.rounds || 0) >= minR);
+      data = applyEntityPickTeams(data);
       paintTable(data, {
         columns: TEAM_COLUMNS,
         fixedCount: 2,
@@ -2391,17 +2628,321 @@ export function createStatsPanel({
     emitViewChange();
   }
 
+  /** Demos the open detail covers, from the catalogue. */
+  function detailDemoIds() {
+    if (!detail || !roster) return null;
+    return detail.kind === 'team'
+      ? demosForTeam(roster, detail.name)
+      : demosForPlayer(roster, detail.id);
+  }
+
+  /**
+   * Pull the open detail's per-match rows from the server.
+   *
+   * The rows come back already aggregated per match, so the browser holds one
+   * row per game instead of every round of every game the entity played.
+   */
+  async function refreshServerDetail() {
+    const token = ++detailToken;
+    const ids = detailDemoIds();
+    if (!ids?.length) {
+      serverDetail = { key: detailKey(), rows: [] };
+      renderServerDetail();
+      return true;
+    }
+    const active = { ...filter, files: scope.files || null };
+    try {
+      const res = await fetchAggregateMatches(
+        detail.kind === 'team' ? { kind: 'team', id: detail.name } : { kind: 'player', id: detail.id },
+        ids,
+        active
+      );
+      if (token !== detailToken) return false;
+      serverDetail = { key: detailKey(), rows: res?.rows || res?.players || [] };
+      renderServerDetail();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Map codes the locked team has played, read off the roster catalogue. */
+  function lockedTeamMaps() {
+    if (!roster || !lockedTeamName) return [];
+    const inScope = scope.demos?.length ? new Set(scope.demos) : null;
+    const want = teamNameKey(lockedTeamName);
+    const played = new Set();
+    for (const d of roster.demos || []) {
+      if (inScope && !inScope.has(d.id)) continue;
+      if (teamNameKey(d.n1, d.t1) !== want && teamNameKey(d.n2, d.t2) !== want) continue;
+      if (d.m) played.add(String(d.m).toUpperCase());
+    }
+    const order = POSITION_MAPS.map((m) => m.code);
+    return [...played].sort((a, b) => {
+      const ia = order.indexOf(a);
+      const ib = order.indexOf(b);
+      if (ia < 0 && ib < 0) return a.localeCompare(b);
+      if (ia < 0) return 1;
+      if (ib < 0) return -1;
+      return ia - ib;
+    });
+  }
+
+  /**
+   * Fetch everything the locked-team views paint, as scoped aggregates.
+   *
+   * Three shapes, all queries the endpoint already answers:
+   *  - players, twice: once under the active filters and once under only
+   *    map/file scope, so the roster pin can show a player the filter zeroed
+   *    out as dashes instead of dropping them;
+   *  - teams once per played map (the Any-map per-map table);
+   *  - on a single map, the library-wide teams table for the comparison.
+   */
+  async function refreshServerLocked() {
+    const token = ++lockedToken;
+    const demos = serverDemoScope();
+    const maps = Array.isArray(filter.maps) ? filter.maps.filter(Boolean) : [];
+    const oneMap = maps.length === 1 ? String(maps[0]) : '';
+    const active = { ...filter, files: scope.files || null, teamName: lockedTeamName, roles: true };
+    const rosterActive = {
+      maps: filter.maps,
+      files: scope.files || null,
+      teamName: lockedTeamName,
+      roles: true
+    };
+    try {
+      const jobs = {
+        players: fetchAggregate(active, { tables: 'players', demos }),
+        rosterPlayers: fetchAggregate(rosterActive, { tables: 'players', demos }),
+        mapRows: oneMap
+          ? Promise.resolve([])
+          : Promise.all(
+              lockedTeamMaps().map(async (code) => {
+                const res = await fetchAggregate(
+                  { ...active, maps: [code] },
+                  { tables: 'teams', demos }
+                );
+                const row = (res?.teams || [])[0];
+                if (!row || !(row.rounds > 0)) return null;
+                return {
+                  ...row,
+                  name: MAPS[code]?.name || POSITION_MAPS.find((m) => m.code === code)?.name || code,
+                  mapCode: code,
+                  mapRow: true,
+                  key: `${row.key}|${code}`
+                };
+              })
+            ),
+        libraryTeams: oneMap
+          ? fetchAggregate({ ...filter, teamName: '', files: null, maps: [oneMap] }, { tables: 'teams' })
+          : Promise.resolve(null),
+        usRow: oneMap
+          ? fetchAggregate({ ...active, maps: [oneMap] }, { tables: 'teams', demos })
+          : Promise.resolve(null)
+      };
+      const [players, rosterPlayers, mapRows, libraryTeams, usRow] = await Promise.all([
+        jobs.players,
+        jobs.rosterPlayers,
+        jobs.mapRows,
+        jobs.libraryTeams,
+        jobs.usRow
+      ]);
+      if (token !== lockedToken) return false;
+      serverLocked = {
+        players: players?.players || [],
+        rosterPlayers: rosterPlayers?.players || [],
+        mapRows: (mapRows || []).filter(Boolean),
+        libraryTeams: libraryTeams?.teams || null,
+        usRow: (usRow?.teams || [])[0] || null,
+        oneMap
+      };
+      renderServerLocked();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Paint the locked-team views from the fetched aggregate rows. */
+  function renderServerLocked() {
+    if (!lockedTeamName || !serverLocked) return;
+    syncHead();
+    syncFilterChrome();
+    const searching = hasEntityPick();
+    const minR = searching ? 0 : Math.max(0, Number(filter.minRounds) || 0);
+
+    if (tab === 'players') {
+      // Pin exactly the way the payload path pins: the roster query decides
+      // which players appear (and their order), the filtered query supplies
+      // the numbers, and a filtered-out player shows as dashes.
+      let rosterRows = serverLocked.rosterPlayers;
+      if (minR > 0) rosterRows = rosterRows.filter((p) => (p.rounds || 0) >= minR);
+      const byId = new Map(serverLocked.players.map((p) => [p.id, p]));
+      let data = rosterRows.length
+        ? rosterRows.map((base) => byId.get(base.id) || absentPlayerRow(base))
+        : minR > 0
+          ? serverLocked.players.filter((p) => (p.rounds || 0) >= minR)
+          : serverLocked.players;
+      data = applyEntityPickPlayers(data);
+      const mode = roleModeOf(data);
+      let cols = mode
+        ? playerColumnsWithRoles(mode)
+        : { columns: PLAYER_COLUMNS, fixedCount: PLAYER_FIXED_BASE.length };
+      if (omitTeamColumn) cols = omitPlayerTeamColumn(cols);
+      paintTable(data, {
+        columns: cols.columns,
+        fixedCount: cols.fixedCount,
+        escapeHtml,
+        sortKey: sort.players.key,
+        sortDir: sort.players.dir,
+        page: page.players,
+        pageSize: STATS_PAGE_SIZE,
+        showAverage: true,
+        nameCell: playerNameCell,
+        teamCell: playerTeamCell
+      });
+    } else if (!serverLocked.oneMap) {
+      let data = applyEntityPickTeams(serverLocked.mapRows);
+      setBodyHtml(statsTableHtml(data, {
+        columns: TEAM_MAP_COLUMNS,
+        fixedCount: 2,
+        escapeHtml,
+        preserveOrder: true,
+        showAverage: true,
+        nameCell: teamNameCell,
+        roundWrCell: teamRoundWrCell
+      }));
+    } else {
+      // One map: worst / best / middle / us, footer averaged over every team
+      // that played the map — the same selection lockedTeamMapCompare made,
+      // over rows the library-wide aggregate already computed.
+      let all = serverLocked.libraryTeams || [];
+      all = minR > 0 ? all.filter((t) => (t.rounds || 0) >= minR) : all.filter((t) => (t.rounds || 0) > 0);
+      const byWr = [...all].sort(
+        (a, b) =>
+          (b.roundWinrate || 0) - (a.roundWinrate || 0) ||
+          String(a.name).localeCompare(String(b.name))
+      );
+      const want = teamNameKey(lockedTeamName);
+      const us = byWr.find((t) => teamNameKey(t.name) === want) || serverLocked.usRow || null;
+      const display = [];
+      const seen = new Set();
+      const push = (row, role) => {
+        if (!row) return;
+        const k = row.key || teamNameKey(row.name);
+        if (!k || seen.has(k)) return;
+        seen.add(k);
+        display.push({ ...row, compareRole: role });
+      };
+      if (byWr.length) {
+        push(byWr[byWr.length - 1], 'worst');
+        push(byWr[0], 'best');
+        push(byWr[Math.floor((byWr.length - 1) / 2)], 'mid');
+      }
+      push(us, 'us');
+      const data = applyEntityPickTeams(display);
+      setBodyHtml(statsTableHtml(data, {
+        columns: TEAM_COLUMNS,
+        fixedCount: 2,
+        escapeHtml,
+        preserveOrder: true,
+        showAverage: true,
+        averageRows: searching ? undefined : byWr,
+        nameCell: teamNameCell,
+        roundWrCell: teamRoundWrCell
+      }));
+    }
+    bodyEl.removeAttribute('aria-busy');
+    bindStatsHScroll(bodyEl);
+    attachTips(bodyEl);
+    emitViewChange();
+  }
+
+  /** Role column mode for rows that came back from the server. */
+  function roleModeOf(rows) {
+    const has = (rows || []).some((p) => p.roleT || p.roleCT || p.posT || p.posCT);
+    if (!has) return '';
+    return singleMap() ? 'position' : 'tactical';
+  }
+
+  /** Identity of the detail a cached row set belongs to. */
+  function detailKey() {
+    if (!detail) return '';
+    return `${detail.kind}:${detail.kind === 'team' ? detail.name : detail.id}`;
+  }
+
+  /**
+   * Paint per-match rows that came from the server.
+   *
+   * The identity columns — score, result, opponent — are derived here rather
+   * than server-side because they depend on which side the entity was on, and
+   * the row already carries the demo's two team names and winner.
+   */
+  function renderServerDetail() {
+    if (!detail || !serverDetail) return;
+    syncHead();
+    syncFilterChrome();
+    // `side`, `scoreLabel` and `scoreSort` are stamped server-side: the score
+    // has to be the FILTERED round record, and only the query that applied the
+    // filter knows it.
+    const data = serverDetail.rows.map((row) => ({
+      ...row,
+      mapName: MAPS[row.map]?.name || row.map || '—',
+      opponent: (row.side === 2 ? row.name1 : row.name2) || '—',
+      result: row.winner === row.side ? 'W' : row.winner ? 'L' : '—',
+      scoreLabel: row.scoreLabel || '',
+      scoreSort: row.scoreSort ?? 0,
+      uploadedAt: row.uploadedAt || 0
+    }));
+    if (detail.label === (detail.id || detail.name)) {
+      const named = data.find((r) => r.name);
+      if (named?.name) detail.label = named.name;
+    }
+    const cols = detail.kind === 'team' ? teamMatchColumns() : playerMatchColumns();
+    const profileLink =
+      detail.kind === 'player'
+        ? `<p class="st-profile-link">
+        <a href="/performance?player=${encodeURIComponent(detail.id)}&name=${encodeURIComponent(
+          detail.label || detail.id
+        )}">Open player profile</a>
+      </p>`
+        : '';
+    paintTable(
+      data,
+      {
+        columns: cols.columns,
+        fixedCount: cols.fixedCount,
+        escapeHtml,
+        sortKey: detailSort.key,
+        sortDir: detailSort.dir,
+        page: detailPage,
+        pageSize: STATS_PAGE_SIZE,
+        showAverage: true,
+        opponentCell: (r) =>
+          r.opponent && r.opponent !== '—' ? teamLink(r.opponent) : escapeHtml(r.opponent || '—')
+      },
+      profileLink
+    );
+    bodyEl.removeAttribute('aria-busy');
+    bindStatsHScroll(bodyEl);
+    attachTips(bodyEl);
+    syncHead();
+    emitViewChange();
+  }
+
   /**
    * Re-query the server for the current filter. Used when the panel is in
    * server mode and a filter, tab or sort changes.
    */
   async function refreshServerTables() {
     const token = ++serverToken;
-    const active = { ...filter, files: scope.files || null };
+    // `roles: true` asks for the role columns even with no role chip set: the
+    // table shows a Role column whenever the library has roles at all.
+    const active = { ...filter, files: scope.files || null, roles: true };
     try {
       const res = await fetchAggregate(active, {
         tables: 'players,teams',
-        demos: scope.demos || undefined
+        demos: serverDemoScope()
       });
       if (token !== serverToken) return false;
       serverTables = res;
@@ -2417,6 +2958,14 @@ export function createStatsPanel({
     lastTable = null;
     if (!payload) {
       // Server mode: no rounds in the browser, so paint from the endpoint.
+      if (detail) {
+        if (serverDetail) renderServerDetail();
+        return;
+      }
+      if (lockedTeamName) {
+        if (serverLocked) renderServerLocked();
+        return;
+      }
       if (serverTables) renderFromServer();
       return;
     }
@@ -2457,13 +3006,13 @@ export function createStatsPanel({
       data = applyEntityPickPlayers(data);
       const matchDemo = singleMatchDemo(payload, scope);
       if (matchDemo) {
-        bodyEl.innerHTML = matchBoardsHtml(data, matchDemo, {
+        setBodyHtml(matchBoardsHtml(data, matchDemo, {
           escapeHtml,
           sortKey: sort.players.key,
           sortDir: sort.players.dir,
           columns: playerCols.columns,
           fixedCount: playerCols.fixedCount
-        });
+        }));
       } else {
         paintTable(data, {
           columns: playerCols.columns,
@@ -2486,7 +3035,7 @@ export function createStatsPanel({
         // Any map: one row per map for the locked team.
         let data = lockedTeamPerMapRows(rows, players, demos, active);
         data = applyEntityPickTeams(data);
-        bodyEl.innerHTML = statsTableHtml(data, {
+        setBodyHtml(statsTableHtml(data, {
           columns: TEAM_MAP_COLUMNS,
           fixedCount: 2,
           escapeHtml,
@@ -2494,7 +3043,7 @@ export function createStatsPanel({
           showAverage: true,
           nameCell: teamNameCell,
           roundWrCell: teamRoundWrCell
-        });
+        }));
       } else if (lockedTeamName && oneMap) {
         // One map: us vs best / mid / worst on that map; footer = all-team average.
         const compared = lockedTeamMapCompare(
@@ -2506,7 +3055,7 @@ export function createStatsPanel({
           minR
         );
         const data = applyEntityPickTeams(compared.rows);
-        bodyEl.innerHTML = statsTableHtml(data, {
+        setBodyHtml(statsTableHtml(data, {
           columns: TEAM_COLUMNS,
           fixedCount: 2,
           escapeHtml,
@@ -2515,7 +3064,7 @@ export function createStatsPanel({
           averageRows: searching ? undefined : compared.averageRows,
           nameCell: teamNameCell,
           roundWrCell: teamRoundWrCell
-        });
+        }));
       } else {
         let data = aggregateTeams(rows, players, demos, active);
         if (minR > 0) data = data.filter((t) => (t.rounds || 0) >= minR);
@@ -2602,7 +3151,11 @@ export function createStatsPanel({
    *   role?: object|string|null
    * }} next
    */
-  async function load(next = {}) {
+  function load(next = {}) {
+    return trackBusy(loadLibrary(next));
+  }
+
+  async function loadLibrary(next = {}) {
     const token = ++loadToken;
     scope = {
       demos: Array.isArray(next.demos) ? [...next.demos] : undefined,
@@ -2613,6 +3166,11 @@ export function createStatsPanel({
     scopeEl.textContent = next.title || '';
     payload = null;
     serverTables = null;
+    serverDetail = null;
+    serverLocked = null;
+    // Start the catalogue now; it is awaited below, before the panel decides
+    // whether it needs raw rounds.
+    const rosterReady = ensureRoster();
     // A re-scoped load counts from zero against a different total.
     resetLibraryProgress();
     setLibraryLoading(false);
@@ -2652,7 +3210,11 @@ export function createStatsPanel({
     applyViewState(next, { notify: false });
     syncSearchToggle();
     if (searchOpen) renderSearch();
-    await fetchVrsRanks().catch(() => {});
+    // The catalogue decides whether a detail view or a search pick can be
+    // answered by the server. It is ~14 KB and arrives in tens of milliseconds;
+    // deciding without it means defaulting to a library download, which is the
+    // thing it exists to avoid. Both requests are already in flight.
+    await Promise.all([fetchVrsRanks().catch(() => {}), rosterReady]);
     if (token !== loadToken) return;
 
     // Server mode. The default view is a filtered table over the library, which
@@ -2660,12 +3222,21 @@ export function createStatsPanel({
     // with the filters this load resolved to, and only pull rounds when the
     // view actually needs them.
     if (!needsRawRounds()) {
-      const served = await refreshServerTables();
+      // A detail view opened straight from a URL asks the matches endpoint,
+      // a locked team (Team Overview) its aggregate pieces; all paint without
+      // a round reaching the browser.
+      const served = detail
+        ? await refreshServerDetail()
+        : lockedTeamName
+          ? await refreshServerLocked()
+          : await refreshServerTables();
       if (token !== loadToken) return;
       if (served) {
         cancelSlow();
         renderFilters();
-        renderFromServer();
+        if (detail) renderServerDetail();
+        else if (lockedTeamName) renderServerLocked();
+        else renderFromServer();
         return;
       }
       // Endpoint unavailable (older server, an error): the payload path below
@@ -2813,41 +3384,11 @@ export function createStatsPanel({
     applyViewState(opts);
   }
 
-  /**
-   * Expand a team-scoped payload to the full library once (for map compare).
-   * No-op when already unscoped. Preserves filters / locked team name.
-   */
-  async function ensureLibraryPayload() {
-    if (!scope.demos?.length && !scope.files?.length) return false;
-    const snap = viewState();
-    await load({
-      title: scope.title || '',
-      teamName: lockedTeamName || '',
-      tab: snap.tab || tab,
-      maps: snap.maps,
-      side: snap.side,
-      result: snap.result,
-      advantage: snap.advantage,
-      econ: snap.econ,
-      oppEcon: snap.oppEcon,
-      hasAwp: snap.hasAwp,
-      oppHasAwp: snap.oppHasAwp,
-      minRounds: snap.minRounds,
-      dateFrom: snap.dateFrom,
-      dateTo: snap.dateTo,
-      role: snap.role,
-      searchPlayers: snap.searchPlayers,
-      searchTeams: snap.searchTeams
-    });
-    return true;
-  }
-
   return {
     el,
     load,
     applyView,
     applyViewState,
-    ensureLibraryPayload,
     mountPageHead,
     /** The loaded payload, so panels beside this one can reuse the fetch. */
     getPayload: () => payload,

@@ -13,14 +13,14 @@
 // metric and dimension is listed here, so adding one without deciding its
 // columns fails the suite instead of silently plotting from absent data.
 //
-// NOT WIRED YET, and the reason is worth recording. `buildFacts` is
-// metric-agnostic: it builds the player, round and kill fact tables from every
-// row in one pass, whatever the chart happens to be showing. Fetching a narrow
-// contract therefore does not narrow the work — it starves it, and the facts
-// for every unfetched column come out empty. Wiring this up first requires
-// buildFacts to know which metrics it is being asked for and to skip the rest.
-// The mapping below is the input that refactor needs, and the test keeps it
-// honest against the metric registry until then.
+// Wired via chartsPanel: the initial fetch asks for exactly the groups the
+// chart on screen reads, and renderCanvas re-checks coverage on every spec
+// change — a chart that needs an unfetched group widens the facts (refetching
+// the union) before plotting. That closes the trap that kept this unwired:
+// buildFacts is metric-agnostic, so facts built under a narrow contract don't
+// error when starved, they plot empty. The coverage check is what makes a
+// narrow fetch safe. The test below keeps the mapping honest against the
+// metric registry; anything unmapped falls back to the full contract.
 // ---------------------------------------------------------------------------
 
 import { DIMENSIONS, METRICS } from './chartFields.js';

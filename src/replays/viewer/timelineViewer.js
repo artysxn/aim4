@@ -20,6 +20,8 @@ import {
   savePlaylist,
   fetchStats
 } from '../api.js';
+import { fetchRoster } from '../api.js';
+import { demosForPlayer } from '../shared/rosterQuery.js';
 import { teamNameKey } from '../shared/statsMath.js';
 import { useMeteredFeature } from '../../lib/meteredFeature.js';
 import { getEntitlements } from '../../lib/entitlements.js';
@@ -3664,10 +3666,24 @@ export function createTimelineViewer({
         // Identity plus roles. Not identity alone: mergeRolesAcrossDemos reads
         // `demo.roles.maps[map][side]`, and without it every demo looks
         // role-less, so the library vote silently returns nothing and seating
-        // falls back to a coin flip. Roles are a per-demo field, not per-round,
-        // so this stays a very small payload.
-        libraryDemos: () =>
-          getStatsPayload(null, { columns: 'roles' }).then((p) => p?.demos || []),
+        // falls back to a coin flip.
+        //
+        // Scoped, not library-wide: the vote only ever counts demos where all
+        // five of these players appear together, and every such demo features
+        // the first of them — so the first player's demo list from the roster
+        // catalogue bounds the pull to one team's history instead of streaming
+        // the identity row of every round in the library.
+        libraryDemos: async () => {
+          try {
+            const roster = await fetchRoster();
+            const ids = demosForPlayer(roster, playerIds.find(Boolean));
+            if (!ids.length) return [];
+            const p = await getStatsPayload(ids, { columns: 'roles' });
+            return p?.demos || [];
+          } catch {
+            return [];
+          }
+        },
         loadRounds: () => stratScanRounds(mapCode, stratSide, playerIds),
         network
       });

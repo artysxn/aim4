@@ -7,11 +7,44 @@
 // superseded jobs when the user clicks again.
 // ---------------------------------------------------------------------------
 
-/** Wait until after the next paint so a spinner can show before a long task. */
+/**
+ * How long to wait for the two frames before giving up and continuing anyway.
+ * Long enough that a genuinely slow frame still gets to paint the spinner,
+ * short enough that nobody reads it as a hang.
+ */
+const PAINT_TIMEOUT_MS = 250;
+
+/**
+ * Wait until after the next paint so a spinner can show before a long task.
+ *
+ * Never waits on frames that are not coming. A browser stops running rAF
+ * callbacks while the page is hidden — backgrounded tab, minimised window, or
+ * simply covered by another window, which Chrome also reports as hidden — so an
+ * `await yieldToPaint()` in the middle of a pipeline used to stop that pipeline
+ * for as long as the page stayed off screen. That is what made the Demo
+ * Manager's Load more look dead: the list was replaced by "Updating…", the work
+ * behind it never resumed, and only re-focusing the tab brought it back.
+ *
+ * Two guards: skip the frames outright when the page is already hidden, and
+ * time the wait out for the case that matters more — the page was visible when
+ * the frames were requested and went away before they ran.
+ */
 export function yieldToPaint() {
   return new Promise((resolve) => {
+    if (typeof document !== 'undefined' && document.hidden) {
+      setTimeout(resolve, 0);
+      return;
+    }
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(finish, PAINT_TIMEOUT_MS);
     requestAnimationFrame(() => {
-      requestAnimationFrame(resolve);
+      requestAnimationFrame(finish);
     });
   });
 }

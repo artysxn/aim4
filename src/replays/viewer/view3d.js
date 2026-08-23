@@ -125,6 +125,30 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange }) {
   let player = null;
   let controls = null;
   let crosshair = null;
+  /**
+   * The Crosshair instance behind that canvas.
+   *
+   * It owns `canvas.style.display` — an INLINE style, which beats the UA's
+   * `[hidden] { display: none }`. Toggling the `hidden` attribute alone
+   * therefore did nothing, and the 3D crosshair stayed painted over the 2D
+   * radar after switching back. Visibility goes through the object that owns
+   * the property.
+   */
+  let crosshairXh = null;
+
+  /**
+   * Show or hide the crosshair overlay.
+   *
+   * Both mechanisms, deliberately: `setVisible` for the inline `display` the
+   * Crosshair class owns (and to stop it redrawing while off screen), and the
+   * `hidden` attribute so the element is out of the accessibility tree too.
+   * Setting only one of them is what left it painted over the 2D radar.
+   */
+  function setCrosshairVisible(on) {
+    if (!crosshair) return;
+    crosshairXh?.setVisible(Boolean(on));
+    crosshair.hidden = !on;
+  }
   let lastNow = 0;
   let altHeld = false;
   let corpseRound = '';
@@ -1479,7 +1503,12 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange }) {
         match: hudMatchStub()
       });
       matchHud.el.hidden = !hudOn;
-      crosshair = mountCrosshair(container, { scaleToResolution: false }).canvas;
+      const mounted = mountCrosshair(container, { scaleToResolution: false });
+      crosshair = mounted.canvas;
+      crosshairXh = mounted.crosshair;
+      // Mounted while the viewer may still be in 2D: start from the real state
+      // rather than assuming visible.
+      setCrosshairVisible(visible);
       window.addEventListener('keydown', onAlt);
       window.addEventListener('keyup', onAlt);
       window.addEventListener('blur', onAltBlur);
@@ -1508,7 +1537,7 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange }) {
       visible = true;
       canvas.hidden = false;
       if (flashOverlay) flashOverlay.hidden = false;
-      if (crosshair) crosshair.hidden = false;
+      setCrosshairVisible(true);
       if (matchHud) matchHud.el.hidden = !hudOn;
       if (isFree()) controls.setEnabled(true);
       syncPointerCursor();
@@ -1518,7 +1547,7 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange }) {
       visible = false;
       canvas.hidden = true;
       if (flashOverlay) flashOverlay.hidden = true;
-      if (crosshair) crosshair.hidden = true;
+      setCrosshairVisible(false);
       if (matchHud) matchHud.el.hidden = true;
       xray?.updateLabels(camera, []);
       controls?.setEnabled(false);
@@ -1620,6 +1649,7 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange }) {
       window.removeEventListener('blur', onAltBlur);
       controls?.dispose();
       crosshair?.remove();
+      crosshairXh = null;
       flashOverlay?.remove();
       for (const b of bodies) b.model?.dispose();
       xray?.dispose();

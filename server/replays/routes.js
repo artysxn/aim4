@@ -72,7 +72,7 @@ import { forgetDemoIndex, loadStoredEntry, refreshLibraryStats, scheduleStatsInd
 import { ColumnContractError, resolveColumns } from '../../src/replays/shared/statsColumns.js';
 import { getRoster, scopeRoster } from './rosterCatalogue.js';
 import { peerAverages } from './peerAverages.js';
-import { hotStoreStatus, hotTables } from './statsHotService.js';
+import { hotStoreStatus, hotMatches, hotTables } from './statsHotService.js';
 import { isAcceptedUpload, rarSupport } from './archive.js';
 import { allJobs, batchStatus, enqueueParse, forgetJob, getBatch, jobStatus, startIngest } from './jobs.js';
 import { SHARED_LIBRARY, authStatus, identify } from './auth.js';
@@ -1232,7 +1232,17 @@ export async function handleReplayRequest(req, res, url) {
       rankOpp: arg('rankOpp') || '',
       dateFrom: arg('from') || '',
       dateTo: arg('to') || '',
-      files: argList('files') || []
+      files: argList('files') || [],
+      // "T:AWPer" / "CT:Anchor". Roles are stored on the index; the store
+      // carries them, so this no longer forces the caller to download rounds.
+      role: (() => {
+        const raw = String(arg('role') || '').trim();
+        if (!raw) return null;
+        const [side, ...rest] = raw.split(':');
+        const value = rest.join(':').trim();
+        if ((side !== 'T' && side !== 'CT') || !value) return null;
+        return { side, value };
+      })()
     };
     // A `files` filter that matched nothing must return nothing, not the whole
     // library — an empty list here means "these rounds", and there are none.
@@ -1249,6 +1259,7 @@ export async function handleReplayRequest(req, res, url) {
     const wantTeams = tabs.includes('teams');
     const { players, teams, maps } = await hotTables(statsIo, user, ready, filter, {
       teams: wantTeams,
+      roles: argHas('roles') || Boolean(filter.role),
       // A demo scope narrows the mask; it never widens what may be read.
       allowedIds: scoped
         ? new Set([...allowedIds].filter((id) => scoped.has(id)))
@@ -1284,6 +1295,73 @@ export async function handleReplayRequest(req, res, url) {
       }),
       req
     );
+    return true;
+  }
+
+  // ---- per-match rows for one player or team -------------------------------
+  //
+  // The detail view under a name in the Database. Same store, same filters, one
+  // row per match instead of one row per entity — so opening a name costs a
+  // request rather than the library.
+  if (
+    (req.method === 'GET' || req.method === 'POST') &&
+    p === '/api/replays/aggregate/matches'
+  ) {
+    let body = null;
+    if (req.method === 'POST') {
+      try {
+        body = await readJson(req, 4 * 1024 * 1024);
+      } catch (err) {
+        json(res, 400, { error: err?.message || 'Invalid JSON body.' });
+        return true;
+      }
+    }
+    const arg = (key) => (body ? body[key] : url.searchParams.get(key));
+    const argList = (key) => {
+      if (!body) return csv(url, key);
+      const v = body[key];
+      if (Array.isArray(v)) return v.map(String).filter(Boolean);
+      return typeof v === 'string' && v ? v.split(',').map((x) => x.trim()).filter(Boolean) : undefined;
+    };
+    const argHas = (key) =>
+      body ? body[key] !== undefined && body[key] !== null : url.searchParams.has(key);
+
+    const playerId = String(arg('player') || '').trim();
+    const teamKey = String(arg('team') || '').trim();
+    if (!playerId && !teamKey) {
+      json(res, 400, { error: 'Pass player= or team=.' });
+      return true;
+    }
+    const demoIds = argList('demos') || [];
+    if (!demoIds.length) {
+      json(res, 200, { rows: [] });
+      return true;
+    }
+
+    const { records: allRecords, allowed } = await readable();
+    const ready = allRecords.filter((r) => (r.status || 'ready') === 'ready');
+    const allowedIds = new Set(
+      allowed.filter((r) => (r.status || 'ready') === 'ready').map((r) => r.id)
+    );
+    const scoped = new Set(demoIds);
+    const filter = {
+      maps: argList('maps') || [],
+      side: arg('side') || '',
+      econ: argHas('econ') ? Number(arg('econ')) : null,
+      oppEcon: argHas('oppEcon') ? Number(arg('oppEcon')) : null,
+      result: arg('result') || '',
+      advantage: arg('advantage') || '',
+      rankOwn: arg('rankOwn') || '',
+      rankOpp: arg('rankOpp') || '',
+      dateFrom: arg('from') || '',
+      dateTo: arg('to') || '',
+      files: argList('files') || []
+    };
+    const rows = await hotMatches(statsIo, user, ready, demoIds, filter, {
+      allowedIds: new Set([...allowedIds].filter((id) => scoped.has(id))),
+      want: teamKey ? { kind: 'team', id: teamKey } : { kind: 'player', id: playerId }
+    });
+    await jsonBig(res, 200, gateStatsPayload(me, { players: rows, rows }), req);
     return true;
   }
 
@@ -1324,28 +1402,62 @@ export async function handleReplayRequest(req, res, url) {
   // count (statsIndex.js STATS_PAGE_BYTES). The
   // client paints the first page, then asks for the next. Filtering still
   // happens in the browser against whatever has arrived so far.
-  if (req.method === 'GET' && p === '/api/replays/stats') {
-    const only = csv(url, 'demos');
+  //
+  // POST takes the identical arguments in a body, for one reason: the `demos`
+  // scope. A per-map Pattern Finder pull names every demo on that map, and on
+  // the game's most-played maps that is over a thousand ids — ~17 KB of query
+  // string, past Node's 16 KB request-line-plus-headers limit, so the request
+  // never reached this handler at all. It came back 431 and the map simply
+  // never loaded. Everything else about the two is the same.
+  if (
+    (req.method === 'GET' || req.method === 'POST') &&
+    p === '/api/replays/stats'
+  ) {
+    let body = null;
+    if (req.method === 'POST') {
+      try {
+        // Big enough for a whole map's demo list: ~200k ids at ~17 bytes.
+        body = await readJson(req, 4 * 1024 * 1024);
+      } catch (err) {
+        json(res, 400, { error: err?.message || 'Invalid JSON body.' });
+        return true;
+      }
+    }
+    /** Query for GET, body for POST. Same names, same meanings. */
+    const arg = (key) => (body ? body[key] : url.searchParams.get(key));
+    const argList = (key) => {
+      if (!body) return csv(url, key);
+      const v = body[key];
+      if (Array.isArray(v)) return v.map(String).filter(Boolean);
+      return typeof v === 'string' && v
+        ? v.split(',').map((x) => x.trim()).filter(Boolean)
+        : undefined;
+    };
+    const only = argList('demos');
     const { allowed } = await readable();
     const records = allowed.filter((r) => (r.status || 'ready') === 'ready');
+    const streamArg = arg('stream');
     const stream =
-      url.searchParams.get('stream') === '1' ||
-      url.searchParams.get('stream') === 'true' ||
+      streamArg === '1' ||
+      streamArg === 'true' ||
+      streamArg === 1 ||
+      streamArg === true ||
       /application\/x-ndjson/i.test(String(req.headers.accept || ''));
-    const offset = Math.max(0, Math.floor(Number(url.searchParams.get('offset') || 0) || 0));
-    const rawLimit = url.searchParams.get('limit');
+    const offset = Math.max(0, Math.floor(Number(arg('offset') || 0) || 0));
+    const rawLimit = arg('limit');
     // No demo-count clamp here any more: `statsPayload` cuts the page by what
     // the response will WEIGH (STATS_PAGE_BYTES), using the contract's own
     // bytes-per-round and each record's round count. Clamping to 300 on top of
     // that is what made a Pattern Finder scope — a fifth the size per demo —
     // arrive in four round trips instead of one.
     const limit =
-      rawLimit === null || rawLimit === ''
+      rawLimit === null || rawLimit === undefined || rawLimit === ''
         ? only?.length || STATS_LIBRARY_PAGE
         : Math.max(1, Math.floor(Number(rawLimit) || STATS_LIBRARY_PAGE));
     // Column contract. Absent → the full set, so an old client build keeps
     // working; a bad one is a 400 rather than a silently wrong rating.
-    const fields = url.searchParams.get('fields');
+    const rawFields = arg('fields');
+    const fields = Array.isArray(rawFields) ? rawFields.join(',') : rawFields;
     let pageOpts;
     try {
       pageOpts = { offset, limit, columns: fields };

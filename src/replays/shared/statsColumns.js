@@ -96,7 +96,24 @@ export const COLUMN_PRESETS = Object.freeze({
    * a round against this contract's ~5.4 KB, so it rides along rather than
    * making Maps a second fetch of the same demos.
    */
-  rating: [...RATING_CORE, 'coreOpenings', 'roles', 'heldGun', 'roundLibrary'],
+  rating: [
+    ...RATING_CORE,
+    'coreOpenings',
+    'roles',
+    'heldGun',
+    'roundLibrary',
+    // The per-match table under the cards is the Database's full player column
+    // set, and these three groups are the ones it reads that RATING_CORE does
+    // not carry: `movement` is DT / PSDT, `utility` is HE dmg / blind-flash /
+    // util dmg / U%, `awpHold` is aKPR. Without them the page renders those
+    // columns as em dashes on every row, which reads as missing DATA rather
+    // than an unfetched column — the numbers exist, and the Database shows them
+    // for the same match. 1.6 KB a round on top of ~5.4 KB, and only ever over
+    // one player's own matches.
+    'movement',
+    'utility',
+    'awpHold'
+  ],
   /** Rating plus every Premium metric column the Database table adds. */
   full: [...COLUMN_GROUP_IDS],
   /** Round list, antistrat: round shapes, no player metrics at all. */
@@ -125,6 +142,16 @@ export const COLUMN_PRESETS = Object.freeze({
   patternsWithRating: [...RATING_CORE, 'coreOpenings', 'phase', 'roundLibrary', 'utility'],
   /** Team tables: team-level rates, no per-player rating. */
   team: ['prw', 'possession', 'anchor', 'utility'],
+  /**
+   * Performance, team page: the team rates plus RATING_CORE.
+   *
+   * The metrics the page leads with — PRW, AC%, utility damage — are the `team`
+   * contract. RATING_CORE rides along because the per-match table underneath
+   * carries the side's average rating, and a rating assembled from a partial
+   * contract is not blank, it is quietly a different number (see the note on
+   * RATING_BEARING). Either the column is honest or it should not be shown.
+   */
+  teamRating: [...RATING_CORE, 'coreOpenings', 'prw', 'possession', 'anchor', 'utility'],
   /** Match cards / listings: who played and who won. Baseline only. */
   identity: []
 });

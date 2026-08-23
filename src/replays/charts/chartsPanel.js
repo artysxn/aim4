@@ -20,6 +20,7 @@ import {
   positionRoleOptions
 } from '../roles/regionKeys.js';
 import { buildFacts, emptyFilter } from './chartFacts.js';
+import { columnsForChart } from './chartColumns.js';
 import {
   SUBJECTS,
   findMetric,
@@ -85,6 +86,16 @@ export function createChartsPanel({ escapeHtml }) {
   const detailsEl = el.querySelector('#ch-details');
 
   let facts = null;
+  /**
+   * Column groups the current facts were built from. `null` means the full
+   * contract — everything is covered. Anything narrower and renderCanvas
+   * checks coverage before trusting the fact tables: facts built without a
+   * group don't error when a chart needs it, they plot empty, which is the
+   * failure nobody reports because it looks like "no data".
+   */
+  let factsColumns = null;
+  /** Demo scope of the last load, so widenFacts refetches the same library slice. */
+  let factsScopeDemos = null;
   /** Cache key of the facts currently in memory (`library` or demos:…). */
   let factsKey = '';
   /** Matches `statsCacheGeneration()` when facts were built. */
@@ -123,7 +134,14 @@ export function createChartsPanel({ escapeHtml }) {
     binStep: 5,
     normalize: false,
     trendline: true,
-    minRounds: 5,
+    /**
+     * Minimum rounds a subject needs to appear.
+     *
+     * 400 rather than a handful: on a full library the interesting question is
+     * who is consistently good, and a five-round subject sitting at the extreme
+     * of both axes is noise that stretches every scale and drags the trendline.
+     */
+    minRounds: 400,
     maxCats: 24,
     filter: emptyFilter(),
     /** Two sides (A/B), each a player or team, optionally narrowed to maps or games. */
@@ -947,10 +965,104 @@ export function createChartsPanel({ escapeHtml }) {
     return escapeHtml(text);
   }
 
+  /** Mean of the finite values in `list`, or null when there are none. */
+  function meanOf(list) {
+    let sum = 0;
+    let n = 0;
+    for (const v of list) {
+      if (!Number.isFinite(v)) continue;
+      sum += v;
+      n++;
+    }
+    return n ? sum / n : null;
+  }
+
+  /**
+   * Most series worth breaking the average down by.
+   *
+   * A per-series row is useful while the series are a handful of lines you are
+   * comparing. Series by team on a full library is 116 of them, and a
+   * hundred-row "footer" under a forty-row table is not a summary of anything —
+   * past this, the overall average is the statistic and the breakdown is noise.
+   */
+  const SERIES_AVG_MAX = 8;
+
+  /**
+   * Average row(s) under the subject table.
+   *
+   * Averaged over EVERY point in the model, not the forty or sixty rows the
+   * table prints. A footer that only averaged what fits on screen would move
+   * when the table was truncated, which is worse than not showing one — the
+   * number would look like the chart's average and be the visible slice's. The
+   * count on each row says what it covers, for exactly that reason.
+   */
+  function averageRowsHtml(model) {
+    /** @type {{ label: string, n: number, cells: string[] }[]} */
+    const rows = [];
+    const rowHtml = (r) =>
+      `<tr class="ch-avg-row"><td class="ch-name">${escapeHtml(r.label)}</td><td class="ch-avg-n">over ${
+        r.n
+      }</td>${r.cells.map((c) => `<td>${c}</td>`).join('')}</tr>`;
+
+    if (model.kind === 'scatter') {
+      const cells = (pts) => [
+        escapeHtml(formatValue(meanOf(pts.map((p) => p.x)), model.xFmt)),
+        escapeHtml(formatValue(meanOf(pts.map((p) => p.y)), model.yFmt)),
+        escapeHtml(formatValue(meanOf(pts.map((p) => p.rounds)), 'num1'))
+      ];
+      if (!model.points.length) return '';
+      const bySeries = new Map();
+      for (const p of model.points) {
+        const key = p.seriesLabel || '';
+        if (!bySeries.has(key)) bySeries.set(key, []);
+        bySeries.get(key).push(p);
+      }
+      if (bySeries.size > 1 && bySeries.size <= SERIES_AVG_MAX) {
+        for (const [label, pts] of bySeries) {
+          rows.push({ label: `Average · ${label || 'Unlabelled'}`, n: pts.length, cells: cells(pts) });
+        }
+      }
+      rows.push({
+        label: rows.length ? 'Average · all series' : 'Average',
+        n: model.points.length,
+        cells: cells(model.points)
+      });
+      return rows.map(rowHtml).join('');
+    }
+
+    const cells = (pts) => [
+      escapeHtml(formatValue(meanOf(pts.map((p) => p.y)), model.yFmt)),
+      escapeHtml(formatValue(meanOf(pts.map((p) => p.n)), 'num1')),
+      escapeHtml(formatValue(meanOf(pts.map((p) => p.rounds)), 'num1'))
+    ];
+    const withPoints = model.seriesList
+      .map((sr) => ({ label: sr.label || '', pts: (sr.points || []).filter((p) => p.y !== null) }))
+      .filter((sr) => sr.pts.length);
+    if (!withPoints.length) return '';
+    if (withPoints.length > 1 && withPoints.length <= SERIES_AVG_MAX) {
+      for (const sr of withPoints) {
+        rows.push({
+          label: `Average · ${sr.label || 'Unlabelled'}`,
+          n: sr.pts.length,
+          cells: cells(sr.pts)
+        });
+      }
+    }
+    const all = withPoints.flatMap((sr) => sr.pts);
+    rows.push({
+      label: rows.length ? 'Average · all series' : 'Average',
+      n: all.length,
+      cells: cells(all)
+    });
+    return rows.map(rowHtml).join('');
+  }
+
   function detailsHtml(model) {
     if (model.kind === 'scatter') {
+      // Every subject, not a first-N slice: the table is the list of what is on
+      // the chart, and a chart with 562 points whose table stops at 40 is
+      // missing the ones a reader is most likely hunting for. It scrolls.
       const rows = model.points
-        .slice(0, 40)
         .map(
           (p, i) =>
             `<tr data-row="${i}"><td class="ch-name">${subjectCellHtml(p)}</td><td>${subCellHtml(
@@ -962,7 +1074,8 @@ export function createChartsPanel({ escapeHtml }) {
         .join('');
       return `<table class="ch-table"><thead><tr><th>Subject</th><th></th><th>${escapeHtml(
         model.xLabel
-      )}</th><th>${escapeHtml(model.yLabel)}</th><th>Rounds</th></tr></thead><tbody>${rows}</tbody></table>`;
+      )}</th><th>${escapeHtml(model.yLabel)}</th><th>Rounds</th></tr></thead><tbody>${rows}</tbody>
+      <tfoot>${averageRowsHtml(model)}</tfoot></table>`;
     }
     const rows = model.seriesList
       .flatMap((s) =>
@@ -977,17 +1090,101 @@ export function createChartsPanel({ escapeHtml }) {
               }</td></tr>`
           )
       )
-      .slice(0, 60)
       .join('');
     return `<table class="ch-table"><thead><tr><th>${escapeHtml(
       model.xLabel
     )}</th><th>Series</th><th>${escapeHtml(
       model.yLabel
-    )}</th><th>Sample</th><th>Rounds</th></tr></thead><tbody>${rows}</tbody></table>`;
+    )}</th><th>Sample</th><th>Rounds</th></tr></thead><tbody>${rows}</tbody>
+    <tfoot>${averageRowsHtml(model)}</tfoot></table>`;
+  }
+
+  /**
+   * Column groups the chart on screen needs, or null for "everything".
+   *
+   * Assembled from the same mapping chartColumns.test.js keeps honest against
+   * the metric registry. Anything this cannot classify — an unknown metric, a
+   * series value with no entry — comes back null and the fetch falls back to
+   * the full contract, so a missed mapping costs bytes, never a wrong chart.
+   */
+  function chartNeededColumns() {
+    // The role filter's option list is static UI, but the facts need
+    // `demo.roles` to apply it — and at 55 bytes a round it is the one group
+    // cheap enough to simply always carry.
+    const wanted = new Set(['roles']);
+    const src = findSubject(state.subject).source;
+    for (const axis of [state.x, state.y]) {
+      const cols = columnsForChart({
+        metric: axis?.metric,
+        dimension: axis?.dimension,
+        series: state.series || undefined,
+        source: src
+      });
+      if (cols === null) return null;
+      for (const g of cols) wanted.add(g);
+    }
+    // Filters read fact fields too: phase bags for phase filters, the kill
+    // list for time / kill-kind / weapon filters.
+    for (const f of [state.filter, state.x?.filter, state.y?.filter]) {
+      if (!f) continue;
+      if (f.phases?.length) wanted.add('phase');
+      if (f.timeFrom != null || f.timeTo != null || f.killKinds?.length || f.weapons?.length) {
+        wanted.add('kills');
+      }
+    }
+    return [...wanted].sort();
+  }
+
+  /** True when the current facts can answer for `needed` groups. */
+  function factsCover(needed) {
+    if (factsColumns === null) return true;
+    if (needed === null) return false;
+    return needed.every((g) => factsColumns.includes(g));
+  }
+
+  /** Fetch the union of what we had and what the chart now needs, rebuild. */
+  let coverToken = 0;
+  async function widenFacts(needed) {
+    const token = ++coverToken;
+    const columns =
+      needed === null || factsColumns === null
+        ? null
+        : [...new Set([...factsColumns, ...needed])].sort();
+    canvasEl.setAttribute('aria-busy', 'true');
+    canvasEl.innerHTML = spinnerHtml('Loading columns for this chart…');
+    try {
+      const payload = await getStatsPayload(factsScopeDemos, {
+        columns,
+        onProgress: (p) => {
+          if (token !== coverToken) return;
+          setSpinnerLabel(canvasEl, statsProgressLabel(p));
+        }
+      });
+      if (token !== coverToken) return;
+      facts = buildFacts(payload);
+      factsColumns = columns;
+      factsGeneration = statsCacheGeneration();
+      renderSide();
+      renderCanvas();
+      canvasEl.removeAttribute('aria-busy');
+    } catch (err) {
+      if (token !== coverToken) return;
+      canvasEl.innerHTML = `<p class="view-empty">${escapeHtml(
+        formatApiError(err).message || 'Could not load stats.'
+      )}</p>`;
+    }
   }
 
   function renderCanvas() {
     if (!facts) return;
+    // Facts built under a narrower contract than this chart reads: widen
+    // first. Without this, switching to a chart that needs an unfetched
+    // column would plot confidently from empty fields.
+    const needed = chartNeededColumns();
+    if (!factsCover(needed)) {
+      void widenFacts(needed);
+      return;
+    }
     hotMark = -1;
     let model;
     try {
@@ -1885,7 +2082,14 @@ export function createChartsPanel({ escapeHtml }) {
         cancelSlow();
         return;
       }
+      // Only the columns the chart on screen reads. This is the wiring the
+      // chartColumns header used to say was missing: it is safe now because
+      // renderCanvas checks coverage and widens the facts before plotting a
+      // chart the fetch did not anticipate (a share link, a metric switch).
+      const wantedColumns = chartNeededColumns();
+      factsScopeDemos = scope.demos || null;
       const payload = await getStatsPayload(scope.demos || null, {
+        columns: wantedColumns,
         onProgress: (p) => {
           if (token !== loadToken) return;
           setSpinnerLabel(canvasEl, statsProgressLabel(p));
@@ -1900,6 +2104,7 @@ export function createChartsPanel({ escapeHtml }) {
         work() {
           if (token !== loadToken) return;
           facts = buildFacts(payload);
+          factsColumns = wantedColumns;
           factsKey = key;
           factsGeneration = statsCacheGeneration();
         }

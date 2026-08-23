@@ -7680,7 +7680,15 @@ body.rv-open {
 }
 
 .ch-details {
-  max-height: 320px;
+  /* The subject list is the whole chart in table form, so give it room to be
+     read rather than peeked at. Still bounded and still scrolls: the point is a
+     browsable list under the plot, not a page that grows to 562 rows.
+
+     Sized against the viewport, not just a pixel cap, because the averages are
+     pinned to the BOTTOM of this box — if the box runs past the fold, so does
+     the summary, and it may as well not exist. The plot above takes roughly the
+     top half, so 40vh keeps the whole list, footer included, on screen. */
+  max-height: clamp(280px, 40vh, 560px);
   overflow-y: auto;
   border: 0;
   border-radius: var(--radius);
@@ -7716,6 +7724,39 @@ table.ch-table th {
   color: var(--muted);
   font-weight: 600;
   z-index: 1;
+}
+
+/* Averages, pinned under the subject list. Sticky for the same reason the head
+   is: the table scrolls, and a summary you have to scroll to find is one nobody
+   reads.
+
+   The shadow is not decoration. Rows scroll UNDER this, and without a lip the
+   half-covered row behind it made the whole thing read as a rendering glitch
+   rather than a footer. */
+table.ch-table tfoot tr.ch-avg-row td {
+  position: sticky;
+  bottom: 0;
+  background: var(--surface-solid);
+  border-top: 1px solid var(--border-strong, rgba(255, 255, 255, 0.16));
+  border-bottom: 0;
+  color: var(--text);
+  font-weight: 600;
+  box-shadow: 0 -6px 12px -6px rgba(0, 0, 0, 0.85);
+}
+
+table.ch-table tfoot tr.ch-avg-row:first-child td {
+  border-top-width: 2px;
+}
+
+table.ch-table tfoot tr.ch-avg-row td.ch-name {
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  font-size: 11px;
+}
+
+table.ch-table tfoot tr.ch-avg-row td.ch-avg-n {
+  color: var(--muted);
+  font-weight: 500;
 }
 
 table.ch-table tbody tr:hover {
@@ -10452,6 +10493,10 @@ table.rp-mine-table tbody tr {
   flex-wrap: wrap;
 }
 
+.ms-maps {
+  --sb-zoom: 1;
+}
+
 .ms-map {
   gap: 0;
   padding: 0;
@@ -10470,8 +10515,12 @@ table.rp-mine-table tbody tr {
   color: #f2f2f2;
 }
 
+/* Zoom the rows, not the card. Same split as the Stratbook, where `zoom` sits
+   on .sb-section and not .sb-map: the map heading is the label you scroll past
+   looking for a map, and shrinking it with the table only makes it harder to find. */
 .ms-table-scroll {
   overflow-x: auto;
+  zoom: var(--sb-zoom);
 }
 
 .ms-table {

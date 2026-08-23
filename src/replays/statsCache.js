@@ -289,6 +289,12 @@ export async function getStatsPayload(demoIds = null, opts = {}) {
        */
       let libraryTotalSeen = 0;
       let libraryLoadedSeen = 0;
+      /**
+       * Demos actually merged. The only number a reader can act on: pages are
+       * fetched PAGE_PIPELINE at a time, so at any moment several are in flight
+       * and none of their demos are in the payload yet.
+       */
+      let mergedLoaded = 0;
 
       /**
        * Fetch ONE page. Everything page-specific — the slice, the progress
@@ -318,7 +324,16 @@ export async function getStatsPayload(demoIds = null, opts = {}) {
               // whose demos are already accounted for, so they land on its end.
               const done = Math.max(0, Number(p?.done) || 0);
               const within = DEMO_PHASES.has(phase) ? Math.min(done, pageCount) : pageCount;
-              const next = pageStart + within;
+              // What has merged, plus how far into the page that merges NEXT.
+              // Counting every page in flight is what pinned a 4 889-demo
+              // library at "1 200 loaded": page 0 lands, three more launch, the
+              // furthest reports 900 + its own 300, and the display jumps
+              // straight to a number nothing had reached — then sits there,
+              // because the pages behind it can only ever confirm what it had
+              // already claimed. Pages ahead of the merge point are in flight,
+              // not loaded, and are worth nothing to whoever is waiting.
+              const next =
+                pageStart <= mergedLoaded ? Math.max(mergedLoaded, pageStart + within) : mergedLoaded;
               // Monotonic: with pages in flight together these arrive
               // interleaved, and a counter that goes backwards is worse than
               // one that stalls.
@@ -345,6 +360,7 @@ export async function getStatsPayload(demoIds = null, opts = {}) {
       const absorb = (pageStart, chunk) => {
         const incomingLen = mergeChunk(merged, chunk);
         const loaded = merged.demos.length;
+        mergedLoaded = Math.max(mergedLoaded, loaded);
         const total = scoped
           ? scoped.length
           : Math.max(Number(chunk?.total) || 0, Number(chunk?.libraryTotal) || 0, loaded);
