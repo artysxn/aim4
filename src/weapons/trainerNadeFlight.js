@@ -21,7 +21,7 @@ import { createHullWorld } from '../cs3d/hullWorld.js';
 import { makeProjectiles } from '../cs3d/projectilesCore.js';
 import { UNIT_M } from '../../shared/sim3d/units.js';
 
-export const { Projectiles } = makeProjectiles({
+const { Projectiles: CoreProjectiles } = makeProjectiles({
   THREE,
   cloneSkinned,
   /**
@@ -37,3 +37,29 @@ export const { Projectiles } = makeProjectiles({
   createHullWorld: (collider) =>
     collider ? createHullWorld({ bvh: collider.bvh }, 'walk', null, { unitScale: UNIT_M }) : null
 });
+
+/**
+ * The core, drawn at the trainer's scale.
+ *
+ * Everything the projectile system puts on screen is authored in SOURCE UNITS:
+ * `_place` writes `sourceToScene(sim.pos)` straight into the group, a trail is
+ * a line of those same positions, and a grenade model comes out of the weapons
+ * pack in the pack's own frame. The map practice mode's scene IS Source units,
+ * so all three land correctly there with no conversion at all.
+ *
+ * The trainer's scene is METRES. Undoing that per-thing would mean scaling the
+ * model, dividing every position and dividing every trail vertex — three
+ * conversions to keep in step, in code that is deliberately shared. Scaling the
+ * one group they all hang off converts the whole subsystem at once, and keeps
+ * the shared core free of any knowledge of which scene it is drawing into.
+ *
+ * Only the DRAWING is scaled. The sim underneath stays in Source units, which
+ * is what `createHullWorld`'s `unitScale` above is for and what every caller
+ * that hands this a position or reads a detonation out of it already speaks.
+ */
+export class Projectiles extends CoreProjectiles {
+  constructor(opts) {
+    super(opts);
+    this.root.scale.setScalar(UNIT_M);
+  }
+}

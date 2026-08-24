@@ -297,6 +297,10 @@ export class DoorsCtPlayback {
         m.traverse((o) => {
           if (o.isMesh) o.frustumCulled = false;
         });
+        // The pack's models are in SOURCE UNITS and this group is placed in the
+        // trainer's metres, so without this a grenade is drawn about forty
+        // times its own size.
+        m.scale.setScalar(UNIT_M);
         group.add(m);
         blip.visible = false;
       })
