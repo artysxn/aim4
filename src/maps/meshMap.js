@@ -35,6 +35,15 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
 const cache = new Map();
 
 /**
+ * `id|minX|maxX` → the sliced render geometry.
+ *
+ * Slicing dust2 walks a million triangles and builds a BVH over what is left,
+ * which is not something to repeat every time a run restarts. Shared exactly
+ * like the full geometry is, and disposed by nobody for the same reason.
+ */
+const sliceCache = new Map();
+
+/**
  * The material every ported map is drawn with.
  *
  * One material, because the greys ride in COLOR_0 and there is nothing else to
@@ -46,13 +55,112 @@ const cache = new Map();
  * probe grid were all left behind, and this is a training arena that happens to
  * be shaped like dust2 rather than a copy of how dust2 looks.
  */
+/**
+ * The ramp the porter baked, as sRGB fractions: the map's LARGEST surfaces at
+ * the dark end, its smallest at the bright end (shared/cs3d/flatGreys.js).
+ * COLOR_0 itself is linear, so the shader converts before comparing.
+ */
+const RAMP_LO = 0x42 / 255;
+const RAMP_HI = 0xf0 / 255;
+
+/**
+ * How much of the brightness range one map is allowed to occupy, and therefore
+ * how much relief it keeps once it is recoloured.
+ *
+ * The flat view's whole trick is that a surface's shade tells you how big it
+ * is, which needs the map to span a band rather than sit at one value. Tinting
+ * by a colour the user picked cannot just multiply: a near-black cover colour
+ * would take the entire map to black and a white one would blow it out, and
+ * either way the size cue is gone.
+ *
+ * So the band is a fixed WIDTH that slides. Its centre is the chosen colour's
+ * own brightness, clamped so the band never runs off either end — pick white
+ * and the band sits against the top, so white is the brightest thing in the map
+ * and everything else steps down from it; pick black and it sits against the
+ * bottom, black is the darkest thing, and the map steps up. The cost is at the
+ * extremes: the last band-half of the range all clamps to the same place, so
+ * the darkest few colours are indistinguishable from each other, as are the
+ * brightest few. That is the trade for never losing the relief.
+ */
+const BAND = 0.3;
+const BAND_HALF = BAND / 2;
+
+const _tintColor = new THREE.Color();
+
+/**
+ * A cover colour → the two things the shader needs: the unit-luminance chroma
+ * to paint with, and the sRGB band to spread the map's own ramp across.
+ */
+export function coverTintBand(color) {
+  _tintColor.set(color || '#ffffff');
+  // Perceptual, because the band is about how bright the colour LOOKS. three
+  // has already colour-managed the hex into linear, so this goes back.
+  const lin = 0.2126 * _tintColor.r + 0.7152 * _tintColor.g + 0.0722 * _tintColor.b;
+  const srgb = lin <= 0.0031308 ? lin * 12.92 : 1.055 * lin ** (1 / 2.4) - 0.055;
+  const centre = Math.min(1 - BAND_HALF, Math.max(BAND_HALF, srgb));
+  // Chroma only: dividing by its own luminance leaves a colour the shader can
+  // scale to any brightness without shifting hue. A black pick has no chroma
+  // to keep, so it paints in greys — which is what "black" should look like
+  // once it is the darkest end of a ramp rather than the whole of it.
+  const unit = lin > 1e-4
+    ? [_tintColor.r / lin, _tintColor.g / lin, _tintColor.b / lin]
+    : [1, 1, 1];
+  return { unit, lo: centre - BAND_HALF, hi: centre + BAND_HALF };
+}
+
+const TINT_CHUNK = /* glsl */ `
+  {
+    float mapLin = dot(vColor.rgb, vec3(0.2126, 0.7152, 0.0722));
+    float mapSrgb = mapLin <= 0.0031308 ? mapLin * 12.92 : 1.055 * pow(mapLin, 1.0 / 2.4) - 0.055;
+    float t = clamp((mapSrgb - ${RAMP_LO.toFixed(6)}) / ${(RAMP_HI - RAMP_LO).toFixed(6)}, 0.0, 1.0);
+    float outSrgb = mix(uCoverBand.x, uCoverBand.y, t);
+    float outLin = outSrgb <= 0.04045 ? outSrgb / 12.92 : pow((outSrgb + 0.055) / 1.055, 2.4);
+    vColor.rgb = uCoverTint * outLin;
+  }
+`;
+
+/**
+ * The material every ported map is drawn with.
+ *
+ * The greys ride in COLOR_0 and there is nothing else to vary, so the whole map
+ * is one draw call. `vertexColors` multiplies white by them, and they are
+ * already in the renderer's working (linear) space, which is what the porter
+ * bakes and why they are 16-bit there.
+ *
+ * On top of that sits the recolour: the baked ramp is remapped, per vertex,
+ * into a band around the player's chosen cover colour. Done in the shader
+ * rather than by rewriting COLOR_0 because the geometry is SHARED between every
+ * run of the map and a colour change must not touch it.
+ *
+ * Lit by the trainer's own lights, deliberately: the map's sun, lightmap and
+ * probe grid were all left behind, and this is a training arena that happens to
+ * be shaped like dust2 rather than a copy of how dust2 looks.
+ */
 function mapMaterial() {
-  return new THREE.MeshStandardMaterial({
+  const mat = new THREE.MeshStandardMaterial({
     color: 0xffffff,
     vertexColors: true,
     roughness: 1,
     metalness: 0
   });
+  // Held on the material so `setCoverTint` can write them after the program is
+  // built; the shader is handed these exact objects, not copies.
+  const uniforms = {
+    uCoverTint: { value: new THREE.Vector3(1, 1, 1) },
+    uCoverBand: { value: new THREE.Vector2(RAMP_LO, RAMP_HI) }
+  };
+  mat.userData.coverUniforms = uniforms;
+  mat.onBeforeCompile = (shader) => {
+    shader.uniforms.uCoverTint = uniforms.uCoverTint;
+    shader.uniforms.uCoverBand = uniforms.uCoverBand;
+    shader.vertexShader = shader.vertexShader
+      .replace(
+        '#include <common>',
+        '#include <common>\nuniform vec3 uCoverTint;\nuniform vec2 uCoverBand;'
+      )
+      .replace('#include <color_vertex>', `#include <color_vertex>\n${TINT_CHUNK}`);
+  };
+  return mat;
 }
 
 /**
@@ -122,7 +230,6 @@ async function fetchMap(data) {
   return {
     geometry: render.geometry,
     collider,
-    material: mapMaterial(),
     // Hand-picked points beat the pack's own, and by a wide margin for a
     // free-for-all: see src/maps/dmSpawns.js for why and for how to add them.
     // They are snapped to the floor the same way, because a getpos taken while
@@ -203,6 +310,87 @@ function snapSpawns(spawns, collider) {
 }
 
 /**
+ * Cut a map's render geometry down to a slab, and throw the rest away.
+ *
+ * For a gamemode played from one spot — Doors holds mid on dust2 and can never
+ * leave a box a few metres across — most of the map is a million triangles of
+ * scenery nobody will ever see. Culling it in the fragment stage (clip planes,
+ * a discard) would still transform every vertex of it every frame; this removes
+ * the triangles from the buffer entirely, so the vertex stage never sees them
+ * and the BVH built over the result is smaller as well.
+ *
+ * The test is bounding-box OVERLAP against the slab, not "every vertex inside".
+ * A ground quad can span the whole map with all four corners outside a slab it
+ * nevertheless crosses, and dropping it would put a hole in the floor the
+ * player is standing on. Overlap keeps exactly what reaches into the slab.
+ *
+ * The source geometry is shared and cached, so this never mutates it: attribute
+ * arrays are copied into fresh ones of the same type, keeping their
+ * `normalized` flag (the greys ride in COLOR_0 as normalized uint16).
+ *
+ * @param {THREE.BufferGeometry} geometry  indexed, position in metres
+ * @param {number} minX  slab start, SCENE metres
+ * @param {number} maxX  slab end
+ * @returns {{geometry: THREE.BufferGeometry, kept: number, total: number}}
+ */
+export function sliceGeometryX(geometry, minX, maxX) {
+  const pos = geometry.getAttribute('position');
+  const index = geometry.getIndex();
+  const triCount = index ? index.count / 3 : pos.count / 3;
+  const at = (i) => (index ? index.getX(i) : i);
+
+  // Pass one: which triangles reach into the slab, and which vertices they use.
+  const keepTris = [];
+  for (let t = 0; t < triCount; t++) {
+    const a = at(t * 3);
+    const b = at(t * 3 + 1);
+    const c = at(t * 3 + 2);
+    const xa = pos.getX(a);
+    const xb = pos.getX(b);
+    const xc = pos.getX(c);
+    if (Math.min(xa, xb, xc) > maxX) continue;
+    if (Math.max(xa, xb, xc) < minX) continue;
+    keepTris.push(a, b, c);
+  }
+
+  // Pass two: compact the vertices the survivors actually reference, so the
+  // buffer shrinks with the triangle list instead of keeping every vertex of
+  // the map alive behind a shorter index.
+  const remap = new Int32Array(pos.count).fill(-1);
+  const used = [];
+  const newIndex = new Uint32Array(keepTris.length);
+  for (let i = 0; i < keepTris.length; i++) {
+    const v = keepTris[i];
+    let m = remap[v];
+    if (m === -1) {
+      m = used.length;
+      remap[v] = m;
+      used.push(v);
+    }
+    newIndex[i] = m;
+  }
+
+  const out = new THREE.BufferGeometry();
+  for (const [name, src] of Object.entries(geometry.attributes)) {
+    const ArrayType = src.array.constructor;
+    const dst = new ArrayType(used.length * src.itemSize);
+    for (let i = 0; i < used.length; i++) {
+      const from = used[i] * src.itemSize;
+      const to = i * src.itemSize;
+      for (let k = 0; k < src.itemSize; k++) dst[to + k] = src.array[from + k];
+    }
+    out.setAttribute(name, new THREE.BufferAttribute(dst, src.itemSize, src.normalized));
+  }
+  out.setIndex(new THREE.BufferAttribute(newIndex, 1));
+  out.computeBoundingBox();
+  out.computeBoundingSphere();
+  // Its own tree: bullets and the played-back tracers raycast this mesh, and
+  // the parent's tree indexes triangles that are no longer here.
+  out.boundsTree = new MeshBVH(out, { targetLeafSize: 8 });
+  return { geometry: out, kept: keepTris.length / 3, total: triCount };
+}
+
+/**
  * A ported map, ready to be put in a scene.
  *
  * @param {object} data  the generated map data module (src/maps/<slug>MapData.js)
@@ -220,17 +408,22 @@ export async function loadMeshMap(data) {
       })
     );
   }
-  const { geometry, collider, material, spawns } = await cache.get(data.id);
-  return new MapHandle(data, geometry, material, collider, spawns);
+  const { geometry, collider, spawns } = await cache.get(data.id);
+  return new MapHandle(data, geometry, collider, spawns);
 }
 
 /** One scenario's view of a cached map. */
 export class MapHandle {
-  constructor(data, geometry, material, collider, spawns) {
+  constructor(data, geometry, collider, spawns) {
     this.data = data;
     this.collider = collider;
     this._spawns = spawns || data.spawns;
-    this.mesh = new THREE.Mesh(geometry, material);
+    // The geometry and its BVHs are shared with every other run of this map;
+    // the MATERIAL is this handle's own, because the cover tint is a per-run
+    // setting and writing it onto a shared one would recolour a scenario that
+    // is not even on screen.
+    this.material = mapMaterial();
+    this.mesh = new THREE.Mesh(geometry, this.material);
     this.mesh.name = `map:${data.id}`;
     // A million triangles in one mesh: culling it as a whole would only ever
     // cull all of it or none of it, and testing the bound costs more than the
@@ -271,8 +464,52 @@ export class MapHandle {
     return this._rayWorld;
   }
 
-  /** Take the map out of the scene WITHOUT disposing anything shared. */
+  /**
+   * Draw only the slab of the map between `minX` and `maxX`, SOURCE units.
+   *
+   * For a gamemode that is played from one fixed spot. Everything outside the
+   * slab is taken out of the vertex buffer, not hidden — see `sliceGeometryX`.
+   * Collision is untouched: the hull is what stops the player and what a bullet
+   * is solved against, it is traversed as a tree rather than walked, and a body
+   * that could fall through the world outside the slab would be a worse bug
+   * than the frames this saves.
+   *
+   * @returns {{kept: number, total: number}} triangles drawn, and before.
+   */
+  setRenderSliceX(minX, maxX) {
+    const key = `${this.data.id}|${minX}|${maxX}`;
+    let slice = sliceCache.get(key);
+    if (!slice) {
+      slice = sliceGeometryX(this.mesh.geometry, minX * UNIT_M, maxX * UNIT_M);
+      sliceCache.set(key, slice);
+    }
+    this.mesh.geometry = slice.geometry;
+    return { kept: slice.kept, total: slice.total };
+  }
+
+  /**
+   * Recolour the map around the player's cover colour.
+   *
+   * Pass the colour from Settings; pass nothing to go back to the porter's own
+   * greys. Safe to call every frame — it writes two uniforms and touches no
+   * geometry — so a colour picker being dragged updates live.
+   */
+  setCoverTint(color) {
+    const u = this.material.userData.coverUniforms;
+    if (!u) return;
+    if (!color) {
+      u.uCoverTint.value.set(1, 1, 1);
+      u.uCoverBand.value.set(RAMP_LO, RAMP_HI);
+      return;
+    }
+    const { unit, lo, hi } = coverTintBand(color);
+    u.uCoverTint.value.set(unit[0], unit[1], unit[2]);
+    u.uCoverBand.value.set(lo, hi);
+  }
+
+  /** Take the map out of the scene WITHOUT disposing the shared geometry. */
   detach() {
     this.mesh.removeFromParent();
+    this.material.dispose();
   }
 }

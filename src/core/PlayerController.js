@@ -34,7 +34,14 @@ import { clamp } from '../utils/MathUtils.js';
 import { supportHeightAt, hasCollision } from '../utils/mapCollision.js';
 import { simWorldFor, U_PER_M } from '../utils/simWorld.js';
 import { createPlayerState, createInput, stepPlayer, flatWorld } from '../../shared/sim3d/motion.js';
-import { TICK_DT, EYE_STAND, EYE_DUCK } from '../../shared/sim3d/constants.js';
+import {
+  TICK_DT,
+  EYE_STAND,
+  EYE_DUCK,
+  HULL_HALF_WIDE,
+  HULL_STAND,
+  STEP_HEIGHT
+} from '../../shared/sim3d/constants.js';
 import { UNIT_M, sourceYawFromCamera } from '../../shared/sim3d/units.js';
 import { RUN_SPEED } from '../utils/SourceMovement.js';
 
@@ -44,6 +51,24 @@ const EYE_DUCK_M = EYE_DUCK * UNIT_M;
 
 /** A frame longer than this is a tab that was in the background; do not replay it. */
 const MAX_FRAME = 0.25;
+
+/**
+ * Heights a spawn is lifted through when it lands inside the world, in Source
+ * units. Fine at the bottom because the usual offence is a fraction of a unit,
+ * and stopping at a step height because past that the spawn is simply wrong.
+ */
+const SETTLE_STEPS = [0.5, 1, 2, 4, 8, 12, STEP_HEIGHT];
+
+/**
+ * How far above and below a spawn the hull is dropped to find its floor, in
+ * Source units. Deep enough to clear the fraction of a unit a getpos taken in
+ * the real game can sit inside a simplified hull, shallow enough that it can
+ * never find the storey below.
+ */
+const SETTLE_LIFT = 32;
+
+/** A nudge used only to ask "can this body move at all from here". */
+const SETTLE_PROBE = 4;
 
 export class PlayerController {
   constructor(engine, input) {
@@ -156,6 +181,7 @@ export class PlayerController {
     this.world = world
       || simWorldFor(colliders, { floorY, extent: this._extentFor(bounds) })
       || flatWorld(floorY * U_PER_M);
+    this.footY = this._settleFoot(this.footY);
 
     const s = this.sim;
     s.pos.x = Math.fround(this.pos.x * U_PER_M);
@@ -181,6 +207,61 @@ export class PlayerController {
     this.camera.rotation.y = yaw;
     this.camera.rotation.x = 0;
     this.camera.position.set(this.pos.x, this.footY + EYE_STAND_M, this.pos.z);
+  }
+
+  /**
+   * Lift a spawn out of the floor it is a hair inside.
+   *
+   * The ground probe is a thin ray and the mover sweeps a 32x72 hull, and on a
+   * ported map the two can disagree by under a unit: the ray drops through a
+   * gap the hull's corner catches on. Land in one of those spots and
+   * `stepPlayer` reports startsolid, which kills velocity and stays put every
+   * tick — the body is planted, standing on nothing it can name, and no key
+   * does anything. It is not a rare shape either: any spawn taken as a `getpos`
+   * from the real game and replayed against the SIMPLIFIED hull can sit a
+   * fraction inside it.
+   *
+   * So: if the hull is solid where the spawn puts it, step up until it is not.
+   * Capped at a step height's worth — beyond that the point is wrong in a way
+   * lifting will not fix, and dropping the body on a roof would be worse than
+   * leaving it where the caller asked.
+   */
+  _settleFoot(footY) {
+    const world = this.world;
+    if (!world?.traceHull) return footY;
+    const x = Math.fround(this.pos.x * U_PER_M);
+    const y = Math.fround(-this.pos.z * U_PER_M);
+    const base = Math.fround(footY * U_PER_M);
+
+    // Drop the REAL hull from a little above and stand where it stops. This is
+    // the mover's own answer to "where is the floor" — DIST_EPSILON clear of
+    // the surface, measured with the box that has to move afterwards — where
+    // the ground probe is a ray that can find a floor the box cannot rest on.
+    const drop = world.traceHull(
+      { x, y, z: base + SETTLE_LIFT },
+      { x, y, z: base - SETTLE_LIFT },
+      HULL_HALF_WIDE,
+      HULL_STAND
+    );
+    if (!drop.startSolid && drop.fraction < 1) return drop.endpos.z * UNIT_M;
+
+    // No floor within reach, or the body is inside something at the top of the
+    // drop as well: step up until the hull is clear. `startSolid` alone is not
+    // the test — it tolerates a quarter unit of overlap, and a hull that
+    // overlaps the floor at all cannot sweep sideways past it — so a candidate
+    // has to also be able to MOVE before it is accepted.
+    const at = { x, y, z: base };
+    const free = (z) => {
+      at.z = Math.fround(z);
+      if (world.traceHull(at, at, HULL_HALF_WIDE, HULL_STAND).startSolid) return false;
+      const probe = world.traceHull(at, { x: x + SETTLE_PROBE, y, z: at.z }, HULL_HALF_WIDE, HULL_STAND);
+      return probe.fraction > 0;
+    };
+    if (free(base)) return footY;
+    for (const lift of SETTLE_STEPS) {
+      if (free(base + lift)) return (base + lift) * UNIT_M;
+    }
+    return footY;
   }
 
   /** How far the arena's ground quad has to reach for these bounds. */

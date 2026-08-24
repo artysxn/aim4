@@ -19,6 +19,8 @@
 // ---------------------------------------------------------------------------
 
 import * as THREE from 'three';
+import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js?three-webgl';
+import { sharedWeaponAssets } from '../agents/weaponAssets.js';
 import {
   readHeader,
   HEADER_BYTES,
@@ -268,14 +270,38 @@ export class DoorsCtPlayback {
     }
   }
 
+  /**
+   * The grenade in the air.
+   *
+   * A blip stands in only until CS2's own model arrives: the weapons pack has
+   * one per grenade and it is what a thrown grenade looks like everywhere else
+   * in the app, so a recorded smoke should not be the one place it is a dot.
+   * The flight is drawn from the recorded waypoints either way — see
+   * `_poseFlight` — so a model that never lands costs nothing.
+   */
   _makeFlight(g) {
     const color = TRAIL_COLOR[g.type] ?? 0xffffff;
     let mat = this._ballMats.get(color);
     if (!mat) this._ballMats.set(color, (mat = new THREE.MeshBasicMaterial({ color })));
-    const mesh = new THREE.Mesh(this._ballGeo, mat);
-    mesh.frustumCulled = false;
-    this.root.add(mesh);
-    return { mesh };
+    const group = new THREE.Group();
+    const blip = new THREE.Mesh(this._ballGeo, mat);
+    blip.frustumCulled = false;
+    group.add(blip);
+    this.root.add(group);
+    const f = { mesh: group, blip, spin: Math.random() * Math.PI * 2 };
+    sharedWeaponAssets()
+      .model?.(g.type)
+      ?.then((template) => {
+        if (!template || f.dead) return;
+        const m = cloneSkinned(template);
+        m.traverse((o) => {
+          if (o.isMesh) o.frustumCulled = false;
+        });
+        group.add(m);
+        blip.visible = false;
+      })
+      .catch(() => {});
+    return f;
   }
 
   _poseFlight(f, g) {
@@ -293,6 +319,10 @@ export class DoorsCtPlayback {
       p0.z + (p1.z - p0.z) * t
     );
     f.mesh.position.set(x, y, z);
+    // A thrown grenade tumbles; src/cs3d/projectilesCore.js spins a live one
+    // the same way, so a recorded throw should not fly rigid.
+    f.spin += 0.28;
+    f.mesh.rotation.set(f.spin * 0.7, f.spin, f.spin * 0.4);
   }
 
   _detonate(g) {
@@ -301,7 +331,13 @@ export class DoorsCtPlayback {
     this.nades.playbackDetonate({ type: g.type, pos: { x: at.x, y: at.y, z: at.z } });
   }
 
+  /**
+   * Detach only. The grenade model is a SkeletonUtils clone that SHARES its
+   * geometry and materials with the pack's template; disposing it would empty
+   * the pack for every later throw.
+   */
   _disposeFlight(f) {
+    f.dead = true;
     f.mesh.removeFromParent();
   }
 

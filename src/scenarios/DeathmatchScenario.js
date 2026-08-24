@@ -169,6 +169,7 @@ export class DeathmatchScenario extends BaseScenario {
       };
       this.floorY = handle.floorY;
       this.colliders = handle.collider;
+      handle.setCoverTint(this.settings.data.colors?.cover);
       this.root.add(handle.mesh);
       // Into `coverMeshes` and NOT into `_envObjects`: it is what bullets, bot
       // sightlines and the decal placer trace against, and it is shared
@@ -211,6 +212,9 @@ export class DeathmatchScenario extends BaseScenario {
 
   applyLiveSettings() {
     super.applyLiveSettings();
+    // The map's own colour follows the cover picker, in every variant.
+    this.mapHandle?.setCoverTint(this.settings.activeSettings?.().colors?.cover
+      ?? this.settings.data.colors?.cover);
     if (this.competitive) return;
     const d = { ...DEFAULTS.deathmatch, ...(this.settings.data.deathmatch || {}) };
     this._bodyHitBase = d.botBodyHit ?? 0.2;
@@ -791,9 +795,13 @@ export class DeathmatchScenario extends BaseScenario {
   }
 
   /** Standing in fire hurts, once per second of it. */
-  _onBurn({ pos, radius, dps, dt }) {
-    const inside = (x, y, z) =>
-      Math.hypot(x - pos.x, z - pos.z) < radius && Math.abs(y - pos.y) < radius;
+  _onBurn({ pos, radius, dps, dt, covers = null }) {
+    // `covers` is the puddle the fire spread actually laid, so what burns is
+    // the flames you can see rather than a disc around the bottle. The circle
+    // stays as the fallback for a thrower that does not supply one.
+    const inside = covers
+      ? (x, y, z) => covers(x, y, z)
+      : (x, y, z) => Math.hypot(x - pos.x, z - pos.z) < radius && Math.abs(y - pos.y) < radius;
     for (const bot of [...this.bots]) {
       if (bot.target.state === 'dying') continue;
       if (!inside(bot.pos.x, bot.footY, bot.pos.z)) continue;

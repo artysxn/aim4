@@ -64,8 +64,33 @@ const PLAYER_BOUNDS = {
 // every jump would trip it.
 const FOOT_MIN = 36 * UNIT_M - 0.6;
 
+/**
+ * The only slab of dust2 this mode draws, Source x.
+ *
+ * The hold is fixed and the box is a few metres across, so everything outside
+ * this band — A site, long, B site, both spawns, the skybox buildings behind
+ * them — is a million triangles nobody in this gamemode can see. They are cut
+ * out of the vertex buffer at load (src/maps/meshMap.js `sliceGeometryX`)
+ * rather than clipped in the shader, so nothing about them is transformed each
+ * frame.
+ *
+ * COLLISION IS NOT CUT. The hull still covers the whole map: it is a tree, so
+ * carrying it costs traversal depth rather than per-frame work, and it is what
+ * the player stands on and what a bullet is solved against.
+ */
+const DRAW_MIN_X = -800;
+const DRAW_MAX_X = 400;
+
 /** The teammate's crouched hull, in metres, for the boost and the fall guard. */
 const MATE_HEIGHT_M = HULL_DUCK * UNIT_M;
+
+/**
+ * Frames drawn with the finished world before the clock starts.
+ *
+ * Two, not one: the frame that first draws the map is the one that compiles
+ * its shader and uploads its buffers, and it is not a frame anybody played.
+ */
+const READY_FRAMES = 2;
 
 export class DoorsAwpScenario extends BaseScenario {
   constructor(opts) {
@@ -107,6 +132,8 @@ export class DoorsAwpScenario extends BaseScenario {
     /** Scratch for the teammate's collision box; rebuilt per query, not per frame. */
     this._mateTris = [];
     this._shotResult = null;
+    /** Frames drawn with the world complete; see `ready`. */
+    this._readyFrames = 0;
 
     // The teammate is T-side, which the shared pack does not carry by default.
     sharedAgentModels().ensureSide?.('T');
@@ -141,6 +168,12 @@ export class DoorsAwpScenario extends BaseScenario {
     return this.coverMeshes.slice();
   }
 
+  applyLiveSettings() {
+    super.applyLiveSettings();
+    this.mapHandle?.setCoverTint(this.settings.activeSettings?.().colors?.cover
+      ?? this.settings.data.colors?.cover);
+  }
+
   // ---- boot -----------------------------------------------------------------
 
   async _loadMap() {
@@ -153,6 +186,12 @@ export class DoorsAwpScenario extends BaseScenario {
       this.mapHandle = handle;
       this.colliders = handle.collider;
       this.floorY = handle.floorY;
+      handle.setCoverTint(this.settings.data.colors?.cover);
+      const slice = handle.setRenderSliceX(DRAW_MIN_X, DRAW_MAX_X);
+      console.log(
+        `doors: drawing ${slice.kept.toLocaleString()} of ${slice.total.toLocaleString()} triangles`
+        + ` (x ${DRAW_MIN_X}..${DRAW_MAX_X})`
+      );
       this.root.add(handle.mesh);
       this.coverMeshes.push(handle.mesh);
       markBulletDecalSurface(handle.mesh);
@@ -162,7 +201,12 @@ export class DoorsAwpScenario extends BaseScenario {
         nades.refill();
         nades.setWorld(simWorldFor(this.colliders, { floorY: this.floorY, extent: 4096 }));
       }
-      if (this.running) this.onStart();
+      // Not gated on `running`: the world exists now, so put the player in it
+      // whether the run has been started yet or not. Waiting for the run would
+      // leave a started one with no body to move — which is exactly what being
+      // unable to move during a load was.
+      this._respawnPlayer();
+      this._maybeBegin();
     } catch (e) {
       this.mapError = e;
       console.warn('doors: could not load dust2 —', e.message || e);
@@ -191,11 +235,41 @@ export class DoorsAwpScenario extends BaseScenario {
     this._maybeBegin();
   }
 
+  /**
+   * Arm the next round when there is one to arm.
+   *
+   * Deliberately NOT gated on `running`: a round is fetched and its bots are
+   * placed before the run starts, so the clock does not begin against an empty
+   * map while a megabyte of ticks is still on the wire. Nothing moves until
+   * `update` runs, and that only happens once the run is going.
+   */
   _maybeBegin() {
-    if (!this.running || !this.mapReady) return;
+    if (!this.mapReady) return;
     if (this._playback || this._roundLoading) return;
     if (!this._playlist?.rounds?.length) return;
     void this._beginRound();
+  }
+
+  /**
+   * Whether the run is allowed to start counting.
+   *
+   * Everything the first shot needs has to be here: the map in the scene, a
+   * round's bots placed, and at least one frame drawn with both — a ported
+   * dust2 is 7.5 MB and its first frame compiles shaders over a million
+   * triangles, and a clock that started before any of that spent the run on a
+   * grey screen. A world that failed outright never becomes ready; the status
+   * line says so and the run can be quit rather than burnt.
+   */
+  get ready() {
+    return this.mapReady && this._roundsSettled && this._readyFrames >= READY_FRAMES;
+  }
+
+  /** True once the round list has produced whatever it is going to produce. */
+  get _roundsSettled() {
+    if (this._playlistError) return true;
+    if (!this._playlist) return false;
+    if (!this._playlist.rounds.length) return true;
+    return !!this._playback;
   }
 
   // ---- the player -----------------------------------------------------------
@@ -449,6 +523,25 @@ export class DoorsAwpScenario extends BaseScenario {
 
   // ---- the frame ------------------------------------------------------------
 
+  /**
+   * Hold the run until the world is up.
+   *
+   * `super.update` is what advances `elapsed`, and `elapsed` is the run clock,
+   * the pace bar and the end of the run. Skipping it while the map and the
+   * first round are still arriving is what makes the timer start when the mode
+   * does. The player still ticks, so a body that already has a world to stand
+   * in can look around and settle instead of being frozen mid-air.
+   */
+  update(dt) {
+    if (!this.running) return;
+    if (!this.ready) {
+      if (this.mapReady && this._roundsSettled) this._readyFrames++;
+      this.engine.player?.update(dt);
+      return;
+    }
+    super.update(dt);
+  }
+
   onUpdate(dt) {
     if (!this.mapReady) return;
     if (this._mate) this._mate.model.update(dt, { crouch: 1, onGround: true });
@@ -525,13 +618,14 @@ export class DoorsAwpScenario extends BaseScenario {
   /** One line for the in-run status element (UIOverlay). */
   statusText() {
     if (this.mapError) return 'dust2 failed to load';
-    if (this._playlistError) return 'rounds unavailable';
     if (!this.mapReady) return 'loading dust2';
+    if (this._playlistError) return 'rounds unavailable';
     if (!this._playlist) {
       return this.team ? `finding ${this.team} rounds` : 'finding VRS top 10 rounds';
     }
     const list = this._playlist.rounds || [];
     if (!list.length) return this._playlist.problem || 'no rounds found';
+    if (!this._playback) return 'loading round';
     const round = this._round || list[this._roundIx];
     if (!round) return '';
     const n = `${(this._roundIx % list.length) + 1}/${list.length}`;

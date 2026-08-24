@@ -44,24 +44,20 @@ import { Projectiles } from './trainerNadeFlight.js';
 import { perfectJumpThrowState, isFireGrenade } from '../../shared/sim3d/grenade.js';
 import { UNIT_M, sourceYawFromCamera } from '../../shared/sim3d/units.js';
 import { radiusFlashForPlayer, applyBlind, flashOverlayAlpha } from '../../shared/sim3d/flash.js';
-import { SMOKE_RADIUS, SMOKE_SECONDS, SMOKE_SQUAT } from '../../shared/sim3d/smokeVolume.js';
+import { SMOKE_CELL } from '../../shared/sim3d/smokeVolume.js';
 import {
   HE_RADIUS,
   HE_DAMAGE,
-  FIRE_RANGE,
-  FIRE_RANGE_INC,
-  FIRE_SECONDS,
-  FIRE_SECONDS_INC,
-  FIRE_DPS,
-  TRAIL_COLOR
+  FIRE_DPS
 } from '../../shared/sim3d/nadeStats.js';
+import { sharedWeaponAssets } from '../agents/weaponAssets.js';
+import { SmokeCloud, FirePatch, BlastFx, warmNadeVisuals } from './nadeVisuals.js';
 import { U_PER_M } from '../utils/simWorld.js';
 
 export { HE_RADIUS, HE_DAMAGE, FIRE_DPS };
 
 /** Metres, for the renderer. The sim's own numbers are units. */
 const HE_RADIUS_M = HE_RADIUS * UNIT_M;
-const SMOKE_RADIUS_M = SMOKE_RADIUS * UNIT_M;
 
 /** The four the trainer hands out, in the order keys 4-7 select them. */
 export const TRAINER_NADES = Object.freeze(['hegrenade', 'flashbang', 'smokegrenade', 'molotov']);
@@ -79,31 +75,14 @@ export const NADE_LABEL = Object.freeze({
 const _fwd = new THREE.Vector3();
 
 /**
- * Is a segment blocked by a smoke? Smoke is wider than it is tall
- * (SMOKE_SQUAT), so the test runs in a space where the ellipsoid is a sphere.
- *
- * The explorer answers this out of a marched volume that knows about the walls
- * it grew against (shared/sim3d/smokeVolume.js `smokeBlocks`). This is the
- * shape without the walls: same radius, same squash, but it does not pour down
- * a stairwell or stop at a doorframe.
+ * How far apart a sightline is sampled when asking a cloud whether it is
+ * blocked, in Source units. Half a fill cell, so a segment cannot thread
+ * between two filled cells and come out the far side reporting clear.
  */
-function segmentHitsSmoke(ax, ay, az, bx, by, bz, cx, cy, cz, r) {
-  const s = SMOKE_SQUAT;
-  const px = ax - cx;
-  const py = (ay - cy) * s;
-  const pz = az - cz;
-  const dx = bx - ax;
-  const dy = (by - ay) * s;
-  const dz = bz - az;
-  const dd = dx * dx + dy * dy + dz * dz;
-  if (dd < 1e-9) return px * px + py * py + pz * pz <= r * r;
-  let t = -(px * dx + py * dy + pz * dz) / dd;
-  t = t < 0 ? 0 : t > 1 ? 1 : t;
-  const qx = px + dx * t;
-  const qy = py + dy * t;
-  const qz = pz + dz * t;
-  return qx * qx + qy * qy + qz * qz <= r * r;
-}
+const SMOKE_STEP = SMOKE_CELL * 0.5;
+
+/** Reused by the smoke fill's `solidAt`; it asks thousands of times a throw. */
+const _probe = { x: 0, y: 0, z: 0 };
 
 export class TrainerNades {
   /**
@@ -125,17 +104,27 @@ export class TrainerNades {
     this.onFlashBang = null; // ({ pos }) => void
     this.onBurn = null; // ({ pos, radius, dps, dt }) => void
 
-    /** The map practice mode's projectile system, on the trainer's renderer. */
-    this.flights = new Projectiles({ assets: null, onDetonate: (d) => this._detonate(d) });
+    /**
+     * The map practice mode's projectile system, on the trainer's renderer.
+     *
+     * Handed the weapons pack, which is the same shape the explorer's own
+     * viewmodel assets are (`model(name)` → a template, `stats(name)` → the
+     * weapons.vdata row). That is what puts CS2's actual grenade in the air
+     * instead of a coloured blip, and what makes the release speed the
+     * weapon's own `m_flThrowVelocity` rather than the 750 default.
+     */
+    this.flights = new Projectiles({
+      assets: sharedWeaponAssets(),
+      onDetonate: (d) => this._detonate(d)
+    });
     this.flights.attach(root);
 
     this.ammo = {};
+    /** Standing clouds and fires — src/weapons/nadeVisuals.js. */
     this.smokes = [];
     this.fires = [];
     this._flash = null;
-    this._blast = null;
-    this._materials = new Map();
-    this._ball = new THREE.SphereGeometry(1, 16, 12);
+    this._blasts = [];
 
     this.throwControl = new ThrowControl({
       jumpState: () =>
@@ -143,6 +132,9 @@ export class TrainerNades {
       onThrow: (t) => this._release(t)
     });
 
+    // The sheets are a megabyte of flipbook and every detonation wants them,
+    // so the fetch starts with the thrower rather than with the first throw.
+    warmNadeVisuals();
     this.refill();
   }
 
@@ -250,20 +242,40 @@ export class TrainerNades {
     if (!(this.ammo[type] > 0)) this.throwControl.setWeapon(null);
   }
 
-  _material(color, opacity) {
-    const key = `${color}:${opacity}`;
-    let m = this._materials.get(key);
-    if (!m) {
-      m = new THREE.MeshBasicMaterial({
-        color,
-        transparent: opacity < 1,
-        opacity,
-        depthWrite: false,
-        side: THREE.DoubleSide
-      });
-      this._materials.set(key, m);
-    }
-    return m;
+  // ---- the world, as the shared effects want to see it ---------------------
+
+  /**
+   * shared/sim3d/smokeVolume.js's `SmokeWorld`.
+   *
+   * `boxSolid` is the startsolid half of a zero-length trace, which is exactly
+   * the fill's question, and it stops at the first triangle that answers it.
+   * Identical to src/cs3d/nadeEffects.js `_smokeWorld` — the cloud has to
+   * flood the same way in both modes or the same lineup gives two clouds.
+   */
+  _smokeWorld() {
+    const world = this.world;
+    if (!world?.boxSolid) return null;
+    return {
+      solidAt: (x, y, z, half) => {
+        _probe.x = x;
+        _probe.y = y;
+        _probe.z = z - half;
+        return world.boxSolid(_probe, half * 0.9, half * 1.8);
+      }
+    };
+  }
+
+  /** ...and shared/sim3d/fireSpread.js's: the ground under a candidate seat. */
+  _fireWorld() {
+    const world = this.world;
+    if (!world?.traceHull) return null;
+    return {
+      groundAt: (x, y, z) => {
+        const t = world.traceHull({ x, y, z: z + 48 }, { x, y, z: z - 112 }, 2, 2);
+        if (t.fraction >= 1 || !t.normal || t.normal.z < 0.5) return null;
+        return { x: t.endpos.x, y: t.endpos.y, z: t.endpos.z };
+      }
+    };
   }
 
   // ---- the frame ----------------------------------------------------------
@@ -271,20 +283,71 @@ export class TrainerNades {
   update(dt) {
     this.throwControl.update(dt);
     this.flights.update(dt);
-    this._stepSmokes(dt);
+    this._step(this.smokes, dt);
     this._stepFires(dt);
-    this._stepBlast(dt);
+    this._step(this._blasts, dt);
     this._stepFlash();
   }
 
   /**
-   * A flight ended. `pos` and `vel` are Source units, the frame the sim works
-   * in; everything drawn below is metres.
+   * Advance a list of effects, reaping the ones that have finished.
+   *
+   * The camera goes through because a sprite card is sorted back to front from
+   * the eye and lit in view space (src/weapons/spriteCardGL.js `prepare`);
+   * without it a cloud of them shows seams wherever two cross.
    */
-  _detonate({ type, pos: src }) {
+  _step(list, dt) {
+    const cam = this.engine.camera;
+    for (let i = list.length - 1; i >= 0; i--) {
+      if (!list[i].update(dt, cam)) {
+        list[i].dispose();
+        list.splice(i, 1);
+      }
+    }
+  }
+
+  /**
+   * Fires, plus what standing in one costs.
+   *
+   * `covers` is the puddle's real shape — the seats the spread actually laid,
+   * on the schedule they light and go out on — so what burns is what is drawn.
+   * `pos` and `radius` stay in the payload as the bounding fallback a caller
+   * written before this can keep using.
+   */
+  _stepFires(dt) {
+    const cam = this.engine.camera;
+    for (let i = this.fires.length - 1; i >= 0; i--) {
+      const f = this.fires[i];
+      if (!f.update(dt, cam)) {
+        f.dispose();
+        this.fires.splice(i, 1);
+        continue;
+      }
+      this.onBurn?.({
+        pos: f.centreM,
+        radius: f.radiusM,
+        dps: FIRE_DPS,
+        dt,
+        covers: (x, y, z) => f.covers(x * U_PER_M, -z * U_PER_M, y * U_PER_M)
+      });
+    }
+  }
+
+  /**
+   * A flight ended. `src` is Source units, the frame the sim and every shared
+   * effect works in; only the damage hooks below are handed metres, because
+   * that is what the scenarios that read them are in.
+   */
+  _detonate({ type, pos: src, vel = null }) {
     const pos = { x: src.x * UNIT_M, y: src.z * UNIT_M, z: -src.y * UNIT_M };
     if (type === 'hegrenade') {
-      this._blast = { pos, t: 0, dur: 0.28, mesh: null };
+      const fx = new BlastFx({ pos: src });
+      this.root.add(fx.object);
+      this._blasts.push(fx);
+      // An HE inside a cloud blows a hole in it that knits shut, the same way
+      // it does in map practice — this is the whole reason a cloud is a fill
+      // and not a ball.
+      for (const s of this.smokes) s.push(src);
       this.onBlast?.({ pos, radius: HE_RADIUS_M, damage: HE_DAMAGE });
       return;
     }
@@ -294,26 +357,15 @@ export class TrainerNades {
       return;
     }
     if (type === 'smokegrenade') {
-      const mesh = new THREE.Mesh(this._ball, this._material(TRAIL_COLOR.smokegrenade, 0.9).clone());
-      mesh.frustumCulled = false;
-      // A cloud sits on the ground and rises; the centre is half its own height
-      // up from where the canister came to rest.
-      const centre = { x: pos.x, y: pos.y + SMOKE_RADIUS_M / SMOKE_SQUAT * 0.5, z: pos.z };
-      mesh.position.set(centre.x, centre.y, centre.z);
-      this.root.add(mesh);
-      this.smokes.push({ pos: centre, mesh, t: 0, r: SMOKE_RADIUS_M, alpha: 0 });
+      const fx = new SmokeCloud({ pos: src, world: this._smokeWorld() });
+      this.root.add(fx.object);
+      this.smokes.push(fx);
       return;
     }
     if (isFireGrenade(type)) {
-      const inc = type === 'incgrenade';
-      const r = (inc ? FIRE_RANGE_INC : FIRE_RANGE) * UNIT_M;
-      const life = inc ? FIRE_SECONDS_INC : FIRE_SECONDS;
-      const mesh = new THREE.Mesh(this._ball, this._material(TRAIL_COLOR.molotov, 0.45).clone());
-      mesh.frustumCulled = false;
-      mesh.scale.set(r, r * 0.35, r);
-      mesh.position.set(pos.x, pos.y + r * 0.2, pos.z);
-      this.root.add(mesh);
-      this.fires.push({ pos, mesh, t: 0, r, life });
+      const fx = new FirePatch({ pos: src, dir: vel, type, world: this._fireWorld() });
+      this.root.add(fx.object);
+      this.fires.push(fx);
     }
   }
 
@@ -360,60 +412,6 @@ export class TrainerNades {
     return this._flash ? flashOverlayAlpha(this._flash, performance.now() / 1000) : 0;
   }
 
-  _stepBlast(dt) {
-    const b = this._blast;
-    if (!b) return;
-    b.t += dt;
-    const k = Math.min(1, b.t / b.dur);
-    if (!b.mesh) {
-      b.mesh = new THREE.Mesh(this._ball, this._material(TRAIL_COLOR.hegrenade, 0.5).clone());
-      b.mesh.frustumCulled = false;
-      b.mesh.position.set(b.pos.x, b.pos.y, b.pos.z);
-      this.root.add(b.mesh);
-    }
-    b.mesh.scale.setScalar(HE_RADIUS_M * (0.25 + 0.75 * k));
-    b.mesh.material.opacity = 0.5 * (1 - k);
-    if (k >= 1) {
-      b.mesh.material.dispose();
-      b.mesh.removeFromParent();
-      this._blast = null;
-    }
-  }
-
-  _stepSmokes(dt) {
-    for (let i = this.smokes.length - 1; i >= 0; i--) {
-      const s = this.smokes[i];
-      s.t += dt;
-      // Bloom in, hold, fade at the end — the shape SMOKE_BLOOM / SMOKE_FADE
-      // describe, without the volume that fills a room properly.
-      const inK = Math.min(1, s.t / 1.4);
-      const outK = Math.max(0, Math.min(1, (s.t - (SMOKE_SECONDS - 1.6)) / 1.6));
-      s.alpha = inK * (1 - outK);
-      s.mesh.material.opacity = 0.92 * s.alpha;
-      s.mesh.scale.set(s.r * inK, (s.r / SMOKE_SQUAT) * inK, s.r * inK);
-      if (s.t >= SMOKE_SECONDS) {
-        s.mesh.material.dispose();
-        s.mesh.removeFromParent();
-        this.smokes.splice(i, 1);
-      }
-    }
-  }
-
-  _stepFires(dt) {
-    for (let i = this.fires.length - 1; i >= 0; i--) {
-      const f = this.fires[i];
-      f.t += dt;
-      const outK = Math.max(0, Math.min(1, (f.t - (f.life - 1)) / 1));
-      f.mesh.material.opacity = 0.45 * (1 - outK);
-      this.onBurn?.({ pos: f.pos, radius: f.r, dps: FIRE_DPS, dt });
-      if (f.t >= f.life) {
-        f.mesh.material.dispose();
-        f.mesh.removeFromParent();
-        this.fires.splice(i, 1);
-      }
-    }
-  }
-
   /**
    * A recorded detonation (demo playback in the Doors gamemode): the same
    * standing effect, and the same flash model against the player's own eyes,
@@ -434,10 +432,24 @@ export class TrainerNades {
    * reason a smoke is worth throwing at something that shoots back.
    */
   smokeBlocks(ax, ay, az, bx, by, bz) {
+    if (!this.smokes.length) return false;
+    // Metres → the Source frame every cloud is filled in.
+    const x0 = ax * U_PER_M;
+    const y0 = -az * U_PER_M;
+    const z0 = ay * U_PER_M;
+    const dx = bx * U_PER_M - x0;
+    const dy = -bz * U_PER_M - y0;
+    const dz = by * U_PER_M - z0;
+    const len = Math.hypot(dx, dy, dz);
+    // Walk the line and ask the fill. A sphere test cannot answer this any
+    // more: the cloud is whatever shape the room let it be, so the sightline
+    // has to be sampled against the cells themselves.
+    const steps = Math.max(1, Math.ceil(len / SMOKE_STEP));
     for (const s of this.smokes) {
-      if (s.alpha < 0.35) continue;
-      const r = s.r * Math.min(1, s.t / 1.4);
-      if (segmentHitsSmoke(ax, ay, az, bx, by, bz, s.pos.x, s.pos.y, s.pos.z, r)) return true;
+      for (let i = 0; i <= steps; i++) {
+        const t = i / steps;
+        if (s.blocksPoint(x0 + dx * t, y0 + dy * t, z0 + dz * t)) return true;
+      }
     }
     return false;
   }
@@ -446,21 +458,10 @@ export class TrainerNades {
   clear() {
     this.cancel();
     this.flights.clear();
-    for (const s of this.smokes) {
-      s.mesh.material.dispose();
-      s.mesh.removeFromParent();
+    for (const list of [this.smokes, this.fires, this._blasts]) {
+      for (const fx of list) fx.dispose();
+      list.length = 0;
     }
-    this.smokes.length = 0;
-    for (const f of this.fires) {
-      f.mesh.material.dispose();
-      f.mesh.removeFromParent();
-    }
-    this.fires.length = 0;
-    if (this._blast?.mesh) {
-      this._blast.mesh.material.dispose();
-      this._blast.mesh.removeFromParent();
-    }
-    this._blast = null;
     this._flash = null;
     this.engine.setFlashOverlay?.(0);
   }
@@ -468,8 +469,5 @@ export class TrainerNades {
   dispose() {
     this.clear();
     this.flights.dispose();
-    this._ball.dispose();
-    for (const m of this._materials.values()) m.dispose();
-    this._materials.clear();
   }
 }
