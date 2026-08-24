@@ -133,5 +133,12 @@ export function pickSpawnPreferHidden(spawns, avoid = [], viewers = [], boxes = 
   for (const c of pool) {
     if (c.gap > best.gap) best = c;
   }
-  return { pos: [...best.sp.pos] };
+  // `camYaw` rides along when the spawn has one. The pack's own spawns carry
+  // the Source angle of a round-start point, which for a free-for-all is
+  // noise; a hand-picked spawn (src/maps/dmSpawns.js) carries the direction
+  // somebody standing there should be looking, already in camera radians, and
+  // that is worth spawning them with.
+  return best.sp.camYaw != null
+    ? { pos: [...best.sp.pos], camYaw: best.sp.camYaw }
+    : { pos: [...best.sp.pos] };
 }

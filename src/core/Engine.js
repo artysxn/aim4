@@ -38,6 +38,7 @@ export class Engine {
     this.lastError = null;
     this.player = null; // PlayerController, assigned by main.js
     this.deathFxEl = document.getElementById('death-fx');
+    this.flashFxEl = document.getElementById('flash-fx');
     this._running = false;
     this.fps = 0;
     /** Optional (renderer, camera) => void — drawn after the main scene pass. */
@@ -162,6 +163,7 @@ _setupLights() {
     this.camera.position.set(0, EYE_HEIGHT, 0);
     this.camera.rotation.set(0, 0, 0);
     this.setDeathOverlay(0);
+    this.setFlashOverlay(0);
     if (this.player) this.player.reset();
   }
 
@@ -172,9 +174,23 @@ _setupLights() {
     this.deathFxEl.style.opacity = String(a);
   }
 
-  /** Reset transient in-run visuals (death tint). */
+  /**
+   * Full-screen white for a flashbang (0 = off, 1 = blind).
+   *
+   * The curve is not this function's: shared/sim3d/flash.js decides how long
+   * the hold is and how the fade runs, from the distance, the angle and what
+   * was between the eye and the bang. This is the pane it is painted on.
+   */
+  setFlashOverlay(strength) {
+    if (!this.flashFxEl) return;
+    const a = Math.max(0, Math.min(1, strength));
+    this.flashFxEl.style.opacity = String(a);
+  }
+
+  /** Reset transient in-run visuals (death tint, flash). */
   clearRunEffects() {
     this.setDeathOverlay(0);
+    this.setFlashOverlay(0);
   }
 
   start() {

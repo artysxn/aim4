@@ -36,10 +36,20 @@
 // The mask is indexed the same way, and gets the same guarantee for free.
 // ---------------------------------------------------------------------------
 
-import * as THREE from 'three/webgpu';
 import { createHullTracer } from '../../shared/sim3d/hullTrace.js';
 
-const _bounds = new THREE.Box3();
+/**
+ * The query box, as a Box3 in everything but its constructor.
+ *
+ * three-mesh-bvh hands `intersectsBounds` a real THREE.Box3 and the test runs
+ * on THAT object (`box.intersectsBox(_bounds)`), which only ever reads
+ * `.min.x`, `.max.z` and their siblings off the argument. So this file needs a
+ * shape, not a class — and needing a shape rather than a class is what lets the
+ * aim trainer import it. The trainer's renderer is `three` (WebGL) and the
+ * explorer's is `three/webgpu`; a single `new THREE.Box3()` here would have put
+ * a second 1.2 MB three core on whichever page did not own this import.
+ */
+const _bounds = { min: { x: 0, y: 0, z: 0 }, max: { x: 0, y: 0, z: 0 } };
 
 /**
  * Does the swept hull actually reach this BVH node?
@@ -146,8 +156,31 @@ export function createLadderProbe(collider) {
   };
 }
 
-export function createHullWorld(collider, audience = 'walk', movers = null) {
+/**
+ * @param {object} collider
+ * @param {'walk'|'nade'|'light'} [audience]
+ * @param {object} [movers]
+ * @param {{ unitScale?: number }} [opts]  metres per Source unit when the BVH is
+ *   in metres (the aim trainer's ported maps), 1 when it is in Source units
+ *   (the explorer's packs).
+ */
+export function createHullWorld(collider, audience = 'walk', movers = null, opts = {}) {
   const bvh = collider.bvh;
+  /**
+   * The BVH's units per the sim's unit, and its reciprocal.
+   *
+   * shared/sim3d/hullTrace.js already converts between the sim's frame and the
+   * scene's; what it cannot know is that the two might not be to the same
+   * SCALE. The explorer's collision geometry is in Source units and this is 1.
+   * The trainer's ported maps are in metres, because everything else in the
+   * trainer is, so its hull world hands the same tracer a `k` of 0.0254 and the
+   * query box goes down while the triangles come back up. Six multiplies on the
+   * box, nine per triangle — cheaper than either a second collision mesh in the
+   * other scale or a trainer that has to think in units.
+   */
+  const k = opts.unitScale || 1;
+  const kInv = 1 / k;
+  const scaled = k !== 1;
   const ranges = collider.ranges?.[audience] || null;
   const mask = collider.mask || null;
   // Whole-soup fast path: when the audience is everything there is, skip the
@@ -172,7 +205,14 @@ export function createHullWorld(collider, audience = 'walk', movers = null) {
     const c = tri.c;
     // A visitor that returns true has the answer already and wants no more
     // triangles (boxSolid). Anything else keeps the shapecast going.
-    if (_visit(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z) === true) {
+    const hit = scaled
+      ? _visit(
+          a.x * kInv, a.y * kInv, a.z * kInv,
+          b.x * kInv, b.y * kInv, b.z * kInv,
+          c.x * kInv, c.y * kInv, c.z * kInv
+        )
+      : _visit(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
+    if (hit === true) {
       _stop = true;
       return true;
     }
@@ -190,6 +230,9 @@ export function createHullWorld(collider, audience = 'walk', movers = null) {
     return emit(tri);
   };
   const boundsSeg = (box) => segmentHitsBox(_hitSeg, box);
+  /** The same slab clip, with the sweep brought down into the BVH's scale. */
+  const _scaledSeg = { cx: 0, cy: 0, cz: 0, dx: 0, dy: 0, dz: 0, ex: 0, ey: 0, ez: 0 };
+  const boundsSegScaled = (box) => segmentHitsBox(_scaledSeg, box);
   const boundsBox = (box) => box.intersectsBox(_bounds);
   const cast = {
     intersectsBounds: boundsBox,
@@ -197,12 +240,27 @@ export function createHullWorld(collider, audience = 'walk', movers = null) {
   };
 
   const tracer = createHullTracer((minX, minY, minZ, maxX, maxY, maxZ, visit, seg) => {
-    _bounds.min.set(minX, minY, minZ);
-    _bounds.max.set(maxX, maxY, maxZ);
+    _bounds.min.x = minX * k;
+    _bounds.min.y = minY * k;
+    _bounds.min.z = minZ * k;
+    _bounds.max.x = maxX * k;
+    _bounds.max.y = maxY * k;
+    _bounds.max.z = maxZ * k;
     _visit = visit;
     _hitSeg = seg;
     _stop = false;
-    cast.intersectsBounds = seg ? boundsSeg : boundsBox;
+    if (seg && scaled) {
+      _scaledSeg.cx = seg.cx * k;
+      _scaledSeg.cy = seg.cy * k;
+      _scaledSeg.cz = seg.cz * k;
+      _scaledSeg.dx = seg.dx * k;
+      _scaledSeg.dy = seg.dy * k;
+      _scaledSeg.dz = seg.dz * k;
+      _scaledSeg.ex = seg.ex * k;
+      _scaledSeg.ey = seg.ey * k;
+      _scaledSeg.ez = seg.ez * k;
+    }
+    cast.intersectsBounds = seg ? (scaled ? boundsSegScaled : boundsSeg) : boundsBox;
     bvh.shapecast(cast);
     if (movers && !_stop) movers.emit(minX, minY, minZ, maxX, maxY, maxZ, visit);
   });

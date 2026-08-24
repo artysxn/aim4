@@ -19,7 +19,10 @@ import * as THREE from 'three';
 import { MeshBVH, acceleratedRaycast } from 'three-mesh-bvh';
 import { packLoader, PACK_CDN } from '../agents/packBase.js';
 import { MeshCollider } from '../utils/MeshCollision.js';
+import { createRayWorld } from '../cs3d/rayWorld.js';
+import { UNIT_M } from '../../shared/sim3d/units.js';
 import { bakeNodeTransform } from './quantizedGeometry.js';
+import { dmSpawnsFor } from './dmSpawns.js';
 
 // Bullets, bot line-of-sight and the decal placer all reach the map through
 // THREE.Raycaster, and a million triangles is not something three's own
@@ -114,13 +117,65 @@ async function fetchMap(data) {
   const collider = collision
     ? new MeshCollider(collision.geometry, { floorY: data.bounds.minY - 2 })
     : null;
+  if (collider) attachCollisionBands(collider, data);
   render.geometry.boundsTree = new MeshBVH(render.geometry, { targetLeafSize: 8 });
   return {
     geometry: render.geometry,
     collider,
     material: mapMaterial(),
-    spawns: snapSpawns(data.spawns, collider)
+    // Hand-picked points beat the pack's own, and by a wide margin for a
+    // free-for-all: see src/maps/dmSpawns.js for why and for how to add them.
+    // They are snapped to the floor the same way, because a getpos taken while
+    // standing on a crate is a metre off the ground it was read from.
+    spawns: snapSpawns(dmSpawnsFor(data.id) || data.spawns, collider)
   };
+}
+
+/**
+ * Expand the porter's band table onto the collider.
+ *
+ * The result is the SAME shape src/cs3d/mapLoader.js builds for the explorer's
+ * packs — `surfaces`, `surfaceOf`, `passBullets`, `ranges`, `mask`, `triangles`
+ * — because the two tracers that read it (src/cs3d/rayWorld.js and
+ * src/cs3d/hullWorld.js) are now the same code in both places. Which is the
+ * whole point: a wallbang in the trainer is decided by
+ * shared/sim3d/penetration.js reading a real surface name off a real triangle,
+ * not by an approximation of one.
+ *
+ * The porter ships ranges rather than a per-triangle array (a phys mesh has one
+ * surface, so a few hundred ranges say the same thing in two kilobytes); this
+ * is where they become the flat arrays the tracers index. Once per map.
+ */
+function attachCollisionBands(collider, data) {
+  const c = data.collision;
+  if (!c) return;
+  const n = c.triangles || collider.length;
+  collider.triangles = n;
+  collider.surfaces = c.surfaces || [];
+  collider.ranges = c.ranges || null;
+  // u8 while the map has 255 or fewer distinct surfaces (the most any of them
+  // has is 40), u16 beyond that.
+  const surfaceOf = collider.surfaces.length > 255 ? new Uint16Array(n) : new Uint8Array(n);
+  const passBullets = new Uint8Array(n);
+  let flagged = 0;
+  for (const [start, end, sid, pass] of c.bands || []) {
+    surfaceOf.fill(sid, start, end);
+    if (pass) {
+      passBullets.fill(1, start, end);
+      flagged += end - start;
+    }
+  }
+  collider.surfaceOf = surfaceOf;
+  collider.passBullets = flagged ? passBullets : null;
+  /**
+   * Per-triangle kill switch, for parity with the explorer's collider.
+   *
+   * Nothing in the trainer breaks a window yet, so it is all zeroes — but the
+   * tracers read it unconditionally and a missing one would mean two code paths
+   * where there is now one.
+   */
+  collider.mask = new Uint8Array(n);
+  collider.maskVersion = 0;
 }
 
 /**
@@ -138,6 +193,7 @@ async function fetchMap(data) {
  */
 function snapSpawns(spawns, collider) {
   if (!collider) return spawns;
+
   return spawns.map((sp) => {
     const [x, y, z] = sp.pos;
     const ground = collider.groundHeightAt(x, z, y);
@@ -195,6 +251,24 @@ export class MapHandle {
   /** Where the world ends underneath, for a player who has fallen off it. */
   get floorY() {
     return this.data.bounds.minY - 2;
+  }
+
+  /**
+   * The map as a BULLET sees it: the `trace` interface
+   * shared/sim3d/penetration.js takes, over this map's hull.
+   *
+   * Built once and cached on the handle. `unitScale` is the whole of the
+   * difference from the explorer's: the hull is in metres here and in Source
+   * units there, and the tracer is asked its questions in Source units either
+   * way.
+   */
+  get rayWorld() {
+    if (this._rayWorld === undefined) {
+      this._rayWorld = this.collider
+        ? createRayWorld(this.collider, null, { unitScale: UNIT_M, Ray: THREE.Ray })
+        : null;
+    }
+    return this._rayWorld;
   }
 
   /** Take the map out of the scene WITHOUT disposing anything shared. */

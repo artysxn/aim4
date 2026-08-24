@@ -226,6 +226,21 @@ input[type='reset'] {
   background: rgba(200, 15, 15, 0.88);
 }
 
+/*
+ * Flashbang. Opaque white and driven entirely by opacity, because that is what
+ * the game's own overlay is: `fadeHold` at full alpha and then `fadeTime` down
+ * to nothing (shared/sim3d/flash.js). No transition here — the curve is
+ * computed per frame and a CSS ease on top of it would fight it.
+ */
+.flash-fx {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+  opacity: 0;
+  background: #fff;
+}
+
 #ui-root {
   position: absolute;
   inset: 0;

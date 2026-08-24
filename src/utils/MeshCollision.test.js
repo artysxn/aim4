@@ -33,7 +33,10 @@ function assert(ok, msg) {
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(here, '..', '..');
-const GLB = path.join(root, 'public', 'maps', 'dust2', 'dust2.glb');
+// `maps/ported/`, which is where gen-trainer-map.mjs has written since ported
+// maps were given a directory of their own; this said `maps/dust2` and so the
+// whole file skipped itself silently.
+const GLB = path.join(root, 'public', 'maps', 'ported', 'dust2', 'dust2.glb');
 const DATA = path.join(root, 'src', 'maps', 'dust2MapData.js');
 
 if (!fs.existsSync(GLB) || !fs.existsSync(DATA)) {
@@ -99,7 +102,15 @@ bakeNodeTransform(collision);
 
   const tris = render.geometry.index.count / 3;
   assert(tris === data.tris, `the data module agrees about the triangle count (${tris} vs ${data.tris})`);
-  assert(tris > 900e3 && tris < 1.2e6, `~1M triangles after a 4x un-subdivision (${tris.toLocaleString()})`);
+  // The porter asks for 4x and PROMISES an error bound, not a ratio: since the
+  // bound became absolute (2 Source units, so a collapse cannot pull a thin
+  // wall shut) dust2 comes back at 2.8x rather than 4.0x. So the range is wide
+  // on purpose — what would be a real regression is the un-subdivision not
+  // running at all, or running away with the map.
+  assert(
+    tris > 0.6e6 && tris < 2.2e6,
+    `un-subdivided, but still a map (${tris.toLocaleString()} of 4.17M read)`
+  );
 }
 
 // ---- the collider ----------------------------------------------------------

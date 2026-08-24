@@ -70,7 +70,7 @@ export class Shooting {
   /** The map's collision, as a BULLET sees it (src/cs3d/rayWorld.js). */
   setCollider(collider, movers = null) {
     this.movers = movers || this.movers || null;
-    this.world = collider ? createRayWorld(collider, this.movers) : null;
+    this.world = collider ? createRayWorld(collider, this.movers, { Ray: THREE.Ray }) : null;
   }
 
   /**

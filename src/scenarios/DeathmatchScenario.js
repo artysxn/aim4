@@ -14,7 +14,7 @@ import * as THREE from 'three';
 import { BaseScenario, beep } from './BaseScenario.js';
 import { buildBotTargetFromSettings } from '../bots/buildBotTarget.js';
 import { randRange, clamp, lerp, degToRad } from '../utils/MathUtils.js';
-import { srcFriction, srcAccelerate, RUN_SPEED, STAND_EYE } from '../utils/SourceMovement.js';
+import { srcFriction, srcAccelerate, RUN_SPEED, STAND_EYE, UNIT } from '../utils/SourceMovement.js';
 import { resolveCollisions, supportHeightAt } from '../utils/mapCollision.js';
 import { gridLineColors, createCoverGridMaterial, applyCoverGridRepeat } from '../utils/ColorUtils.js';
 import { markBulletDecalSurface } from '../utils/bulletImpact.js';
@@ -24,8 +24,13 @@ import { COMPETITIVE_CONFIG_KEY } from './leaderboardConfig.js';
 import { DEFAULTS } from '../core/SettingsManager.js';
 import { DEATHMATCH_MAP, deathmatchExtent } from './deathmatchMap.js';
 import { dmMapById, DM_MAP_DEFAULT } from '../maps/dmMaps.js';
+import { simWorldFor } from '../utils/simWorld.js';
+import { resolveShot, wasWallbang, GRAZE_DAMAGE, FALLBACK_WEAPONS } from '../weapons/wallbang.js';
+import { sharedWeaponAssets, weaponNameFor } from '../agents/weaponAssets.js';
+import { deathmatchExtent as dmExtent } from './deathmatchMap.js';
 import { loadMeshMap } from '../maps/meshMap.js';
 import { eyeOffset, SPAWN_GRACE } from '../multiplayer/constants.js';
+import { FLASH_RADIUS } from '../../shared/sim3d/flash.js';
 import { pickSpawnPreferHidden, movementHitScale, movementReactionDelay, isPointVisible } from '../utils/spawnVisibility.js';
 import { worldImpactNormal } from '../utils/bulletImpact.js';
 import {
@@ -244,7 +249,10 @@ export class DeathmatchScenario extends BaseScenario {
       .map((e) => ({
         killer: this._board.get(e.killerId)?.name ?? '?',
         victim: this._board.get(e.victimId)?.name ?? '?',
-        headshot: e.headshot
+        headshot: e.headshot,
+        // Through a wall. The feed shows it because a wallbang is the one kill
+        // where "how" is the interesting part.
+        wallbang: e.wallbang
       }));
   }
 
@@ -255,18 +263,18 @@ export class DeathmatchScenario extends BaseScenario {
     return this._board.get(id);
   }
 
-  _pushKillFeed(killerId, victimId, { headshot = false } = {}) {
-    this._killFeed.unshift({ killerId, victimId, headshot, at: performance.now() });
+  _pushKillFeed(killerId, victimId, { headshot = false, wallbang = false } = {}) {
+    this._killFeed.unshift({ killerId, victimId, headshot, wallbang, at: performance.now() });
     if (this._killFeed.length > KILL_FEED_MAX) this._killFeed.length = KILL_FEED_MAX;
   }
 
-  _recordKill(killerId, victimId, { headshot = false } = {}) {
+  _recordKill(killerId, victimId, { headshot = false, wallbang = false } = {}) {
     if (!this._board.has(killerId) || !this._board.has(victimId)) return;
     const killer = this._board.get(killerId);
     const victim = this._board.get(victimId);
     killer.kills++;
     victim.deaths++;
-    this._pushKillFeed(killerId, victimId, { headshot });
+    this._pushKillFeed(killerId, victimId, { headshot, wallbang });
   }
 
   // ---- Environment --------------------------------------------------------
@@ -359,6 +367,19 @@ export class DeathmatchScenario extends BaseScenario {
     return Math.atan2(-dx, -dz);
   }
 
+  /**
+   * Which way a spawn faces.
+   *
+   * A hand-picked spawn (src/maps/dmSpawns.js) was taken while looking
+   * somewhere on purpose, so it is spawned looking there. Everything else gets
+   * the old answer, facing the middle of the world — which is right for the
+   * arena, whose middle is where the fight is, and is merely arbitrary on a
+   * ported map that has no such list yet.
+   */
+  _spawnYaw(spawn) {
+    return spawn.camYaw != null ? spawn.camYaw : this._yawToward(spawn.pos, [0, 0, 0]);
+  }
+
   // ---- Bots ---------------------------------------------------------------
   _buildBot() {
     return buildBotTargetFromSettings(this.settings, this.variant, {
@@ -396,6 +417,10 @@ export class DeathmatchScenario extends BaseScenario {
       spawnGrace: SPAWN_GRACE,
       sneakFireDelay: 0,
       sneakTargetKey: null,
+      /** Seconds of flashbang left; a blind bot does not shoot. */
+      blindFor: 0,
+      /** Fire damage accumulated while standing in a molotov. */
+      burn: 0,
       hadPlayerLos: false,
       playerReactDelay: 0
     };
@@ -404,10 +429,14 @@ export class DeathmatchScenario extends BaseScenario {
     return bot;
   }
 
-  /** Line-of-sight between two world points (cover occludes). */
+  /** Line-of-sight between two world points (cover and smoke occlude). */
   _hasLos(fromX, fromY, fromZ, tx, ty, tz) {
     const dist = Math.hypot(tx - fromX, ty - fromY, tz - fromZ);
     if (dist < 1e-4) return true;
+    // Smoke first: it is a sphere test and the geometry is a BVH cast, so the
+    // cheap answer goes in front. This is what makes a smoke worth throwing —
+    // every bot's target pick and every respawn placement reads this function.
+    if (this.engine.nades?.smokeBlocks(fromX, fromY, fromZ, tx, ty, tz)) return false;
     _headPos.set(fromX, fromY, fromZ);
     _losDir.set(tx - fromX, ty - fromY, tz - fromZ).multiplyScalar(1 / dist);
     _losRay.set(_headPos, _losDir);
@@ -661,10 +690,12 @@ export class DeathmatchScenario extends BaseScenario {
     // A second start on the same run (the map arriving) must not stack bots.
     for (const bot of this.bots.splice(0)) this._removeBot(bot);
 
+    this._armGrenades();
+
     const spawn = this._pickSpawn();
     this.engine.player.spawn({
       pos: spawn.pos,
-      yaw: this._yawToward(spawn.pos, [0, 0, 0]),
+      yaw: this._spawnYaw(spawn),
       bounds: this.map.bounds,
       colliders: this.colliders,
       spawnGrace: SPAWN_GRACE
@@ -676,6 +707,114 @@ export class DeathmatchScenario extends BaseScenario {
       avoid.push([bot.pos.x, bot.footY, bot.pos.z]);
     }
     this._playerHp = PLAYER_HP;
+  }
+
+  /**
+   * Hand the run's grenades their world and their consequences.
+   *
+   * The thrower lives in main.js because the mouse and the number row do; what
+   * a detonation COSTS is a property of this mode, so it is assigned here and
+   * taken away again in dispose(). A mode that never assigns them can still
+   * throw — the utility just does not hurt anybody.
+   */
+  _armGrenades() {
+    const nades = this.engine.nades;
+    if (!nades) return;
+    nades.clear();
+    nades.refill();
+    nades.setWorld(
+      simWorldFor(this.colliders, {
+        floorY: this.floorY,
+        extent: this.isMeshMap ? 4096 : dmExtent(this.map)
+      })
+    );
+    nades.onBlast = (b) => this._onBlast(b);
+    nades.onFlashBang = (f) => this._onFlashBang(f);
+    nades.onBurn = (f) => this._onBurn(f);
+  }
+
+  /**
+   * An HE went off. Damage falls off linearly to nothing at the rim, which is
+   * CS2's own shape, and is then read into this mode's two-hit health: a
+   * centre-mass blast kills, an edge-of-radius one costs a hit, and further out
+   * costs nothing. Bots and the player take it the same way, because a
+   * free-for-all where your own nade cannot kill you is not one.
+   */
+  _onBlast({ pos, radius, damage }) {
+    const hits = (dist) => {
+      if (dist >= radius) return 0;
+      const dmg = damage * (1 - dist / radius);
+      return dmg >= 60 ? PLAYER_HP : dmg >= 20 ? 1 : 0;
+    };
+    for (const bot of [...this.bots]) {
+      if (bot.target.state === 'dying') continue;
+      const d = Math.hypot(bot.pos.x - pos.x, bot.footY + 0.5 - pos.y, bot.pos.z - pos.z);
+      const n = hits(d);
+      if (!n) continue;
+      if (!this._losClearForBlast(pos, bot)) continue;
+      bot.hp -= n;
+      if (bot.hp <= 0) this._killBot(bot, true, null, false);
+    }
+    if (!this._dead && !this._isInPlayerGrace()) {
+      const cam = this.camera;
+      const d = Math.hypot(cam.position.x - pos.x, cam.position.y - pos.y, cam.position.z - pos.z);
+      const n = hits(d);
+      if (n) {
+        this._playerHp -= n;
+        if (this._playerHp <= 0) this._onPlayerDeath(false);
+      }
+    }
+  }
+
+  /** A wall between the blast and a body stops it. */
+  _losClearForBlast(pos, bot) {
+    return this._hasLos(pos.x, pos.y, pos.z, bot.pos.x, bot.footY + 0.5, bot.pos.z);
+  }
+
+  /**
+   * A flashbang. The player's own blindness is CS2's model and belongs to the
+   * thrower (shared/sim3d/flash.js); what this adds is the bots', which is
+   * simpler on purpose: a bot that could see the bang stops shooting for as
+   * long as it would have been blind.
+   */
+  _onFlashBang({ pos }) {
+    for (const bot of this.bots) {
+      if (bot.target.state === 'dying') continue;
+      const ey = this._botEyePos(bot);
+      if (!this._hasLos(pos.x, pos.y, pos.z, bot.pos.x, ey, bot.pos.z)) continue;
+      const d = Math.hypot(bot.pos.x - pos.x, bot.pos.z - pos.z);
+      // Full blindness up close, tapering to nothing at the flash's own reach.
+      const k = Math.max(0, 1 - d / (FLASH_RADIUS * UNIT));
+      if (k <= 0.05) continue;
+      bot.blindFor = Math.max(bot.blindFor || 0, 0.5 + 3 * k);
+    }
+  }
+
+  /** Standing in fire hurts, once per second of it. */
+  _onBurn({ pos, radius, dps, dt }) {
+    const inside = (x, y, z) =>
+      Math.hypot(x - pos.x, z - pos.z) < radius && Math.abs(y - pos.y) < radius;
+    for (const bot of [...this.bots]) {
+      if (bot.target.state === 'dying') continue;
+      if (!inside(bot.pos.x, bot.footY, bot.pos.z)) continue;
+      bot.burn = (bot.burn || 0) + dps * dt;
+      // A hit per 50 damage taken, so a bot that walks through loses nothing and
+      // one that stands in it dies.
+      while (bot.burn >= 50 && bot.hp > 0) {
+        bot.burn -= 50;
+        bot.hp -= 1;
+        if (bot.hp <= 0) this._killBot(bot, true, null, false);
+      }
+    }
+    if (this._dead || this._isInPlayerGrace()) return;
+    const cam = this.camera;
+    if (!inside(cam.position.x, cam.position.y - STAND_EYE, cam.position.z)) return;
+    this._playerBurn = (this._playerBurn || 0) + dps * dt;
+    while (this._playerBurn >= 50 && this._playerHp > 0) {
+      this._playerBurn -= 50;
+      this._playerHp -= 1;
+      if (this._playerHp <= 0) this._onPlayerDeath(false);
+    }
   }
 
   onUpdate(dt) {
@@ -753,8 +892,12 @@ export class DeathmatchScenario extends BaseScenario {
           bot.playerReactDelay = 0;
         }
 
+        // A flashed bot does not shoot. Blunter than the player's own
+        // blindness, which runs CS2's fade curve (shared/sim3d/flash.js): a bot
+        // has no screen to whiten, so what being blind costs it is the shot.
         const mayFire = (targetSeesMe || bot.sneakFireDelay <= 0)
-          && (!engagingPlayer || bot.playerReactDelay <= 0);
+          && (!engagingPlayer || bot.playerReactDelay <= 0)
+          && !(bot.blindFor > 0);
         bot.fireTimer -= dt;
         if (mayFire && bot.fireTimer <= 0) {
           bot.fireTimer = SHOT_INTERVAL;
@@ -803,6 +946,8 @@ export class DeathmatchScenario extends BaseScenario {
           bot.stuckAccum = 0;
         }
       }
+
+      if (bot.blindFor > 0) bot.blindFor = Math.max(0, bot.blindFor - dt);
 
       bot.crouchTimer -= dt;
       if (bot.crouchWant && bot.crouchTimer <= 0) {
@@ -867,9 +1012,14 @@ export class DeathmatchScenario extends BaseScenario {
     const spawn = this._pickSpawn(botPts);
     this.engine.weapon?.reset();
     this._playerHp = PLAYER_HP;
+    this._playerBurn = 0;
+    // A fresh set of utility with a fresh life, and nothing left in hand from
+    // the last one — dying mid-charge must not respawn holding a pulled pin.
+    this.engine.nades?.cancel();
+    this.engine.nades?.refill();
     this.engine.player.spawn({
       pos: spawn.pos,
-      yaw: this._yawToward(spawn.pos, [0, 0, 0]),
+      yaw: this._spawnYaw(spawn),
       bounds: this.map.bounds,
       colliders: this.colliders,
       spawnGrace: SPAWN_GRACE
@@ -899,13 +1049,93 @@ export class DeathmatchScenario extends BaseScenario {
   }
 
   // ---- Player shooting bots ----------------------------------------------
+
+  /** The weapons-pack row for whatever is in hand, for the penetration solver. */
+  _bulletWeapon() {
+    const name = weaponNameFor(this.weaponId) || 'ak47';
+    return sharedWeaponAssets().stats?.(name) || FALLBACK_WEAPONS[name] || FALLBACK_WEAPONS.ak47;
+  }
+
+  /**
+   * On a ported map, the bullet is solved once HERE and the answer is reused.
+   *
+   * This hook already exists to find where a tracer ends, and on a real map
+   * that is the same question as "what did the bullet hit", because it may have
+   * gone through two walls to get there (src/weapons/wallbang.js). Solving it
+   * twice — once for the tracer and once for the damage — would be two
+   * penetration walks per shot and a chance for them to disagree.
+   *
+   * The arena keeps the plain raycast: it has no surfaces and nothing to shoot
+   * through, so there is nothing for the solver to decide.
+   */
+  _resolveBulletImpact() {
+    const world = this.isMeshMap ? this.mapHandle?.rayWorld : null;
+    if (!world) return super._resolveBulletImpact();
+    const ray = this._shotRaycaster().ray;
+    const res = resolveShot({
+      origin: ray.origin,
+      direction: ray.direction,
+      world,
+      weapon: this._bulletWeapon(),
+      colliders: this.activeColliders()
+    });
+    this._shotResult = res;
+    this._lastImpact.copy(res.end);
+    const n = res.hit ? null : res.impacts[res.impacts.length - 1]?.normal;
+    if (n) this._lastImpactNormal.set(n.x, n.z, -n.y);
+    else this._lastImpactNormal.set(0, 1, 0);
+    // The shape the caller wants: something with an `object`, so the decal
+    // placer and the miss counter keep working unchanged. A bullet that hit a
+    // bot reports the bot's collider; one that stopped in a wall reports the
+    // map, which is a decal surface; one that flew off into the sky reports
+    // nothing, which is a miss.
+    if (res.hit) return { object: res.hit.object, point: res.end };
+    if (res.impacts.length) return { object: this.mapHandle.mesh, point: res.end };
+    return null;
+  }
+
   onShoot(raycaster) {
     if (this._isInPlayerGrace()) return;
+    if (this.isMeshMap && this.mapHandle?.rayWorld) {
+      this._onShootPenetrating();
+      return;
+    }
     const hit = this.raycastTargets(raycaster, this.coverMeshes);
     if (!hit) return;
     const obj = hit.object;
     const tgt = obj.userData.target;
     if (!tgt) return; // hit cover → blocked
+    this._registerBotHit(obj, tgt);
+  }
+
+  /**
+   * The shot the penetration solver already worked out (`_resolveBulletImpact`).
+   *
+   * Two things it can decide that the plain raycast never could: that a bullet
+   * reached a bot THROUGH something, and that it arrived with too little left to
+   * matter. The trainer's deathmatch counts hits rather than health, so the
+   * second is a threshold rather than a subtraction — see GRAZE_DAMAGE.
+   */
+  _onShootPenetrating() {
+    const res = this._shotResult;
+    this._shotResult = null;
+    if (!res?.hit) return;
+    const obj = res.hit.object;
+    const tgt = obj?.userData?.target;
+    if (!tgt) return;
+    // Range falloff and the walls it crossed have taken their cut; what is left
+    // decides whether this counts at all.
+    if (res.damage < GRAZE_DAMAGE) return;
+    this._registerBotHit(obj, tgt, { wallbang: wasWallbang(res) });
+  }
+
+  /**
+   * One hit on a bot, however the bullet got there.
+   *
+   * Shared by the arena's raycast and a ported map's penetration walk so the
+   * two cannot drift on what a headshot is worth or when a bot dies.
+   */
+  _registerBotHit(obj, tgt, { wallbang = false } = {}) {
     const bot = this.bots.find((b) => b.target === tgt);
     if (!bot || bot.target.state === 'dying' || bot.spawnGrace > 0) return;
 
@@ -917,7 +1147,7 @@ export class DeathmatchScenario extends BaseScenario {
       this.kills++;
       this.score += obj.userData.points;
       beep(1000, 0.05, 'square', 0.05);
-      this._recordKill(PLAYER_BOARD_ID, bot.boardKey, { headshot: true });
+      this._recordKill(PLAYER_BOARD_ID, bot.boardKey, { headshot: true, wallbang });
       this._killBot(bot);
     } else {
       this.hits++;
@@ -926,7 +1156,7 @@ export class DeathmatchScenario extends BaseScenario {
       beep(520, 0.04, 'square', 0.04);
       if (bot.hp <= 0) {
         this.kills++;
-        this._recordKill(PLAYER_BOARD_ID, bot.boardKey, { headshot: false });
+        this._recordKill(PLAYER_BOARD_ID, bot.boardKey, { headshot: false, wallbang });
         this._killBot(bot);
       } else {
         const mat = obj.material;
@@ -980,6 +1210,16 @@ export class DeathmatchScenario extends BaseScenario {
     this._disposed = true;
     this.bots = [];
     this.engine.setDeathOverlay?.(0);
+    // The thrower outlives this scenario (it is main.js's), so its world and
+    // its consequences are handed back rather than left pointing at a dead run.
+    const nades = this.engine.nades;
+    if (nades) {
+      nades.clear();
+      nades.setWorld(null);
+      nades.onBlast = null;
+      nades.onFlashBang = null;
+      nades.onBurn = null;
+    }
     for (const obj of this._envObjects) {
       this.root.remove(obj);
       obj.geometry?.dispose();

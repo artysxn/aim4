@@ -33,7 +33,18 @@ export class InputManager {
     this.pitch = 0;
     this.locked = false;
     this.keys = new Set(); // currently-held movement keys (only while locked)
-    this.jumpQueued = false; // consumed once per press by PlayerController
+    this.jumpQueued = false; // a press latched between frames (see jumpHeld)
+    /**
+     * Space held right now.
+     *
+     * The movement sim wants the BUTTON every tick, not an event: CS2's
+     * CheckJumpButton does its own latching (sv_autobunnyhopping 0 means
+     * holding space does not re-jump on landing) and that rule lives in
+     * shared/sim3d/motion.js. `jumpQueued` stays alongside it for the press
+     * that goes down and up inside a single frame, which at 240 Hz is a jump
+     * the sim would otherwise never see.
+     */
+    this.jumpHeld = false;
     this.spawnGraceRemaining = 0; // keyboard locked briefly after spawn
     this.fireHeld = false; // shoot bind held — drives full-auto in weapon scenarios
     this.altHeld = false; // RMB held — cycles sniper zoom while held
@@ -48,6 +59,23 @@ export class InputManager {
     this.onUnlockedClick = null; // () => void — canvas clicked while not locked
     this.onAltFire = null; // () => void — RMB pressed (sniper zoom cycle)
     this.onUnscope = null; // () => void — unscope bind pressed (default 3 / Q)
+    /**
+     * `(slot: number) => void` — a number row key, as its own digit. 1 puts
+     * the gun back in hand and 4-7 pick a grenade (src/weapons/nades.js).
+     * Kept as a digit rather than a grenade type because this class knows about
+     * keys and nothing about what is in the pocket.
+     */
+    this.onSlot = null;
+    /**
+     * `(which: 'primary'|'secondary', down: boolean) => boolean` — offered every
+     * mouse button before the gun sees it, and a true return consumes it.
+     *
+     * This is how a grenade takes the mouse: the pin, the charge and the
+     * release are a THROW and not a shot, and the two must never both happen
+     * off one click. The gun's own path is untouched, which matters because the
+     * shoot bind is rebindable and the sniper's RMB is a zoom.
+     */
+    this.onMouseIntercept = null;
 
     document.addEventListener('pointerlockchange', () => this._handleLockChange());
     document.addEventListener('pointerlockerror', () => this._handleLockChange());
@@ -84,6 +112,7 @@ export class InputManager {
   /** Lock keyboard movement briefly after spawn; mouse look still works. */
   beginSpawnGrace(seconds) {
     this.jumpQueued = false;
+    this.jumpHeld = false;
     this.spawnGraceRemaining = Math.max(0, seconds);
   }
 
@@ -163,6 +192,7 @@ export class InputManager {
     if (!this.locked) {
       this.keys.clear(); // never leave a key "stuck" after Esc
       this.jumpQueued = false;
+      this.jumpHeld = false;
       this.fireHeld = false; // never leave the trigger "stuck" after Esc
       this.altHeld = false;
     }
@@ -181,6 +211,7 @@ export class InputManager {
     if (e.code === 'Space') {
       if (!this.locked) return;
       e.preventDefault();
+      this.jumpHeld = down && !grace;
       if (!grace && down) this.jumpQueued = true;
       return;
     }
@@ -200,6 +231,16 @@ export class InputManager {
         if (down) this.keys.add(e.code);
         else this.keys.delete(e.code);
       }
+      return;
+    }
+    // The number row, and AFTER the unscope binds on purpose: Digit3 is the
+    // sniper's default instant-unscope and that has to keep winning. Which is
+    // also why the grenades sit on 4-7 rather than on 2-5 — 4 is the grenade
+    // slot in CS2, so it is the key the muscle memory reaches for anyway.
+    if (/^Digit[1-7]$/.test(e.code)) {
+      if (!this.locked) return;
+      e.preventDefault();
+      if (down && this.onSlot) this.onSlot(Number(e.code.slice(5)));
       return;
     }
     if (!MOVE_CODES.has(e.code)) return;
@@ -224,6 +265,11 @@ export class InputManager {
     this.camera.rotation.x = this.pitch;
   }
 
+  /** Offer a button to whoever has taken the mouse. True = it was consumed. */
+  _intercept(which, down) {
+    return !!(this.locked && this.onMouseIntercept && this.onMouseIntercept(which, down));
+  }
+
   _onMouseDown(e) {
     if (matchesMouseBind(this._shootBind(), e.button)) {
       if (!this.locked) {
@@ -232,6 +278,7 @@ export class InputManager {
         return;
       }
       e.preventDefault();
+      if (this._intercept('primary', true)) return;
       this._beginFire();
       return;
     }
@@ -239,6 +286,7 @@ export class InputManager {
       if (!this.locked) return;
       e.preventDefault();
       this.altHeld = true;
+      if (this._intercept('secondary', true)) return;
       if (this.onAltFire) this.onAltFire();
       return;
     }
@@ -249,11 +297,19 @@ export class InputManager {
 
   _onMouseUp(e) {
     if (matchesMouseBind(this._shootBind(), e.button)) {
+      // The release is what throws, so it is offered even after a press the
+      // grenade did not take — switching to a nade mid-click must not leave a
+      // pin pulled with nothing to let go of it.
+      if (this._intercept('primary', false)) {
+        this.fireHeld = false;
+        return;
+      }
       this._endFire();
       return;
     }
     if (e.button === 2) {
       this.altHeld = false;
+      this._intercept('secondary', false);
     }
   }
 }

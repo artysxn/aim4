@@ -15,6 +15,7 @@ import { GameAudio } from './audio/GameAudio.js';
 import { Crosshair } from './components/Crosshair.js';
 import { Viewmodel } from './components/Viewmodel.js';
 import { WeaponController } from './weapons/WeaponController.js';
+import { TrainerNades, TRAINER_NADES } from './weapons/nades.js';
 import { SceneManager } from './core/SceneManager.js';
 import { ReplayRecorder } from './core/ReplayRecorder.js';
 import { ReplayPlayer } from './core/ReplayPlayer.js';
@@ -46,6 +47,31 @@ engine.weapon = weapon; // scenarios/UI reach it for ammo + reset
 input.onReload = () => weapon.reload();
 input.onAltFire = () => weapon.cycleScope();
 input.onUnscope = () => weapon.unscope();
+
+/**
+ * Grenades, on the same code the 3D map practice mode throws with.
+ *
+ * Owned here rather than by a scenario for the same reason the gun is: the
+ * mouse and the number row are the InputManager's, and a scenario comes and
+ * goes several times a minute. What a scenario DOES own is the world they
+ * bounce off and what a detonation costs (`setWorld`, `onBlast`,
+ * `onFlashBang`, `onBurn`), which is why those are assigned rather than
+ * constructed — a mode with no bots and no map simply never sets them, and
+ * throwing is then just throwing.
+ */
+const nades = new TrainerNades({ engine, input, root: engine.scene });
+engine.nades = nades;
+// The grenade gets the mouse whenever one is in hand, so a click is a throw and
+// never also a shot.
+input.onMouseIntercept = (which, down) => nades.button(which, down);
+input.onSlot = (slot) => {
+  if (slot === 1) {
+    nades.select(null);
+    return;
+  }
+  const type = TRAINER_NADES[slot - 4];
+  if (type) nades.select(type);
+};
 const replayRecorder = new ReplayRecorder(engine, input);
 engine.replayRecorder = replayRecorder; // BaseScenario.shoot records shots through it
 const replayPlayer = new ReplayPlayer(engine);
@@ -102,7 +128,8 @@ engine.onUpdate = (dt) => {
   const sc = sceneManager.current;
   const inFP = !!(sc?.usesWeapon && sc.running && sc.showViewmodel !== false);
   // The gun model is hidden while looking through the scope (CS behaviour).
-  viewmodel.setVisible(inFP && weapon.scopeLevel === 0);
+  // Hidden while a grenade is in hand too: the gun is not what you are holding.
+  viewmodel.setVisible(inFP && weapon.scopeLevel === 0 && !nades.active);
   const motion = engine.player?.enabled
     ? {
         onGround: engine.player.onGround,
@@ -111,6 +138,7 @@ engine.onUpdate = (dt) => {
     : {};
   viewmodel.update(dt, motion);
   weapon.update(dt);
+  nades.update(dt);
   // Sample telemetry after the viewmodel so camera punch/kick is captured.
   if (replayRecorder.active && sceneManager.current?.running) {
     replayRecorder.sample(dt);

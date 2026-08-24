@@ -83,9 +83,12 @@ export { SMOKE_RADIUS, SMOKE_SECONDS };
 export const FIRE_RADIUS = FIRE_RANGE;
 export { FIRE_SECONDS };
 
-/** [docs] HE blast radius and damage, weapons.vdata `m_flRange` / `m_nDamage`. */
-export const HE_RADIUS = 350;
-export const HE_DAMAGE = 99;
+// Imported AND re-exported: the numbers are shared with the aim trainer
+// (shared/sim3d/nadeStats.js) and are also read a few hundred lines below, and
+// a bare `export ... from` re-exports without binding a local name.
+import { HE_RADIUS, HE_DAMAGE, DECOY_SECONDS } from '../../shared/sim3d/nadeStats.js';
+
+export { HE_RADIUS, HE_DAMAGE, DECOY_SECONDS };
 
 /**
  * The three beats of an HE, seconds, and they are all short.
@@ -107,8 +110,6 @@ export const HE_SECONDS = HE_SMOKE;
 /** Ring-wave travel uses the original 0.11s beat so a longer flame does not fly further. */
 const HE_FLAME_THROW = 0.11;
 
-/** [guessed] Decoy lifetime, seconds. */
-export const DECOY_SECONDS = 15;
 
 /**
  * How long a blast keeps pushing a smoke around, seconds.
@@ -429,7 +430,7 @@ export class NadeEffects {
     if (c !== this._flashCollider || m !== this._flashMovers) {
       this._flashCollider = c;
       this._flashMovers = m;
-      this._flashWorld = c ? createRayWorld(c, m, { flash: true }) : null;
+      this._flashWorld = c ? createRayWorld(c, m, { flash: true, Ray: THREE.Ray }) : null;
     }
     return this._flashWorld;
   }
