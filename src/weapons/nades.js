@@ -414,6 +414,16 @@ export class TrainerNades {
     }
   }
 
+  /**
+   * A recorded detonation (demo playback in the Doors gamemode): the same
+   * standing effect, and the same flash model against the player's own eyes,
+   * as a grenade the player threw — just without a flight of ours ending it.
+   * `pos` is Source units, straight off the round's event.
+   */
+  playbackDetonate({ type, pos }) {
+    this._detonate({ type, pos });
+  }
+
   // ---- what the scenario asks ----------------------------------------------
 
   /**

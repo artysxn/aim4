@@ -1217,15 +1217,9 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
         label: 'Doors (AWP)',
         body: `
 <div class="field field-plain">
-            <div class="field-top"><span class="field-label">Cross direction</span></div>
-            <select id="set-doors-cross" class="config-code-input">
-              <option value="rightToLeft">Right → left</option>
-              <option value="leftToRight">Left → right</option>
-            </select>
+            <div class="field-top"><span class="field-label">Team</span></div>
+            <input type="text" id="set-doors-team" class="config-code-input" placeholder="VRS top 10" spellcheck="false" autocomplete="off" />
           </div>
-          ${rf('set-doors-speed', 'Bot cross speed', 0.5, 2.0, 0.05)}
-          <label class="field-check"><input type="checkbox" id="set-doors-feedback" /> Shot feedback (practice)</label>
-          ${rf('set-doors-feedback-dur', 'Feedback duration (s)', 0.2, 2.0, 0.1)}
           ${rf('set-doors-misslimit', 'Miss limit (0 = unlimited)', 0, 50, 1)}`
       },
       {
@@ -1316,6 +1310,9 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
 
     <!-- DEATHMATCH KILL FEED -->
     <div id="dm-killfeed" class="dm-killfeed"></div>
+
+    <!-- DOORS ROUND STATUS -->
+    <div id="doors-status" class="doors-status"></div>
 
     <!-- MULTIPLAYER CHAT (Enter / Y to open · Tab to return to game) -->
     <div id="mp-chat" class="mp-chat">
@@ -1920,6 +1917,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     this.hud = this.root.querySelector('#hud');
     this.mpScoreboard = this.root.querySelector('#mp-scoreboard');
     this.dmKillfeed = this.root.querySelector('#dm-killfeed');
+    this.doorsStatus = this.root.querySelector('#doors-status');
     this._mpKillFeed = [];
     this.mpChat = this.root.querySelector('#mp-chat');
     this.mpChatLog = this.root.querySelector('#mp-chat-log');
@@ -3298,14 +3296,9 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     this._bindRange('set-sntr-misslimit', (v, d) => { d.snipertracking.missLimit = v; }, { parse: (v) => parseInt(v, 10) });
 
     // Doors (AWP)
-    $('#set-doors-cross')?.addEventListener('change', (e) => {
-      draft((d) => { d.doorsawp.crossFrom = e.target.value; });
+    $('#set-doors-team')?.addEventListener('input', (e) => {
+      draft((d) => { d.doorsawp.team = e.target.value; });
     });
-    this._bindRange('set-doors-speed', (v, d) => { d.doorsawp.botSpeed = v; });
-    $('#set-doors-feedback')?.addEventListener('change', (e) => {
-      draft((d) => { d.doorsawp.shotFeedback = e.target.checked; });
-    });
-    this._bindRange('set-doors-feedback-dur', (v, d) => { d.doorsawp.shotFeedbackDur = v; });
     this._bindRange('set-doors-misslimit', (v, d) => { d.doorsawp.missLimit = v; }, { parse: (v) => parseInt(v, 10) });
 
     // Peekswitch (Static)
@@ -6494,12 +6487,8 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     this._setRange('set-sntr-misslimit', snt.missLimit ?? 0);
 
     const doors = s.doorsawp ?? {};
-    const doorsCross = this.root.querySelector('#set-doors-cross');
-    if (doorsCross) doorsCross.value = doors.crossFrom === 'leftToRight' ? 'leftToRight' : 'rightToLeft';
-    const doorsFb = this.root.querySelector('#set-doors-feedback');
-    if (doorsFb) doorsFb.checked = doors.shotFeedback !== false;
-    this._setRange('set-doors-speed', doors.botSpeed ?? 1);
-    this._setRange('set-doors-feedback-dur', doors.shotFeedbackDur ?? 0.5);
+    const doorsTeam = this.root.querySelector('#set-doors-team');
+    if (doorsTeam) doorsTeam.value = doors.team ?? '';
     this._setRange('set-doors-misslimit', doors.missLimit ?? 0);
 
     const pk = s.peekswitch ?? {};
@@ -7598,6 +7587,17 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     }
     if (this.dmKillfeed) {
       this.dmKillfeed.classList.toggle('active', isDm);
+    }
+    if (this.doorsStatus) {
+      const isDoors = this.state === 'playing' && sc?.name === 'doorsawp' && !!sc.statusText;
+      this.doorsStatus.classList.toggle('active', isDoors);
+      if (isDoors) {
+        const text = sc.statusText() || '';
+        if (text !== this._doorsStatusLast) {
+          this._doorsStatusLast = text;
+          this.doorsStatus.textContent = text;
+        }
+      }
     }
     if (this.hud) {
       this.hud.classList.toggle(

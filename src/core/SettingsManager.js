@@ -580,10 +580,7 @@ export const DEFAULTS = {
     missLimit: 0
   },
   doorsawp: {
-    botSpeed: 1.0, // cross-speed multiplier
-    crossFrom: 'rightToLeft', // rightToLeft | leftToRight — spawn flank + cross direction
-    shotFeedback: true, // practice: red bot snapshot + yellow hit marker
-    shotFeedbackDur: 0.5, // seconds both markers stay visible
+    team: '', // replay team the CT rounds come from; empty = VRS top 10
     duration: { type: 'time', value: 60 },
     missLimit: 0
   },

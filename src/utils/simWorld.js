@@ -45,9 +45,9 @@ export const U_PER_M = 1 / UNIT_M;
  * by the same hull a player is, which is wrong in exactly the places CS2 puts a
  * grenadeclip and right everywhere else. Noted rather than hidden.
  */
-export function meshSimWorld(collider) {
+export function meshSimWorld(collider, movers = null) {
   if (!collider?.bvh) return null;
-  return createHullWorld({ bvh: collider.bvh }, 'walk', null, { unitScale: UNIT_M });
+  return createHullWorld({ bvh: collider.bvh }, 'walk', movers, { unitScale: UNIT_M });
 }
 
 // ---- the arenas -------------------------------------------------------------
@@ -156,9 +156,15 @@ export function boxSimWorld(boxes, { floorY = 0, extent = 64 } = {}) {
  * object: an arena's soup is a few thousand triangles to bake and a scenario
  * respawns the player a lot.
  */
-export function simWorldFor(colliders, { floorY = 0, extent = 64 } = {}) {
+export function simWorldFor(colliders, { floorY = 0, extent = 64, movers = null } = {}) {
   if (!colliders) return null;
   if (colliders.isMeshCollider) {
+    // `movers` is geometry that is not in the BVH because it moves — a body
+    // planted mid-run and stood on (src/cs3d/hullWorld.js takes the same
+    // emitter the map explorer's practice dummies use). It belongs to ONE
+    // scenario's player, so that world is built fresh and never cached onto
+    // the shared collider: the next run must not inherit somebody's boost.
+    if (movers) return meshSimWorld(colliders, movers);
     if (!colliders._simWorld) colliders._simWorld = meshSimWorld(colliders);
     return colliders._simWorld;
   }

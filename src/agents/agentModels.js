@@ -172,6 +172,35 @@ export class AgentModels {
     this._loading = null;
   }
 
+  /**
+   * Fetch one more agent on demand. The shared pack loads only the CT by
+   * default because that is all any gamemode drew until the Doors mode put a
+   * T-side teammate next to the player; the second model is a few MB nobody
+   * else should pay for. Resolves true once `models[side]` is usable.
+   */
+  ensureSide(side) {
+    if (this.models[side]) return Promise.resolve(true);
+    if (!this._sideJobs) this._sideJobs = new Map();
+    if (this._sideJobs.has(side)) return this._sideJobs.get(side);
+    const job = (async () => {
+      await this.load();
+      const m = this.manifest?.models?.[side];
+      if (!m) return false;
+      const gltf = await loadGlb(packLoader(), `${this.base}/${m.file}${packVersionQuery(this.manifest)}`);
+      gltf.scene.traverse((o) => {
+        if (o.isMesh) o.frustumCulled = false;
+      });
+      this.models[side] = { scene: gltf.scene, hitboxes: m.hitboxes, bones: m.bones, name: m.name };
+      return true;
+    })().catch((e) => {
+      this._sideJobs.delete(side);
+      console.warn(`aim4: agent "${side}" did not load —`, e.message || e);
+      return false;
+    });
+    this._sideJobs.set(side, job);
+    return job;
+  }
+
   /** Fetch the manifest, the models and the clip sets. Resolves to `ready`. */
   load() {
     if (this._loading) return this._loading;

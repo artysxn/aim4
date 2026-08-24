@@ -351,9 +351,7 @@ export const COMPETITIVE_PRESETS = {
     maxDistance: 16
   },
   doorsawp: {
-    runDuration: 60,
-    botSpeed: 1.0,
-    crossFrom: 'rightToLeft'
+    runDuration: 60
   },
   peekswitch: {
     runDuration: 30,

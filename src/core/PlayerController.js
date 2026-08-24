@@ -122,9 +122,17 @@ export class PlayerController {
 
   /**
    * Place the player and take control of the camera position.
-   * @param {{pos:[number,number,number], yaw?:number, bounds?:object}} opts
+   *
+   * `world` overrides what the player COLLIDES against, while `colliders`
+   * stays what the ground probe and the bots read. They are normally two views
+   * of one thing and this is left unset; a scenario passes it when the player's
+   * world has something in it the shared collider does not — Doors plants a
+   * body you can stand on (src/utils/simWorld.js `movers`), and baking that
+   * into the cached map world would leave it there for every later run.
+   *
+   * @param {{pos:[number,number,number], yaw?:number, bounds?:object, world?:object}} opts
    */
-  spawn({ pos, yaw = 0, bounds = null, colliders = null, spawnGrace = 0, floorY = 0 }) {
+  spawn({ pos, yaw = 0, bounds = null, colliders = null, spawnGrace = 0, floorY = 0, world = null }) {
     this.pos.x = pos[0];
     this.pos.z = pos[2];
     this.floorY = floorY;
@@ -145,7 +153,8 @@ export class PlayerController {
     // off the map lands: the arenas have a plane at 0, a ported map has the
     // bottom of its own bounds, and the flat world is what a scenario with no
     // geometry at all (Tracking, Range) stands on.
-    this.world = simWorldFor(colliders, { floorY, extent: this._extentFor(bounds) })
+    this.world = world
+      || simWorldFor(colliders, { floorY, extent: this._extentFor(bounds) })
       || flatWorld(floorY * U_PER_M);
 
     const s = this.sim;
