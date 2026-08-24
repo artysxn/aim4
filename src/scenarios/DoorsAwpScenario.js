@@ -58,12 +58,6 @@ const PLAYER_BOUNDS = {
   minZ: 250 * UNIT_M,
   maxZ: Math.max(750 * UNIT_M, SPAWN_POS[2] + 0.05)
 };
-// The box's floor (z 36). Below it the player has left the area some way the
-// walls did not stop — put them back at the spawn. There is no ceiling check:
-// the ground inside the box already sits near the top of the given range and
-// every jump would trip it.
-const FOOT_MIN = 36 * UNIT_M - 0.6;
-
 /**
  * The only slab of dust2 this mode draws, Source x.
  *
@@ -551,8 +545,6 @@ export class DoorsAwpScenario extends BaseScenario {
       // round was decided. Not a miss; just the next one.
       if (!alive) this._nextRound();
     }
-    const player = this.engine.player;
-    if (player?.enabled && player.footY < FOOT_MIN) this._respawnPlayer();
   }
 
   // ---- shooting -------------------------------------------------------------

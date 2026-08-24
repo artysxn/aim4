@@ -372,14 +372,34 @@ export function sliceGeometryX(geometry, minX, maxX) {
 
   const out = new THREE.BufferGeometry();
   for (const [name, src] of Object.entries(geometry.attributes)) {
+    const itemSize = src.itemSize;
     const ArrayType = src.array.constructor;
-    const dst = new ArrayType(used.length * src.itemSize);
+    const dst = new ArrayType(used.length * itemSize);
+    /**
+     * Where vertex `v` starts, and how far apart two vertices are.
+     *
+     * An attribute out of a meshopt-compressed glb is INTERLEAVED: `src.array`
+     * is the whole packed vertex buffer shared with its neighbours, and one
+     * vertex begins at `v * stride + offset`, NOT at `v * itemSize`. dust2's
+     * normals and greys arrive that way with a stride of 4 against an itemSize
+     * of 3, so indexing by itemSize walks a byte further into the buffer with
+     * every vertex and reads a sliding mixture of the vertices around it.
+     *
+     * It is worth naming what that looked like, because nothing threw and the
+     * map still had the right SHAPE: position is a plain array by then
+     * (`bakeNodeTransform` rebuilds it), so only the normals and the colours
+     * came out scrambled. The map rendered with per-vertex normals pointing
+     * everywhere, which reads as a glossy, metallic sheen sweeping across flat
+     * concrete — a lighting bug that looks like a material choice.
+     */
+    const stride = src.isInterleavedBufferAttribute ? src.data.stride : itemSize;
+    const offset = src.isInterleavedBufferAttribute ? src.offset : 0;
     for (let i = 0; i < used.length; i++) {
-      const from = used[i] * src.itemSize;
-      const to = i * src.itemSize;
-      for (let k = 0; k < src.itemSize; k++) dst[to + k] = src.array[from + k];
+      const from = used[i] * stride + offset;
+      const to = i * itemSize;
+      for (let k = 0; k < itemSize; k++) dst[to + k] = src.array[from + k];
     }
-    out.setAttribute(name, new THREE.BufferAttribute(dst, src.itemSize, src.normalized));
+    out.setAttribute(name, new THREE.BufferAttribute(dst, itemSize, src.normalized));
   }
   out.setIndex(new THREE.BufferAttribute(newIndex, 1));
   out.computeBoundingBox();

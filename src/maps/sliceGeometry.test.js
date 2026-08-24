@@ -118,6 +118,47 @@ console.log('the buffer after compaction');
   check(!!geometry.boundsTree, 'the slice gets its own BVH, so raycasts hit the right triangles');
 }
 
+console.log('interleaved attributes (what a meshopt glb actually hands over)');
+{
+  // dust2's normals and greys arrive INTERLEAVED with a stride of 4 against an
+  // itemSize of 3, while position is a plain array by then. Indexing the
+  // packed buffer by itemSize walks a slot further in with every vertex and
+  // reads a sliding mixture of neighbouring vertices — which threw nothing,
+  // kept the map's shape (position is unaffected), and scrambled every normal
+  // into a glossy metallic sheen across flat concrete.
+  const tris = [INSIDE, OVER, STRADDLE_HI];
+  const g = geometryOf(tris);
+  // Rebuild `normal` as an interleaved, padded attribute: unit +Y everywhere,
+  // with a marker in the spare slot that must never be read as a normal.
+  const packed = new Int8Array(tris.length * 3 * 4);
+  for (let v = 0; v < tris.length * 3; v++) {
+    packed[v * 4] = 0;
+    packed[v * 4 + 1] = 127; // +Y
+    packed[v * 4 + 2] = 0;
+    packed[v * 4 + 3] = -128; // padding; reading this as a normal is the bug
+  }
+  const buf = new THREE.InterleavedBuffer(packed, 4);
+  g.setAttribute('normal', new THREE.InterleavedBufferAttribute(buf, 3, 0, true));
+
+  const { geometry } = sliceGeometryX(g, 0, 10);
+  const n = geometry.getAttribute('normal');
+  check(!n.isInterleavedBufferAttribute, 'the slice writes a plain attribute');
+  let unit = true;
+  let padLeaked = false;
+  for (let i = 0; i < n.count; i++) {
+    const L = Math.hypot(n.getX(i), n.getY(i), n.getZ(i));
+    if (Math.abs(L - 1) > 0.02) unit = false;
+    // -128/127 is the padding slot; it can only appear if the stride was ignored.
+    if (n.getX(i) < -0.9 || n.getZ(i) < -0.9) padLeaked = true;
+  }
+  check(unit, 'every copied normal is still unit length');
+  check(!padLeaked, 'the padding slot never gets read as a normal component');
+  check(
+    n.getY(0) > 0.99 && n.getY(n.count - 1) > 0.99,
+    'the first and last vertex still point the way they did'
+  );
+}
+
 console.log('degenerate slabs');
 {
   const src = geometryOf([INSIDE, OVER]);
