@@ -28,7 +28,7 @@ import { createRayWorld } from '../cs3d/rayWorld.js';
 import { fireBullet, boxWorld, wallCost, PENETRATION_UNITS } from '../../shared/sim3d/penetration.js';
 import { surface as surfaceOf } from '../../shared/sim3d/surfaces.js';
 import { UNIT_M } from '../../shared/sim3d/units.js';
-import { FALLBACK_WEAPONS } from './wallbang.js';
+import { FALLBACK_WEAPONS, resolveShot, GRAZE_DAMAGE } from './wallbang.js';
 
 let failures = 0;
 function check(ok, msg) {
@@ -86,6 +86,48 @@ function check(ok, msg) {
   check(Math.abs(c.cost - 10 / 0.5) < 1e-9, 'concrete costs thickness / 0.5');
   check(wallCost(surfaceOf('chainlink'), surfaceOf('concrete'), 10).damageLeft >= 0.9, 'a grate keeps the bullet nearly whole');
   check(PENETRATION_UNITS > 0, 'penetration power converts to units of wall');
+}
+
+// ---- ignoreWalls (Doors AWP): a bot on the ray is a hit, wall thickness
+//      does not get a vote. Misses still stop on the hull. -------------------
+{
+  const origin = new THREE.Vector3(0, 0.9, 0);
+  const direction = new THREE.Vector3(1, 0, 0);
+  const awp = FALLBACK_WEAPONS.awp;
+  // 200 units of concrete: thicker than Source will ever look for an exit
+  // (MAX_WALL_THICKNESS is 90), so a real AWP never comes out the far side.
+  const thick = boxWorld([
+    { mins: [100, -200, -200], maxs: [300, 200, 200], surface: 'concrete' }
+  ]);
+  const bot = new THREE.Mesh(new THREE.BoxGeometry(0.4, 1.8, 0.4));
+  bot.position.set(400 * UNIT_M, 0.9, 0);
+  bot.updateMatrixWorld(true);
+  bot.userData = { zone: 'chest' };
+
+  const blocked = resolveShot({
+    origin, direction, world: thick, weapon: awp, colliders: [bot]
+  });
+  check(!blocked.hit, '200 units of concrete stops an AWP');
+
+  const through = resolveShot({
+    origin, direction, world: thick, weapon: awp, colliders: [bot], ignoreWalls: true
+  });
+  check(!!through.hit, 'ignoreWalls still hits the bot behind it');
+  check(through.hit.object === bot, 'and names that bot');
+  check(through.damage >= GRAZE_DAMAGE, 'with enough damage to count');
+  check(through.penetrations > 0, 'and still counts as a wallbang');
+
+  const miss = resolveShot({
+    origin, direction, world: thick, weapon: awp, colliders: [], ignoreWalls: true
+  });
+  check(!miss.hit, 'a miss is still a miss');
+  check(miss.impacts.length > 0, 'and the tracer still stops on the wall');
+
+  const clean = resolveShot({
+    origin, direction, world: boxWorld([]), weapon: awp, colliders: [bot], ignoreWalls: true
+  });
+  check(!!clean.hit, 'a clear shot still hits');
+  check(clean.penetrations === 0, 'and is not a wallbang');
 }
 
 // ---- the shipped map -------------------------------------------------------

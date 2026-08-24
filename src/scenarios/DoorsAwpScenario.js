@@ -554,8 +554,8 @@ export class DoorsAwpScenario extends BaseScenario {
     return sharedWeaponAssets().stats?.(name) || FALLBACK_WEAPONS[name] || FALLBACK_WEAPONS.ak47;
   }
 
-  /** Same penetration walk as Deathmatch on a ported map: the tracer's end and
-   *  the bullet's verdict are one answer, wallbangs included. */
+  /** A CT on the crosshair is a hit, walls included. Misses still stop on the
+   *  hull so the tracer has somewhere to land. */
   _resolveBulletImpact() {
     const world = this.mapHandle?.rayWorld;
     if (!world) return super._resolveBulletImpact();
@@ -565,7 +565,8 @@ export class DoorsAwpScenario extends BaseScenario {
       direction: ray.direction,
       world,
       weapon: this._bulletWeapon(),
-      colliders: this.activeColliders()
+      colliders: this.activeColliders(),
+      ignoreWalls: true
     });
     this._shotResult = res;
     this._lastImpact.copy(res.end);

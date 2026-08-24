@@ -34,7 +34,13 @@
 // ---------------------------------------------------------------------------
 
 import * as THREE from 'three';
-import { fireBullet } from '../../shared/sim3d/penetration.js';
+import {
+  fireBullet,
+  rangeFalloff,
+  hitgroupMultiplier,
+  armorSplit,
+  armorAgainst
+} from '../../shared/sim3d/penetration.js';
 import { UNIT_M } from '../../shared/sim3d/units.js';
 
 const U_PER_M = 1 / UNIT_M;
@@ -70,6 +76,10 @@ function toScene(p, out) {
 const _a = new THREE.Vector3();
 const _b = new THREE.Vector3();
 
+function along(from, dir, d) {
+  return { x: from.x + dir.x * d, y: from.y + dir.y * d, z: from.z + dir.z * d };
+}
+
 /**
  * Resolve a shot through a ported map's hull.
  *
@@ -79,10 +89,13 @@ const _b = new THREE.Vector3();
  * @param {object} o.world               a ported map's `rayWorld`
  * @param {object} o.weapon              a weapons-pack row (or FALLBACK_WEAPONS)
  * @param {THREE.Object3D[]} o.colliders bot hit meshes
+ * @param {boolean} [o.ignoreWalls]      if set, a bot on the ray is a hit even
+ *   when the wall in front of them is thicker than the bullet can pay for.
+ *   Misses still walk the real hull so the tracer has a wall to stop on.
  * @returns {{ hit: object|null, impacts: object[], penetrations: number,
  *   damage: number, end: THREE.Vector3 }}
  */
-export function resolveShot({ origin, direction, world, weapon, colliders = [] }) {
+export function resolveShot({ origin, direction, world, weapon, colliders = [], ignoreWalls = false }) {
   const src = toSource(origin);
   const dir = toSource(direction);
   // toSource is a rotation plus a uniform scale, so a direction comes back
@@ -123,6 +136,32 @@ export function resolveShot({ origin, direction, world, weapon, colliders = [] }
       helmet: false
     };
   };
+
+  if (ignoreWalls) {
+    const range = weapon?.range || 8192;
+    const target = hitTargets(src, along(src, dir, range));
+    if (target) {
+      const d = target.distance;
+      const raw = rangeFalloff(weapon?.damage || 0, weapon?.rangeModifier ?? 0.98, d)
+        * hitgroupMultiplier(target.group, weapon?.headshot ?? 4);
+      const split = armorSplit(
+        raw,
+        weapon?.armorRatio ?? 1,
+        armorAgainst(target.group, target.armor || 0, target.helmet)
+      );
+      const wall = world.trace(src, along(src, dir, d));
+      const through = !!(wall && wall.distance < d - 1e-3);
+      const end = new THREE.Vector3();
+      toScene(target.point || along(src, dir, d), end);
+      return {
+        hit: { ...target, distance: d, damage: split.health, armor: split.armor, penetrated: through ? 1 : 0 },
+        impacts: [],
+        penetrations: through ? 1 : 0,
+        damage: split.health,
+        end
+      };
+    }
+  }
 
   const res = fireBullet({ src, dir, weapon, world, hitTargets });
   const end = new THREE.Vector3();
