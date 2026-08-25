@@ -3457,13 +3457,28 @@ export function createStatsPanel({
       // A detail view opened straight from a URL asks the matches endpoint,
       // a locked team (Team Overview) its aggregate pieces; all paint without
       // a round reaching the browser.
-      const served = detail
-        ? await refreshServerDetail()
-        : lockedTeamName
-          ? await refreshServerLocked()
-          : earlyTables
-            ? await earlyTables
-            : await refreshServerTables();
+      // The aggregate is one request and cannot report progress, so a spinner
+      // over it is indistinguishable from a hung page. Count the seconds: it
+      // is not an estimate, but it is proof something is still happening, and
+      // it is the difference between "loading" and "frozen".
+      let waited = 0;
+      const tick = setInterval(() => {
+        waited += 1;
+        if (token !== loadToken) return;
+        setSpinnerLabel(bodyEl, `Loading database… ${waited}s`);
+      }, 1000);
+      let served;
+      try {
+        served = detail
+          ? await refreshServerDetail()
+          : lockedTeamName
+            ? await refreshServerLocked()
+            : earlyTables
+              ? await earlyTables
+              : await refreshServerTables();
+      } finally {
+        clearInterval(tick);
+      }
       if (token !== loadToken) return;
       if (served) {
         cancelSlow();

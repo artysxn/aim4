@@ -8,7 +8,7 @@
 // into the destination team's Documents tab.
 // ---------------------------------------------------------------------------
 
-import { fetchTeams, saveTeamDocument, formatApiError } from '../api.js';
+import { fetchRoster, fetchTeams, saveTeamDocument, formatApiError } from '../api.js';
 import { getStatsPayload } from '../statsCache.js';
 import { CAP } from '../../../shared/entitlements/keys.js';
 import { PLAN_NAMES } from '../../../shared/entitlements/catalogue.js';
@@ -354,8 +354,28 @@ export function createAntistratPanel({ escapeHtml }) {
     const included = includedMatches();
     const title = `Antistrat: ${team.name} on ${MAPS[state.mapCode]?.name || state.mapCode}`;
     try {
+      // The picker runs on the catalogue, which carries no rounds. Fetch them
+      // now, scoped to the matches this run actually covers — a handful of
+      // demos rather than the library.
+      let scanPayload = payload;
+      if (payload?.identityOnly) {
+        state.progress = 'Loading rounds for these matches…';
+        renderProgress();
+        scanPayload = await getStatsPayload(
+          included.map((d) => d.id),
+          {
+            // Round-library tags and match identity, nothing else. This scan
+            // never reads the phase bags, which are two thirds of "shapes".
+            columns: 'roundLibrary',
+            onProgress: (p) => {
+              state.progress = statsProgressLabel(p);
+              renderProgress();
+            }
+          }
+        );
+      }
       const results = await runAntistratScan({
-        payload,
+        payload: scanPayload,
         teamKey: state.teamKey,
         mapCode: state.mapCode,
         demoIds: included.map((d) => d.id),
@@ -493,6 +513,37 @@ export function createAntistratPanel({ escapeHtml }) {
       });
   }
 
+  /**
+   * The roster catalogue in the shape the picker already reads.
+   *
+   * Identity only, and `rounds` is deliberately empty: `identityOnly` marks it
+   * so generate() knows to fetch the real rounds for the demos it is about to
+   * scan, rather than scanning nothing and reporting no patterns.
+   */
+  function catalogFromRoster(roster) {
+    const players = roster?.players || [];
+    const demos = (roster?.demos || []).map((d) => {
+      const seats = [];
+      const pairs = d.p || [];
+      for (let i = 0; i < pairs.length; i += 2) {
+        const p = players[pairs[i]];
+        if (p?.i) seats.push({ id: p.i, name: p.n || p.i, team: pairs[i + 1] === 2 ? 2 : 1 });
+      }
+      return {
+        id: d.id,
+        map: d.m || '',
+        t1: d.t1 || '',
+        t2: d.t2 || '',
+        name1: d.n1 || '',
+        name2: d.n2 || '',
+        uploadedAt: d.u || 0,
+        players: seats,
+        rounds: []
+      };
+    });
+    return { demos, identityOnly: true };
+  }
+
   function applyPayload(statsPayload) {
     payload = statsPayload;
     loadError = '';
@@ -528,17 +579,20 @@ export function createAntistratPanel({ escapeHtml }) {
     fetching = true;
     el.innerHTML = spinnerHtml('Loading teams…');
     try {
-      const data = await getStatsPayload(null, {
-        // Round-library tags and match identity, nothing else. This scan never
-        // reads the phase bags, which are two thirds of the "shapes" contract.
-        columns: 'roundLibrary',
-        onProgress: (p) => {
-          if (token !== loadToken) return;
-          setSpinnerLabel(el, statsProgressLabel(p));
-        }
-      });
+      // The roster catalogue, NOT the library's stats payload.
+      //
+      // This step picks a team and then a match, and everything it draws is
+      // identity: who played whom, on what map, when. That is precisely what
+      // the catalogue carries, in a few hundred KB. It used to download every
+      // round of every demo — hundreds of megabytes, minutes of waiting — to
+      // read the team names off the top of it, which is what left this panel
+      // sitting on "Loading teams…".
+      //
+      // The rounds are still needed to actually scan, and are fetched then,
+      // scoped to the handful of demos the run covers.
+      const roster = await fetchRoster();
       if (token !== loadToken) return;
-      applyPayload(data);
+      applyPayload(catalogFromRoster(roster));
     } catch (err) {
       if (token !== loadToken) return;
       loadError = formatApiError(err).message || 'Could not load teams.';
