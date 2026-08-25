@@ -479,6 +479,37 @@ function needsPhaseEnrichment(entry) {
   );
 }
 
+/**
+ * Fill every field needsPhaseEnrichment checks with an inert value, keeping
+ * anything already present. For a round whose meta file is unreadable this is
+ * the terminal answer: leaving the fields missing keeps needsPhaseEnrichment
+ * true forever, and every later enrichment pass re-reads the demo's other
+ * rounds to relearn that this one cannot be enriched.
+ */
+function applyInertPhaseDefaults(row) {
+  if (!row.ph || typeof row.ph !== 'object') row.ph = {};
+  if (row.prw1 === undefined) row.prw1 = null;
+  if (row.prw2 === undefined) row.prw2 = null;
+  if (row.sw === undefined) row.sw = null;
+  if (row.aca1 === undefined) row.aca1 = 0;
+  if (row.ack1 === undefined) row.ack1 = 0;
+  if (row.aca2 === undefined) row.aca2 = 0;
+  if (row.ack2 === undefined) row.ack2 = 0;
+  if (row.pos1 === undefined) row.pos1 = null;
+  if (row.pos2 === undefined) row.pos2 = null;
+  if (!Array.isArray(row.kt)) row.kt = [];
+  if (!row.ev) row.ev = {};
+  if (row.du === undefined) row.du = null;
+  if (row.aw === undefined) row.aw = {};
+  if (!row.hg || typeof row.hg !== 'object') row.hg = {};
+  if (!row.mv || typeof row.mv !== 'object') row.mv = {};
+  if (!Array.isArray(row.cok)) row.cok = [];
+  if (!Array.isArray(row.cod)) row.cod = [];
+  if (row.am === undefined) row.am = null;
+  if (row.ut === undefined) row.ut = null;
+  if (row.utt === undefined) row.utt = null;
+}
+
 /** Roles missing or on an older role algorithm. */
 function needsRoleEnrichment(entry) {
   if (!entry?.rounds?.length) return false;
@@ -754,7 +785,13 @@ async function enrichPhases(io, user, entry, { roles = true, fields = null } = {
     } catch {
       meta = null;
     }
-    if (!meta) continue;
+    if (!meta) {
+      // Terminal, not a skip — see applyInertPhaseDefaults. Selective field
+      // patches keep the old behaviour: they must not write fields they were
+      // not asked to touch.
+      if (!selected) applyInertPhaseDefaults(row);
+      continue;
+    }
     meta.map = meta.map || row.m || entry.map || '';
 
     const roster =
@@ -1262,10 +1299,19 @@ export async function demoIndex(io, user, record, opts = {}) {
   if (entry.key !== key) entry.key = key;
 
   if (needsPhaseEnrichment(entry)) {
-    emit('rebuilding');
-    await enrichPhases(io, user, entry, { roles: true });
-    await persistEntry(io, user, key, entry);
-    return entry;
+    // Only explicit refresh paths pay for this here. Library pages
+    // (statsPayload sets skipBackgroundEnrichment) serve the stored row as-is:
+    // enrichPhases re-reads every round meta and full tick buffer of the demo,
+    // and letting GET /stats do that inline turned the first page after a
+    // column was added into minutes of request time — hours across a big
+    // library. Stale columns backfill when the admin runs "Recalculate all
+    // statistics", which is the same walk done once, off the request path.
+    if (!opts.skipBackgroundEnrichment) {
+      emit('rebuilding');
+      await enrichPhases(io, user, entry, { roles: true });
+      await persistEntry(io, user, key, entry);
+      return entry;
+    }
   }
 
   if (opts.heldGun && needsHeldGunEnrichment(entry)) {
@@ -1374,7 +1420,14 @@ export async function statsPayload(io, user, records, demoIds = null, opts = {})
 
   const demos = [];
   let done = 0;
-  for (const record of page) {
+  // A page is one or two small file reads per demo (sidecar or full JSON), and
+  // doing them one await at a time made page latency the sum of every seek on
+  // the volume. A few readers keep the disk busy; results merge back in page
+  // order below, so the response is byte-identical to the serial loop's.
+  const PAGE_READ_CONCURRENCY = 4;
+  const results = new Array(page.length);
+  let cursor = 0;
+  const loadOne = async (record) => {
     const label = String(record.filename || record.mapName || record.id || 'demo');
     onProgress?.({
       done,
@@ -1426,7 +1479,6 @@ export async function statsPayload(io, user, records, demoIds = null, opts = {})
       if (entry) void writeColumnar(io, user, record.id, entry);
     }
     done += 1;
-    if (entry) demos.push(fromSidecar ? entry : projectEntry(entry, contract));
     onProgress?.({
       done,
       total,
@@ -1436,7 +1488,19 @@ export async function statsPayload(io, user, records, demoIds = null, opts = {})
       phase: 'ready',
       id: record.id
     });
-  }
+    return entry ? (fromSidecar ? entry : projectEntry(entry, contract)) : null;
+  };
+  const readers = Array.from(
+    { length: Math.max(1, Math.min(PAGE_READ_CONCURRENCY, page.length)) },
+    async () => {
+      while (cursor < page.length) {
+        const idx = cursor++;
+        results[idx] = await loadOne(page[idx]);
+      }
+    }
+  );
+  await Promise.all(readers);
+  for (const entry of results) if (entry) demos.push(entry);
   const next = offset + page.length;
   return {
     demos,

@@ -121,14 +121,25 @@ export function roundOwnerIndex(records) {
  * @param {string} file
  * @param {object[]} records
  * @param {Map<string, object>} [index]  from roundOwnerIndex, if already built
+ * @param {Map<string, object>} [byId]   id → record, if already built. Without
+ *   it every modern `~<demoId>` name pays a linear scan of the whole record
+ *   list — per round, per request, which on a large library was most of the
+ *   round collector's time.
  */
-export function recordForRoundFile(file, records, index = null) {
+export function recordForRoundFile(file, records, index = null, byId = null) {
   const name = String(file || '');
   const cut = name.lastIndexOf('~');
   if (cut > 0) {
     const demoId = name.slice(cut + 1).replace(/\.[a-z0-9.]+$/i, '');
-    const owner = (records || []).find((r) => r.id === demoId);
+    const owner = byId ? byId.get(demoId) : (records || []).find((r) => r.id === demoId);
     if (owner) return owner;
   }
   return (index || roundOwnerIndex(records)).get(name) || null;
+}
+
+/** id → record, the companion lookup to roundOwnerIndex. */
+export function recordIdIndex(records) {
+  const out = new Map();
+  for (const r of records || []) if (r?.id) out.set(r.id, r);
+  return out;
 }

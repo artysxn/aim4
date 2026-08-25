@@ -2,7 +2,7 @@
 // Analytics geography: user-drawn shapes + feature predicates (localStorage).
 // ---------------------------------------------------------------------------
 
-import { fetchRoundMeta, fetchRoundTicks } from '../api.js';
+import { fetchRoundMeta, fetchRoundPacks, fetchRoundTicks } from '../api.js';
 import { COARSE_STRIDE } from '../tickStore.js';
 import { phaseAtTick, phaseBounds } from '../coach/roundPhases.js';
 import { readHeader, readRecord } from '../shared/tickFormat.js';
@@ -530,6 +530,14 @@ export function searchNeedsTicks(activeShapes) {
 export const PACK_CONCURRENCY = 8;
 
 /**
+ * Rounds per batched /rounds/packs request, and how many such requests run at
+ * once. One request for ~150 rounds replaces ~300 per-round GETs; two in
+ * flight keep the link busy while the server reads the next chunk's files.
+ */
+export const PACK_BATCH_FILES = 150;
+const PACK_BATCH_CONCURRENCY = 2;
+
+/**
  * Load the round packs a set of windows needs, in parallel, reporting progress.
  *
  * This replaces a loop that awaited `fetchRoundMeta` and then `fetchRoundTicks`
@@ -557,7 +565,10 @@ export async function loadRoundPacks(
     // Injected so a test can drive the pool without a network. Production
     // callers never pass these.
     fetchMeta = fetchRoundMeta,
-    fetchTicks = fetchRoundTicks
+    fetchTicks = fetchRoundTicks,
+    // The batched transport. Tests that inject per-round fetchers get the
+    // per-round pool unless they inject this too; production gets batching.
+    fetchPacks = undefined
   } = {}
 ) {
   const missing = files.filter((f) => {
@@ -574,11 +585,64 @@ export async function loadRoundPacks(
     return cache;
   }
   let done = 0;
-  let next = 0;
   onProgress?.({ done: 0, total });
+
+  const batcher =
+    fetchPacks !== undefined
+      ? fetchPacks
+      : fetchMeta === fetchRoundMeta && fetchTicks === fetchRoundTicks
+        ? fetchRoundPacks
+        : null;
+
+  // Files the batch could not answer (endpoint unavailable, or a round the
+  // batch reported as missing/denied) fall back to the per-round pool below,
+  // which still knows about the sample-demo mirrors.
+  let queue = missing;
+  if (batcher) {
+    queue = [];
+    const chunks = [];
+    for (let i = 0; i < missing.length; i += PACK_BATCH_FILES) {
+      chunks.push(missing.slice(i, i + PACK_BATCH_FILES));
+    }
+    let nextChunk = 0;
+    const batchWorker = async () => {
+      while (nextChunk < chunks.length) {
+        const chunk = chunks[nextChunk++];
+        let got = null;
+        try {
+          got = await batcher(chunk, { stride: COARSE_STRIDE, ticks });
+        } catch {
+          got = null;
+        }
+        if (!got) {
+          queue.push(...chunk);
+          continue;
+        }
+        for (const file of chunk) {
+          const entry = got.get(file);
+          // A released pack still has its meta; the batch's copy wins when
+          // both exist, but either serves.
+          const meta = entry?.meta || cache.get(file)?.meta || null;
+          if (!meta) {
+            queue.push(file);
+            continue;
+          }
+          cache.set(file, { meta, ticks: ticks ? entry?.ticks || null : null });
+          done += 1;
+          onProgress?.({ done, total });
+        }
+      }
+    };
+    await Promise.all(
+      Array.from({ length: Math.min(PACK_BATCH_CONCURRENCY, chunks.length) }, batchWorker)
+    );
+    if (!queue.length) return cache;
+  }
+
+  let next = 0;
   const worker = async () => {
-    while (next < missing.length) {
-      const file = missing[next++];
+    while (next < queue.length) {
+      const file = queue[next++];
       // A released pack still has its meta; only its ticks were dropped, so
       // re-reading it costs one request rather than two.
       const pack = { meta: cache.get(file)?.meta || null, ticks: null };
@@ -617,7 +681,7 @@ export async function loadRoundPacks(
       onProgress?.({ done, total });
     }
   };
-  await Promise.all(Array.from({ length: Math.max(1, Math.min(concurrency, missing.length)) }, worker));
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(concurrency, queue.length)) }, worker));
   return cache;
 }
 

@@ -10,6 +10,7 @@
 
 import { decodePacked, isPacked } from './shared/tickPacked.js';
 import { isReplayPackage } from './shared/replayPackage.js';
+import { decodeRoundPacks } from './shared/roundPackWire.js';
 
 
 const API_BASE = (import.meta.env?.VITE_API_URL || '').replace(/\/$/, '');
@@ -230,6 +231,33 @@ export async function fetchDemos(opts = {}) {
   return finishSampleMerge(lib, await fetchSampleDemos(), opts);
 }
 
+/**
+ * Records for an explicit id list, batched.
+ *
+ * The demo browser used to resolve library-wide filter results with one
+ * GET /demos/:id per demo — up to a couple of hundred requests funnelled
+ * through the browser's six connections before a row could render.
+ *
+ * @param {string[]} ids
+ * @returns {Promise<object[]>} the records the caller may read, any order
+ */
+export async function fetchDemosByIds(ids) {
+  const list = [...new Set((ids || []).filter(Boolean))];
+  if (!list.length) return [];
+  const out = [];
+  const CHUNK = 150;
+  for (let i = 0; i < list.length; i += CHUNK) {
+    const q = list.slice(i, i + CHUNK).join(',');
+    const body = await asJson(
+      await safeFetch(`${API_BASE}/api/replays/demos?ids=${encodeURIComponent(q)}`, {
+        headers: await headers()
+      })
+    );
+    out.push(...(body.demos || []));
+  }
+  return out;
+}
+
 function finishSampleMerge(lib, samples, opts) {
   let extra = samples;
   if (opts.team) {
@@ -376,6 +404,9 @@ export async function fetchAggregate(filter = {}, opts = {}) {
     params.set('role', `${filter.role.side}:${filter.role.value}`);
   }
   if (filter.roles) params.set('roles', '1');
+  if (Number.isFinite(filter.minRounds) && filter.minRounds > 0) {
+    params.set('minRounds', String(filter.minRounds));
+  }
   if (filter.rankOwn) params.set('rankOwn', String(filter.rankOwn));
   if (filter.rankOpp) params.set('rankOpp', String(filter.rankOpp));
   if (filter.dateFrom) params.set('from', filter.dateFrom);
@@ -429,6 +460,7 @@ function aggregateBody(filter = {}, opts = {}) {
   if (filter.teamName) body.teamName = filter.teamName;
   if (filter.role?.side && filter.role?.value) body.role = `${filter.role.side}:${filter.role.value}`;
   if (filter.roles) body.roles = 1;
+  if (Number.isFinite(filter.minRounds) && filter.minRounds > 0) body.minRounds = filter.minRounds;
   if (filter.rankOwn) body.rankOwn = filter.rankOwn;
   if (filter.rankOpp) body.rankOpp = filter.rankOpp;
   if (filter.dateFrom) body.from = filter.dateFrom;
@@ -715,6 +747,33 @@ export async function fetchRoundMeta(file) {
     }
     throw err;
   }
+}
+
+/**
+ * Batched round packs: meta + (optionally) ticks for many rounds in one
+ * request, against POST /rounds/packs.
+ *
+ * Returns Map file → { meta, ticks }. A file the server could not serve
+ * (missing, denied) maps to nulls; the caller decides whether to fall back to
+ * the per-round routes for those. Throws when the endpoint itself is
+ * unavailable — an older server — so the caller can fall back wholesale.
+ *
+ * @param {string[]} files
+ * @param {{ stride?: number, ticks?: boolean }} [opts]
+ * @returns {Promise<Map<string, { meta: object|null, ticks: ArrayBuffer|null }>>}
+ */
+export async function fetchRoundPacks(files, { stride = 100, ticks = true } = {}) {
+  const res = await safeFetch(`${API_BASE}/api/replays/rounds/packs`, {
+    method: 'POST',
+    headers: await headers({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ files, stride, ticks })
+  });
+  if (!res.ok) throw new Error(`Could not load round packs (${res.status})`);
+  const packs = decodeRoundPacks(await res.arrayBuffer());
+  if (!packs) throw new Error('Round packs: unexpected response format.');
+  const out = new Map();
+  for (const p of packs) out.set(p.file, { meta: p.meta, ticks: p.ticks });
+  return out;
 }
 
 /** Longest text one note will keep; the server truncates to the same length. */

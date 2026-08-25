@@ -2867,7 +2867,16 @@ export function createStatsPanel({
     const demos = serverDemoScope();
     const maps = Array.isArray(filter.maps) ? filter.maps.filter(Boolean) : [];
     const oneMap = maps.length === 1 ? String(maps[0]) : '';
-    const active = { ...filter, files: scope.files || null, teamName: lockedTeamName, roles: true };
+    // minRounds stays client-side here: the roster pin shows the locked
+    // team's players regardless of the bar, which a server-side cut would
+    // silently break.
+    const active = {
+      ...filter,
+      files: scope.files || null,
+      teamName: lockedTeamName,
+      roles: true,
+      minRounds: 0
+    };
     const rosterActive = {
       maps: filter.maps,
       files: scope.files || null,
@@ -3103,7 +3112,17 @@ export function createStatsPanel({
     const token = ++serverToken;
     // `roles: true` asks for the role columns even with no role chip set: the
     // table shows a Role column whenever the library has roles at all.
-    const active = { ...filter, files: scope.files || null, roles: true };
+    // min-rounds is applied on the server: the bar hides most of a big
+    // library's players, and shipping tens of thousands of rows to discard
+    // them in the browser was most of the response. A search pick must not be
+    // hidden under it, so a pick re-queries without the bar — the same rule
+    // renderFromServer applies to whatever rows it holds.
+    const active = {
+      ...filter,
+      files: scope.files || null,
+      roles: true,
+      minRounds: hasEntityPick() ? 0 : Math.max(0, Number(filter.minRounds) || 0)
+    };
     try {
       const res = await fetchAggregate(active, {
         tables: 'players,teams',

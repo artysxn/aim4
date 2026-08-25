@@ -528,11 +528,13 @@ export function invalidateDemoList(user = undefined) {
   if (user === undefined) {
     recordListCache.clear();
     usageCache.clear();
+    roundNamesCache.clear();
     return;
   }
   const key = userKey(user);
   recordListCache.delete(key);
   usageCache.delete(key);
+  roundNamesCache.delete(key);
 }
 
 /**
@@ -844,8 +846,24 @@ export async function writeRound(user, demoId, round, extra = {}) {
   return stem;
 }
 
-/** Names only. This is what makes filtering cheap. */
+/**
+ * The rounds directory holds ~3 files per round, so at library scale a
+ * readdir here walks hundreds of thousands of dirents — and the round
+ * collector runs on every filter change in the demo browser. Names only
+ * change when a round is written or a demo deleted, both of which funnel
+ * through invalidateDemoList; the TTL is the safety net for anything writing
+ * to the volume behind this process's back.
+ *
+ * @type {Map<string, {names: string[], expires: number}>}
+ */
+const roundNamesCache = new Map();
+const ROUND_NAMES_TTL_MS = 5 * 60 * 1000;
+
+/** Names only. This is what makes filtering cheap. Treat the array as read-only. */
 export async function listRoundNames(user) {
+  const key = userKey(user);
+  const hit = roundNamesCache.get(key);
+  if (hit && hit.expires > Date.now()) return hit.names;
   const files = await listFiles(roundsDir(user));
   const stems = new Set();
   for (const f of files) {
@@ -853,7 +871,9 @@ export async function listRoundNames(user) {
     // write, and the collector has nothing to filter it on anyway.
     if (f.endsWith('.json') || f.endsWith('.json.zst')) stems.add(f.split('.')[0]);
   }
-  return [...stems];
+  const names = [...stems];
+  roundNamesCache.set(key, { names, expires: Date.now() + ROUND_NAMES_TTL_MS });
+  return names;
 }
 
 /**
@@ -1401,6 +1421,9 @@ export async function deleteDemo(user, id) {
   for (const f of await listFiles(dir)) {
     if (f.includes(`~${demoId}.`)) await fsp.rm(path.join(dir, f), { force: true });
   }
+  // Again, after the round files are gone: a round listing rebuilt between the
+  // two would otherwise cache the deleted names for the TTL.
+  invalidateDemoList(user);
   forgetWireCache(demoId);
   // Playlists would otherwise keep counting rounds that no longer exist.
   const lists = await readPlaylists(user);

@@ -12,6 +12,7 @@ import {
   deletePlaylist,
   fetchDemo,
   fetchDemos,
+  fetchDemosByIds,
   fetchPlaylists,
   fetchRoundMeta,
   fetchStatus,
@@ -35,7 +36,7 @@ import {
   parseRoundId,
   winningSide
 } from '../replays/shared/roundId.js';
-import { collectRounds, matchesQuery, splitStoredName } from '../replays/shared/roundFilter.js';
+import { collectRounds, compileQuery, splitStoredName } from '../replays/shared/roundFilter.js';
 import { clusterTeams } from '../replays/shared/teamClusters.js';
 import {
   demoPassesRank,
@@ -100,6 +101,12 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
   const LIBRARY_PAGE = 50;
   /** How many stored demos the library page currently requests (grows via Load more). */
   let libraryLimit = LIBRARY_PAGE;
+  /**
+   * How many STORED records the loaded pages cover — the offset for the next
+   * Load more. Distinct from demos.length: page one also carries the pending
+   * parse overlay, which is not part of the server's record window.
+   */
+  let libraryOffset = 0;
   /** Total stored demos on the server (from the last library fetch). */
   let demoTotal = 0;
   let demoHasMore = false;
@@ -260,10 +267,21 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
 
   // ---- quota + parser -----------------------------------------------------
 
+  /**
+   * How many demos this account may hold. `/status` sends 0 for unlimited
+   * (catalogue -1). `maxDemos || 5` used to treat that 0 as missing and cap
+   * Team Elite at five.
+   */
+  function uploadDemoCap() {
+    if (account.admin) return 0;
+    const n = Number(account.maxDemos);
+    return Number.isFinite(n) ? n : 5;
+  }
+
   function renderQuota(usage) {
     if (!usage || !quotaEl) return;
     const demoCount = mineOwnedCount ?? myDemos().length;
-    const demoCap = account.admin ? 0 : account.maxDemos || 5;
+    const demoCap = uploadDemoCap();
     const pctDemos = demoCap > 0 ? (demoCount / demoCap) * 100 : 0;
     const pctBytes = usage.maxBytes ? (usage.bytes / usage.maxBytes) * 100 : 0;
     const demosLine = demoCap
@@ -1431,8 +1449,8 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       );
       return;
     }
-    const cap0 = account.admin ? 0 : account.maxDemos || 5;
-    if (cap0 && myDemos().length >= cap0) {
+    const cap0 = uploadDemoCap();
+    if (cap0 > 0 && myDemos().length >= cap0) {
       setStatus(
         `You already have ${myDemos().length} demos uploaded. Delete one first (limit ${cap0}).`,
         true
@@ -2623,6 +2641,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
    */
   function filterLibraryRounds(query) {
     const out = [];
+    const matches = compileQuery(query);
     for (const d of scopedDemos()) {
       for (const r of d.rounds || []) {
         const file = r.file || (r.id && d.id ? `${r.id}~${d.id}` : '');
@@ -2640,7 +2659,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
           round: r.round,
           players: []
         };
-        if (!matchesQuery(meta, query)) continue;
+        if (!matches(meta)) continue;
         out.push({ ...meta, demoId: d.id, file: file || meta.id });
       }
     }
@@ -2648,6 +2667,8 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
   }
 
   let queryToken = 0;
+  /** How long a filter burst may keep coalescing before the server is asked. */
+  const QUERY_DEBOUNCE_MS = 250;
   async function runQuery() {
     const token = ++queryToken;
     if (hasRankFilter(filters)) await fetchVrsRanks().catch(() => {});
@@ -2668,6 +2689,14 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     else setQueryStatus('');
     renderResults();
     resultEl?.removeAttribute('aria-busy');
+
+    // Coalesce filter bursts. The paint above already reflects the new filter
+    // against the loaded page; the server phase below is the expensive half
+    // (a library-wide rounds collector plus record fetches), and every
+    // sidebar toggle lands here undebounced. Wait a beat and let a newer
+    // call take over before going to the network.
+    await new Promise((resolve) => setTimeout(resolve, QUERY_DEBOUNCE_MS));
+    if (token !== queryToken) return;
 
     try {
       const [res, playlists] = await Promise.all([
@@ -2731,9 +2760,20 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     }
   }
 
+  // Indexed lazily off the current `demos` array. Scope filtering asks for a
+  // demo per round in the result set, and a linear scan of a few thousand
+  // loaded records per round was millions of compares per filter change. The
+  // array is replaced (never mutated in place) whenever the listing changes,
+  // so identity is the cache key.
+  let demoIndexSource = null;
+  let demoIndexMap = new Map();
   function demoById(id) {
     if (!id) return null;
-    return demos.find((d) => d.id === id) || extraDemos.get(id) || null;
+    if (demoIndexSource !== demos) {
+      demoIndexMap = new Map(demos.map((d) => [d.id, d]));
+      demoIndexSource = demos;
+    }
+    return demoIndexMap.get(id) || extraDemos.get(id) || null;
   }
 
   /** Fetch demo records missing from the current page (and extra cache). */
@@ -2747,6 +2787,18 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       if (!demoById(id)) missing.push(id);
     }
     if (!missing.length) return;
+    // One batched request. A library-wide filter surfaces rounds from up to a
+    // couple of hundred demos outside the loaded page; fetching each record
+    // individually saturated the browser's six connections and nothing
+    // rendered until the last one landed.
+    try {
+      for (const demo of await fetchDemosByIds(missing)) {
+        if (demo?.id) extraDemos.set(demo.id, demo);
+      }
+      return;
+    } catch {
+      /* older server without ?ids= — fall through to per-demo below */
+    }
     await Promise.all(
       missing.map(async (id) => {
         try {
@@ -4003,9 +4055,26 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     if (!demoHasMore || loadingMoreDemos) return;
     loadingMoreDemos = true;
     paintLoadMoreState();
-    libraryLimit += LIBRARY_PAGE;
     try {
-      await refresh();
+      // Fetch only the next page and append. Growing libraryLimit and
+      // re-running the whole refresh re-downloaded every page already on
+      // screen — page ten re-fetched pages one through nine.
+      const list = await fetchDemos({ limit: LIBRARY_PAGE, offset: libraryOffset });
+      demoTotal = Number(list.total) || demoTotal;
+      demoHasMore = Boolean(list.hasMore);
+      libraryOffset += list.demos?.length || 0;
+      const seen = new Set(demos.map((d) => d.id));
+      const fresh = (list.demos || []).filter((d) => d.id && !seen.has(d.id));
+      for (const d of fresh) extraDemos.delete(d.id);
+      // Replaced, never pushed: demoById keys its index on array identity.
+      demos = [...demos, ...fresh];
+      // Keep the poll's full refresh sized to what is on screen.
+      libraryLimit = Math.max(libraryLimit, libraryOffset);
+      renderDemos();
+      renderFilters();
+      await runQuery();
+    } catch (err) {
+      setStatus(formatApiError(err).message || 'Could not load more demos.', true);
     } finally {
       loadingMoreDemos = false;
       // The refresh repainted the buttons while the flag was still set, so

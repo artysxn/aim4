@@ -14,6 +14,7 @@
 //   POST   /api/replays/demos/:id/parse          re-run a failed parse
 //   DELETE /api/replays/demos/:id                remove demo + its rounds
 //   GET    /api/replays/rounds?...               filter by name, no file reads
+//   POST   /api/replays/rounds/packs             meta + ticks for many rounds
 //   GET    /api/replays/rounds/:file             round meta + events
 //   GET    /api/replays/rounds/:file/ticks       tick buffer, ?stride=N&fmt=packed
 //   GET    /api/replays/stats                    compact per-round index
@@ -96,10 +97,12 @@ import {
   normalizeVisibility,
   ownerOf,
   recordForRoundFile,
+  recordIdIndex,
   roundOwnerIndex,
   visibleDemoIds,
   visibleRecords
 } from './visibility.js';
+import { encodeRoundPacks } from '../../src/replays/shared/roundPackWire.js';
 import { importReplayPackage } from './importPackage.js';
 import { readChampion } from '../training/champion.js';
 import { spawnsForMap } from './spawnPoints.js';
@@ -558,12 +561,32 @@ export async function handleReplayRequest(req, res, url) {
   };
 
   /**
+   * File → owning record, with both lookup maps built once per request. The
+   * pack route resolves hundreds of rounds in one request, and canOpenRound
+   * used to re-scan the record list per file.
+   */
+  let roundLookupOnce = null;
+  const roundLookup = async () => {
+    if (!roundLookupOnce) {
+      roundLookupOnce = (async () => {
+        const { records } = await readable();
+        return {
+          records,
+          byId: recordIdIndex(records),
+          owners: roundOwnerIndex(records)
+        };
+      })();
+    }
+    return roundLookupOnce;
+  };
+
+  /**
    * May the caller open this round file? Round URLs are the link case, which
    * is exactly what "unlisted" is for: the file name is the link.
    */
   const canOpenRound = async (file) => {
-    const { records } = await readable();
-    const record = recordForRoundFile(file, records);
+    const { records, byId, owners } = await roundLookup();
+    const record = recordForRoundFile(file, records, owners, byId);
     // No owning record: a round that predates materialization. Library default.
     if (!record) return true;
     if (!canSee(record, access, { viaLink: true })) return false;
@@ -655,6 +678,19 @@ export async function handleReplayRequest(req, res, url) {
   // ---- library ------------------------------------------------------------
   if (req.method === 'GET' && p === '/api/replays/demos') {
     const { records: allRecords, allowed } = await readable();
+    // Detail records for an explicit id list — the demo browser resolving
+    // library-wide filter results to row headers. One request instead of one
+    // GET /demos/:id per demo, and none of the team-cluster / usage work the
+    // full listing carries.
+    const idsQ = csv(url, 'ids');
+    if (idsQ?.length) {
+      const wanted = new Set(idsQ.slice(0, 500));
+      const rows = allowed
+        .filter((r) => wanted.has(r.id))
+        .map((r) => ({ ...withJob(user, r), owner: ownerOf(r) }));
+      await jsonBig(res, 200, { demos: rows }, req);
+      return true;
+    }
     // `?mine=1` is the My Uploads listing: everything this account owns, in one
     // response and never paginated. It used to reuse the library's paged fetch
     // and filter client-side, which silently capped the page at the library's
@@ -1266,6 +1302,15 @@ export async function handleReplayRequest(req, res, url) {
         : allowedIds
     });
 
+    // The Database hides players under its minimum-rounds bar, and that bar
+    // hides MOST of the library: thousands of one-match names against a few
+    // hundred regulars. Filtering here instead of the browser is most of the
+    // response gone. Player rows only — team rows are few and their bar is a
+    // different question.
+    const minRounds = Math.max(0, Math.floor(Number(arg('minRounds')) || 0));
+    const rankedPlayers =
+      minRounds > 0 ? players.filter((p) => (p.rounds || 0) >= minRounds) : players;
+
     // Paged. The table shows a hundred rows; a library with thousands of
     // players should not ship all of them to render one screen.
     const page = (rows) => {
@@ -1287,8 +1332,8 @@ export async function handleReplayRequest(req, res, url) {
       res,
       200,
       gateStatsPayload(me, {
-        players: page(players),
-        playersTotal: players.length,
+        players: page(rankedPlayers),
+        playersTotal: rankedPlayers.length,
         ...(wantTeams ? { teams: page(teams), teamsTotal: teams.length } : {}),
         maps,
         offset
@@ -1785,15 +1830,15 @@ export async function handleReplayRequest(req, res, url) {
   // ---- rounds -------------------------------------------------------------
   if (req.method === 'GET' && p === '/api/replays/rounds') {
     const limit = Number(url.searchParams.get('limit') || 2000);
-    const { records, allowed } = await readable();
+    const { allowed } = await readable();
+    const { records, byId, owners } = await roundLookup();
     const seen = visibleDemoIds(allowed, access);
-    const owners = roundOwnerIndex(records);
     const [found, noted] = await Promise.all([
       findRounds(user, queryFromUrl(url), { limit }),
       listNotedRounds(user)
     ]);
     const rounds = found.filter((r) => {
-      const record = recordForRoundFile(r.file || r.name || r, records, owners);
+      const record = recordForRoundFile(r.file || r.name || r, records, owners, byId);
       // A round with no owning record predates materialization; treat the
       // library default (public) as the answer rather than hiding history.
       return !record || seen.has(record.id);
@@ -1810,6 +1855,73 @@ export async function handleReplayRequest(req, res, url) {
     }
     // Up to 2000 round summaries; repetitive enough to be worth the gzip.
     await jsonBig(res, 200, { rounds, total: rounds.length, noted }, req);
+    return true;
+  }
+
+  // Batched round packs: meta + (optionally) ticks for many rounds in one
+  // response. The shape search reads tens of thousands of rounds per map, and
+  // two GETs per round through the browser's six-connection cap made that
+  // phase minutes of pure round-trips. Access is the same canOpenRound the
+  // per-round routes enforce; a denied or missing round comes back with a null
+  // meta and the client falls back to its per-round path for it.
+  if (req.method === 'POST' && p === '/api/replays/rounds/packs') {
+    let body;
+    try {
+      body = await readJson(req, 256 * 1024);
+    } catch (err) {
+      json(res, 400, { error: err.message });
+      return true;
+    }
+    const files = (Array.isArray(body.files) ? body.files : [])
+      .map((f) => String(f || ''))
+      .filter((f) => /^[A-Za-z0-9_~-]+$/.test(f));
+    if (!files.length) {
+      json(res, 400, { error: 'Pass files: [roundFile, …].' });
+      return true;
+    }
+    if (files.length > 400) {
+      json(res, 400, { error: 'At most 400 rounds per request.' });
+      return true;
+    }
+    const wantTicks = body.ticks !== false;
+    const stride = Math.max(1, Math.min(1000, Number(body.stride) || 100));
+    // Warm both lookups once; every canOpenRound below is then map reads.
+    await roundLookup();
+    const entries = new Array(files.length);
+    let cursor = 0;
+    const worker = async () => {
+      while (cursor < files.length) {
+        const idx = cursor++;
+        const file = files[idx];
+        const entry = { file, meta: null, ticks: null };
+        entries[idx] = entry;
+        try {
+          if (!(await canOpenRound(file))) continue;
+          entry.meta = await readRoundMetaMaybeSample(user, file);
+          if (entry.meta && wantTicks) {
+            entry.ticks = await readRoundTicksMaybeSample(user, file, stride);
+          }
+        } catch {
+          entry.meta = null;
+          entry.ticks = null;
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(8, files.length) }, worker));
+    let buf = Buffer.from(encodeRoundPacks(entries));
+    const headers = {
+      'Content-Type': 'application/vnd.aim4.round-packs',
+      'Cache-Control': 'no-store',
+      ...CORS
+    };
+    if (/\bgzip\b/.test(String(req.headers['accept-encoding'] || ''))) {
+      buf = await gzip(buf, { level: 6 });
+      headers['Content-Encoding'] = 'gzip';
+      headers.Vary = 'Accept-Encoding';
+    }
+    headers['Content-Length'] = buf.length;
+    res.writeHead(200, headers);
+    res.end(buf);
     return true;
   }
 

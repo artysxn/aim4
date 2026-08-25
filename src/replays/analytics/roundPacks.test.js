@@ -196,4 +196,52 @@ const files = (n) => Array.from({ length: n }, (_, i) => `r${i}`);
 
 assert.ok(PACK_CONCURRENCY > 1, 'the default pool is not one');
 
+// ---- the batched transport, when the server speaks it -----------------------
+{
+  const t = tracker();
+  const batches = [];
+  const cache = new Map();
+  const progress = [];
+  await loadRoundPacks(files(10), cache, {
+    ticks: true,
+    onProgress: (p) => progress.push(p),
+    fetchMeta: t.fetchMeta,
+    fetchTicks: t.fetchTicks,
+    fetchPacks: async (chunk, opts) => {
+      batches.push({ n: chunk.length, stride: opts.stride, ticks: opts.ticks });
+      return new Map(
+        chunk.map((f) => [
+          f,
+          // One round the batch cannot serve: it must fall back per-round.
+          f === 'r7'
+            ? { meta: null, ticks: null }
+            : { meta: { id: f }, ticks: new ArrayBuffer(8) }
+        ])
+      );
+    }
+  });
+  assert.equal(batches.length, 1, 'ten rounds are one batched request');
+  assert.equal(batches[0].stride, COARSE_STRIDE, 'the batch asks for the precomputed stride');
+  assert.equal(cache.size, 10, 'every file landed in the cache');
+  assert.ok(cache.get('r3').ticks instanceof ArrayBuffer, 'batched ticks are cached');
+  assert.deepEqual(t.meta, ['r7'], 'only the round the batch declined goes per-round');
+  assert.deepEqual(progress.at(-1), { done: 10, total: 10 }, 'progress still reaches the total');
+}
+
+// ---- an older server without the endpoint costs nothing but the probe -------
+{
+  const t = tracker();
+  const cache = new Map();
+  await loadRoundPacks(files(6), cache, {
+    ticks: false,
+    fetchMeta: t.fetchMeta,
+    fetchTicks: t.fetchTicks,
+    fetchPacks: async () => {
+      throw new Error('404');
+    }
+  });
+  assert.equal(cache.size, 6, 'the per-round pool covered everything');
+  assert.equal(t.meta.length, 6);
+}
+
 console.log('roundPacks.test.js: ok');
