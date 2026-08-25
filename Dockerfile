@@ -86,4 +86,13 @@ EXPOSE 8080
 
 # Headed CloakBrowser runs on a virtual display; package.json ("type": "module")
 # ships in the image so Node loads the ESM server.
-CMD ["xvfb-run", "-a", "-s", "-screen 0 1920x1080x24", "node", "server/index.js"]
+#
+# --max-old-space-size is not optional at this library size. Node sized its own
+# heap at 1 GB here, and the resident statistics store is a few hundred MB of
+# typed arrays built by parsing every stats index in turn: against a 1 GB
+# ceiling that is permanent GC pressure rather than progress, and /aggregate
+# stops answering at all while it grinds (RSS sat at 1.8 GB with the heap
+# capped at 1 GB). The host has ~7.7 GB and the parse worker caps its own heap
+# separately (AIM4_PARSE_HEAP_MB, default 1536), so this leaves room for a parse
+# to run alongside a store build.
+CMD ["xvfb-run", "-a", "-s", "-screen 0 1920x1080x24", "node", "--max-old-space-size=3072", "server/index.js"]

@@ -28,9 +28,7 @@ import { handlePitchRequest } from './pitchRoutes.js';
 import { handleBillingRequest } from './billing/routes.js';
 import { handleFaceitWebhookRequest } from './ingest/faceit/webhookRoutes.js';
 import { handleCs3dRequest } from './cs3d/routes.js';
-import { checkCaseSensitivity, listDemos, sweepStaleUploads, userDir } from './replays/demoStore.js';
-import { getHotStore } from './replays/statsHotService.js';
-import { SHARED_LIBRARY } from './replays/auth.js';
+import { checkCaseSensitivity, sweepStaleUploads } from './replays/demoStore.js';
 import { parseQueueBusy, resumeInterruptedParses, sweepBatchFiles } from './replays/jobs.js';
 import { setParserBusyProbe } from './sim/jobs.js';
 import { printHostBanner, fetchPublicIp } from './network.js';
@@ -352,26 +350,22 @@ startIngestSupervisor();
 // warm, exactly as before. The delay only moves the prefetch out of the
 // window where real requests are fighting for the box.
 setTimeout(() => warmCloakBrowserCache(loadIngestConfig()).catch(() => {}), 90 * 1000);
-// Warm the aggregate store off the request path. It only ever lived for the
-// process, so every deploy made the FIRST Database or Pattern Finder visitor
-// pay the full library read while their request hung. Deferred past the boot
-// scramble (same reasoning as the prefetch above, shorter fuse); a visitor
-// arriving earlier still triggers the same shared build, just from their
-// request instead of this timer. The store only reads stats indexes that
-// already exist — it never parses or enriches anything.
-setTimeout(() => {
-  (async () => {
-    const records = (await listDemos(SHARED_LIBRARY)).filter(
-      (r) => (r.status || 'ready') === 'ready'
-    );
-    if (!records.length) return;
-    const t0 = Date.now();
-    await getHotStore({ userDir }, SHARED_LIBRARY, records);
-    console.log(
-      `[stats] aggregate store warmed: ${records.length} demos in ${Math.round((Date.now() - t0) / 1000)}s`
-    );
-  })().catch(() => {});
-}, 20 * 1000);
+// NO boot-time warm of the aggregate store. There was one here; it made things
+// worse, not better, and the way it failed is worth keeping written down.
+//
+// Building the store reads every stats index in the library. At ~4,900 demos
+// that is hundreds of MB of JSON parsed against a 1 GB heap, so it does not
+// finish in seconds — it grinds. Meanwhile getHotStore() dedupes concurrent
+// builds by handing every caller the SAME in-flight promise, which is correct
+// and is exactly what turned a slow build into a dead endpoint: the warm
+// started at boot, and every /aggregate request after it waited on that one
+// promise. The Database sat on "Loading database…" for as long as the build
+// took, on every single deploy.
+//
+// A visitor-triggered build has the same cost but only when someone actually
+// asks, and it starts after the boot scramble rather than in the middle of it.
+// Warming is worth revisiting once the build itself is cheap (reading the
+// columnar sidecars instead of whole indexes); until then it is a liability.
 
 server.listen(PORT, HOST, async () => {
   if (SERVE_STATIC) {

@@ -3108,6 +3108,22 @@ export function createStatsPanel({
    * Re-query the server for the current filter. Used when the panel is in
    * server mode and a filter, tab or sort changes.
    */
+  /**
+   * How long the aggregate endpoint gets before the panel stops waiting on it.
+   *
+   * Warm, it answers in milliseconds. Cold, it has to build the resident store
+   * from every stats index in the library, and while that runs it answers
+   * nothing at all — every caller is parked on the same in-flight build. The
+   * page used to wait on that for as long as it took, showing a spinner and
+   * then "No response from the server yet", which reads as "the site is down".
+   *
+   * Giving up here does not lose the work: the build carries on server-side and
+   * the next load gets it warm. What it buys is the fallback below, which pages
+   * the library in and paints as each page lands, so there is always something
+   * on screen.
+   */
+  const AGGREGATE_TIMEOUT_MS = 8_000;
+
   async function refreshServerTables() {
     const token = ++serverToken;
     // `roles: true` asks for the role columns even with no role chip set: the
@@ -3124,10 +3140,21 @@ export function createStatsPanel({
       minRounds: hasEntityPick() ? 0 : Math.max(0, Number(filter.minRounds) || 0)
     };
     try {
-      const res = await fetchAggregate(active, {
-        tables: 'players,teams',
-        demos: serverDemoScope()
-      });
+      const TIMED_OUT = Symbol('aggregate-timeout');
+      let timer = null;
+      const res = await Promise.race([
+        fetchAggregate(active, { tables: 'players,teams', demos: serverDemoScope() }),
+        new Promise((resolve) => {
+          timer = setTimeout(() => resolve(TIMED_OUT), AGGREGATE_TIMEOUT_MS);
+        })
+      ]);
+      clearTimeout(timer);
+      if (res === TIMED_OUT) {
+        // Retire this token so the response, if it ever lands, does not paint
+        // over whatever the fallback has put on screen by then.
+        serverToken += 1;
+        return false;
+      }
       if (token !== serverToken) return false;
       serverTables = res;
       renderFromServer();
@@ -3364,8 +3391,15 @@ export function createStatsPanel({
     bodyEl.innerHTML = spinnerHtml('Loading database…');
     filtersEl.innerHTML = '';
     const cancelSlow = watchSlowLoad(bodyEl, {
+      // Longer than AGGREGATE_TIMEOUT_MS on purpose. A cold statistics store
+      // legitimately takes several seconds to answer, and telling someone the
+      // API might be down while it is simply working is worse than saying
+      // nothing: the old 4s default fired on every cold load and read as an
+      // outage. Past this point the fallback should have painted something, so
+      // an empty view really does mean something is wrong.
+      delayMs: 15_000,
       message:
-        'No response from the server yet. Check that the API is running and your connection is up.'
+        'Still waiting on the server. If this does not clear, check that the API is running and your connection is up.'
     });
     // Reset then overlay anything the URL / caller asked for.
     filter.maps = [];
@@ -3439,9 +3473,11 @@ export function createStatsPanel({
         else renderFromServer();
         return;
       }
-      // Endpoint unavailable (older server, an error): the payload path below
-      // is still the whole feature, only slower.
-      bodyEl.innerHTML = spinnerHtml('Loading database…');
+      // The aggregate could not answer: an older server, an error, or a store
+      // still building. The payload path below is the whole feature either way,
+      // and it paints page by page, so say what is happening rather than
+      // repeating the label the last eight seconds already showed.
+      bodyEl.innerHTML = spinnerHtml('Loading rounds…');
     }
 
     try {
