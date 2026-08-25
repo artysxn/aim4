@@ -1739,7 +1739,8 @@ export function createAnalyzerViewer({
     const first = visibleLayers()[0];
     if (first) {
       const tick = tickForLayer(first, pos);
-      clockEl.textContent = clockAt(first.timing, tick).label;
+      // No bomb timer here: the clock is the axis every layer is aligned on.
+      clockEl.textContent = clockAt(first.timing, tick, { bombTimer: false }).label;
     } else {
       clockEl.textContent = '—';
     }
@@ -1894,7 +1895,7 @@ export function createAnalyzerViewer({
       paintKillMarks(row.L, row.tick, row.players);
     }
 
-    if (refTiming) clockEl.textContent = clockAt(refTiming, refTick).label;
+    if (refTiming) clockEl.textContent = clockAt(refTiming, refTick, { bombTimer: false }).label;
     else clockEl.textContent = '—';
 
     const pct = playback.duration ? (pos / playback.duration) * 100 : 0;

@@ -57,10 +57,23 @@ export function totalSeconds(timing) {
 /**
  * Which phase a tick falls in, and what the clock reads there.
  *
+ * `bombTimer` is what a SINGLE round wants and an aggregate view does not.
+ * Watching one round, the plant replacing the countdown with 0:40 is the game's
+ * own behaviour and the whole point. The Analyzer overlays many rounds on one
+ * axis and aligns them all by `freezeEndTick + pos * tickRate`, so that axis IS
+ * the round countdown and is shared by every round on screen. Reading the clock
+ * off one reference round there let a plant in THAT round rewrite the shared
+ * readout: at 1:10 the clock jumped to 0:40 while every other round drawn
+ * beside it was still live and thirty seconds behind what the clock claimed.
+ *
+ * With it off the countdown simply continues, and `planted` still reports the
+ * bomb is down for anything that wants to show it another way.
+ *
  * @param {RoundTiming} timing
  * @param {number} tick   demo tick, may be fractional during interpolation
+ * @param {{bombTimer?: boolean}} [opts]
  */
-export function clockAt(timing, tick) {
+export function clockAt(timing, tick, { bombTimer = true } = {}) {
   const { tickRate, startTick, freezeEndTick, plantTick, endTick } = timing;
   const secs = (a, b) => (b - a) / tickRate;
 
@@ -85,7 +98,9 @@ export function clockAt(timing, tick) {
     };
   }
 
-  if (plantTick !== null && tick >= plantTick) {
+  const planted = plantTick !== null && tick >= plantTick;
+
+  if (planted && bombTimer) {
     const left = Math.max(0, BOMB_SECONDS - secs(plantTick, tick));
     return {
       phase: 'planted',
@@ -95,11 +110,14 @@ export function clockAt(timing, tick) {
     };
   }
 
+  // Clamped at zero: a planted round runs past 1:55, and on a round-clock axis
+  // "00:00" is the honest reading for that tail rather than a negative time.
   const left = ROUND_SECONDS - secs(freezeEndTick, tick);
   return {
     phase: 'live',
     label: formatClock(Math.max(0, left)),
-    seconds: Math.max(0, left)
+    seconds: Math.max(0, left),
+    planted
   };
 }
 

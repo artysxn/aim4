@@ -1334,19 +1334,26 @@ body.rv-open {
   overflow: hidden;
 }
 
-/* Site title bar stays up, but only over the map column so it cannot cover
-   the viewer back control. --rv-side-w is the timeline panel (360px). */
+/*
+ * The site title bar goes away entirely while the viewer is up.
+ *
+ * The viewer (and the Analyzer with it) is a full-screen surface, not a page
+ * inside the shell. The title bar belongs to whatever page is BEHIND it and has
+ * nothing to say about a demo: opening one is an overlay, not a navigation, so
+ * the router never runs and the bar keeps the last page's title and the last
+ * page's controls. That is how "Demo Manager" and a Performance search box
+ * ended up sitting over a demo.
+ *
+ * Hidden outright rather than shifted aside. Moving it over the map column left
+ * every one of those problems in place and only chose where they appeared, and
+ * a bar that is not on screen cannot cover the back control either, which is
+ * what the shifting was for.
+ *
+ * `--rv-page-head-h` is now never set, so the gutter rules below fall back to
+ * 0 and the viewer starts at the top of the window.
+ */
 body.rv-open .page-head {
-  position: fixed;
-  top: 0;
-  left: var(--rv-side-w);
-  right: 0;
-  width: auto;
-  z-index: 97;
-}
-
-body.rv-open:has(.side-collapsed) .page-head {
-  left: 0;
+  display: none;
 }
 
 body.rv-open .rv-main {
@@ -1357,22 +1364,10 @@ body.rv-open:has(.side-collapsed) .rv-side-show {
   top: calc(var(--rv-page-head-h, 0px) + 10px);
 }
 
-@media (max-width: 860px) {
-  body.rv-open .page-head {
-    left: 0;
-  }
-
-  body.rv-open:not(:has(.side-collapsed)) .page-head {
-    visibility: hidden;
-    pointer-events: none;
-  }
-}
-
 .rv-overlay {
   position: fixed;
   inset: 0;
-  /* Under the site title bar (97) so DEMO MANAGER can sit on the map column;
-     above the rest of the shell. Auth modal is 100. */
+  /* Over the whole shell, title bar included. Auth modal is 100. */
   z-index: 96;
   display: flex;
   flex-direction: column;

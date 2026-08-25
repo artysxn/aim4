@@ -342,9 +342,23 @@ export function initPerformanceView({ auth, escapeHtml }) {
     }
   }
 
+  /**
+   * Whether this page is the one on screen.
+   *
+   * `#page-head-actions` is a SINGLE element shared by every page, and this one
+   * writes its search box into it. Several paints here are deferred — peer
+   * averages landing, an auth change, the roster fetch that `show` awaits — and
+   * they guarded only on the SELECTION still matching, never on the page still
+   * being visible. Navigate away while one is in flight and it repainted the
+   * search under somebody else's title, most visibly over the demo viewer.
+   * The router and `onHide` both clear the slot; neither can help against a
+   * write that arrives afterwards, so the write is what has to check.
+   */
+  let visible = false;
+
   function mountHead() {
     const slot = document.getElementById('page-head-actions');
-    if (!slot) return;
+    if (!slot || !visible) return;
     const chapters = playerId
       ? `<nav class="an-chapters" aria-label="Performance">
         ${CHAPTERS.map(
@@ -1088,6 +1102,7 @@ export function initPerformanceView({ auth, escapeHtml }) {
   });
 
   async function show(params = {}) {
+    visible = true;
     host.innerHTML = `<div class="is-loading" role="status">${spinnerHtml()}</div>`;
     // The catalogue first: the selection has to be known before there is
     // anything worth fetching stats for.
@@ -1116,6 +1131,7 @@ export function initPerformanceView({ auth, escapeHtml }) {
   return {
     onShow: show,
     onHide() {
+      visible = false;
       document.getElementById('page-head-actions')?.replaceChildren();
     }
   };

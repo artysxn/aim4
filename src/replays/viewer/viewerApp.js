@@ -161,17 +161,12 @@ export function openViewer({
     if (btn && !btn.disabled) void setMode(btn.dataset.mode);
   });
 
-  let pageHeadObs = null;
-
   function close() {
-    pageHeadObs?.disconnect();
-    pageHeadObs = null;
     current?.destroy();
     store.clear();
     document.removeEventListener('keydown', onKey);
     overlay.remove();
     document.body.classList.remove('rv-open');
-    document.body.style.removeProperty('--rv-page-head-h');
     syncUrl(null);
     onClose?.();
   }
@@ -188,16 +183,7 @@ export function openViewer({
 
   document.body.appendChild(overlay);
   document.body.classList.add('rv-open');
-  const pageHead = document.querySelector('.page-head');
-  const syncPageHeadGutter = () => {
-    const h = pageHead ? Math.round(pageHead.getBoundingClientRect().height) : 0;
-    document.body.style.setProperty('--rv-page-head-h', `${h}px`);
-  };
-  syncPageHeadGutter();
-  if (pageHead && typeof ResizeObserver === 'function') {
-    pageHeadObs = new ResizeObserver(syncPageHeadGutter);
-    pageHeadObs.observe(pageHead);
-  }
+
   // Opening straight into Analyzer from a link still spends a use; if it is
   // refused, fall back to the timeline rather than leaving an empty overlay.
   void (async () => {
