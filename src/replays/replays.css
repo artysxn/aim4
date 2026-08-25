@@ -10144,13 +10144,69 @@ table.rp-mine-table tbody tr {
 .sb-table {
   --sb-cols: 10;
   width: 100%;
+  /*
+   * A floor for the role columns.
+   *
+   * The fixed columns below add up to 672px and do not shrink, so in a narrow
+   * container (a small window, or zoomed in, where the section's CSS width
+   * halves) they would take everything and leave the role columns 30px wide to
+   * hold a whole round of instructions. Past this width the wrapper scrolls
+   * instead, which is the right trade: horizontal scroll is a nuisance, an
+   * unreadable column is useless. `--sb-cols` counts every column and seven of
+   * them are the fixed ones, so the rest are the roles.
+   */
+  min-width: calc(672px + (var(--sb-cols) - 7) * 150px);
   border-collapse: collapse;
   table-layout: fixed;
   font: 500 12px var(--font-body);
 }
 
-.sb-table col {
-  width: calc(100% / var(--sb-cols));
+/*
+ * Column widths.
+ *
+ * These used to be an even `100% / cols` split, which is why Economy sat in a
+ * column three times wider than the longest thing it can ever hold ("Full buy
+ * + AWP") while the role columns, the ones actually holding writing, were the
+ * same narrow width as everything else.
+ *
+ * So: the fixed columns are sized to their own content and the role columns
+ * are left `auto`. Under `table-layout: fixed` the auto columns split whatever
+ * is left EQUALLY, which is both what makes them wide and what keeps them
+ * matched to each other however many players a side has.
+ *
+ * The widths are px against the table's own 12px body font, and the section is
+ * scaled with `zoom`, so text and column scale together and the fit holds at
+ * every zoom step. Zooming out gives the role columns proportionally more,
+ * because the fixed ones stop growing once their content fits.
+ */
+.sb-table col.sb-col-name {
+  width: 130px;
+}
+
+/* Sized to "Full buy + AWP" and "Cheap exec", the longest option in each. */
+.sb-table col.sb-col-econ {
+  width: 106px;
+}
+
+.sb-table col.sb-col-cat {
+  width: 96px;
+}
+
+.sb-table col.sb-col-desc {
+  width: 120px;
+}
+
+.sb-table col.sb-col-links {
+  width: 68px;
+}
+
+.sb-table col.sb-col-players {
+  width: 112px;
+}
+
+/* The icon and its hit area, nothing more. */
+.sb-table col.sb-col-del {
+  width: 40px;
 }
 
 .sb-table th,
@@ -10280,6 +10336,8 @@ table.rp-mine-table tbody tr {
 }
 
 .sb-cell-links {
+  position: relative;
+  overflow: visible;
   vertical-align: middle;
   text-align: center;
 }
@@ -10372,44 +10430,164 @@ table.rp-mine-table tbody tr {
 }
 
 .sb-links {
+  position: relative;
   display: flex;
-  gap: 10px;
   align-items: center;
   justify-content: center;
+  width: 100%;
   min-width: 0;
 }
 
-.sb-link {
-  appearance: none;
-  background: none;
-  border: 0;
-  padding: 0;
-  color: var(--text);
-  font: 600 11px var(--font-body);
-  cursor: pointer;
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-
-.sb-link.is-empty {
-  color: var(--muted);
-  text-decoration: none;
-}
-
-.sb-link:hover {
-  color: var(--accent);
-}
-
-.sb-cell-all,
 .sb-cell-visible,
 .sb-cell-del {
   text-align: center;
   vertical-align: middle;
 }
 
-.sb-cell-all .sb-check {
+/* ---- delete ------------------------------------------------------------- */
+
+/* An icon, not a word: the column is now as wide as the icon and no wider. */
+.sb-del-btn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.sb-del-btn svg {
   display: block;
-  margin: 0 auto;
+  width: 16px;
+  height: 16px;
+  /* The file ships a hard-coded grey fill; follow the button instead. */
+  fill: currentColor;
+}
+
+.sb-del-btn:hover {
+  background: rgba(224, 68, 68, 0.14);
+  color: #e07070;
+}
+
+.sb-del-btn:focus-visible {
+  outline: 1px solid rgba(255, 255, 255, 0.35);
+  outline-offset: -1px;
+}
+
+/* ---- links -------------------------------------------------------------- */
+
+.sb-link-btn {
+  appearance: none;
+  box-sizing: border-box;
+  width: 100%;
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.35);
+  color: var(--text);
+  font: 500 11px var(--font-body);
+  text-align: center;
+  cursor: pointer;
+}
+
+.sb-link-btn.is-empty {
+  color: var(--muted);
+}
+
+.sb-link-btn:hover {
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+.sb-links-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 20;
+  min-width: 180px;
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: #121212;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  text-align: left;
+}
+
+.sb-links-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.sb-links-open {
+  appearance: none;
+  flex: 1;
+  min-width: 0;
+  padding: 5px 6px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text);
+  font: 500 11px var(--font-body);
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.sb-links-open:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.sb-links-del {
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--muted);
+  font: 600 13px/1 var(--font-body);
+  cursor: pointer;
+}
+
+.sb-links-del:hover {
+  color: #e07070;
+}
+
+.sb-links-add {
+  appearance: none;
+  width: 100%;
+  margin-top: 4px;
+  padding: 5px 6px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text);
+  font: 500 11px var(--font-body);
+  text-align: center;
+  cursor: pointer;
+}
+
+.sb-links-add:hover {
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+/* The All row sits above the players it overrides. */
+.sb-visible-all {
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+  padding-bottom: 6px;
 }
 
 .sb-check {
@@ -10498,15 +10676,19 @@ table.rp-mine-table tbody tr {
 
 .sb-add {
   appearance: none;
-  width: 32px;
-  height: 28px;
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  height: 30px;
   margin: 0;
   padding: 0;
   border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 3px;
   background: rgba(0, 0, 0, 0.25);
   color: var(--text);
-  font: 600 16px/1 var(--font-body);
+  font: 600 12px/1 var(--font-body);
+  letter-spacing: 0.02em;
+  text-align: center;
   cursor: pointer;
 }
 
@@ -10572,8 +10754,10 @@ table.rp-mine-table tbody tr {
   font: 500 13px var(--font-body);
 }
 
+/* Vertical padding is the row height knob (gear panel > Row height); 2px is
+   the default and puts a single-line row at 22px, down from the 34 it was. */
 .ms-table td {
-  padding: 8px 12px;
+  padding: var(--ms-row-pad, 2px) 12px;
   vertical-align: middle;
   border-bottom: 1px solid rgba(0, 0, 0, 0.45);
   border-right: 1px solid rgba(0, 0, 0, 0.35);

@@ -63,6 +63,7 @@ import { mountDrawingBoard } from './drawingBoard.js';
 import { mountUtilityArchive } from './utilityArchive.js';
 import { spinnerHtml } from '../lib/spinner.js';
 import { renderStratNoteLinks, safeHref } from './stratNoteLinks.js';
+import deleteIcon from '../icons/icon_delete.svg?raw';
 
 /** Below this a per-side winrate is noise, so the bar stays empty. */
 const MIN_SIDE_ROUNDS = 12;
@@ -224,6 +225,45 @@ export function initTeamView({ auth, escapeHtml }) {
   let utilityIndexTeamId = '';
   let loadInFlight = false;
   let demosLoaded = false;
+  /** Which stratbook links menu is open (strategy id). */
+  let openLinksMenu = '';
+
+  /**
+   * A strategy's links, oldest field shape included.
+   *
+   * The server already folds `link3d` / `link2d` into `links`, but a payload
+   * cached from before that lands would not have, so the same fallback is here.
+   */
+  /** Prompt for a URL and append it to a strategy's list. */
+  async function addStratLink(id, list) {
+    const url = window.prompt('Link URL (https://…)', '');
+    if (url === null) return;
+    const trimmed = url.trim();
+    if (!trimmed) return;
+    const label = (window.prompt('Label (optional)', '') || '').trim();
+    await patchStrategy(id, { links: [...list, { url: trimmed, label }] });
+    openLinksMenu = '';
+    render();
+  }
+
+  function stratLinks(s) {
+    if (Array.isArray(s?.links)) return s.links.filter((l) => l && l.url);
+    const out = [];
+    if (s?.link3d) out.push({ url: s.link3d, label: '3D' });
+    if (s?.link2d) out.push({ url: s.link2d, label: '2D' });
+    return out;
+  }
+
+  /** A short name for a link with no label of its own. */
+  function linkHostLabel(url) {
+    try {
+      const u = new URL(url);
+      return u.host.replace(/^www\./, '') || 'Link';
+    } catch {
+      return 'Link';
+    }
+  }
+
   /** Which stratbook "Visible to" menu is open (strategy id). */
   let openVisibleMenu = '';
   /** Member whose My Strategies view is shown. */
@@ -237,6 +277,27 @@ export function initTeamView({ auth, escapeHtml }) {
   } catch {
     /* ignore */
   }
+  /**
+   * My Strategies row height, in px.
+   *
+   * A row was a fixed 34px: one 17.4px line of note with 8px of padding above
+   * and below. That is a lot of air for a table read as a list, so the default
+   * is 22 and the padding is derived from it. 18 is the floor, where the line
+   * of text IS the row.
+   */
+  const SB_ROW_KEY = 'aim4.stratbookRowHeight';
+  const SB_ROW_STEPS = [18, 22, 26, 30, 34, 38];
+  const SB_ROW_DEFAULT = 22;
+  /** The line box a row is built around; padding is whatever is left over. */
+  const SB_ROW_LINE = 18;
+  let stratbookRowHeight = SB_ROW_DEFAULT;
+  try {
+    const savedRow = Number(localStorage.getItem(SB_ROW_KEY));
+    if (SB_ROW_STEPS.includes(savedRow)) stratbookRowHeight = savedRow;
+  } catch {
+    /* ignore */
+  }
+
   const SB_VIEW_KEY = 'aim4.stratbookView';
   /** @type {'compact'|'full'} */
   let stratbookView = 'compact';
@@ -2023,7 +2084,7 @@ export function initTeamView({ auth, escapeHtml }) {
     const canEdit = Boolean(team?.isAdmin);
     const roles = positionsFor(side, mapCode);
     const categories = side === 'CT' ? STRAT_CATEGORY_CT : STRAT_CATEGORY_T;
-    const colCount = 8 + roles.length;
+    const colCount = 7 + roles.length;
     const rows = (team.stratbook || [])
       .filter((s) => s.map === mapCode && s.side === side)
       .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
@@ -2038,13 +2099,31 @@ export function initTeamView({ auth, escapeHtml }) {
         const visibleTo = new Set(Array.isArray(s.visibleTo) ? s.visibleTo : []);
         const menuOpen = openVisibleMenu === s.id;
         const members = team.members || [];
-        const visibleLabel =
-          visibleTo.size === 0
+        // "All" is the default and lives in this column now, so it is what the
+        // button says when it is on: a row visible to everyone should not read
+        // as a list of five names.
+        const visibleLabel = s.visibleAll
+          ? 'All'
+          : visibleTo.size === 0
             ? 'None'
             : members
                 .filter((m) => visibleTo.has(m.id))
                 .map((m) => m.username)
                 .join(', ') || `${visibleTo.size} selected`;
+
+        const links = stratLinks(s);
+        const linksOpen = openLinksMenu === s.id;
+        // One control. Empty is an invitation to add; one link opens straight
+        // away; several need picking, which is what the menu is for.
+        const linksLabel = links.length === 0 ? 'Add' : links.length === 1 ? 'Open' : `${links.length}`;
+        const linksTitle =
+          links.length === 0
+            ? 'Add a link'
+            : links.length === 1
+              ? canEdit
+                ? 'Open · Shift+click to manage'
+                : 'Open'
+              : 'Pick a link to open';
 
         const roleCells = roles
           .map((_, i) => {
@@ -2094,21 +2173,50 @@ export function initTeamView({ auth, escapeHtml }) {
               : noteWithUtilityLinks(s.description || '')
           }</td>
           <td class="sb-cell-links">
-            <span class="sb-links">
-            <button type="button" class="sb-link${s.link3d ? '' : ' is-empty'}" data-sb-link="link3d" data-sb-id="${escapeHtml(
-              s.id
-            )}" title="${s.link3d ? 'Open · Shift+click to edit' : 'Set 3D link'}">3D</button>
-            <button type="button" class="sb-link${s.link2d ? '' : ' is-empty'}" data-sb-link="link2d" data-sb-id="${escapeHtml(
-              s.id
-            )}" title="${s.link2d ? 'Open · Shift+click to edit' : 'Set 2D link'}">2D</button>
-            </span>
+            <div class="sb-links${linksOpen ? ' is-open' : ''}">
+              ${
+                links.length || canEdit
+                  ? `<button type="button" class="sb-link-btn${
+                      links.length ? '' : ' is-empty'
+                    }" data-sb-links-toggle="${escapeHtml(s.id)}" title="${escapeHtml(
+                      linksTitle
+                    )}">${escapeHtml(linksLabel)}</button>`
+                  : ''
+              }
+              ${
+                linksOpen
+                  ? `<div class="sb-links-menu" data-sb-links-menu="${escapeHtml(s.id)}">
+                      ${links
+                        .map(
+                          (l, li) => `<div class="sb-links-item">
+                            <button type="button" class="sb-links-open" data-sb-link-open="${li}" data-sb-id="${escapeHtml(
+                              s.id
+                            )}" title="${escapeHtml(l.url)}">${escapeHtml(
+                              l.label || linkHostLabel(l.url)
+                            )}</button>
+                            ${
+                              canEdit
+                                ? `<button type="button" class="sb-links-del" data-sb-link-del="${li}" data-sb-id="${escapeHtml(
+                                    s.id
+                                  )}" title="Remove link">×</button>`
+                                : ''
+                            }
+                          </div>`
+                        )
+                        .join('')}
+                      ${
+                        canEdit
+                          ? `<button type="button" class="sb-links-add" data-sb-link-add="${escapeHtml(
+                              s.id
+                            )}">Add link</button>`
+                          : ''
+                      }
+                    </div>`
+                  : ''
+              }
+            </div>
           </td>
           ${roleCells}
-          <td class="sb-cell-all">
-            <input type="checkbox" class="sb-check" data-sb-field="visibleAll" data-sb-id="${escapeHtml(
-              s.id
-            )}"${s.visibleAll ? ' checked' : ''}${dis} />
-          </td>
           <td class="sb-cell-visible">
             <div class="sb-visible${menuOpen ? ' is-open' : ''}">
               <button type="button" class="sb-visible-btn" data-sb-visible-toggle="${escapeHtml(
@@ -2117,6 +2225,12 @@ export function initTeamView({ auth, escapeHtml }) {
               ${
                 menuOpen && canEdit
                   ? `<div class="sb-visible-menu" data-sb-visible-menu="${escapeHtml(s.id)}">
+                      <label class="sb-visible-item sb-visible-all">
+                        <input type="checkbox" data-sb-field="visibleAll" data-sb-id="${escapeHtml(
+                          s.id
+                        )}"${s.visibleAll ? ' checked' : ''} />
+                        <span>All</span>
+                      </label>
                       ${members
                         .map(
                           (m) => `<label class="sb-visible-item">
@@ -2124,7 +2238,7 @@ export function initTeamView({ auth, escapeHtml }) {
                               m.id
                             )}" data-sb-id="${escapeHtml(s.id)}"${
                               visibleTo.has(m.id) ? ' checked' : ''
-                            } />
+                            }${s.visibleAll ? ' disabled' : ''} />
                             <span>${escapeHtml(m.username)}</span>
                           </label>`
                         )
@@ -2137,9 +2251,9 @@ export function initTeamView({ auth, escapeHtml }) {
           <td class="sb-cell-del">
             ${
               canEdit
-                ? `<button type="button" class="btn btn-sm danger" data-sb-del="${escapeHtml(
+                ? `<button type="button" class="sb-del-btn" data-sb-del="${escapeHtml(
                     s.id
-                  )}">Delete</button>`
+                  )}" title="Delete strategy" aria-label="Delete strategy">${deleteIcon}</button>`
                 : ''
             }
           </td>
@@ -2151,7 +2265,7 @@ export function initTeamView({ auth, escapeHtml }) {
   function stratSection(mapCode, side) {
     const canEdit = Boolean(team?.isAdmin);
     const roles = positionsFor(side, mapCode);
-    const colCount = 8 + roles.length;
+    const colCount = 7 + roles.length;
     const roleHeads = roles
       .map(
         (pos) =>
@@ -2163,23 +2277,35 @@ export function initTeamView({ auth, escapeHtml }) {
     const addRow = canEdit
       ? `<tr class="sb-add-row sb-${side.toLowerCase()}"><td colspan="${colCount}"><button type="button" class="sb-add" data-sb-add="${escapeHtml(
           mapCode
-        )}|${side}" title="Add ${side} strategy">+</button></td></tr>`
+        )}|${side}" title="Add ${side} strategy">Add strategy</button></td></tr>`
       : '';
+    // Widths come from the column classes, not from an even split: the fixed
+    // columns are sized to the longest thing they can hold and the role columns
+    // take everything left over, equally. See `.sb-col-*` in replays.css.
+    const cols = [
+      '<col class="sb-col-name" />',
+      '<col class="sb-col-econ" />',
+      '<col class="sb-col-cat" />',
+      '<col class="sb-col-desc" />',
+      '<col class="sb-col-links" />',
+      ...roles.map(() => '<col class="sb-col-role" />'),
+      '<col class="sb-col-players" />',
+      '<col class="sb-col-del" />'
+    ].join('');
     return `
       <div class="sb-section sb-${side.toLowerCase()}">
         <div class="sb-table-scroll">
           <table class="sb-table" style="--sb-cols: ${colCount}">
-            <colgroup>${Array.from({ length: colCount }, () => '<col />').join('')}</colgroup>
+            <colgroup>${cols}</colgroup>
             <thead>
               <tr>
                 <th>Name</th>
                 <th>Economy</th>
                 <th>Category</th>
-                <th>Description</th>
+                <th>Desc</th>
                 <th>Links</th>
                 ${roleHeads}
-                <th>All</th>
-                <th>Visible to</th>
+                <th>Players</th>
                 <th></th>
               </tr>
             </thead>
@@ -2213,6 +2339,31 @@ export function initTeamView({ auth, escapeHtml }) {
     });
     const label = shellEl.querySelector('[data-sb-zoom-label]');
     if (label) label.textContent = `${next}%`;
+  }
+
+  /** Vertical cell padding that lands a single-line row on `h`. */
+  function stratRowPad(h) {
+    return Math.max(0, Math.round((h - SB_ROW_LINE) / 2));
+  }
+
+  function applyStratRowHeight(rangeEl) {
+    const next = SB_ROW_STEPS[Number(rangeEl.value)] ?? SB_ROW_DEFAULT;
+    stratbookRowHeight = next;
+    try {
+      localStorage.setItem(SB_ROW_KEY, String(next));
+    } catch {
+      /* ignore */
+    }
+    shellEl.querySelectorAll('[data-sb-zoom-root]').forEach((root) => {
+      root.style.setProperty('--ms-row-pad', `${stratRowPad(next)}px`);
+    });
+    const label = shellEl.querySelector('[data-sb-row-label]');
+    if (label) label.textContent = `${next}px`;
+  }
+
+  function stratbookRowIndex() {
+    const i = SB_ROW_STEPS.indexOf(stratbookRowHeight);
+    return i >= 0 ? i : SB_ROW_STEPS.indexOf(SB_ROW_DEFAULT);
   }
 
   function stratbookZoomIndex() {
@@ -2466,7 +2617,18 @@ export function initTeamView({ auth, escapeHtml }) {
    * zoom the other opens at. Compact/Full is Stratbook-only: it drives
    * `.sb-maps.is-full`, and My Strategies has no such layout to switch.
    */
-  function stratSettingsPanelHtml({ showZoom = false, showView = false } = {}) {
+  function stratSettingsPanelHtml({ showZoom = false, showView = false, showRow = false } = {}) {
+    const rowBlock = showRow
+      ? `<div class="sb-settings-block">
+          <div class="sb-settings-title">Row height</div>
+          <div class="sb-zoom">
+            <input class="sb-zoom-range" type="range" min="0" max="${
+              SB_ROW_STEPS.length - 1
+            }" step="1" value="${stratbookRowIndex()}" data-sb-row />
+            <span class="sb-zoom-value" data-sb-row-label>${stratbookRowHeight}px</span>
+          </div>
+        </div>`
+      : '';
     const zoomBlock = showZoom
       ? `<div class="sb-settings-block">
           <div class="sb-settings-title">Zoom</div>
@@ -2495,6 +2657,7 @@ export function initTeamView({ auth, escapeHtml }) {
           </svg>
         </button>
         <div class="sb-settings-panel" data-sb-settings-panel>
+          ${rowBlock}
           ${zoomBlock}
           ${viewBlock}
           <div class="sb-settings-block">
@@ -2576,10 +2739,10 @@ export function initTeamView({ auth, escapeHtml }) {
     const mapsHtml = POSITION_MAPS.map((m) => myStratMapHtml(m, strategiesPlayerId)).join('');
 
     return `
-      ${headerHtml('', stratSettingsPanelHtml({ showZoom: true }))}
+      ${headerHtml('', stratSettingsPanelHtml({ showZoom: true, showRow: true }))}
       <div class="ms-maps" data-sb-color-root data-sb-zoom-root style="--sb-zoom: ${
         stratbookZoom / 100
-      };${stratColorVarsStyle()}">
+      };--ms-row-pad: ${stratRowPad(stratbookRowHeight)}px;${stratColorVarsStyle()}">
       <section class="tm-card">
         <div class="tm-card-head">
           <h3 class="tm-card-title">Player</h3>
@@ -3087,26 +3250,73 @@ export function initTeamView({ auth, escapeHtml }) {
       return;
     }
 
-    const linkBtn = t.closest('[data-sb-link]');
-    if (linkBtn) {
-      const id = linkBtn.dataset.sbId;
-      const field = linkBtn.dataset.sbLink;
+    const linksToggle = t.closest('[data-sb-links-toggle]');
+    if (linksToggle) {
+      const id = linksToggle.dataset.sbLinksToggle;
       const existing = (team.stratbook || []).find((s) => s.id === id);
       if (!existing) return;
-      const current = existing[field] || '';
-      if (!team.isAdmin) {
-        if (current) window.open(current, '_blank', 'noopener');
+      const list = stratLinks(existing);
+      // Nothing to open yet: go straight to adding rather than showing an
+      // empty menu.
+      if (!list.length) {
+        if (!team.isAdmin) return;
+        await addStratLink(id, list);
         return;
       }
-      if (e.shiftKey || !current) {
-        const next = window.prompt('Link URL (https://…)', current);
-        if (next === null) return;
-        await patchStrategy(id, { [field]: next.trim() });
-        render();
+      // Exactly one, and no intent to manage it: open it. That is the case
+      // this column is used for almost every time.
+      if (list.length === 1 && !(e.shiftKey && team.isAdmin)) {
+        window.open(list[0].url, '_blank', 'noopener');
         return;
       }
-      window.open(current, '_blank', 'noopener');
+      openLinksMenu = openLinksMenu === id ? '' : id;
+      openVisibleMenu = '';
+      render();
       return;
+    }
+
+    const linkOpen = t.closest('[data-sb-link-open]');
+    if (linkOpen) {
+      const id = linkOpen.dataset.sbId;
+      const existing = (team.stratbook || []).find((s) => s.id === id);
+      const link = stratLinks(existing)[Number(linkOpen.dataset.sbLinkOpen)];
+      if (link) window.open(link.url, '_blank', 'noopener');
+      openLinksMenu = '';
+      render();
+      return;
+    }
+
+    const linkDel = t.closest('[data-sb-link-del]');
+    if (linkDel) {
+      if (!team.isAdmin) return;
+      const id = linkDel.dataset.sbId;
+      const existing = (team.stratbook || []).find((s) => s.id === id);
+      if (!existing) return;
+      const list = stratLinks(existing).slice();
+      list.splice(Number(linkDel.dataset.sbLinkDel), 1);
+      await patchStrategy(id, { links: list });
+      render();
+      return;
+    }
+
+    const linkAdd = t.closest('[data-sb-link-add]');
+    if (linkAdd) {
+      if (!team.isAdmin) return;
+      const id = linkAdd.dataset.sbLinkAdd;
+      const existing = (team.stratbook || []).find((s) => s.id === id);
+      if (!existing) return;
+      await addStratLink(id, stratLinks(existing));
+      return;
+    }
+
+    if (
+      page === 'team-stratbook' &&
+      openLinksMenu &&
+      !t.closest('[data-sb-links-menu]') &&
+      !t.closest('[data-sb-links-toggle]')
+    ) {
+      openLinksMenu = '';
+      render();
     }
 
     const visToggle = t.closest('[data-sb-visible-toggle]');
@@ -3135,6 +3345,14 @@ export function initTeamView({ auth, escapeHtml }) {
     const zoom = t.closest?.('[data-sb-zoom]');
     if (zoom) {
       applyStratZoom(zoom);
+      return;
+    }
+
+    // Both listeners, like zoom: a range fires `input` while it is dragged and
+    // `change` when it is released or moved by keyboard.
+    const rowH = t.closest?.('[data-sb-row]');
+    if (rowH) {
+      applyStratRowHeight(rowH);
       return;
     }
 
@@ -3223,6 +3441,9 @@ export function initTeamView({ auth, escapeHtml }) {
 
       if (field === 'visibleAll') {
         await patchStrategy(id, { visibleAll: sbField.checked });
+        // It lives in the Players menu now, so the button label above it and
+        // the per-player boxes it overrides both have to be repainted.
+        render();
         return;
       }
       if (field === 'economy' || field === 'category') {
@@ -3326,6 +3547,11 @@ export function initTeamView({ auth, escapeHtml }) {
     const zoom = e.target.closest?.('[data-sb-zoom]');
     if (zoom) {
       applyStratZoom(zoom);
+      return;
+    }
+    const rowH = e.target.closest?.('[data-sb-row]');
+    if (rowH) {
+      applyStratRowHeight(rowH);
       return;
     }
     const ta = e.target.closest?.('textarea.sb-role-note');

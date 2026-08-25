@@ -565,6 +565,38 @@ function sanitizeUrl(value) {
   }
 }
 
+/** How many links one strategy may carry. */
+const MAX_STRAT_LINKS = 8;
+
+/**
+ * A strategy's links, as a list.
+ *
+ * Rows written before the list existed carry exactly two named links,
+ * `link3d` and `link2d`, and those fields are still sent to the client (the
+ * player-facing table opens `link2d` as the strategy's 2D view). When a row has
+ * no `links` array yet, the pair IS the list, so an old stratbook opens in the
+ * new UI with its links intact instead of looking empty.
+ */
+function normalizeLinks(s) {
+  if (Array.isArray(s?.links)) {
+    return s.links
+      .map((l) => ({
+        url: sanitizeUrl(l?.url || ''),
+        label: String(l?.label || '')
+          .trim()
+          .slice(0, 40)
+      }))
+      .filter((l) => l.url)
+      .slice(0, MAX_STRAT_LINKS);
+  }
+  const out = [];
+  const legacy3d = sanitizeUrl(s?.link3d || '');
+  const legacy2d = sanitizeUrl(s?.link2d || '');
+  if (legacy3d) out.push({ url: legacy3d, label: '3D' });
+  if (legacy2d) out.push({ url: legacy2d, label: '2D' });
+  return out;
+}
+
 function normalizeRoleNotes(raw) {
   const src = Array.isArray(raw) ? raw : [];
   return [0, 1, 2, 3, 4].map((i) => String(src[i] ?? '').slice(0, 800));
@@ -587,6 +619,7 @@ function publicStrategy(s) {
     description: s.description || '',
     link3d: s.link3d || '',
     link2d: s.link2d || '',
+    links: normalizeLinks(s),
     roleNotes: normalizeRoleNotes(s.roleNotes),
     visibleAll: Boolean(s.visibleAll),
     visibleTo: Array.isArray(s.visibleTo) ? [...s.visibleTo] : [],
@@ -631,6 +664,10 @@ export async function upsertStrategy(actor, teamId, patch = {}) {
         patch.link3d === undefined ? existing?.link3d || '' : sanitizeUrl(patch.link3d),
       link2d:
         patch.link2d === undefined ? existing?.link2d || '' : sanitizeUrl(patch.link2d),
+      links:
+        patch.links === undefined
+          ? normalizeLinks(existing)
+          : normalizeLinks({ links: patch.links }),
       roleNotes:
         patch.roleNotes === undefined
           ? normalizeRoleNotes(existing?.roleNotes)

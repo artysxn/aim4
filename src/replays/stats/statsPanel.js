@@ -1533,6 +1533,110 @@ export function createStatsPanel({
     await onPlayRounds(files, teamRoundsTitle(teamRow));
   }
 
+  // ---- player rounds -> the timeline ---------------------------------------
+
+  /**
+   * The rounds behind one player's R count, as demo files.
+   *
+   * Deliberately the same walk `accumulatePlayers` does (shared/statsMath.js):
+   * a round counts for a player when they appear in `row.p`, their seat resolves
+   * to a team, and `rowPasses` accepts the round for THAT team. Anything looser
+   * opens rounds the number never counted, which is worse than not linking at
+   * all, because the count on screen stops being the thing you clicked.
+   */
+  function collectPlayerRoundFiles(playerRow) {
+    if (!payload || !playerRow?.id) return [];
+    const want = String(playerRow.id);
+    const { players, demos } = indexMaps(payload);
+    const active = roundsFilterForPlayer();
+    const files = [];
+    const seen = new Set();
+    for (const row of allRows(payload)) {
+      if (!row.p || !row.p[want]) continue;
+      const team = players.get(`${row.d}:${want}`)?.team;
+      if (!team) continue;
+      if (!rowPasses(row, active, team, players, demos)) continue;
+      if (lockedTeamName) {
+        const demo = demos.get(row.d);
+        if (!demo) continue;
+        const displayName = team === 1 ? demo.name1 : demo.name2;
+        if (teamNameKey(displayName) !== teamNameKey(lockedTeamName)) continue;
+      }
+      const file = String(row.f || '').trim();
+      if (!file || seen.has(file)) continue;
+      seen.add(file);
+      files.push(file);
+    }
+    return files;
+  }
+
+  /** The list filters, as the player walk wants them. */
+  function roundsFilterForPlayer() {
+    return {
+      ...roundsFilterForTeam(null),
+      ...(lockedTeamName ? { teamName: lockedTeamName } : {})
+    };
+  }
+
+  function playerRoundsTitle(playerRow) {
+    const parts = [playerRow?.name || 'Player'];
+    const mapCode = singleMap();
+    if (mapCode) parts.push(MAPS[mapCode]?.name || mapCode);
+    if (filter.side === 'T' || filter.side === 'CT') parts.push(filter.side);
+    return parts.join(' \u00b7 ');
+  }
+
+  /**
+   * Whether the R count is worth making clickable.
+   *
+   * Gated on ONE map and ONE side, which is what makes the resulting set
+   * coherent to watch: rounds from several maps, or both halves at once, open
+   * as a pile with no shared geometry or shared sense of who was attacking.
+   */
+  function canOpenPlayerRounds() {
+    if (!onPlayRounds) return false;
+    if (!singleMap()) return false;
+    return filter.side === 'T' || filter.side === 'CT';
+  }
+
+  function playerRoundsCell(p) {
+    const col = PLAYER_COLUMNS.find((c) => c.key === 'rounds');
+    const text = col ? col.cell(p) : String(p.rounds ?? '');
+    if (!canOpenPlayerRounds() || !(p.rounds > 0) || !p.id) return escapeHtml(text);
+    return `<span class="st-link st-rounds-open" role="link" tabindex="0" data-st-player-rounds="${escapeHtml(
+      String(p.id)
+    )}" data-st-player-rounds-name="${escapeHtml(p.name || '')}" title="Open these rounds in the timeline">${escapeHtml(
+      text
+    )}</span>`;
+  }
+
+  async function openPlayerRounds(link) {
+    if (!onPlayRounds || !link || selectionInside(link)) return;
+    const id = String(link.dataset.stPlayerRounds || '').trim();
+    if (!id) return;
+    const name = String(link.dataset.stPlayerRoundsName || id).trim() || id;
+    // Server mode paints from the aggregate endpoint and holds no rounds, so
+    // the walk above has nothing to read. Same on-demand pull the team link uses.
+    if (!payload) {
+      if (link.classList.contains('is-busy')) return;
+      link.classList.add('is-busy');
+      const wasBusy = bodyEl.getAttribute('aria-busy');
+      try {
+        await ensurePayload();
+      } catch {
+        return;
+      } finally {
+        link.classList.remove('is-busy');
+        if (wasBusy === null) bodyEl.removeAttribute('aria-busy');
+        else bodyEl.setAttribute('aria-busy', wasBusy);
+      }
+      if (!payload) return;
+    }
+    const files = collectPlayerRoundFiles({ id, name });
+    if (!files.length) return;
+    await onPlayRounds(files, playerRoundsTitle({ id, name }));
+  }
+
   function teamRoundWrCell(r) {
     const col = TEAM_COLUMNS.find((c) => c.key === 'roundWinrate');
     const text = col ? col.cell(r) : '—';
@@ -1554,6 +1658,12 @@ export function createStatsPanel({
     if (wrLink && onPlayRounds) {
       e.preventDefault();
       void openTeamRounds(wrLink);
+      return;
+    }
+    const rLink = e.target.closest('[data-st-player-rounds]');
+    if (rLink && onPlayRounds) {
+      e.preventDefault();
+      void openPlayerRounds(rLink);
       return;
     }
     // Names are plain links; the browser (and site.js) owns them. The one
@@ -1637,6 +1747,12 @@ export function createStatsPanel({
     if (wrLink && e.target === wrLink && onPlayRounds) {
       e.preventDefault();
       void openTeamRounds(wrLink);
+      return;
+    }
+    const rLink = e.target.closest?.('[data-st-player-rounds]');
+    if (rLink && e.target === rLink && onPlayRounds) {
+      e.preventDefault();
+      void openPlayerRounds(rLink);
     }
     // Name links are anchors: Enter already activates them.
   });
@@ -2632,6 +2748,7 @@ export function createStatsPanel({
         showAverage: true,
         nameCell: playerNameCell,
         teamCell: playerTeamCell,
+        roundsCell: playerRoundsCell,
         lockedCols: lockedColsFor('players')
       });
     } else {
@@ -2846,7 +2963,8 @@ export function createStatsPanel({
         pageSize: STATS_PAGE_SIZE,
         showAverage: true,
         nameCell: playerNameCell,
-        teamCell: playerTeamCell
+        teamCell: playerTeamCell,
+        roundsCell: playerRoundsCell
       });
     } else if (!serverLocked.oneMap) {
       let data = applyEntityPickTeams(serverLocked.mapRows);
@@ -3072,7 +3190,8 @@ export function createStatsPanel({
           pageSize: STATS_PAGE_SIZE,
           showAverage: true,
           nameCell: playerNameCell,
-          teamCell: playerTeamCell
+          teamCell: playerTeamCell,
+          roundsCell: playerRoundsCell
         });
       }
     } else {
