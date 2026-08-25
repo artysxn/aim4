@@ -561,19 +561,28 @@ export async function handleReplayRequest(req, res, url) {
   };
 
   /**
-   * File → owning record, with both lookup maps built once per request. The
-   * pack route resolves hundreds of rounds in one request, and canOpenRound
-   * used to re-scan the record list per file.
+   * File → owning record, memoized per request.
+   *
+   * `byId` is cheap: one entry per demo, and it answers every modern round
+   * name, which carry their demo id as a `~<demoId>` suffix.
+   *
+   * `owners` is NOT cheap and is therefore lazy. It walks every round of every
+   * record — roughly 120,000 entries on this library — and only legacy names
+   * from before that suffix existed need it. Building it eagerly here made a
+   * scan crawl: each round the Pattern Finder fetched paid for a fresh
+   * 120,000-entry Map before a byte was served, turning a three-second scan
+   * into seconds per round. Almost every request now never builds it at all.
    */
   let roundLookupOnce = null;
   const roundLookup = async () => {
     if (!roundLookupOnce) {
       roundLookupOnce = (async () => {
         const { records } = await readable();
+        let owners = null;
         return {
           records,
           byId: recordIdIndex(records),
-          owners: roundOwnerIndex(records)
+          ownersLazy: () => (owners ||= roundOwnerIndex(records))
         };
       })();
     }
@@ -585,8 +594,12 @@ export async function handleReplayRequest(req, res, url) {
    * is exactly what "unlisted" is for: the file name is the link.
    */
   const canOpenRound = async (file) => {
-    const { records, byId, owners } = await roundLookup();
-    const record = recordForRoundFile(file, records, owners, byId);
+    const { records, byId, ownersLazy } = await roundLookup();
+    // Modern names resolve from `byId` alone and never touch the owner index.
+    // Only a legacy name pays for it, and then once per request rather than
+    // once per call.
+    const legacy = String(file || '').lastIndexOf('~') <= 0;
+    const record = recordForRoundFile(file, records, legacy ? ownersLazy() : null, byId);
     // No owning record: a round that predates materialization. Library default.
     if (!record) return true;
     if (!canSee(record, access, { viaLink: true })) return false;
@@ -1308,6 +1321,22 @@ export async function handleReplayRequest(req, res, url) {
     // background and a later call picks it up warm; the client meanwhile falls
     // back to the paged /stats path, which reports real progress. A slow answer
     // is a bug. No answer is an outage.
+    // A kill switch, because the build is not free while it runs: it is CPU
+    // on the only thread this process has, and everything else — round meta,
+    // tick buffers, the Pattern Finder's scan — waits behind it. With
+    // AIM4_HOT_STORE=off nothing is built and this endpoint says so
+    // immediately; callers fall back to the paged /stats path, which is
+    // slower per page but leaves the box responsive for everyone else.
+    if (String(process.env.AIM4_HOT_STORE || '').toLowerCase() === 'off') {
+      json(res, 503, {
+        error: 'Statistics are still loading. This page will fill in shortly.',
+        building: true,
+        disabled: true,
+        demos: ready.length
+      });
+      return true;
+    }
+
     const BUILD_BUDGET_MS = Number(process.env.AIM4_AGGREGATE_TIMEOUT_MS || 20_000);
     const STILL_BUILDING = Symbol('aggregate-building');
     let budget = null;
@@ -1866,14 +1895,18 @@ export async function handleReplayRequest(req, res, url) {
   if (req.method === 'GET' && p === '/api/replays/rounds') {
     const limit = Number(url.searchParams.get('limit') || 2000);
     const { allowed } = await readable();
-    const { records, byId, owners } = await roundLookup();
+    const { records, byId, ownersLazy } = await roundLookup();
     const seen = visibleDemoIds(allowed, access);
     const [found, noted] = await Promise.all([
       findRounds(user, queryFromUrl(url), { limit }),
       listNotedRounds(user)
     ]);
     const rounds = found.filter((r) => {
-      const record = recordForRoundFile(r.file || r.name || r, records, owners, byId);
+      const name = r.file || r.name || r;
+      // Same rule as canOpenRound: the owner index is built only if a legacy
+      // name in this result set actually needs it, and then just once.
+      const legacy = String(name || '').lastIndexOf('~') <= 0;
+      const record = recordForRoundFile(name, records, legacy ? ownersLazy() : null, byId);
       // A round with no owning record predates materialization; treat the
       // library default (public) as the answer rather than hiding history.
       return !record || seen.has(record.id);

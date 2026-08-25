@@ -3430,6 +3430,33 @@ export function createStatsPanel({
     applyViewState(next, { notify: false });
     syncSearchToggle();
     if (searchOpen) renderSearch();
+
+    // One clock for the WHOLE load, not per phase.
+    //
+    // Every stage here can stall — the ranks, the catalogue, the aggregate, the
+    // paged fallback — and each one used to own its own label. When a stage
+    // reported nothing, the spinner simply froze on whatever text it was left
+    // with and the page was indistinguishable from a dead one. So the seconds
+    // tick regardless, and whatever the current stage knows is prepended to
+    // them: `Loading stats 41/300 · <demo> · 12s` when there is real progress,
+    // `Loading database… · 12s` when there is not. Something always moves.
+    let waited = 0;
+    let phaseLabel = 'Loading database…';
+    const showProgress = (label) => {
+      if (label) phaseLabel = label;
+      if (token !== loadToken) return;
+      setSpinnerLabel(bodyEl, waited ? `${phaseLabel} · ${waited}s` : phaseLabel);
+    };
+    const clock = setInterval(() => {
+      if (token !== loadToken) {
+        clearInterval(clock);
+        return;
+      }
+      waited += 1;
+      showProgress();
+    }, 1000);
+    const stopClock = () => clearInterval(clock);
+
     // The default table view needs neither the catalogue nor the ranks to be
     // answered — only detail views, locked teams, picks and tiny scopes do.
     // Start the aggregate query NOW so the slow half (a cold aggregate store
@@ -3457,30 +3484,19 @@ export function createStatsPanel({
       // A detail view opened straight from a URL asks the matches endpoint,
       // a locked team (Team Overview) its aggregate pieces; all paint without
       // a round reaching the browser.
-      // The aggregate is one request and cannot report progress, so a spinner
-      // over it is indistinguishable from a hung page. Count the seconds: it
-      // is not an estimate, but it is proof something is still happening, and
-      // it is the difference between "loading" and "frozen".
-      let waited = 0;
-      const tick = setInterval(() => {
-        waited += 1;
-        if (token !== loadToken) return;
-        setSpinnerLabel(bodyEl, `Loading database… ${waited}s`);
-      }, 1000);
-      let served;
-      try {
-        served = detail
-          ? await refreshServerDetail()
-          : lockedTeamName
-            ? await refreshServerLocked()
-            : earlyTables
-              ? await earlyTables
-              : await refreshServerTables();
-      } finally {
-        clearInterval(tick);
+      const served = detail
+        ? await refreshServerDetail()
+        : lockedTeamName
+          ? await refreshServerLocked()
+          : earlyTables
+            ? await earlyTables
+            : await refreshServerTables();
+      if (token !== loadToken) {
+        stopClock();
+        return;
       }
-      if (token !== loadToken) return;
       if (served) {
+        stopClock();
         cancelSlow();
         renderFilters();
         if (detail) renderServerDetail();
@@ -3490,9 +3506,10 @@ export function createStatsPanel({
       }
       // The aggregate could not answer: an older server, an error, or a store
       // still building. The payload path below is the whole feature either way,
-      // and it paints page by page, so say what is happening rather than
-      // repeating the label the last eight seconds already showed.
+      // and it paints page by page. Re-rendering the spinner drops the label
+      // the clock has been writing, so hand it straight back.
       bodyEl.innerHTML = spinnerHtml('Loading rounds…');
+      showProgress('Loading rounds…');
     }
 
     try {
@@ -3505,7 +3522,9 @@ export function createStatsPanel({
           // these as library-wide figures; the raw event is per-page.
           noteLibraryProgress({ loaded: p?.libraryLoaded, total: p?.libraryTotal });
           if (painted) return;
-          setSpinnerLabel(bodyEl, statsProgressLabel(p));
+          // Through the clock, so the elapsed seconds ride along and a phase
+          // that goes quiet does not leave a frozen label behind it.
+          showProgress(statsProgressLabel(p));
         },
         onBatch: (batch) => {
           if (token !== loadToken) return;
@@ -3523,6 +3542,9 @@ export function createStatsPanel({
             return;
           }
           cancelSlow();
+          // Rows are on screen from here on; the spinner they belonged to is
+          // gone, so the clock has nothing left to write to.
+          stopClock();
           const rebuildFilters = !painted;
           painted = true;
           void scheduleUiJob({
@@ -3587,6 +3609,10 @@ export function createStatsPanel({
       bodyEl.innerHTML = `<p class="view-empty">${escapeHtml(msg)}</p>
         <button type="button" class="btn btn-sm" data-st-retry>Retry</button>`;
       bodyEl.querySelector('[data-st-retry]')?.addEventListener('click', () => load({ ...scope, ...next }));
+    } finally {
+      // Every path out of here: painted, empty, failed, superseded. A stray
+      // interval would keep writing seconds onto whatever replaced the spinner.
+      stopClock();
     }
   }
 

@@ -11,6 +11,7 @@
 
 import fs from 'node:fs';
 import os from 'node:os';
+import v8 from 'node:v8';
 
 const MB = 1024 * 1024;
 
@@ -249,7 +250,17 @@ export function memorySnapshot(extra = {}) {
   const limit = containerLimitMb();
   return {
     serverRssMb: Math.round(mem.rss / MB),
+    // The PARSE WORKER's configured ceiling, which is what this has always
+    // meant. Badly named: it reads like the server's own heap and was taken
+    // for exactly that during an incident, sending the fix at a number that
+    // could never move. The real one is below.
     heapLimitMb: Number(process.env.AIM4_PARSE_HEAP_MB || 1024),
+    // What V8 will actually let THIS process grow to, --max-old-space-size and
+    // NODE_OPTIONS included. The only way to confirm a heap flag reached the
+    // running server, whichever of the Dockerfile, nixpacks or the host's own
+    // start command actually launched it.
+    v8HeapLimitMb: Math.round(v8.getHeapStatistics().heap_size_limit / MB),
+    heapUsedMb: Math.round(mem.heapUsed / MB),
     batchTicks: Number(process.env.AIM4_PARSE_BATCH_TICKS) || deriveBatchTicks(),
     batchTicksDerivedFromMb: availableMemoryMb(),
     containerLimitMb: limit ?? 'unlimited',
