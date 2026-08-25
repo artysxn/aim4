@@ -1293,14 +1293,49 @@ export async function handleReplayRequest(req, res, url) {
       .map((x) => x.trim())
       .filter(Boolean);
     const wantTeams = tabs.includes('teams');
-    const { players, teams, maps } = await hotTables(statsIo, user, ready, filter, {
-      teams: wantTeams,
-      roles: argHas('roles') || Boolean(filter.role),
-      // A demo scope narrows the mask; it never widens what may be read.
-      allowedIds: scoped
-        ? new Set([...allowedIds].filter((id) => scoped.has(id)))
-        : allowedIds
-    });
+
+    // This endpoint must always answer, even when it cannot answer WELL.
+    //
+    // The first call after a restart builds the resident store from every
+    // stats index in the library, and getHotStore hands every concurrent
+    // caller that same in-flight promise. So while the build runs, nothing
+    // here returns — and if the build is slow enough (a big library against a
+    // small heap), "nothing returns" lasts for as long as the process lives.
+    // From a browser that is indistinguishable from a dead server: the
+    // Database sat on "Loading database…" forever.
+    //
+    // Rather than park the request, say so. The build carries on in the
+    // background and a later call picks it up warm; the client meanwhile falls
+    // back to the paged /stats path, which reports real progress. A slow answer
+    // is a bug. No answer is an outage.
+    const BUILD_BUDGET_MS = Number(process.env.AIM4_AGGREGATE_TIMEOUT_MS || 20_000);
+    const STILL_BUILDING = Symbol('aggregate-building');
+    let budget = null;
+    const tables = await Promise.race([
+      hotTables(statsIo, user, ready, filter, {
+        teams: wantTeams,
+        roles: argHas('roles') || Boolean(filter.role),
+        // A demo scope narrows the mask; it never widens what may be read.
+        allowedIds: scoped
+          ? new Set([...allowedIds].filter((id) => scoped.has(id)))
+          : allowedIds
+      }),
+      new Promise((resolve) => {
+        budget = setTimeout(() => resolve(STILL_BUILDING), BUILD_BUDGET_MS);
+      })
+    ]);
+    clearTimeout(budget);
+
+    if (tables === STILL_BUILDING) {
+      json(res, 503, {
+        error: 'Statistics are still loading. This page will fill in shortly.',
+        building: true,
+        demos: ready.length
+      });
+      return true;
+    }
+
+    const { players, teams, maps } = tables;
 
     // The Database hides players under its minimum-rounds bar, and that bar
     // hides MOST of the library: thousands of one-match names against a few

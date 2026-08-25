@@ -6,6 +6,25 @@
 # say so rather than letting detection guess.
 providers = ["node"]
 
+# The heap ceiling, set HERE and not only in the Dockerfile.
+#
+# Both files describe how to run this service and only one of them is used:
+# when Nixpacks builds, the Dockerfile's CMD is never read. A --max-old-space-size
+# added there alone therefore did nothing, which was invisible until
+# /api/replays/diag still reported heapLimitMb 1024 after the deploy.
+#
+# 1 GB is not enough at this library size. The resident statistics store is a
+# few hundred MB of typed arrays built by parsing every stats index in turn;
+# against a 1 GB ceiling that becomes permanent GC pressure instead of
+# progress, and /api/replays/aggregate stops answering while it grinds. The
+# host has ~7.7 GB and the demo parser caps its own worker heap separately
+# (AIM4_PARSE_HEAP_MB, default 1536).
+#
+# Setting NODE_OPTIONS in the host's environment overrides this and is the
+# quickest way to change it without a rebuild.
+[start]
+cmd = "node --max-old-space-size=3072 server/index.js"
+
 [phases.setup]
 aptPkgs = [
   "...",
