@@ -3396,6 +3396,18 @@ export function createStatsPanel({
     applyViewState(next, { notify: false });
     syncSearchToggle();
     if (searchOpen) renderSearch();
+    // The default table view needs neither the catalogue nor the ranks to be
+    // answered — only detail views, locked teams, picks and tiny scopes do.
+    // Start the aggregate query NOW so the slow half (a cold aggregate store
+    // after a deploy) overlaps the roster/ranks fetches instead of queueing
+    // behind them; the re-render in the served branch below picks up ranks
+    // once they land.
+    const canServeEarly =
+      !detail &&
+      !lockedTeamName &&
+      !hasEntityPick() &&
+      !(scope.demos?.length && scope.demos.length <= 1);
+    const earlyTables = canServeEarly ? refreshServerTables().catch(() => false) : null;
     // The catalogue decides whether a detail view or a search pick can be
     // answered by the server. It is ~14 KB and arrives in tens of milliseconds;
     // deciding without it means defaulting to a library download, which is the
@@ -3415,7 +3427,9 @@ export function createStatsPanel({
         ? await refreshServerDetail()
         : lockedTeamName
           ? await refreshServerLocked()
-          : await refreshServerTables();
+          : earlyTables
+            ? await earlyTables
+            : await refreshServerTables();
       if (token !== loadToken) return;
       if (served) {
         cancelSlow();

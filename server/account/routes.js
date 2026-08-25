@@ -29,6 +29,7 @@ import {
 } from '../entitlements/subscriptions.js';
 import { ValidationError } from '../entitlements/grants.js';
 import { db } from '../entitlements/service.js';
+import { passwordLogin } from './login.js';
 import {
   cancelDeletion,
   deleteAccount,
@@ -127,6 +128,19 @@ export async function handleAccountRequest(req, res, url) {
 
 async function route(req, res, url, me) {
   const p = url.pathname;
+
+  // ---- password sign-in ----------------------------------------------------
+  // Public by definition: the caller has no session yet, which is the point.
+  // Rate limiting and the uniform failure message live in login.js.
+  if (req.method === 'POST' && p === '/api/account/login') {
+    const body = await readJson(req, 4 * 1024);
+    const { status, body: out } = await passwordLogin(req, {
+      identifier: body.identifier ?? body.username ?? body.email,
+      password: body.password
+    });
+    json(res, status, out);
+    return true;
+  }
 
   // ---- who am I, and what may I do ----------------------------------------
   if (req.method === 'GET' && p === '/api/me') {

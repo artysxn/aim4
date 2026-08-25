@@ -884,7 +884,9 @@ async function route(req, res, url, me) {
     const force = body.force !== false;
     const startedAt = Date.now();
     statsRefreshJob = {
-      kind: 'stats',
+      // Two panel buttons share this job: the full rebuild and the
+      // stale-only enrichment. The kind tells the panel which one is live.
+      kind: force ? 'stats' : 'stats-stale',
       startedAt,
       startedBy: me.id,
       force,

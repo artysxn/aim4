@@ -1,15 +1,19 @@
 // ---------------------------------------------------------------------------
-// AuthManager.js — Supabase auth (Google), profile, settings cloud sync
+// AuthManager.js — Supabase auth (Google or password), profile, settings sync
 //
-// Sign-up and sign-in by email and password are gone. Google is the only way to
-// create an account, which removes the password reset flow, the confirmation
-// email, and the class of support ticket that comes with both.
+// Two ways in, and they land on the same session:
 //
-// Existing password accounts are NOT locked out. The Email provider stays
-// enabled in Supabase until the migration window closes, signIn/signUp are
-// simply no longer reachable from the UI, and password holders are prompted to
-// link Google on their next visit. Disabling the provider is a dashboard action
-// taken after that window, not something this file does.
+//   · Google (OAuth). Still the only way to CREATE an account from the site.
+//   · Username (or email) and password, for accounts that predate the switch
+//     to Google and for accounts an admin seeded.
+//
+// The password path does not call signInWithPassword here. Supabase
+// authenticates on email, the site's identity is a username, and turning one
+// into the other in the browser would mean a public username -> email lookup,
+// which is an email harvester. So the credentials go to our own backend
+// (POST /api/account/login), which resolves the address privately and hands
+// back the tokens; setSession() then installs them and everything downstream —
+// profile, entitlements, cloud settings — is identical either way.
 // ---------------------------------------------------------------------------
 
 import {
@@ -20,6 +24,9 @@ import {
 } from '../lib/supabase.js';
 import * as Storage from '../utils/Storage.js';
 import { clampElo, DEFAULT_ELO } from '../multiplayer/elo.js';
+
+/** Same resolution the rest of the client uses; empty means same origin. */
+const API_BASE = (import.meta.env?.VITE_API_URL || '').replace(/\/$/, '');
 
 export class AuthManager {
   constructor(settings) {
@@ -261,6 +268,53 @@ export class AuthManager {
   get needsGoogleLink() {
     if (!this.user || !this._linkedProviders.length) return false;
     return !this._linkedProviders.includes('google');
+  }
+
+  /**
+   * Sign in with a username (or email) and a password.
+   *
+   * The account must already exist: this signs in, it never registers. Google
+   * is still the only way to create one from the site.
+   *
+   * @param {{ identifier: string, password: string }} credentials
+   * @returns {Promise<object>} the profile row
+   */
+  async signIn({ identifier, password }) {
+    if (!this.isConfigured) throw new Error('Accounts are not configured on this deployment.');
+    const id = String(identifier || '').trim();
+    if (!id) throw new Error('Enter your username or email.');
+    if (!password) throw new Error('Enter your password.');
+
+    let res;
+    try {
+      res = await fetch(`${API_BASE}/api/account/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifier: id, password })
+      });
+    } catch {
+      throw new Error('Could not reach the server. Check your connection and try again.');
+    }
+
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || 'Sign-in failed.');
+    if (!body.access_token || !body.refresh_token) throw new Error('Sign-in failed.');
+
+    const sb = getSupabase();
+    const { data, error } = await sb.auth.setSession({
+      access_token: body.access_token,
+      refresh_token: body.refresh_token
+    });
+    if (error) throw new Error(error.message || 'Sign-in failed.');
+
+    const user = data?.user || data?.session?.user || null;
+    if (!user) throw new Error('Sign-in failed.');
+
+    // setSession fires onAuthStateChange, which runs this too. Awaiting it here
+    // as well is what lets the caller close the modal knowing the profile is
+    // loaded, rather than on a race with the listener.
+    await this._applySession(user);
+    return this.profile;
   }
 
   /**

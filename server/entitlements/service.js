@@ -166,6 +166,48 @@ export const db = {
   }
 };
 
+/**
+ * The GoTrue admin API (/auth/v1/admin/*), same service-role key.
+ *
+ * Separate from `db` because it is not PostgREST: auth.users is not reachable
+ * over /rest/v1 at all, and the one thing the server needs from it — the login
+ * email behind a username — has no other source.
+ */
+export const authAdmin = {
+  /** One auth user by id, or null when absent / unconfigured. */
+  async getUser(userId) {
+    const id = String(userId || '');
+    if (!id || !isConfigured()) return null;
+    try {
+      return await request(`/auth/v1/admin/users/${encodeURIComponent(id)}`);
+    } catch (err) {
+      if (err instanceof NotConfiguredError) return null;
+      if (err?.status === 404) return null;
+      throw err;
+    }
+  },
+
+  /**
+   * Create an account directly, bypassing sign-up.
+   *
+   * `email_confirm: true` marks the address verified without sending mail,
+   * which is what makes a seeded test account usable immediately.
+   */
+  async createUser({ email, password, username, emailConfirm = true }) {
+    return request('/auth/v1/admin/users', {
+      method: 'POST',
+      body: {
+        email,
+        password,
+        email_confirm: emailConfirm,
+        // handle_new_user() reads this and stamps the profile row, so a
+        // seeded account arrives with its username already chosen.
+        user_metadata: username ? { username: String(username).toLowerCase() } : {}
+      }
+    });
+  }
+};
+
 // ---------------------------------------------------------------------------
 // Admin identity
 //

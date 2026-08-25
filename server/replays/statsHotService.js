@@ -30,6 +30,11 @@ const building = new Map();
  */
 const APPEND_LIMIT = 250;
 
+/** Let other HTTP requests in between JSON.parse / packer.add bursts. */
+function yieldEventLoop() {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
 /**
  * Per-demo identity. A reparse or rename changes it, so a record whose key
  * moved is not the demo we packed even though the id matches.
@@ -67,11 +72,14 @@ export async function getHotStore(io, user, records, opts = {}) {
       const pending = building.get(key);
       if (pending) return pending;
       const job = (async () => {
+        let n = 0;
         for (const [k, record] of wanted) {
           if (hit.ids.has(k)) continue;
           const entry = await loadStoredEntry(io, user, record.id);
           if (entry?.rounds?.length) hit.packer.add(entry);
           hit.ids.add(k);
+          n += 1;
+          if (n % 8 === 0) await yieldEventLoop();
         }
         // finish() hands back views over the current buffers, so it must be
         // re-run after an append: growth reallocates, and the previous views
@@ -110,6 +118,10 @@ export async function getHotStore(io, user, records, opts = {}) {
       done += 1;
       opts.onProgress?.({ done, total: records.length, phase: 'packing' });
       if (entry?.rounds?.length) packer.add(entry);
+      // JSON.parse + rating context for one demo is sync. Without this a cold
+      // pack after deploy holds the only thread until every index is in, so
+      // Database /status / everything else looks down until it finishes.
+      if (done % 8 === 0) await yieldEventLoop();
     }
     const store = packer.finish();
     // Only one build is kept: each is hundreds of MB.
@@ -180,6 +192,7 @@ function visibilityMask(store, allowedIds) {
  */
 export async function hotTables(io, user, records, filter = {}, opts = {}) {
   const store = await getHotStore(io, user, records, opts);
+  await yieldEventLoop();
   const allow = visibilityMask(store, opts.allowedIds || null);
   let players = aggregateHot(store, filter, allow);
   // Roles ride along whenever the caller asked for them or is filtering on

@@ -73,6 +73,26 @@ function buildJobs(selectedFields) {
       ].filter(Boolean)
     },
     {
+      kind: 'stats-stale',
+      idle: 'Enrich stale statistics',
+      busy: 'Enriching…',
+      className: 'btn',
+      confirm:
+        'Backfill missing statistics columns on every stale or unindexed demo?\n\nDemos already current are skipped, so this is much cheaper than a full recalculation. Run it after a release adds a column: library pages serve the old columns until it has.',
+      running: 'Enriching stale demos…',
+      starting: 'Starting enrichment…',
+      done: 'Enrichment finished.',
+      start: () => adminApi.refreshStats({ force: false }),
+      status: () => adminApi.refreshStatsStatus(),
+      summary: (r, ms) => [
+        `Done in ${Math.round(ms / 1000)}s.`,
+        `${r.ready || 0} ready demos.`,
+        `${r.built || 0} rebuilt`,
+        `${r.enriched || 0} enriched`,
+        `${r.current || 0} already current`
+      ]
+    },
+    {
       kind: 'stats',
       idle: 'Recalculate all statistics',
       busy: 'Recalculating…',
@@ -346,7 +366,12 @@ export function toolsPanel() {
       }
       const live = states.findIndex((s) => s.running);
       if (live !== -1) {
-        drawProgress(states[live], JOBS[live].kind);
+        // Jobs can share a status endpoint (full rebuild vs stale-only
+        // enrichment); the state's own kind names the one actually running.
+        const liveKind = JOBS.some((j) => j.kind === states[live].kind)
+          ? states[live].kind
+          : JOBS[live].kind;
+        drawProgress(states[live], liveKind);
         return true;
       }
       const mine = JOBS.findIndex((j) => j.kind === activeKind);
@@ -359,7 +384,12 @@ export function toolsPanel() {
       // Attach to a finished job that another tab just completed.
       if (!activeKind) {
         const recent = states.findIndex((s) => s.finished && !s.stale && s.report);
-        if (recent !== -1) applyFinished(states[recent], JOBS[recent].kind);
+        if (recent !== -1) {
+          const recentKind = JOBS.some((j) => j.kind === states[recent].kind)
+            ? states[recent].kind
+            : JOBS[recent].kind;
+          applyFinished(states[recent], recentKind);
+        }
       }
       stopPoll();
       if (!running) drawProgress(null, null);

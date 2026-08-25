@@ -277,18 +277,28 @@ function setAuthStatus(msg, ok = true) {
   status.classList.toggle('is-error', !ok);
 }
 
+const authIdentifier = document.getElementById('auth-identifier');
+const authPassword = document.getElementById('auth-password');
+const authSubmit = document.getElementById('auth-submit');
+
 /**
- * Google is the only provider. `mode` is still accepted because callers all
- * over the shell pass 'register', and there is now no difference between
- * signing in and signing up.
+ * Two ways in: Google, or a username and password. Registration is still
+ * Google-only, so `mode` is accepted and ignored the way it has been since
+ * the sign-up form went away.
  */
 function openAuth() {
   setAuthStatus('');
+  if (authIdentifier) authIdentifier.value = '';
+  if (authPassword) authPassword.value = '';
   authModal.hidden = false;
+  // Focus the field someone typing a password is heading for anyway. Deferred
+  // because the modal is still hidden as this runs.
+  requestAnimationFrame(() => authIdentifier?.focus());
 }
 
 function closeAuth() {
   authModal.hidden = true;
+  if (authPassword) authPassword.value = '';
 }
 
 document.getElementById('auth-modal-backdrop').addEventListener('click', closeAuth);
@@ -305,6 +315,41 @@ document.getElementById('auth-google').addEventListener('click', async () => {
     setAuthStatus(e.message || 'Google sign-in failed.', false);
   }
 });
+
+let signingIn = false;
+async function submitAuth() {
+  // The button is disabled below, but Enter reaches here directly, and a second
+  // submit mid-request would spend another attempt against the rate limit.
+  if (signingIn) return;
+  const identifier = authIdentifier?.value.trim() || '';
+  const password = authPassword?.value || '';
+  if (!identifier || !password) {
+    setAuthStatus('Enter your username and password.', false);
+    return;
+  }
+  signingIn = true;
+  if (authSubmit) authSubmit.disabled = true;
+  setAuthStatus('Signing in…');
+  try {
+    await auth.signIn({ identifier, password });
+    closeAuth();
+  } catch (e) {
+    setAuthStatus(e.message || 'Sign-in failed.', false);
+  } finally {
+    signingIn = false;
+    if (authSubmit) authSubmit.disabled = false;
+  }
+}
+
+authSubmit?.addEventListener('click', submitAuth);
+for (const field of [authIdentifier, authPassword]) {
+  field?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      submitAuth();
+    }
+  });
+}
 
 // ---- Username picker --------------------------------------------------------
 // A Google sign-in carries no username, so a first-run account gets a
@@ -343,10 +388,18 @@ usernameInput.addEventListener('keydown', (e) => {
 });
 
 // ---- Password account migration ---------------------------------------------
-// Existing email/password accounts keep working. They are asked once, per
-// browser, to link Google before the Email provider is turned off. Dismissible:
-// this is a prompt, not a lockout, and the lockout only comes after a real
-// deadline and an email.
+// Retired, deliberately, rather than deleted.
+//
+// This asked password accounts once per browser to link Google "to keep
+// access", because the Email provider was going to be turned off. Password
+// sign-in is a supported way in again, so that sentence is no longer true and
+// the prompt would be telling people their access is at risk when it is not.
+//
+// The modal, its handlers and AuthManager.linkGoogle() all stay: linking is
+// still offered from the account screen, where it is an option rather than a
+// warning. Flip PROMPT_GOOGLE_LINK back to true to bring the nag back if the
+// provider is ever retired for real.
+const PROMPT_GOOGLE_LINK = false;
 
 const linkGoogleModal = document.getElementById('link-google-modal');
 const linkGoogleStatus = document.getElementById('link-google-status');
@@ -375,6 +428,7 @@ document.getElementById('link-google-btn').addEventListener('click', async () =>
 });
 
 function syncLinkGooglePrompt() {
+  if (!PROMPT_GOOGLE_LINK) return;
   if (!auth.ready || !auth.isLoggedIn) return;
   let prompted = false;
   try {

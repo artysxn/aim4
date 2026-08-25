@@ -608,28 +608,49 @@ export async function listDemos(user, { fresh = false } = {}) {
 const usageCache = new Map();
 const USAGE_TTL_MS = 15 * 1000;
 
+/**
+ * Builds in flight, so concurrent misses share one walk. A page load fires
+ * /status and /demos side by side and both ride on usage(); without this a
+ * cold cache ran two full stat walks of the rounds directory at once.
+ *
+ * @type {Map<string, Promise<object>>}
+ */
+const usageInflight = new Map();
+
 export async function usage(user, { fresh = false } = {}) {
   const key = userKey(user);
   if (!fresh) {
     const hit = usageCache.get(key);
     if (hit && hit.expires > Date.now()) return hit.value;
+    const inflight = usageInflight.get(key);
+    if (inflight) return inflight;
   }
-  const [demoBytes, roundBytes, records] = await Promise.all([
-    dirBytes(demosDir(user)),
-    dirBytes(roundsDir(user)),
-    listDemos(user, { fresh })
-  ]);
-  const bytes = demoBytes + roundBytes;
-  const value = {
-    demos: records.length,
-    bytes,
-    maxBytes: MAX_BYTES,
-    demoBytes,
-    roundBytes,
-    bytesLeft: Math.max(0, MAX_BYTES - bytes)
-  };
-  usageCache.set(key, { value, expires: Date.now() + USAGE_TTL_MS });
-  return value;
+  const build = (async () => {
+    const [demoBytes, roundBytes, records] = await Promise.all([
+      dirBytes(demosDir(user)),
+      dirBytes(roundsDir(user)),
+      listDemos(user, { fresh })
+    ]);
+    const bytes = demoBytes + roundBytes;
+    const value = {
+      demos: records.length,
+      bytes,
+      maxBytes: MAX_BYTES,
+      demoBytes,
+      roundBytes,
+      bytesLeft: Math.max(0, MAX_BYTES - bytes)
+    };
+    usageCache.set(key, { value, expires: Date.now() + USAGE_TTL_MS });
+    return value;
+  })();
+  // Fresh builds register too: a quota check already walking the directory may
+  // as well be the walk everyone else piggybacks on.
+  usageInflight.set(key, build);
+  try {
+    return await build;
+  } finally {
+    usageInflight.delete(key);
+  }
 }
 
 /**

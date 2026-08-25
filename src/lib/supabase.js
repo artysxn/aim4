@@ -33,10 +33,10 @@ export function getSupabase() {
   return client;
 }
 
-// normalizeEmail, validateEmail and validatePassword lived here for the
-// email/password registration form. Google is now the only provider and the
-// form is gone, so they had no callers left. validateUsername stays: the
-// first-run username picker still needs it.
+// Registration is Google-only, so validateEmail and the sign-up field checks
+// that went with it are still gone. What came back is the pair sign-IN needs:
+// accounts made before the switch, and accounts seeded by an admin, both hold a
+// password, and the form has to tell a username apart from an email.
 
 const USERNAME_RE = /^[a-zA-Z0-9_]{3,20}$/;
 
@@ -46,4 +46,20 @@ export function validateUsername(username) {
     return 'Username must be 3-20 characters (letters, numbers, underscore).';
   }
   return null;
+}
+
+/** Normalize email for auth lookups. */
+export function normalizeEmail(email) {
+  return String(email || '').trim().toLowerCase();
+}
+
+/**
+ * Is this sign-in identifier an email rather than a username?
+ *
+ * Deliberately just "has an @": usernames cannot contain one, so anything that
+ * does was meant as an email, and a stricter test here would only reject an
+ * unusual-but-real address before the server ever sees it.
+ */
+export function looksLikeEmail(identifier) {
+  return String(identifier || '').includes('@');
 }
