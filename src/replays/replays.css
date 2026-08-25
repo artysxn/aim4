@@ -1334,10 +1334,46 @@ body.rv-open {
   overflow: hidden;
 }
 
+/* Site title bar stays up, but only over the map column so it cannot cover
+   the viewer back control. --rv-side-w is the timeline panel (360px). */
+body.rv-open .page-head {
+  position: fixed;
+  top: 0;
+  left: var(--rv-side-w);
+  right: 0;
+  width: auto;
+  z-index: 97;
+}
+
+body.rv-open:has(.side-collapsed) .page-head {
+  left: 0;
+}
+
+body.rv-open .rv-main {
+  padding-top: var(--rv-page-head-h, 0px);
+}
+
+body.rv-open:has(.side-collapsed) .rv-side-show {
+  top: calc(var(--rv-page-head-h, 0px) + 10px);
+}
+
+@media (max-width: 860px) {
+  body.rv-open .page-head {
+    left: 0;
+  }
+
+  body.rv-open:not(:has(.side-collapsed)) .page-head {
+    visibility: hidden;
+    pointer-events: none;
+  }
+}
+
 .rv-overlay {
   position: fixed;
   inset: 0;
-  z-index: 60;
+  /* Under the site title bar (97) so DEMO MANAGER can sit on the map column;
+     above the rest of the shell. Auth modal is 100. */
+  z-index: 96;
   display: flex;
   flex-direction: column;
   background: #050505;
