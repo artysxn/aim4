@@ -657,7 +657,15 @@ export function createDocsEditor({ escapeHtml, onSave, onDirty }) {
   function paintOutline() {
     const host = outlineHost();
     if (!host) return;
-    outlineItems = collectOutline(surface);
+    // Chapters only. A generated antistrat doc nests CT / T headings and one
+    // heading per strategy under every chapter, and a compass listing all of
+    // them is a wall of buttons nobody can scan. The deepest levels are for
+    // reading in place; the compass is for JUMPING, and you jump by chapter.
+    // Documents written without Title blocks keep their next-best level, so a
+    // plain h2-structured doc still gets a compass instead of nothing.
+    const all = collectOutline(surface);
+    const top = all.reduce((m, i) => Math.min(m, i.level), Infinity);
+    outlineItems = all.filter((i) => i.level === top);
     if (!outlineItems.length) {
       host.hidden = true;
       host.innerHTML = '';

@@ -2729,6 +2729,28 @@ table.plan-matrix .plan-matrix-group td {
   font-size: 15px;
 }
 
+/* The roster under each name field: who the label is being attached to. */
+.admin-rename-side {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.admin-rename-roster {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.admin-rename-player {
+  padding: 2px 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
 .ingest-shell {
   display: flex;
   flex-direction: column;

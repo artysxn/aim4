@@ -12,6 +12,26 @@ export function uploadsPanel() {
   const root = el('div', 'admin-uploads');
   let unnamedOnly = false;
   let busy = false;
+  /** Last rescan progress/result line; survives the repaint `load()` does. */
+  let rescanNote = '';
+  /**
+   * A notice to raise once the panel has repainted.
+   *
+   * Saving reloads the list, and the reload replaces every child of `root` —
+   * including the notice that was just posted. Anything the admin has to READ
+   * (how far a rename reached, most of all) has to outlive that.
+   * @type {{ text: string, kind: string }|null}
+   */
+  let pendingNotice = null;
+
+  /** Repaint, then say whatever the last action left to say. */
+  function commit(wrap) {
+    root.replaceChildren(wrap);
+    if (!pendingNotice) return;
+    const { text, kind } = pendingNotice;
+    pendingNotice = null;
+    notice(root, text, kind);
+  }
 
   root.appendChild(spinnerNode());
 
@@ -24,6 +44,22 @@ export function uploadsPanel() {
     }
   }
 
+  /** A name field with the five players it is naming listed under it. */
+  function renameSide(label, name, players) {
+    const wrap = el('div', 'admin-rename-side');
+    const field = input('text', name || '', label);
+    field.className = 'ingest-field';
+    field.setAttribute('aria-label', label);
+    wrap.appendChild(field);
+    if (players?.length) {
+      const roster = el('div', 'admin-rename-roster');
+      roster.setAttribute('aria-label', `${label} players`);
+      for (const p of players) roster.appendChild(el('span', 'admin-rename-player', p));
+      wrap.appendChild(roster);
+    }
+    return { wrap, field };
+  }
+
   function openRename(item) {
     const overlay = el('div', 'admin-rename-overlay');
     const card = el('div', 'admin-rename-card');
@@ -31,19 +67,33 @@ export function uploadsPanel() {
     card.appendChild(
       el('div', 'ingest-tools-meta', `${item.team1 || 'Team 1'} vs ${item.team2 || 'Team 2'}`)
     );
-    const t1 = input('text', item.team1 || '', 'Team 1');
-    t1.className = 'ingest-field';
-    t1.setAttribute('aria-label', 'Team 1');
-    const t2 = input('text', item.team2 || '', 'Team 2');
-    t2.className = 'ingest-field';
-    t2.setAttribute('aria-label', 'Team 2');
-    card.append(t1, t2);
+    // The roster is the identity; the name is a label on top of it. Seeing who
+    // is on each side is what makes a parser-invented name recognisable, and
+    // it is the same core the save below carries to the rest of the library.
+    const side1 = renameSide('Team 1', item.team1, item.team1Players);
+    const side2 = renameSide('Team 2', item.team2, item.team2Players);
+    const t1 = side1.field;
+    const t2 = side2.field;
+    card.append(side1.wrap, side2.wrap);
     const save = button('Save', async () => {
       save.disabled = true;
       try {
-        await adminApi.renameUploadTeams(item.id, t1.value.trim(), t2.value.trim());
+        const res = await adminApi.renameUploadTeams(item.id, t1.value.trim(), t2.value.trim());
         overlay.remove();
-        notice(root, 'Teams saved.');
+        // Say how far the rename reached. Renaming one demo and silently
+        // rewriting nine others is the kind of thing an admin has to be told.
+        const extra = Number(res?.alsoRenamed) || 0;
+        pendingNotice = res?.capped
+          ? {
+              text: 'Too many demos shared that roster, so only this one was renamed.',
+              kind: 'error'
+            }
+          : {
+              text: extra
+                ? `Teams saved. ${extra} more ${extra === 1 ? 'demo' : 'demos'} with the same roster renamed.`
+                : 'Teams saved.',
+              kind: 'info'
+            };
         load();
       } catch (err) {
         notice(root, err.message, 'error');
@@ -61,11 +111,70 @@ export function uploadsPanel() {
     t1.select();
   }
 
+  /** Poll the rescan until it settles. The note outlives the repaint. */
+  function watchRescan(meta, refresh) {
+    const say = (text) => {
+      rescanNote = text;
+      meta.textContent = text;
+    };
+    const tick = async () => {
+      let st;
+      try {
+        st = await adminApi.teamsRescanStatus();
+      } catch {
+        return;
+      }
+      if (st.running) {
+        const phase = st.phase === 'analyze' ? 'analysing rosters' : 'renaming demos';
+        say(`Re-scanning team names: ${phase}${st.total ? ` ${st.done}/${st.total}` : ''}`);
+        window.setTimeout(tick, 1200);
+        return;
+      }
+      if (st.error) {
+        say(`Re-scan failed: ${st.error}`);
+        return;
+      }
+      if (st.summary) {
+        say(
+          `Re-scan done: ${st.summary.renamedDemos} demos renamed, ` +
+            `${st.summary.teams} teams identified`
+        );
+        refresh();
+      }
+    };
+    tick();
+  }
+
   function paint(data) {
     const wrap = el('div');
     const head = el('div', 'ingest-hero-top');
     head.appendChild(el('h3', 'ingest-title', 'Uploads'));
+    // Library-wide identity pass: rosters link renamed teams, filenames name
+    // the unnamed ones. Runs in the background; this button reads back its
+    // position until it settles, then reloads the list with the new names.
+    const rescanBtn = el('button', 'ingest-seg-btn', 'Re-scan team names');
+    rescanBtn.type = 'button';
+    rescanBtn.title =
+      'Rebuild team identity for every demo: link lineups across name changes and name unnamed teams from demo filenames';
+    head.appendChild(rescanBtn);
     wrap.appendChild(head);
+    const rescanMeta = el('div', 'ingest-tools-meta', rescanNote);
+    wrap.appendChild(rescanMeta);
+    rescanBtn.addEventListener('click', async () => {
+      if (rescanBtn.disabled) return;
+      rescanBtn.disabled = true;
+      try {
+        await adminApi.teamsRescanStart();
+      } catch (err) {
+        rescanMeta.textContent = err.message;
+        rescanBtn.disabled = false;
+        return;
+      }
+      watchRescan(rescanMeta, () => {
+        rescanBtn.disabled = false;
+        load();
+      });
+    });
 
     const filterSeg = el('div', 'ingest-seg');
     filterSeg.setAttribute('role', 'group');
@@ -108,7 +217,7 @@ export function uploadsPanel() {
 
     if (!data.items?.length) {
       wrap.appendChild(el('div', 'ingest-tools-meta', 'Empty'));
-      root.replaceChildren(wrap);
+      commit(wrap);
       return;
     }
 
@@ -154,7 +263,7 @@ export function uploadsPanel() {
     }
     table.appendChild(tbody);
     wrap.appendChild(table);
-    root.replaceChildren(wrap);
+    commit(wrap);
   }
 
   load();

@@ -69,11 +69,17 @@ import {
   writeRoundNotes
 } from './demoStore.js';
 import { cpuProbe, memorySnapshot } from './hostMemory.js';
-import { forgetDemoIndex, loadStoredEntry, refreshLibraryStats, scheduleStatsIndex, STATS_LIBRARY_PAGE, statsPayload } from './statsIndex.js';
+import { forgetDemoIndex, loadStoredEntry, patchIndexTeamNames, refreshLibraryStats, scheduleStatsIndex, STATS_LIBRARY_PAGE, statsPayload } from './statsIndex.js';
 import { ColumnContractError, resolveColumns } from '../../src/replays/shared/statsColumns.js';
-import { getRoster, scopeRoster } from './rosterCatalogue.js';
+import { getRoster, invalidateRoster, scopeRoster } from './rosterCatalogue.js';
 import { peerAverages, peerAveragesHot } from './peerAverages.js';
-import { hotBuildProgress, hotStoreStatus, hotMatches, hotTables } from './statsHotService.js';
+import {
+  hotBuildProgress,
+  hotStoreStatus,
+  hotMatches,
+  hotTables,
+  patchHotStoreTeamNames
+} from './statsHotService.js';
 import { isAcceptedUpload, rarSupport } from './archive.js';
 import { allJobs, batchStatus, enqueueParse, forgetJob, getBatch, jobStatus, startIngest } from './jobs.js';
 import { SHARED_LIBRARY, authStatus, identify } from './auth.js';
@@ -974,6 +980,16 @@ export async function handleReplayRequest(req, res, url) {
       json(res, 404, { error: 'Replay not found.' });
       return true;
     }
+    // Names are hashed into both the stats-index fingerprint and the hot
+    // store's record key, so an unpatched rename means a lazy index rebuild
+    // for this demo AND a full store rebuild for everybody — minutes of
+    // background CPU to change two strings. Patch both in place instead; a
+    // cold store simply reads the fresh index when it next builds. (No
+    // roster propagation here on purpose: an uploader renames their own
+    // demo, the admin tool is what sweeps the library.)
+    await patchIndexTeamNames(statsIo, user, record);
+    patchHotStoreTeamNames(statsIo, user, [record]);
+    invalidateRoster(user);
     json(res, 200, { demo: withJob(user, record), usage: await usage(user) });
     return true;
   }

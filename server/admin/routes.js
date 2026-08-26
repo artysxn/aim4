@@ -557,11 +557,21 @@ async function route(req, res, url, me) {
         lacksVrsName = !resolved.team1 || !resolved.team2;
         if (unnamedOnly && !lacksVrsName) continue;
       }
+      // Who is actually on each side. The rename dialog names a ROSTER, not a
+      // string, and five names is what makes an invented label recognisable.
+      const sideNames = (side) =>
+        (r.players || [])
+          .filter((pl) => (pl?.team === 2 ? 2 : 1) === side)
+          .map((pl) => String(pl?.name || '').trim())
+          .filter(Boolean)
+          .slice(0, 5);
       mapped.push({
         id: r.id,
         map: r.mapName || r.map || '',
         team1: team1Name,
         team2: team2Name,
+        team1Players: sideNames(1),
+        team2Players: sideNames(2),
         score: r.score || null,
         status: r.status || '',
         source: r.source || '',
@@ -594,15 +604,67 @@ async function route(req, res, url, me) {
       json(res, req, 400, { error: 'demo id required' });
       return true;
     }
-    const { renameDemoTeams } = await import('../replays/demoStore.js');
-    const record = await renameDemoTeams(SHARED_LIBRARY, demoId, body.team1, body.team2);
+    // Not just this demo: every unnamed side sharing the renamed roster's core
+    // is the same team under a parser-invented label. See teamRescan.js.
+    const { applyTeamRename } = await import('../replays/teamRescan.js');
+    const { record, alsoRenamed, capped } = await applyTeamRename(
+      statsIo,
+      SHARED_LIBRARY,
+      demoId,
+      body.team1,
+      body.team2
+    );
+    if (!record) {
+      json(res, req, 404, { error: 'Replay not found.' });
+      return true;
+    }
     await writeAudit({
       actorId: me.id,
       action: 'uploads.renameTeams',
-      payload: { demoId, team1: body.team1, team2: body.team2 },
+      payload: { demoId, team1: body.team1, team2: body.team2, alsoRenamed },
       req
     });
-    json(res, req, 200, { ok: true, id: record.id, team1: record.team1, team2: record.team2 });
+    json(res, req, 200, {
+      ok: true,
+      id: record.id,
+      team1: record.team1,
+      team2: record.team2,
+      alsoRenamed,
+      capped
+    });
+    return true;
+  }
+
+  // ---- team identity rescan -------------------------------------------------
+  // Rebuild team identity for the whole library: rosters bind lineups across
+  // name changes, filenames name the unnamed sides by elimination, and the
+  // placeholder "some player's name" teams collapse into real ones. The job
+  // runs detached with its position readable here; see replays/teamRescan.js.
+  if (p === '/api/admin/teams/rescan') {
+    const { startTeamRescan, teamRescanStatus } = await import('../replays/teamRescan.js');
+    if (req.method === 'POST') {
+      const started = startTeamRescan(statsIo, SHARED_LIBRARY);
+      if (started) {
+        await writeAudit({ actorId: me.id, action: 'teams.rescan', payload: {}, req });
+      }
+      json(res, req, started ? 202 : 409, {
+        ok: started,
+        ...(started ? {} : { error: 'A rescan is already running.' }),
+        status: teamRescanStatus()
+      });
+      return true;
+    }
+    if (req.method === 'GET') {
+      json(res, req, 200, teamRescanStatus());
+      return true;
+    }
+  }
+
+  // The teams database the last rescan built: identity, aliases, rosters.
+  if (req.method === 'GET' && p === '/api/admin/teams') {
+    const { readTeamIdentityStore } = await import('../replays/teamRescan.js');
+    const store = await readTeamIdentityStore(statsIo, SHARED_LIBRARY);
+    json(res, req, 200, store || { v: 0, teams: [], summary: null });
     return true;
   }
 

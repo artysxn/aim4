@@ -83,6 +83,9 @@ export const adminApi = {
   },
   renameUploadTeams: (demoId, team1, team2) =>
     send('POST', `/api/admin/uploads/${encodeURIComponent(demoId)}/teams`, { team1, team2 }),
+  teamsRescanStart: () => send('POST', '/api/admin/teams/rescan'),
+  teamsRescanStatus: () => get('/api/admin/teams/rescan'),
+  teamsIdentity: () => get('/api/admin/teams'),
 
   users: ({ q = '', tier = '', status = '', page = 0, sort = 'created_at' } = {}) => {
     const params = new URLSearchParams();

@@ -40,9 +40,22 @@ function yieldEventLoop() {
 /**
  * Per-demo identity. A reparse or rename changes it, so a record whose key
  * moved is not the demo we packed even though the id matches.
+ *
+ * Team names are part of the key because the packed columns CARRY them: the
+ * Teams table groups by the names baked in at pack time. Without the name
+ * hash, renaming a team (one demo by hand, or the whole library through the
+ * identity rescan) left the resident store — and the snapshot on disk —
+ * serving the old names until the process died. With it, a renamed demo reads
+ * as removed-plus-added, which is exactly the signal that forces the rebuild.
  */
 function recordKey(r) {
-  return `${r.id}:${r.parsedAt || 0}:${r.roundCount || 0}`;
+  let h = 0x811c9dc5;
+  const names = `${r.team1?.name || ''}|${r.team2?.name || ''}`;
+  for (let i = 0; i < names.length; i++) {
+    h ^= names.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return `${r.id}:${r.parsedAt || 0}:${r.roundCount || 0}:${h.toString(36)}`;
 }
 
 /** One library, one store. Keyed on the user, not on the record set. */
@@ -484,6 +497,47 @@ export async function hotMatches(io, user, records, demoIds, filter = {}, opts =
       uploadedAt: demo.uploadedAt || 0
     };
   });
+}
+
+/**
+ * Rewrite team names on demos the resident store already holds.
+ *
+ * A rename changes recordKey (the names are hashed into it), and the normal
+ * consequence of a changed key is a FULL rebuild: minutes of CPU and a cold
+ * Database, for what is a two-string edit. It does not have to be, because the
+ * names are the one thing the packed columns do not hold — `store.demos[i]` is
+ * a plain object, and `finish()` hands back that same array, so patching it
+ * updates the packer, the resident store and any later append at once.
+ *
+ * The ids set is re-stamped to match, otherwise the very next request compares
+ * keys, sees the demo as removed-and-added, and rebuilds anyway.
+ *
+ * @param {string} user
+ * @param {object[]} records  renamed records (id + team1/team2 + fingerprint)
+ * @returns {number} demos patched
+ */
+export function patchHotStoreTeamNames(io, user, records) {
+  const hit = cache.get(LIB(user));
+  if (!hit || !records?.length) return 0;
+  const at = new Map(hit.store.demos.map((d, i) => [d.id, i]));
+  let n = 0;
+  for (const r of records) {
+    const i = at.get(r.id);
+    if (i === undefined) continue;
+    hit.store.demos[i].name1 = r.team1?.name || '';
+    hit.store.demos[i].name2 = r.team2?.name || '';
+    // The old key carried the old name hash; drop it whatever it was.
+    for (const k of hit.ids) {
+      if (k.startsWith(`${r.id}:`)) hit.ids.delete(k);
+    }
+    hit.ids.add(recordKey(r));
+    n += 1;
+  }
+  if (n) {
+    hit.builtAt = Date.now();
+    scheduleSnapshotWrite(io, user);
+  }
+  return n;
 }
 
 /** What the store currently holds, for diagnostics. */

@@ -1,7 +1,12 @@
 // Incremental appends must be indistinguishable from a rebuild.
 import assert from 'node:assert/strict';
 import { aggregateHot } from './statsHotAggregate.js';
-import { getHotStore, invalidateHotStore, hotStoreStatus } from './statsHotService.js';
+import {
+  getHotStore,
+  invalidateHotStore,
+  hotStoreStatus,
+  patchHotStoreTeamNames
+} from './statsHotService.js';
 
 let seed = 7;
 const rnd = (n) => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed % n; };
@@ -240,4 +245,110 @@ assert.deepEqual(hotStoreStatus().stores, [], 'invalidate clears');
   await fsp.rm(tmp, { recursive: true, force: true });
 }
 
-console.log('statsHotService.test.js: appends, growth, trimming, requireWarm and snapshots all pass');
+// --- a rename invalidates the store AND refuses the stale snapshot -----------
+// The packed columns carry the team names, so a store built before a rename
+// keeps serving the old ones. The record key hashes the names precisely so a
+// renamed demo reads as removed-plus-added: resident store rebuilt, and a
+// snapshot written before the rename fails its staleness check instead of
+// resurrecting the old names after a deploy.
+{
+  process.env.AIM4_HOT_SNAPSHOT_DELAY_MS = '0';
+  const fsp = await import('node:fs/promises');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'aim4-hotrename-'));
+  await fsp.mkdir(path.join(tmp, 'stats'), { recursive: true });
+  const three = ids.slice(0, 3);
+  for (const id of three) {
+    await fsp.writeFile(path.join(tmp, 'stats', `${id}.json`), JSON.stringify(ENTRIES.get(id)));
+  }
+  const io4 = { userDir: () => tmp };
+  const recWithNames = (id, n1) => ({ ...recordFor(id), team1: { name: n1 }, team2: { name: 'Other' } });
+  const before = await getHotStore(io4, 'local', three.map((id) => recWithNames(id, 'OldName')));
+  assert.ok(before.demos.length === 3);
+  const snapFile = path.join(tmp, 'stats', '_hotstore.a4s');
+  let snapped = false;
+  for (let i = 0; i < 400 && !snapped; i++) {
+    await new Promise((r) => setTimeout(r, 25));
+    snapped = await fsp.stat(snapFile).then(() => true, () => false);
+  }
+  assert.ok(snapped, 'snapshot written for the pre-rename store');
+
+  // Rename lands on the stats index (as patchIndexTeamNames would) and record.
+  const renamedEntry = { ...ENTRIES.get(three[0]), name1: 'NewName' };
+  await fsp.writeFile(path.join(tmp, 'stats', `${three[0]}.json`), JSON.stringify(renamedEntry));
+  const renamedRecords = three.map((id, i) => recWithNames(id, i === 0 ? 'NewName' : 'OldName'));
+
+  // Resident store: the changed key forces a rebuild with the new name.
+  const after = await getHotStore(io4, 'local', renamedRecords);
+  assert.ok(
+    after.demos.some((d) => d.name1 === 'NewName'),
+    'a rename reaches the resident store without a restart'
+  );
+
+  // "Restart": the pre-rename snapshot must NOT come back.
+  invalidateHotStore();
+  const cold = await getHotStore(io4, 'local', renamedRecords, { requireWarm: true });
+  assert.equal(cold, null, 'cold answers null while deciding');
+  let warm = null;
+  for (let i = 0; i < 400 && !warm; i++) {
+    await new Promise((r) => setTimeout(r, 25));
+    warm = await getHotStore(io4, 'local', renamedRecords, { requireWarm: true });
+  }
+  assert.ok(warm.demos.some((d) => d.name1 === 'NewName'), 'the stale snapshot was refused');
+
+  invalidateHotStore();
+  delete process.env.AIM4_HOT_SNAPSHOT_DELAY_MS;
+  await fsp.rm(tmp, { recursive: true, force: true });
+}
+
+// --- patching names in place costs no rebuild -------------------------------
+// The counterpart to the test above: a rename that goes through the rename
+// path patches the resident store instead of dropping it. Names are the one
+// thing not in the packed columns, so rebuilding hundreds of MB of them to
+// change two strings is pure waste — the admin renames a team and the Database
+// must stay warm.
+{
+  process.env.AIM4_HOT_SNAPSHOT = 'off';
+  const fsp = await import('node:fs/promises');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'aim4-hotpatch-'));
+  await fsp.mkdir(path.join(tmp, 'stats'), { recursive: true });
+  const three = ids.slice(0, 3);
+  for (const id of three) {
+    await fsp.writeFile(path.join(tmp, 'stats', `${id}.json`), JSON.stringify(ENTRIES.get(id)));
+  }
+  const io5 = { userDir: () => tmp };
+  const recWith = (id, n1, n2) => ({ ...recordFor(id), team1: { name: n1 }, team2: { name: n2 } });
+  const before = three.map((id) => recWith(id, 'OldName', 'Other'));
+  const built = await getHotStore(io5, 'local', before);
+
+  const renamed = [recWith(three[0], 'NewName', 'Other')];
+  assert.equal(patchHotStoreTeamNames(io5, 'local', renamed), 1, 'one demo patched');
+  assert.equal(
+    built.demos.find((d) => d.id === three[0]).name1,
+    'NewName',
+    'the resident store shows the new name immediately'
+  );
+
+  // The next request must serve the SAME store: patched ids mean no rebuild.
+  const after = await getHotStore(io5, 'local', [renamed[0], ...before.slice(1)]);
+  assert.equal(after, built, 'no rebuild: the very same store object is served');
+
+  // A demo the store does not hold is reported as not patched, so the caller
+  // knows to fall back to invalidating.
+  assert.equal(
+    patchHotStoreTeamNames(io5, 'local', [
+      { id: 'not-in-this-store', parsedAt: 1, roundCount: 1, team1: { name: 'X' }, team2: { name: 'Y' } }
+    ]),
+    0,
+    'unknown demos are not counted as patched'
+  );
+
+  invalidateHotStore();
+  delete process.env.AIM4_HOT_SNAPSHOT;
+  await fsp.rm(tmp, { recursive: true, force: true });
+}
+
+console.log('statsHotService.test.js: appends, growth, trimming, requireWarm, snapshots, renames and name patching all pass');

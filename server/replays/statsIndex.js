@@ -1234,6 +1234,27 @@ export function topPlayerOf(entry) {
   return { id: String(best.id || ''), name: String(best.name || ''), rating: best.rating };
 }
 
+/**
+ * Rewrite ONLY the team names on a stored stats index, and stamp its key so it
+ * is not rebuilt for the rename.
+ *
+ * The version fingerprint includes both team names, so a rename invalidates
+ * the index — correct for one demo, catastrophic for a library-wide team
+ * rescan: thousands of invalidated indexes means the next Database load
+ * rebuilds them all from round files. Names are the only thing a rename
+ * changes, so patch them in place for one JSON read and write per demo.
+ */
+export async function patchIndexTeamNames(io, user, record) {
+  if (!record?.id) return false;
+  const entry = await loadStoredEntry(io, user, record.id);
+  if (!entry) return false;
+  entry.name1 = record.team1?.name || entry.name1 || '';
+  entry.name2 = record.team2?.name || entry.name2 || '';
+  entry.key = versionKey(record);
+  await persistEntry(io, user, entry.key, entry);
+  return true;
+}
+
 export async function loadStoredEntry(io, user, demoId) {
   const cached = memory.get(demoId);
   if (cached?.entry) {
