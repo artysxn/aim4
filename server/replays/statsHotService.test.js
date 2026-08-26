@@ -114,6 +114,53 @@ const FILTERS = [{}, { maps: ['de_nuke'] }, { side: 'CT' }, { result: 'won' }, {
 }
 
 invalidateHotStore();
-assert.deepEqual(hotStoreStatus(), [], 'invalidate clears');
+assert.deepEqual(hotStoreStatus().stores, [], 'invalidate clears');
 
-console.log('statsHotService.test.js: appends, growth and trimming all match a full pack');
+// --- requireWarm: an HTTP request never waits on a cold build ----------------
+// The contract that kept the site down twice: a cold /aggregate used to park
+// every caller on the shared build promise. requireWarm answers null at once,
+// the build runs detached, and only a WARM store is ever served.
+{
+  const fsp = await import('node:fs/promises');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'aim4-hot-'));
+  await fsp.mkdir(path.join(tmp, 'stats'), { recursive: true });
+  for (const [id, e] of ENTRIES) {
+    await fsp.writeFile(path.join(tmp, 'stats', `${id}.json`), JSON.stringify(e));
+  }
+  // One poisoned index: a round shape the packer cannot read. It must cost
+  // this demo its rows, never the build — a throw here used to reject the
+  // shared promise and take /aggregate down for the life of the process.
+  const badId = 'd-poison';
+  await fsp.writeFile(
+    path.join(tmp, 'stats', `${badId}.json`),
+    JSON.stringify({ id: badId, key: '19|9|9|1|A|B', map: 'de_nuke', players: [], rounds: [null] })
+  );
+  const io2 = { userDir: () => tmp };
+  const records = [
+    ...ids.map(recordFor),
+    { id: badId, status: 'ready', parsedAt: 9, roundCount: 1 }
+  ];
+
+  const cold = await getHotStore(io2, 'local', records, { requireWarm: true });
+  assert.equal(cold, null, 'cold + requireWarm answers null immediately, never the build promise');
+
+  let warm = null;
+  for (let i = 0; i < 400 && !warm; i++) {
+    await new Promise((r) => setTimeout(r, 25));
+    warm = await getHotStore(io2, 'local', records, { requireWarm: true });
+  }
+  assert.ok(warm, 'the detached build finishes and later calls serve warm');
+  // The poisoned demo may keep its identity row (the packer registers the demo
+  // before its rounds); what matters is that it contributed no round data and
+  // everyone else's did.
+  const goodRounds = ids.reduce((n, id) => n + ENTRIES.get(id).rounds.length, 0);
+  assert.equal(warm.nRounds, goodRounds, 'every healthy round packed, none from the poisoned demo');
+  assert.equal(hotStoreStatus().lastBuildFailure, null, 'a skipped entry is not a failed build');
+
+  invalidateHotStore();
+  await fsp.rm(tmp, { recursive: true, force: true });
+}
+
+console.log('statsHotService.test.js: appends, growth, trimming and requireWarm all pass');

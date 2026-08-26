@@ -47,11 +47,47 @@ function recordKey(r) {
 const LIB = (user) => `lib:${user}`;
 
 /**
+ * When a build FAILS, wait this long before anyone may start another.
+ *
+ * Without it a failing build is a death spiral: the rejected promise leaves
+ * the cache empty, the next request starts the whole scan again, fails the
+ * same way, and the process spends its life re-reading five thousand files —
+ * which from outside looks like "the backend is up but nothing loads".
+ */
+const BUILD_RETRY_MS = 5 * 60 * 1000;
+let lastBuildFailure = { at: 0, message: '' };
+
+/**
+ * One entry into the packer, contained.
+ *
+ * An index written by an older code path — or healed with inert defaults —
+ * can carry a round shape the packer's rating context does not expect. That
+ * must cost ONE demo its row, never the whole store: an exception here used
+ * to reject the shared build promise, and with every /aggregate caller
+ * parked on that promise, one poisoned file took the endpoint down.
+ */
+function addGuarded(packer, entry) {
+  try {
+    packer.add(entry);
+    return true;
+  } catch (err) {
+    console.warn(`[stats] hot store skipped ${entry?.id || 'unknown'}: ${err?.message || err}`);
+    return false;
+  }
+}
+
+/**
  * Build (or reuse) the store for one library.
  *
  * Concurrent callers share one build: at four thousand demos this reads every
  * index off disk, and letting two requests do that at once is how a server runs
  * out of memory.
+ *
+ * `opts.requireWarm`: never make an HTTP request wait for a cold build. A
+ * resident or cheaply-appendable store is returned as usual; a cold one starts
+ * building DETACHED and this resolves null so the route can answer "still
+ * building" immediately. The request path sets this; boot code and tests,
+ * which genuinely want to await the build, do not.
  */
 export async function getHotStore(io, user, records, opts = {}) {
   const key = LIB(user);
@@ -76,7 +112,7 @@ export async function getHotStore(io, user, records, opts = {}) {
         for (const [k, record] of wanted) {
           if (hit.ids.has(k)) continue;
           const entry = await loadStoredEntry(io, user, record.id);
-          if (entry?.rounds?.length) hit.packer.add(entry);
+          if (entry?.rounds?.length) addGuarded(hit.packer, entry);
           hit.ids.add(k);
           n += 1;
           if (n % 8 === 0) await yieldEventLoop();
@@ -100,7 +136,30 @@ export async function getHotStore(io, user, records, opts = {}) {
   }
 
   const inflight = building.get(key);
-  if (inflight) return inflight;
+  if (inflight) {
+    // A build is running. The request path never waits on it — that is how
+    // one cold build made every /aggregate caller hang together.
+    if (opts.requireWarm) return null;
+    return inflight;
+  }
+
+  if (opts.requireWarm) {
+    // Cold. Kick the build detached and answer null now; the route says
+    // "still building" and the caller falls back to the paged path. Respect
+    // the failure cooldown so a build that cannot succeed does not restart
+    // per request forever.
+    if (Date.now() - lastBuildFailure.at < BUILD_RETRY_MS) return null;
+    startBuild(io, user, records).catch(() => {});
+    return null;
+  }
+
+  return startBuild(io, user, records, opts);
+}
+
+function startBuild(io, user, records, opts = {}) {
+  const key = LIB(user);
+  const wanted = new Map(records.map((r) => [recordKey(r), r]));
+  const startedAt = Date.now();
 
   const job = (async () => {
     // Capacity from the manifests, which the caller already holds. A hint only
@@ -113,16 +172,18 @@ export async function getHotStore(io, user, records, opts = {}) {
     // parsed indexes on the heap next to the store being built from them, which
     // is the allocation that blew the heap before paging was introduced.
     let done = 0;
+    let skipped = 0;
     for (const record of records) {
       const entry = await loadStoredEntry(io, user, record.id);
       done += 1;
       opts.onProgress?.({ done, total: records.length, phase: 'packing' });
-      if (entry?.rounds?.length) packer.add(entry);
+      if (entry?.rounds?.length && !addGuarded(packer, entry)) skipped += 1;
       // JSON.parse + rating context for one demo is sync. Without this a cold
       // pack after deploy holds the only thread until every index is in, so
       // Database /status / everything else looks down until it finishes.
       if (done % 8 === 0) await yieldEventLoop();
     }
+    if (skipped) console.warn(`[stats] hot store built with ${skipped} demos skipped`);
     const store = packer.finish();
     // Only one build is kept: each is hundreds of MB.
     cache.clear();
@@ -133,18 +194,34 @@ export async function getHotStore(io, user, records, opts = {}) {
       builtAt: Date.now(),
       appends: 0
     });
+    console.log(
+      `[stats] hot store built: ${records.length} demos in ${Math.round((Date.now() - startedAt) / 1000)}s`
+    );
+    lastBuildFailure = { at: 0, message: '' };
     return store;
-  })().finally(() => {
-    if (building.get(key) === job) building.delete(key);
-  });
+  })();
 
-  building.set(key, job);
-  return job;
+  const tracked = job
+    .catch((err) => {
+      // Record the failure BEFORE rethrowing, so the cooldown holds whether or
+      // not anyone was awaiting this build. The message goes to the log in
+      // full: this is the line that explains every "statistics never load".
+      lastBuildFailure = { at: Date.now(), message: String(err?.message || err) };
+      console.error('[stats] hot store build failed:', err);
+      throw err;
+    })
+    .finally(() => {
+      if (building.get(key) === tracked) building.delete(key);
+    });
+
+  building.set(key, tracked);
+  return tracked;
 }
 
 /** Player table for a filter, computed against the resident store. */
 export async function hotPlayers(io, user, records, filter = {}, opts = {}) {
   const store = await getHotStore(io, user, records, opts);
+  if (!store) return null;
   return aggregateHot(store, filter, visibilityMask(store, opts.allowedIds || null));
 }
 
@@ -192,6 +269,8 @@ function visibilityMask(store, allowedIds) {
  */
 export async function hotTables(io, user, records, filter = {}, opts = {}) {
   const store = await getHotStore(io, user, records, opts);
+  // requireWarm and the store is cold: the route answers "still building".
+  if (!store) return null;
   await yieldEventLoop();
   const allow = visibilityMask(store, opts.allowedIds || null);
   let players = aggregateHot(store, filter, allow);
@@ -223,6 +302,8 @@ export async function hotTables(io, user, records, filter = {}, opts = {}) {
  */
 export async function hotMatches(io, user, records, demoIds, filter = {}, opts = {}) {
   const store = await getHotStore(io, user, records, opts);
+  // requireWarm and the store is cold: the route answers "still building".
+  if (!store) return null;
   const allow = visibilityMask(store, opts.allowedIds || null);
   const rows = aggregateHotMatches(store, demoIds, filter, allow, opts.want || {});
   const demoById = new Map(store.demos.map((d) => [d.id, d]));
@@ -259,7 +340,15 @@ export function hotStoreStatus() {
       bytes: v.store.bytes
     });
   }
-  return out;
+  return {
+    stores: out,
+    building: building.size > 0,
+    // Why statistics are not loading, when they are not. Empty means no
+    // failed build on record.
+    lastBuildFailure: lastBuildFailure.at
+      ? { at: lastBuildFailure.at, message: lastBuildFailure.message }
+      : null
+  };
 }
 
 export function invalidateHotStore() {

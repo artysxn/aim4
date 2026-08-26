@@ -1307,58 +1307,38 @@ export async function handleReplayRequest(req, res, url) {
       .filter(Boolean);
     const wantTeams = tabs.includes('teams');
 
-    // This endpoint must always answer, even when it cannot answer WELL.
+    // This endpoint answers from a WARM store or not at all.
     //
-    // The first call after a restart builds the resident store from every
-    // stats index in the library, and getHotStore hands every concurrent
-    // caller that same in-flight promise. So while the build runs, nothing
-    // here returns — and if the build is slow enough (a big library against a
-    // small heap), "nothing returns" lasts for as long as the process lives.
-    // From a browser that is indistinguishable from a dead server: the
-    // Database sat on "Loading database…" forever.
+    // The store build reads every stats index in the library, and getHotStore
+    // used to hand every concurrent caller that same in-flight build promise —
+    // so while it ran, nothing here returned, and when it failed, the next
+    // request started it over. From a browser that is indistinguishable from
+    // a dead server, and it took the rest of the site with it: the build is
+    // CPU on the only thread this process has.
     //
-    // Rather than park the request, say so. The build carries on in the
-    // background and a later call picks it up warm; the client meanwhile falls
-    // back to the paged /stats path, which reports real progress. A slow answer
-    // is a bug. No answer is an outage.
-    // A kill switch, because the build is not free while it runs: it is CPU
-    // on the only thread this process has, and everything else — round meta,
-    // tick buffers, the Pattern Finder's scan — waits behind it. With
-    // AIM4_HOT_STORE=off nothing is built and this endpoint says so
-    // immediately; callers fall back to the paged /stats path, which is
-    // slower per page but leaves the box responsive for everyone else.
-    if (String(process.env.AIM4_HOT_STORE || '').toLowerCase() === 'off') {
+    // requireWarm inverts that: a cold store answers 503 "still building"
+    // immediately (kicking the build in the background, once, with a cooldown
+    // after failures), and the client falls back to the paged /stats path,
+    // which streams real progress. AIM4_HOT_STORE=off skips even the
+    // background build for a box that needs its CPU back entirely.
+    const storeDisabled = String(process.env.AIM4_HOT_STORE || '').toLowerCase() === 'off';
+    const tables = storeDisabled
+      ? null
+      : await hotTables(statsIo, user, ready, filter, {
+          requireWarm: true,
+          teams: wantTeams,
+          roles: argHas('roles') || Boolean(filter.role),
+          // A demo scope narrows the mask; it never widens what may be read.
+          allowedIds: scoped
+            ? new Set([...allowedIds].filter((id) => scoped.has(id)))
+            : allowedIds
+        });
+
+    if (!tables) {
       json(res, 503, {
         error: 'Statistics are still loading. This page will fill in shortly.',
         building: true,
-        disabled: true,
-        demos: ready.length
-      });
-      return true;
-    }
-
-    const BUILD_BUDGET_MS = Number(process.env.AIM4_AGGREGATE_TIMEOUT_MS || 20_000);
-    const STILL_BUILDING = Symbol('aggregate-building');
-    let budget = null;
-    const tables = await Promise.race([
-      hotTables(statsIo, user, ready, filter, {
-        teams: wantTeams,
-        roles: argHas('roles') || Boolean(filter.role),
-        // A demo scope narrows the mask; it never widens what may be read.
-        allowedIds: scoped
-          ? new Set([...allowedIds].filter((id) => scoped.has(id)))
-          : allowedIds
-      }),
-      new Promise((resolve) => {
-        budget = setTimeout(() => resolve(STILL_BUILDING), BUILD_BUDGET_MS);
-      })
-    ]);
-    clearTimeout(budget);
-
-    if (tables === STILL_BUILDING) {
-      json(res, 503, {
-        error: 'Statistics are still loading. This page will fill in shortly.',
-        building: true,
+        ...(storeDisabled ? { disabled: true } : {}),
         demos: ready.length
       });
       return true;
@@ -1466,10 +1446,24 @@ export async function handleReplayRequest(req, res, url) {
       dateTo: arg('to') || '',
       files: argList('files') || []
     };
-    const rows = await hotMatches(statsIo, user, ready, demoIds, filter, {
-      allowedIds: new Set([...allowedIds].filter((id) => scoped.has(id))),
-      want: teamKey ? { kind: 'team', id: teamKey } : { kind: 'player', id: playerId }
-    });
+    // Same warm-only rule as /aggregate: a cold store answers "still
+    // building" instead of parking this request behind the build. The client
+    // falls back to its payload path for the detail view.
+    const rows =
+      String(process.env.AIM4_HOT_STORE || '').toLowerCase() === 'off'
+        ? null
+        : await hotMatches(statsIo, user, ready, demoIds, filter, {
+            requireWarm: true,
+            allowedIds: new Set([...allowedIds].filter((id) => scoped.has(id))),
+            want: teamKey ? { kind: 'team', id: teamKey } : { kind: 'player', id: playerId }
+          });
+    if (!rows) {
+      json(res, 503, {
+        error: 'Statistics are still loading. This page will fill in shortly.',
+        building: true
+      });
+      return true;
+    }
     await jsonBig(res, 200, gateStatsPayload(me, { players: rows, rows }), req);
     return true;
   }
@@ -1483,7 +1477,7 @@ export async function handleReplayRequest(req, res, url) {
       json(res, 403, { error: 'Only site admins can read store status.' });
       return true;
     }
-    json(res, 200, { stores: hotStoreStatus() });
+    json(res, 200, hotStoreStatus());
     return true;
   }
 
