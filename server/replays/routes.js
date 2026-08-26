@@ -1946,6 +1946,29 @@ export async function handleReplayRequest(req, res, url) {
   // phase minutes of pure round-trips. Access is the same canOpenRound the
   // per-round routes enforce; a denied or missing round comes back with a null
   // meta and the client falls back to its per-round path for it.
+  /**
+   * The matching projection of one round's meta.
+   *
+   * Top level is copied minus the known-heavy bags, so a new scalar field
+   * flows to the matcher without touching this function; `events` is a
+   * whitelist because that is where the weight lives (kills ~1.4 KB and
+   * grenades ~2 KB stay; shots ~16 KB goes). The client asks for this
+   * explicitly, so an older bundle keeps getting the full form.
+   */
+  const MATCH_META_DROP = new Set(['stats', 'weapons', 'parser', 'events']);
+  const MATCH_EVENTS_KEEP = ['kills', 'grenades', 'bomb'];
+  function matchProjection(meta) {
+    if (!meta || typeof meta !== 'object') return meta;
+    const out = {};
+    for (const [k, v] of Object.entries(meta)) if (!MATCH_META_DROP.has(k)) out[k] = v;
+    const ev = meta.events;
+    if (ev && typeof ev === 'object') {
+      out.events = {};
+      for (const k of MATCH_EVENTS_KEEP) if (ev[k] !== undefined) out.events[k] = ev[k];
+    }
+    return out;
+  }
+
   if (req.method === 'POST' && p === '/api/replays/rounds/packs') {
     let body;
     try {
@@ -1966,6 +1989,13 @@ export async function handleReplayRequest(req, res, url) {
       return true;
     }
     const wantTicks = body.ticks !== false;
+    // `meta: 'match'` asks for the MATCHING projection of each round's meta:
+    // the fields the Pattern Finder's shape / phase / utility predicates read,
+    // and nothing else. A full meta is ~27 KB and ~60% of it is `events.shots`
+    // — every bullet of the round — which no search predicate looks at. Across
+    // a 150-round batch that is megabytes of transfer whose only visible
+    // effect was a ten-second gap between the client's progress bursts.
+    const slimMeta = body.meta === 'match';
     const stride = Math.max(1, Math.min(1000, Number(body.stride) || 100));
     // Warm both lookups once; every canOpenRound below is then map reads.
     await roundLookup();
@@ -1980,6 +2010,7 @@ export async function handleReplayRequest(req, res, url) {
         try {
           if (!(await canOpenRound(file))) continue;
           entry.meta = await readRoundMetaMaybeSample(user, file);
+          if (entry.meta && slimMeta) entry.meta = matchProjection(entry.meta);
           if (entry.meta && wantTicks) {
             entry.ticks = await readRoundTicksMaybeSample(user, file, stride);
           }

@@ -762,11 +762,13 @@ export async function fetchRoundMeta(file) {
  * @param {{ stride?: number, ticks?: boolean }} [opts]
  * @returns {Promise<Map<string, { meta: object|null, ticks: ArrayBuffer|null }>>}
  */
-export async function fetchRoundPacks(files, { stride = 100, ticks = true } = {}) {
+export async function fetchRoundPacks(files, { stride = 100, ticks = true, meta = '' } = {}) {
   const res = await safeFetch(`${API_BASE}/api/replays/rounds/packs`, {
     method: 'POST',
     headers: await headers({ 'Content-Type': 'application/json' }),
-    body: JSON.stringify({ files, stride, ticks })
+    // meta: 'match' asks for the matching projection: what the search
+    // predicates read and nothing else. See the server's packs endpoint.
+    body: JSON.stringify({ files, stride, ticks, ...(meta ? { meta } : {}) })
   });
   if (!res.ok) throw new Error(`Could not load round packs (${res.status})`);
   const packs = decodeRoundPacks(await res.arrayBuffer());

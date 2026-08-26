@@ -531,11 +531,13 @@ export const PACK_CONCURRENCY = 8;
 
 /**
  * Rounds per batched /rounds/packs request, and how many such requests run at
- * once. One request for ~150 rounds replaces ~300 per-round GETs; two in
- * flight keep the link busy while the server reads the next chunk's files.
+ * once. One request for ~150 rounds replaces ~300 per-round GETs; three in
+ * flight keep the link busy while the server reads the next chunk's files —
+ * with match-projected metas a batch is a few hundred KB, so three at once is
+ * still polite to the box.
  */
 export const PACK_BATCH_FILES = 150;
-const PACK_BATCH_CONCURRENCY = 2;
+const PACK_BATCH_CONCURRENCY = 3;
 
 /**
  * Load the round packs a set of windows needs, in parallel, reporting progress.
@@ -610,7 +612,11 @@ export async function loadRoundPacks(
         const chunk = chunks[nextChunk++];
         let got = null;
         try {
-          got = await batcher(chunk, { stride: COARSE_STRIDE, ticks });
+          // The matching projection: the fields the predicates below read
+          // and nothing else. A full meta is mostly `events.shots`, which no
+          // predicate looks at, and across thousands of rounds that was the
+          // difference between a progress burst and a ten-second silence.
+          got = await batcher(chunk, { stride: COARSE_STRIDE, ticks, meta: 'match' });
         } catch {
           got = null;
         }

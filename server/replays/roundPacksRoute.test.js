@@ -97,7 +97,16 @@ for (const round of [5, 6]) {
       startTick: 9001,
       freezeEndTick: 9200,
       endTick: 15800,
-      events: { kills: [], shots: [], grenades: [], bomb: [] },
+      players: [{ id: 'p1', name: 'One', team: 1 }, { id: 'p2', name: 'Two', team: 2 }],
+      stats: { [`p${round}`]: { kills: 1 } },
+      events: {
+        kills: [{ tick: 9500, attacker: 'p1', victim: 'p2' }],
+        shots: Array.from({ length: 40 }, (_, i) => ({ tick: 9300 + i, player: 'p1' })),
+        damage: [{ tick: 9500, attacker: 'p1', victim: 'p2', hp: 27 }],
+        items: [{ tick: 9200, player: 'p1', item: 'ak47' }],
+        grenades: [{ tick: 9400, player: 'p1', type: 'smoke' }],
+        bomb: []
+      },
       ticks: ticks.buffer.slice(ticks.byteOffset, ticks.byteOffset + ticks.byteLength)
     },
     { map: 'INF' }
@@ -147,6 +156,37 @@ const base = `http://127.0.0.1:${server.address().port}`;
     );
   }
   assert(packs[2].meta === null && packs[2].ticks === null, 'unknown round is explicit nulls');
+}
+
+// The matching projection: what the search predicates read, nothing else.
+// `shots` is the field that made a 150-round batch megabytes; a client that
+// asks for meta:'match' must not receive it, and must still receive every
+// field the predicates do read — including the ticks, untouched.
+{
+  const res = await fetch(`${base}/api/replays/rounds/packs`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ files: stems, stride: 100, meta: 'match' })
+  });
+  assert(res.ok, `match packs respond 200 (${res.status})`);
+  const packs = decodeRoundPacks(await res.arrayBuffer());
+  for (const [i, stem] of stems.entries()) {
+    const m = packs[i].meta;
+    assert(m, 'projected meta present');
+    assert(m.events?.kills?.length === 1, 'kills survive the projection');
+    assert(m.events?.grenades?.length === 1, 'grenades survive');
+    assert(Array.isArray(m.events?.bomb), 'bomb survives');
+    assert(m.events.shots === undefined, 'shots are dropped');
+    assert(m.events.damage === undefined, 'damage is dropped');
+    assert(m.events.items === undefined, 'items are dropped');
+    assert(m.stats === undefined, 'per-round stats are dropped');
+    assert(m.startTick === 9001 && m.freezeEndTick === 9200 && m.endTick === 15800,
+      'phase-bound scalars pass through');
+    assert(Array.isArray(m.players), 'players pass through');
+    const want = Buffer.from(sliceStride(ticksByStem.get(stem), 100));
+    assert(Buffer.compare(Buffer.from(packs[i].ticks), want) === 0,
+      'ticks are untouched by the meta projection');
+  }
 }
 
 // Meta-only batches skip the tick blobs entirely.
