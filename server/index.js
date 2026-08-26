@@ -350,6 +350,24 @@ startIngestSupervisor();
 // warm, exactly as before. The delay only moves the prefetch out of the
 // window where real requests are fighting for the box.
 setTimeout(() => warmCloakBrowserCache(loadIngestConfig()).catch(() => {}), 90 * 1000);
+// Load the aggregate-store SNAPSHOT shortly after boot — a load, never a
+// build (see the essay below before touching this). With the file present the
+// first Database visitor after a deploy is warm instead of eating the one
+// remaining 503-and-fallback window; without one, this does nothing and the
+// first visitor kicks the background build exactly as before.
+setTimeout(async () => {
+  try {
+    const { listDemos, userDir } = await import('./replays/demoStore.js');
+    const { SHARED_LIBRARY } = await import('./replays/auth.js');
+    const { warmHotStoreFromSnapshot } = await import('./replays/statsHotService.js');
+    const records = (await listDemos(SHARED_LIBRARY)).filter(
+      (r) => (r.status || 'ready') === 'ready'
+    );
+    await warmHotStoreFromSnapshot({ userDir }, SHARED_LIBRARY, records);
+  } catch (err) {
+    console.warn('[stats] boot snapshot load skipped:', err?.message || err);
+  }
+}, 5 * 1000);
 // NO boot-time warm of the aggregate store. There was one here; it made things
 // worse, not better, and the way it failed is worth keeping written down.
 //

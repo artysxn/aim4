@@ -5,7 +5,8 @@ import {
   getHotStore,
   invalidateHotStore,
   hotStoreStatus,
-  patchHotStoreTeamNames
+  patchHotStoreTeamNames,
+  warmHotStoreFromSnapshot
 } from './statsHotService.js';
 
 let seed = 7;
@@ -227,6 +228,35 @@ assert.deepEqual(hotStoreStatus().stores, [], 'invalidate clears');
   const grown = await getHotStore(io3, 'local', [...records, ...extra.map(recordFor)]);
   const expect = built.nRounds + extra.reduce((n, id) => n + ENTRIES.get(id).rounds.length, 0);
   assert.equal(grown.nRounds, expect, 'appends after a snapshot load land on the hydrated packer');
+
+  // Boot warm: a LOAD, never a build. With the snapshot present and the
+  // indexes gone, only the file can produce a store — and it does, before any
+  // request has asked for one.
+  invalidateHotStore();
+  {
+    const warmed = await warmHotStoreFromSnapshot(io3, 'local', records);
+    assert.equal(warmed, true, 'boot warm loads the snapshot');
+    const served = await getHotStore(io3, 'local', records, { requireWarm: true });
+    assert.ok(served, 'the first request after boot is already warm');
+    // With no snapshot on disk and no cache, boot warm does nothing quietly.
+    invalidateHotStore();
+    await fsp.rm(snapFile, { force: true });
+    assert.equal(
+      await warmHotStoreFromSnapshot(io3, 'local', records),
+      false,
+      'no file, no store, and crucially no build'
+    );
+    assert.deepEqual(hotStoreStatus().stores, [], 'nothing resident after a fileless warm');
+    // Put the snapshot back for the phases below.
+    invalidateHotStore();
+    const again = await getHotStore(io3, 'local', records);
+    assert.ok(again, 'rebuild for the remaining phases');
+    let waited = 0;
+    while (waited < 10_000 && !(await fsp.stat(snapFile).then(() => true, () => false))) {
+      await new Promise((r) => setTimeout(r, 25));
+      waited += 25;
+    }
+  }
 
   // A stale snapshot (library shrank) is skipped, not served. The indexes go
   // back on disk first: the point of this check is WHICH source answers, and a

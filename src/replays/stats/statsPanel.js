@@ -3166,10 +3166,10 @@ export function createStatsPanel({
       return true;
     } catch (err) {
       // A 503 while the statistics store builds carries where the build is.
-      // The paged fallback is about to own the spinner; this hands it a real
-      // starting line instead of a bare "Loading rounds".
+      // The whole body is kept: `building`/`disabled`/`progress` are what let
+      // the caller tell "wait for it" apart from "it is not coming".
       if (err?.status === 503 && err?.body?.building) {
-        serverBuilding = err.body.progress || { building: true };
+        serverBuilding = err.body;
       }
       return false;
     }
@@ -3511,7 +3511,7 @@ export function createStatsPanel({
       // A detail view opened straight from a URL asks the matches endpoint,
       // a locked team (Team Overview) its aggregate pieces; all paint without
       // a round reaching the browser.
-      const served = detail
+      let served = detail
         ? await refreshServerDetail()
         : lockedTeamName
           ? await refreshServerLocked()
@@ -3521,6 +3521,37 @@ export function createStatsPanel({
       if (token !== loadToken) {
         stopClock();
         return;
+      }
+      // The store is building and says where it is: WAIT for it, visibly,
+      // instead of falling back. The fallback for the library view is the
+      // whole library over the wire — hundreds of MB on a real deployment —
+      // and it competes with the build for the same disk and CPU, so taking
+      // it here made both slower. Polling costs a request every few seconds
+      // and lands on tables the moment the store is warm. The fallback below
+      // still runs the moment the 503 stops carrying progress: a failed or
+      // disabled store must degrade to the paged path, not to a spinner.
+      if (!served && !detail && !lockedTeamName) {
+        for (let polls = 0; polls < 240; polls++) {
+          const b = serverBuilding;
+          if (!b?.building || b.disabled || !b.progress) break;
+          const p = b.progress;
+          const eta = etaLabel(p.etaSeconds);
+          showProgress(
+            `Server preparing statistics ${Number(p.done) || 0}/${Number(p.total) || 0}` +
+              `${eta ? ` · ${eta}` : ''}`
+          );
+          await new Promise((r) => setTimeout(r, 2500));
+          if (token !== loadToken) {
+            stopClock();
+            return;
+          }
+          served = await refreshServerTables();
+          if (token !== loadToken) {
+            stopClock();
+            return;
+          }
+          if (served) break;
+        }
       }
       if (served) {
         stopClock();
@@ -3536,11 +3567,11 @@ export function createStatsPanel({
       // and it paints page by page. Re-rendering the spinner drops the label
       // the clock has been writing, so hand it straight back — with the
       // server's own build position when the 503 carried one.
-      const b = serverBuilding;
+      const bp = serverBuilding?.progress;
       const buildingLabel =
-        b && Number(b.total) > 0
-          ? `Server preparing statistics ${Number(b.done) || 0}/${Number(b.total)}${
-              etaLabel(b.etaSeconds) ? ` · ${etaLabel(b.etaSeconds)}` : ''
+        bp && Number(bp.total) > 0
+          ? `Server preparing statistics ${Number(bp.done) || 0}/${Number(bp.total)}${
+              etaLabel(bp.etaSeconds) ? ` · ${etaLabel(bp.etaSeconds)}` : ''
             } · loading rounds meanwhile`
           : 'Loading rounds…';
       bodyEl.innerHTML = spinnerHtml(buildingLabel);

@@ -174,6 +174,28 @@ function ensureSnapshotLoaded(io, user, wanted) {
   return promise;
 }
 
+/**
+ * Boot-time snapshot LOAD — never a build.
+ *
+ * The boot-warm essay in server/index.js still holds: starting a BUILD at boot
+ * is how the two-hour outage began, and nothing here revives that. Loading a
+ * snapshot is a different animal — one bounded file read that either installs
+ * a finished store or does nothing — and doing it at boot instead of on the
+ * first /aggregate call erases the one remaining 503 window on a deploy that
+ * has a snapshot: the first visitor is warm instead of the second.
+ *
+ * @returns {Promise<boolean>} true when a store is resident afterwards
+ */
+export async function warmHotStoreFromSnapshot(io, user, records) {
+  if (!snapshotEnabled()) return false;
+  const key = LIB(user);
+  if (cache.has(key)) return true;
+  const wanted = new Map(records.map((r) => [recordKey(r), r]));
+  const loading = ensureSnapshotLoaded(io, user, wanted);
+  if (loading) await loading;
+  return cache.has(key);
+}
+
 /** Debounced, deduped write of the current cache entry for this library. */
 function scheduleSnapshotWrite(io, user) {
   if (!snapshotEnabled()) return;
@@ -337,13 +359,29 @@ function startBuild(io, user, records, opts = {}) {
     for (const r of records) capacity += Number(r.roundCount) || 0;
     const packer = createPacker(capacity || 1024);
 
-    // Streamed, one entry at a time. Collecting them first would put ~1.8 GB of
-    // parsed indexes on the heap next to the store being built from them, which
-    // is the allocation that blew the heap before paging was introduced.
+    // Streamed with a short read-ahead. One entry at a time keeps the heap
+    // bounded (collecting them first was ~1.8 GB and blew it), but strictly
+    // sequential read-then-pack leaves the disk idle while the CPU packs and
+    // the CPU idle while the disk seeks — measured at 3:1 read-to-pack, which
+    // on a cold prod volume is most of the build spent waiting. A lookahead of
+    // four keeps the disk queue full while costing four parsed entries of
+    // heap, and entries are still packed strictly in order.
+    const AHEAD = 4;
+    /** @type {Promise<object|null>[]} */
+    const ahead = [];
+    let queued = 0;
+    const pump = () => {
+      while (ahead.length < AHEAD && queued < records.length) {
+        ahead.push(loadStoredEntry(io, user, records[queued].id));
+        queued += 1;
+      }
+    };
+    pump();
     let done = 0;
     let skipped = 0;
-    for (const record of records) {
-      const entry = await loadStoredEntry(io, user, record.id);
+    for (let i = 0; i < records.length; i++) {
+      const entry = await ahead.shift();
+      pump();
       done += 1;
       const bp = buildProgress.get(key);
       if (bp) bp.done = done;
