@@ -593,6 +593,53 @@ export async function listDemos(user, { fresh = false } = {}) {
 }
 
 /**
+ * Every ready record, projected to the fields team naming needs.
+ *
+ * The caller is the parse worker (lineupNames.js): a separate process, with a
+ * capped heap, holding a whole parsed demo, that needs to know who the library
+ * already has under which team name before it writes its round files. listDemos
+ * would leave every full manifest — rounds and all — resident in that process
+ * for the sake of ten player ids per demo. So this reads the same files and
+ * keeps only the projection: a few hundred bytes per demo instead of tens of
+ * kilobytes, and nothing cached afterwards.
+ *
+ * @returns {Promise<Array<{ id, uploadedAt, team1, team2, players }>>}
+ */
+export async function listDemoLineups(user) {
+  const dir = demosDir(user);
+  const files = (await listFiles(dir)).filter((f) => f.endsWith('.json'));
+  const out = [];
+  for (let i = 0; i < files.length; i += READ_CONCURRENCY) {
+    const batch = await Promise.all(
+      files.slice(i, i + READ_CONCURRENCY).map(async (f) => {
+        try {
+          const r = JSON.parse(await fsp.readFile(path.join(dir, f), 'utf8'));
+          // A demo still uploading or parsing has no roster to match against.
+          if ((r.status || 'ready') !== 'ready') return null;
+          return {
+            id: String(r.id || ''),
+            uploadedAt: Number(r.uploadedAt) || Number(r.parsedAt) || 0,
+            team1: { id: r.team1?.id || '', name: r.team1?.name || '' },
+            team2: { id: r.team2?.id || '', name: r.team2?.name || '' },
+            players: (Array.isArray(r.players) ? r.players : []).map((p) => ({
+              id: p?.id || '',
+              name: p?.name || '',
+              steamId: p?.steamId ? String(p.steamId) : '',
+              team: p?.team === 2 ? 2 : 1
+            }))
+          };
+        } catch {
+          /* skip a corrupt record rather than fail the whole scan */
+          return null;
+        }
+      })
+    );
+    for (const rec of batch) if (rec) out.push(rec);
+  }
+  return out;
+}
+
+/**
  * Storage totals, cached.
  *
  * This rides along on every library listing but only changes when something is

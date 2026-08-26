@@ -27,6 +27,7 @@ import {
   aggregateTeams,
   allRows,
   demoPassesDate,
+  filterNeedsRounds,
   indexMaps,
   rowPasses,
   teamNameKey
@@ -2577,16 +2578,29 @@ export function createStatsPanel({
       // Server mode. An interaction that needs rounds pulls them once and then
       // behaves exactly as it always did; everything else re-queries.
       if (needsRawRounds()) {
-        return ensurePayload().then(() => {
-          if (payload) render({ rebuildFilters });
-        });
+        // Move the bar before the rounds land: pulling them can take a while,
+        // and a control that stays put reads as a dropped click.
+        if (rebuildFilters) renderFilters();
+        else syncFilterChrome();
+        return ensurePayload()
+          .then(() => {
+            if (payload) render({ rebuildFilters });
+          })
+          // Without this the spinner runs forever on a failed page and the
+          // rejection lands in the console instead of on screen.
+          .catch(() => renderServerUnavailable());
       }
       if (rebuildFilters) renderFilters();
       else syncFilterChrome();
       bodyEl.setAttribute('aria-busy', 'true');
-      if (detail) return refreshServerDetail();
-      if (lockedTeamName) return refreshServerLocked();
-      return refreshServerTables();
+      // The table stays on screen while the query runs (it answers in
+      // milliseconds), so a query that does NOT answer has to say so: the bar
+      // has already moved, and leaving the old rows there is the one outcome
+      // worse than an error — numbers that look current and are not.
+      const onFail = renderServerUnavailable;
+      if (detail) return refreshServerDetail({ onFail });
+      if (lockedTeamName) return refreshServerLocked({ onFail });
+      return refreshServerTables({ onFail, timeoutMs: FILTER_TIMEOUT_MS });
     }
     if (rebuildFilters) {
       // Structural filter changes still need a full filter bar rebuild, but do
@@ -2655,7 +2669,12 @@ export function createStatsPanel({
       (detail && !roster) ||
       (lockedTeamName && !roster) ||
       (hasEntityPick() && !roster) ||
-      (scope.demos?.length && scope.demos.length <= 1)
+      (scope.demos?.length && scope.demos.length <= 1) ||
+      // A call pick or a round-clock window. The aggregate cannot see either
+      // (filterNeedsRounds says why), and asking it anyway returns the table
+      // UNFILTERED — the filter bar moves and the numbers do not, which is
+      // exactly how this used to read as "the Database ignored my filter".
+      filterNeedsRounds(filter)
     );
   }
 
@@ -2807,7 +2826,7 @@ export function createStatsPanel({
    * The rows come back already aggregated per match, so the browser holds one
    * row per game instead of every round of every game the entity played.
    */
-  async function refreshServerDetail() {
+  async function refreshServerDetail(opts = {}) {
     const token = ++detailToken;
     const ids = detailDemoIds();
     if (!ids?.length) {
@@ -2827,6 +2846,7 @@ export function createStatsPanel({
       renderServerDetail();
       return true;
     } catch {
+      if (token === detailToken) opts.onFail?.();
       return false;
     }
   }
@@ -2863,7 +2883,7 @@ export function createStatsPanel({
    *  - teams once per played map (the Any-map per-map table);
    *  - on a single map, the library-wide teams table for the comparison.
    */
-  async function refreshServerLocked() {
+  async function refreshServerLocked(opts = {}) {
     const token = ++lockedToken;
     const demos = serverDemoScope();
     const maps = Array.isArray(filter.maps) ? filter.maps.filter(Boolean) : [];
@@ -2933,6 +2953,7 @@ export function createStatsPanel({
       renderServerLocked();
       return true;
     } catch {
+      if (token === lockedToken) opts.onFail?.();
       return false;
     }
   }
@@ -3128,9 +3149,10 @@ export function createStatsPanel({
   /** Last "store still building" progress a 503 carried, for the spinner. */
   let serverBuilding = null;
 
-  async function refreshServerTables() {
+  async function refreshServerTables(opts = {}) {
     const token = ++serverToken;
     serverBuilding = null;
+    const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : AGGREGATE_TIMEOUT_MS;
     // `roles: true` asks for the role columns even with no role chip set: the
     // table shows a Role column whenever the library has roles at all.
     // min-rounds is applied on the server: the bar hides most of a big
@@ -3150,7 +3172,7 @@ export function createStatsPanel({
       const res = await Promise.race([
         fetchAggregate(active, { tables: 'players,teams', demos: serverDemoScope() }),
         new Promise((resolve) => {
-          timer = setTimeout(() => resolve(TIMED_OUT), AGGREGATE_TIMEOUT_MS);
+          timer = setTimeout(() => resolve(TIMED_OUT), timeoutMs);
         })
       ]);
       clearTimeout(timer);
@@ -3158,6 +3180,7 @@ export function createStatsPanel({
         // Retire this token so the response, if it ever lands, does not paint
         // over whatever the fallback has put on screen by then.
         serverToken += 1;
+        opts.onFail?.();
         return false;
       }
       if (token !== serverToken) return false;
@@ -3171,8 +3194,45 @@ export function createStatsPanel({
       if (err?.status === 503 && err?.body?.building) {
         serverBuilding = err.body;
       }
+      // Only the query that is still the current one may paint an error over
+      // the table; a superseded one is about to be answered by its successor.
+      if (token === serverToken) opts.onFail?.();
       return false;
     }
+  }
+
+  /**
+   * Ceiling on a filter change's aggregate query.
+   *
+   * Much longer than AGGREGATE_TIMEOUT_MS, which exists so the FIRST load can
+   * give up on a cold store and fall back to streaming rounds. A filter change
+   * has no such fallback to race towards: the outcomes are the answer or an
+   * honest failure, and abandoning a slow-but-coming answer at eight seconds
+   * only produced the second one sooner.
+   */
+  const FILTER_TIMEOUT_MS = 45_000;
+
+  /**
+   * A filter change the server could not answer.
+   *
+   * Keeps the filter bar (it says what was asked for) and replaces the rows,
+   * because the rows are the PREVIOUS filter's. When the 503 carried a build
+   * position, say where it is: "still preparing" and "failed" want different
+   * patience from the reader.
+   */
+  function renderServerUnavailable() {
+    const p =
+      serverBuilding?.building && !serverBuilding?.disabled ? serverBuilding.progress : null;
+    const total = Number(p?.total) || 0;
+    const label = total
+      ? `Server is still preparing statistics, ${Number(p.done) || 0} of ${total} demos.`
+      : 'The table could not be updated for these filters.';
+    bodyEl.innerHTML = `<p class="view-empty">${escapeHtml(label)}</p>
+      <button type="button" class="btn btn-sm" data-st-refilter>Retry</button>`;
+    bodyEl.removeAttribute('aria-busy');
+    bodyEl.querySelector('[data-st-refilter]')?.addEventListener('click', () => {
+      void scheduleRender({ rebuildFilters: false });
+    });
   }
 
   function render(opts = {}) {
@@ -3494,6 +3554,10 @@ export function createStatsPanel({
       !detail &&
       !lockedTeamName &&
       !hasEntityPick() &&
+      // A restored call pick or clock window: the aggregate would answer it
+      // unfiltered, and this query PAINTS. Without this line a share link
+      // carrying one flashes the wrong numbers before the rounds land.
+      !filterNeedsRounds(filter) &&
       !(scope.demos?.length && scope.demos.length <= 1);
     const earlyTables = canServeEarly ? refreshServerTables().catch(() => false) : null;
     // The catalogue decides whether a detail view or a search pick can be

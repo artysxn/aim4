@@ -1276,6 +1276,11 @@ export async function handleReplayRequest(req, res, url) {
       return typeof v === 'string' && v ? v.split(',').map((x) => x.trim()).filter(Boolean) : undefined;
     };
     const argHas = (key) => (body ? body[key] !== undefined && body[key] !== null : url.searchParams.has(key));
+    /** A flag, from either transport: `?hasAwp=1` or `{ hasAwp: 1 }`. */
+    const argFlag = (key) => {
+      const v = arg(key);
+      return v === 1 || v === true || v === '1' || v === 'true';
+    };
     // The store is built from the whole library, once, for everybody. What this
     // caller may read is applied as a mask per query.
     const { records: allRecords, allowed } = await readable();
@@ -1290,6 +1295,12 @@ export async function handleReplayRequest(req, res, url) {
       side: arg('side') || '',
       econ: argHas('econ') ? Number(arg('econ')) : null,
       oppEcon: argHas('oppEcon') ? Number(arg('oppEcon')) : null,
+      // The AWP toggles are a property of the buy digit the store already
+      // holds (the legacy 5 = full buy that had an AWP), so they cost nothing
+      // to honour here and are wrong to drop: a filter the client sends and
+      // the server ignores repaints the same table under a changed bar.
+      hasAwp: argFlag('hasAwp'),
+      oppHasAwp: argFlag('oppHasAwp'),
       result: arg('result') || '',
       advantage: arg('advantage') || '',
       teamName: arg('teamName') || '',
@@ -1434,6 +1445,10 @@ export async function handleReplayRequest(req, res, url) {
     };
     const argHas = (key) =>
       body ? body[key] !== undefined && body[key] !== null : url.searchParams.has(key);
+    const argFlag = (key) => {
+      const v = arg(key);
+      return v === 1 || v === true || v === '1' || v === 'true';
+    };
 
     const playerId = String(arg('player') || '').trim();
     const teamKey = String(arg('team') || '').trim();
@@ -1458,6 +1473,8 @@ export async function handleReplayRequest(req, res, url) {
       side: arg('side') || '',
       econ: argHas('econ') ? Number(arg('econ')) : null,
       oppEcon: argHas('oppEcon') ? Number(arg('oppEcon')) : null,
+      hasAwp: argFlag('hasAwp'),
+      oppHasAwp: argFlag('oppHasAwp'),
       result: arg('result') || '',
       advantage: arg('advantage') || '',
       rankOwn: arg('rankOwn') || '',

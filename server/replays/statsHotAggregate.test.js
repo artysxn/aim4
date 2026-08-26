@@ -44,7 +44,12 @@ function makeEntry(i) {
       aw[id] = rnd(40);
     }
     return { f: `d${i}-r${k}`, d: `d${i}`, m: map, n: k + 1, w: (k % 2) + 1,
-      s1: k < 3 ? 'T' : 'CT', s2: k < 3 ? 'CT' : 'T', e1: rnd(6), e2: rnd(6),
+      s1: k < 3 ? 'T' : 'CT', s2: k < 3 ? 'CT' : 'T',
+      // Digit 5 is a full buy that had an AWP. The generator below draws it
+      // roughly one time in a thousand, so it was never in the fixture: place
+      // it deliberately, or neither the AWP filters nor buyBucket's 5 -> 4
+      // folding is exercised by any of the comparisons here.
+      e1: k % 5 === 0 ? 5 : rnd(6), e2: k % 7 === 3 ? 5 : rnd(6),
       ok: pids[rnd(10)], od: pids[rnd(10)], p, sw, am, ut, du, mv, aw,
       cok: rnd(2) ? [pids[rnd(10)]] : [], cod: rnd(2) ? [pids[rnd(10)]] : [],
       dur: 40 + rnd(50), pt: rnd(2) ? rnd(60) : null,
@@ -102,6 +107,10 @@ const FILTERS = [
   ['5v4', { advantage: '5v4' }],
   ['4v5', { advantage: '4v5' }],
   ['even', { advantage: 'even' }],
+  ['hasAwp', { hasAwp: true }],
+  ['oppHasAwp', { oppHasAwp: true }],
+  ['both AWPs', { hasAwp: true, oppHasAwp: true }],
+  ['hasAwp + side', { hasAwp: true, side: 'T' }],
   ['teamName', { teamName: 'Team 1' }],
   ['date window', { dateFrom: '2026-01-05', dateTo: '2026-01-20' }],
   ['combined', { maps: ['de_mirage'], side: 'CT', econ: 4, result: 'won' }]
@@ -367,6 +376,31 @@ assert.deepEqual(aggregateTeamsHot(store, { maps: ['de_train'] }), []);
   assert.equal(filterRolesHot(all, null).length, all.length, 'no chip changes nothing');
 
   console.log(`  roles: ${roleChecks} field comparisons against the browser path, all exact`);
+}
+
+// The AWP toggles have to BITE, not just agree with the reference.
+//
+// Every filter above is checked by comparing the two implementations, which two
+// no-ops would also pass. The buy digit is where an AWP round is recorded (the
+// legacy 5 = full buy that had one), and both sides read it or neither does.
+{
+  const roundsOf = (filter) =>
+    aggregateHot(store, filter).reduce((n, p) => n + (p.rounds || 0), 0);
+  const open = roundsOf({});
+  const own = roundsOf({ hasAwp: true });
+  const opp = roundsOf({ oppHasAwp: true });
+  assert.ok(own > 0, 'the fixture has AWP rounds');
+  assert.ok(own < open, 'the AWP filter excludes rounds without one');
+  assert.ok(opp > 0 && opp < open, 'so does the enemy AWP filter');
+  const teamRounds = (filter) =>
+    aggregateTeamsHot(store, filter, aggregateHot(store, filter)).reduce(
+      (n, t) => n + (t.rounds || 0),
+      0
+    );
+  assert.ok(
+    teamRounds({ hasAwp: true }) > 0 && teamRounds({ hasAwp: true }) < teamRounds({}),
+    'and the Teams tab is filtered too, not only Players'
+  );
 }
 
 console.log(

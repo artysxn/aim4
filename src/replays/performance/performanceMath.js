@@ -143,7 +143,11 @@ export const CARD_METRICS = [
   { key: 'kpr', label: 'KPR', fmt: 'num2', band: 'kpr', read: (p) => kprOf(p) },
   { key: 'xk', label: 'xK', fmt: 'num2', band: 'xk', read: (p) => p?.xk },
   { key: 'tfw', label: 'Fight win', fmt: 'pct', band: 'pct', read: (p) => p?.tfw },
-  { key: 'pfw', label: 'PFW', fmt: 'pct', band: 'pct', read: (p) => p?.pfw }
+  { key: 'pfw', label: 'PFW', fmt: 'pct', band: 'pct', read: (p) => p?.pfw },
+  // Opening duels, on the same band as the team page's OPK card: it is the same
+  // metric read from the other end, and two bands would make the player's card
+  // and their team's disagree about what a good number looks like.
+  { key: 'opkRate', label: 'OPK', fmt: 'pct', band: 'winrate', read: (p) => p?.opkRate }
 ];
 
 // ---------------------------------------------------------------------------
@@ -400,6 +404,7 @@ export function matchSeries(payload, playerId, ui, players, demos) {
       xk: p.xk,
       tfw: p.tfw,
       pfw: p.pfw,
+      opkRate: p.openKills + p.openDeaths > 0 ? p.opkRate : null,
       map: demo.map || '',
       opponent: opp || '',
       result: demo.winner === team ? 'W' : demo.winner ? 'L' : '',

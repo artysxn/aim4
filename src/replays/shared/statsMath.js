@@ -289,6 +289,31 @@ export function rowPasses(row, filter = {}, team = 0, players = null, demos = nu
   return true;
 }
 
+/**
+ * Does this filter need the round itself, rather than a row of a resident store?
+ *
+ * The server's aggregate keeps one line per round: map, sides, buys, winner,
+ * the opening duel. Nothing above reads more than that EXCEPT the last block of
+ * rowPasses, which reads `row.rl` — which calls each side made, and at what
+ * clock. Those cannot be answered away from the rounds.
+ *
+ * The reason this is a predicate and not a comment: a caller that sends them to
+ * /aggregate anyway does not get an error, it gets an UNFILTERED answer, and the
+ * table repaints identical numbers under a changed filter bar. Callers ask this
+ * first and take the rounds path when it says yes.
+ *
+ * Keep it next to rowPasses. A new filter added there that reads anything
+ * beyond that one line per round belongs here in the same edit.
+ */
+export function filterNeedsRounds(filter = {}) {
+  return Boolean(
+    normalizeRoundKeys(filter?.roundOwn).length ||
+      normalizeRoundKeys(filter?.roundOpp).length ||
+      Number.isFinite(filter?.fromSec) ||
+      Number.isFinite(filter?.toSec)
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Players
 // ---------------------------------------------------------------------------

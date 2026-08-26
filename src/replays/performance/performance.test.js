@@ -2,6 +2,7 @@
 
 import assert from 'node:assert/strict';
 import {
+  CARD_METRICS,
   findPlayerByUsername,
   lastDemoIds,
   smoothSeries,
@@ -18,7 +19,12 @@ import {
   aggregateGuns
 } from './gunStats.js';
 import { DELTA_BANDS, deltaLevel, deltaMarkHtml, withDeltaHtml } from './deltaMark.js';
-import { mapRoundTableHtml } from './mapRoundTables.js';
+import {
+  TEAM_COLS,
+  mapRoundTableHtml,
+  teamMapRoundBlocksHtml,
+  teamMapTotalHtml
+} from './mapRoundTables.js';
 
 assert.equal(stripAt('@artysan'), 'artysan');
 assert.equal(findPlayerByUsername([{ id: '1', name: 'artysan', maps: ['DD2'] }], 'artysan').id, '1');
@@ -128,6 +134,35 @@ assert.equal(guns[0].kills, 2);
 assert.equal(guns[0].rounds, 1);
 assert.ok(Number.isFinite(guns[0].rating), 'guns rating is Rating 3.0 from aggregatePlayers');
 assert.equal(guns[0].a4r, undefined);
+assert.equal(guns[0].opkRate, null, 'a gun with no opening duel has no rate, not 0%');
+
+// Opening duels are counted per gun: this is the number the AWP row exists for.
+{
+  const opened = aggregateGuns(
+    [
+      { ...gunRows[0], ok: 'p1' },
+      { ...gunRows[0], f: 'r2', n: 2, od: 'p1' }
+    ],
+    'p1',
+    players,
+    demos,
+    { r1: 'awp', r2: 'awp' }
+  );
+  assert.equal(opened[0].openKills, 1);
+  assert.equal(opened[0].openDeaths, 1);
+  assert.equal(opened[0].opkRate, 50);
+}
+
+// The seventh card. Opening duels sit on the same band as the team page's.
+{
+  const opk = CARD_METRICS.find((m) => m.key === 'opkRate');
+  assert.equal(CARD_METRICS.length, 7, 'seven summary cards');
+  assert.equal(CARD_METRICS[6], opk, 'OPK is the last of them');
+  assert.equal(opk.label, 'OPK');
+  assert.equal(opk.fmt, 'pct');
+  assert.equal(opk.band, 'winrate');
+  assert.equal(opk.read({ opkRate: 62 }), 62);
+}
 
 assert.equal(deltaLevel(1.0, 1.0, DELTA_BANDS.rating), 0);
 assert.equal(deltaLevel(1.04, 1.0, DELTA_BANDS.rating), 0);
@@ -187,7 +222,62 @@ assert.equal(
   const names = [...html.matchAll(/pf-rt-text">([^<]+)/g)].map((m) => m[1]);
   assert.deepEqual(names, ['High', 'Low', 'Empty'], 'round types sort by rating');
   assert.ok(html.includes('pf-empty'), 'empty cells are gray dashes');
+  // Four numbers a lane now: the opening duel joined rating, swing and winrate.
+  assert.equal([...html.matchAll(/>OPK</g)].length, 2, 'OPK on both lanes');
+  assert.ok(html.includes('<col span="8"'), 'eight numeric columns');
   assert.ok(!html.includes('\u2014'), 'maps table does not use an em dash');
 }
+
+// ---- the team's version of the same block ---------------------------------
+{
+  const esc = (s) => String(s);
+  const cell = (o) => ({
+    rounds: 0,
+    wins: 0,
+    winrate: null,
+    opkRate: null,
+    conv5v4: null,
+    conv4v5: null,
+    files: [],
+    ...o
+  });
+  const byMap = {
+    NUK: {
+      total: cell({ rounds: 12, winrate: 58.3, opkRate: 55, conv5v4: 70, conv4v5: 30 }),
+      T: [
+        { key: 'rare', label: 'Rare', ran: cell({ rounds: 2, winrate: 50 }), faced: cell({}) },
+        {
+          key: 'bread',
+          label: 'Bread',
+          ran: cell({ rounds: 9, winrate: 44.4, opkRate: 60, conv5v4: 80, conv4v5: 25 }),
+          faced: cell({})
+        }
+      ],
+      CT: [{ key: 'ct', label: 'Ct call', ran: cell({ rounds: 3 }), faced: cell({}) }]
+    }
+  };
+  const html = teamMapRoundBlocksHtml(byMap, ['NUK'], esc);
+  const names = [...html.matchAll(/pf-rt-text">([^<]+)/g)].map((m) => m[1]);
+  assert.deepEqual(names, ['Bread', 'Rare', 'Ct call'], 'a team leads with the calls it runs');
+  for (const col of TEAM_COLS) {
+    assert.ok(html.includes(`>${col.label}<`), `${col.label} column`);
+  }
+  assert.ok(!html.includes('>Rtg<'), "a team's table drops the player columns");
+  assert.ok(html.includes('44%'), 'the winrate of the call it runs most');
+  assert.ok(html.includes('80%'), 'and what it does with the man advantage');
+  assert.ok(html.includes('Nuke'), 'the map is named');
+  assert.ok(html.includes('12</b> Rounds'), 'the map line carries its own record');
+  assert.ok(html.includes('58%</b> WR'));
+  assert.ok(!html.includes('\u2014'), 'no em dash here either');
+  // Both tables pad to the taller side, so the pair ends level.
+  assert.equal([...html.matchAll(/pf-mt-pad/g)].length, 1);
+}
+
+// A map with nothing played has no record line to show.
+assert.equal(teamMapTotalHtml({ rounds: 0 }, (s) => s), '');
+assert.ok(
+  teamMapTotalHtml({ rounds: 4, winrate: 25, opkRate: null }, (s) => s).includes('pf-empty'),
+  'a call with no opening duel leaves the dash rather than a zero'
+);
 
 console.log('performance.test.js ok');

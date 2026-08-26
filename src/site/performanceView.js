@@ -2,7 +2,12 @@
 // site/performanceView.js
 // One player: Summary (rating, cards, roles, form, matches), Guns, and Maps.
 // Maps is the roles grid over again, then a T and a CT round-type table for
-// every map in the library. Team search lists that roster.
+// every map in the library.
+//
+// A team gets Summary and Maps. Same chapters, different subject: its Maps
+// tables carry the team's own numbers per call (round win rate, the opening
+// duel, 5v4 and 4v5) instead of one player's rating, and its Summary lists the
+// roster. There is no Guns chapter for a team.
 // ---------------------------------------------------------------------------
 
 import { getStatsPayload } from '../replays/statsCache.js';
@@ -45,8 +50,15 @@ import {
   teamStats
 } from '../replays/performance/performanceMath.js';
 import { aggregateGuns, gunMapForPlayer } from '../replays/performance/gunStats.js';
-import { MAP_ROUND_CODES, mapRoundGrid } from '../replays/performance/mapRoundStats.js';
-import { mapRoundBlocksHtml } from '../replays/performance/mapRoundTables.js';
+import {
+  MAP_ROUND_CODES,
+  mapRoundGrid,
+  teamMapRoundGrid
+} from '../replays/performance/mapRoundStats.js';
+import {
+  mapRoundBlocksHtml,
+  teamMapRoundBlocksHtml
+} from '../replays/performance/mapRoundTables.js';
 import { DELTA_BANDS, withDeltaHtml } from '../replays/performance/deltaMark.js';
 import {
   attachTips,
@@ -67,6 +79,9 @@ const CHAPTERS = [
   { key: 'guns', label: 'Guns' },
   { key: 'maps', label: 'Maps' }
 ];
+
+/** A team has no held-gun table: Guns is a question about one pair of hands. */
+const TEAM_CHAPTERS = CHAPTERS.filter((c) => c.key !== 'guns');
 
 function fmtMetric(fmt, n) {
   if (fmt === 'pct') return pct(n);
@@ -372,12 +387,15 @@ export function initPerformanceView({ auth, escapeHtml }) {
   function mountHead() {
     const slot = document.getElementById('page-head-actions');
     if (!slot || !visible) return;
-    const chapters = playerId
+    const list = playerId ? CHAPTERS : teamKey ? TEAM_CHAPTERS : null;
+    const chapters = list
       ? `<nav class="an-chapters" aria-label="Performance">
-        ${CHAPTERS.map(
-          (c) =>
-            `<button type="button" class="an-chapter-btn${c.key === chapter ? ' active' : ''}" data-pf-chapter="${c.key}">${escapeHtml(c.label)}</button>`
-        ).join('')}
+        ${list
+          .map(
+            (c) =>
+              `<button type="button" class="an-chapter-btn${c.key === chapter ? ' active' : ''}" data-pf-chapter="${c.key}">${escapeHtml(c.label)}</button>`
+          )
+          .join('')}
       </nav>`
       : '';
     slot.innerHTML = `
@@ -645,6 +663,11 @@ export function initPerformanceView({ auth, escapeHtml }) {
           <td>${Number.isFinite(r.accuracy) ? pct(r.accuracy) : '—'}</td>
           <td>${f2(r.kpr)}</td>
           <td>${f2(r.xk)}</td>
+          <td class="${r.openKills + r.openDeaths > 0 ? 'has-tip' : ''}"${
+            r.openKills + r.openDeaths > 0
+              ? ` data-tip="${escapeHtml(`${r.openKills} opening kills, ${r.openDeaths} opening deaths`)}"`
+              : ''
+          }>${Number.isFinite(r.opkRate) ? pct(r.opkRate) : '—'}</td>
         </tr>`
       )
       .join('');
@@ -652,6 +675,7 @@ export function initPerformanceView({ auth, escapeHtml }) {
       <thead><tr>
         ${th('label', 'Weapon', 'left ')}${th('used', 'Used')}${th('rating', 'Rating')}
         ${th('swing', 'Swing')}${th('accuracy', 'Acc')}${th('kpr', 'KPR')}${th('xk', 'xK')}
+        ${th('opkRate', 'OPK')}
       </tr></thead>
       <tbody>${body}</tbody>
     </table>`;
@@ -737,27 +761,31 @@ export function initPerformanceView({ auth, escapeHtml }) {
     });
   }
 
-  function teamSummaryHtml() {
+  /**
+   * The team Summary chapter, without the toolbar around it.
+   *
+   * Its own function because a filter change repaints exactly this \u2014 see
+   * refreshStats. The player summary still inlines its twin in two places;
+   * that duplication is not worth copying into a third.
+   */
+  function teamStatsHtml() {
     const team = rosterTeams(roster, '', Infinity).find((t) => t.key === teamKey);
     if (!team) return `<p class="view-empty">That team is not in the library.</p>`;
     const { players, demos } = maps();
     const stats = teamStats(payload, teamKey, ui, players, demos);
     const series = teamMatchSeries(payload, teamKey, ui, players, demos);
     if (!stats) {
-      return `${filtersHtml()}<div id="pf-stats">
+      return `
         <div class="pf-hero">
           <div class="pf-identity"><h2 class="pf-name">${escapeHtml(team.name)}</h2></div>
         </div>
         <p class="view-empty">No rounds for ${escapeHtml(team.name)} in this selection.</p>
-        ${teamRosterHtml()}
-      </div>`;
+        ${teamRosterHtml()}`;
     }
     const peerMetrics = teamPeers?.metrics || {};
     const record =
       stats.maps > 0 ? `${stats.mapWins}\u2013${stats.mapLosses} in ${stats.maps} maps` : '';
     return `
-      ${filtersHtml()}
-      <div id="pf-stats">
       <div class="pf-hero">
         <div class="pf-identity">
           <h2 class="pf-name">${escapeHtml(team.name)}</h2>
@@ -774,8 +802,30 @@ export function initPerformanceView({ auth, escapeHtml }) {
         read: (p) => p.roundWinrate,
         label: 'Round win rate'
       })}</div>
-      <div class="pf-matches">${teamMatchesHtml(series)}</div>
-      </div>`;
+      <div class="pf-matches">${teamMatchesHtml(series)}</div>`;
+  }
+
+  function teamSummaryHtml() {
+    return `${filtersHtml()}<div id="pf-stats">${teamStatsHtml()}</div>`;
+  }
+
+  /**
+   * Maps, for a team.
+   *
+   * The player's version of this chapter opens with the roles grid, which is a
+   * question about one person. A team's opens straight into the round-type
+   * tables: its record on the map, then every call it makes or faces there with
+   * the round win rate, the opening duel, and both man-advantage conversions.
+   */
+  function teamMapsStatsHtml() {
+    const { players, demos } = maps();
+    const codes = ui.map ? MAP_ROUND_CODES.filter((c) => c === ui.map) : MAP_ROUND_CODES;
+    const byMap = teamMapRoundGrid(payload, teamKey, ui, players, demos);
+    return teamMapRoundBlocksHtml(byMap, codes, escapeHtml);
+  }
+
+  function teamMapsBodyHtml() {
+    return `${filtersHtml({ withSide: false })}<div id="pf-stats">${teamMapsStatsHtml()}</div>`;
   }
 
   function summaryHtml() {
@@ -825,7 +875,9 @@ export function initPerformanceView({ auth, escapeHtml }) {
   }
 
   function bodyHtml() {
-    if (!playerId && teamKey) return teamSummaryHtml();
+    if (!playerId && teamKey) {
+      return chapter === 'maps' ? teamMapsBodyHtml() : teamSummaryHtml();
+    }
     if (!playerId) {
       return '';
     }
@@ -843,7 +895,16 @@ export function initPerformanceView({ auth, escapeHtml }) {
 
   function refreshStats() {
     const slot = host.querySelector('#pf-stats');
-    if (!slot || !playerId) return;
+    if (!slot) return;
+    if (!playerId) {
+      // A team. The comparison line is fetched per map / date window, and this
+      // path is only reached by filters that are not in that stamp, so the
+      // cards keep the peers they already have.
+      if (!teamKey) return;
+      slot.innerHTML = chapter === 'maps' ? teamMapsStatsHtml() : teamStatsHtml();
+      bindChrome();
+      return;
+    }
     if (chapter === 'guns') {
       const { players, demos } = maps();
       const careerRows = [];
@@ -1129,7 +1190,8 @@ export function initPerformanceView({ auth, escapeHtml }) {
     playerName = String(params.name || playerName || '').trim();
     teamKey = String(params.team || teamKey || '').trim();
     const ch = String(params.chapter || chapter || 'summary');
-    chapter = CHAPTERS.some((c) => c.key === ch) ? ch : 'summary';
+    const chapters = teamKey && !playerId ? TEAM_CHAPTERS : CHAPTERS;
+    chapter = chapters.some((c) => c.key === ch) ? ch : 'summary';
     resolveDefault();
     await renderScoped();
   }

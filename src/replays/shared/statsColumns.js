@@ -151,7 +151,17 @@ export const COLUMN_PRESETS = Object.freeze({
    * contract is not blank, it is quietly a different number (see the note on
    * RATING_BEARING). Either the column is honest or it should not be shown.
    */
-  teamRating: [...RATING_CORE, 'coreOpenings', 'prw', 'possession', 'anchor', 'utility'],
+  teamRating: [
+    ...RATING_CORE,
+    'coreOpenings',
+    'prw',
+    'possession',
+    'anchor',
+    'utility',
+    // Same reason `rating` carries it: the Maps chapter reads the round-library
+    // tags, and 81 bytes a round beats fetching the same demos twice.
+    'roundLibrary'
+  ],
   /** Match cards / listings: who played and who won. Baseline only. */
   identity: []
 });

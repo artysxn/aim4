@@ -148,7 +148,27 @@ export function applyStandingsToDemo(demo) {
 export function applyStandingsToRecord(record, files = null) {
   if (!record) return record;
   const players = record.players || [];
-  const resolved = resolveDemoTeams(players, loadStandingTeams());
+  return applyResolvedTeamsToRecord(
+    record,
+    resolveDemoTeams(players, loadStandingTeams()),
+    files
+  );
+}
+
+/**
+ * Stamp already-resolved team names onto a record and its round metas.
+ *
+ * Split out of applyStandingsToRecord because the standings are not the only
+ * thing that can name a side of an imported package: lineupNames.js resolves
+ * the same shape from the library's own rosters, and both have to land in the
+ * same two places or the manifest and the round files disagree.
+ *
+ * @param {object} record
+ * @param {{ team1: {id,name}|null, team2: {id,name}|null }} resolved
+ * @param {Map<string, Uint8Array>} [files]
+ */
+export function applyResolvedTeamsToRecord(record, resolved, files = null) {
+  if (!record || !resolved) return record;
   if (!resolved.team1 && !resolved.team2) return record;
 
   if (resolved.team1) {

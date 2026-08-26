@@ -3,8 +3,9 @@
 // Per-gun numbers for one player, from the stats index already in memory.
 //
 // Player matches are selected first. Each round's `hg` field names the gun
-// held longest while alive. Rating 3.0 / swing / accuracy / KPR / xK re-aggregate
-// those rounds. The file→gun map is cached against the player's demo set.
+// held longest while alive. Rating 3.0 / swing / accuracy / KPR / xK / opening
+// duel rate re-aggregate those rounds. The file→gun map is cached against the
+// player's demo set.
 // ---------------------------------------------------------------------------
 
 import { aggregatePlayers } from '../shared/statsMath.js';
@@ -184,6 +185,12 @@ export function aggregateGuns(rows, playerId, players, demos, gunByFile) {
       accuracy: shots > 0 ? p.accuracy : null,
       kpr: kprOf(p),
       xk: p.xk,
+      // Opening duels taken WITH this gun in hand — the AWP's number is a
+      // different question from the AK's, which is the whole reason this table
+      // splits by weapon.
+      opkRate: p.openKills + p.openDeaths > 0 ? p.opkRate : null,
+      openKills: p.openKills,
+      openDeaths: p.openDeaths,
       kills: gunKills,
       deaths: gunDeaths,
       stats: p

@@ -77,6 +77,11 @@ function buyBucket(code) {
   return n === 5 ? 4 : n;
 }
 
+/** econHasAwp, mirrored: the legacy digit 5 is a full buy that had an AWP. */
+function econHasAwp(code) {
+  return (Number(code) || 0) === 5;
+}
+
 
 /**
  * @param {object} store  from packStore
@@ -120,6 +125,8 @@ export function aggregateHot(store, filter = {}, allowDemo = null) {
   const wantEcon = filter.econ === null || filter.econ === undefined ? null : buyBucket(filter.econ);
   const wantOppEcon =
     filter.oppEcon === null || filter.oppEcon === undefined ? null : buyBucket(filter.oppEcon);
+  const wantAwp = Boolean(filter.hasAwp);
+  const wantOppAwp = Boolean(filter.oppHasAwp);
   const wantResult = filter.result || '';
   const wantAdvantage = filter.advantage || '';
   const wantTeamName = filter.teamName ? teamNameKey(filter.teamName) : '';
@@ -169,6 +176,8 @@ export function aggregateHot(store, filter = {}, allowDemo = null) {
       const ownB = buyBucket(own);
       if (wantEcon !== null && ownB !== wantEcon) continue;
       if (wantOppEcon !== null && buyBucket(opp) !== wantOppEcon) continue;
+      if (wantAwp && !econHasAwp(own)) continue;
+      if (wantOppAwp && !econHasAwp(opp)) continue;
       const won = winner === team;
       if (wantResult === 'won' && !won) continue;
       if (wantResult === 'lost' && won) continue;
@@ -416,6 +425,8 @@ export function aggregateTeamsHot(store, filter = {}, playerRows = null, allowDe
   const wantEcon = filter.econ === null || filter.econ === undefined ? null : buyBucket(filter.econ);
   const wantOppEcon =
     filter.oppEcon === null || filter.oppEcon === undefined ? null : buyBucket(filter.oppEcon);
+  const wantAwp = Boolean(filter.hasAwp);
+  const wantOppAwp = Boolean(filter.oppHasAwp);
   const wantResult = filter.result || '';
   const wantAdvantage = filter.advantage || '';
   const wantTeamName = filter.teamName ? teamNameKey(filter.teamName) : '';
@@ -469,6 +480,8 @@ export function aggregateTeamsHot(store, filter = {}, playerRows = null, allowDe
       const opp = team === 1 ? rEcon2[r] : rEcon1[r];
       if (wantEcon !== null && buyBucket(own) !== wantEcon) continue;
       if (wantOppEcon !== null && buyBucket(opp) !== wantOppEcon) continue;
+      if (wantAwp && !econHasAwp(own)) continue;
+      if (wantOppAwp && !econHasAwp(opp)) continue;
       const won = winner === team;
       if (wantResult === 'won' && !won) continue;
       if (wantResult === 'lost' && won) continue;

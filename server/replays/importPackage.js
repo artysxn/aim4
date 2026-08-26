@@ -14,6 +14,7 @@ import { isRoundId, parseRoundId } from '../../src/replays/shared/roundId.js';
 import { checkQuota, readRecord, writeMaterialized } from './demoStore.js';
 import { TICKZ_EXT } from './tickCodec.js';
 import { applyStandingsToRecord } from './teamStandingsDb.js';
+import { applyLibraryTeamNamesToRecord } from './lineupNames.js';
 
 /**
  * @param {string} user
@@ -114,6 +115,10 @@ export async function importReplayPackage(user, buf, meta = {}) {
   // Local packages often still carry clan/player fallbacks — stamp standings
   // names onto the manifest + plain round JSON before they hit the library.
   applyStandingsToRecord(ready, files);
+  // A team the VRS tables have never heard of can still be one the library
+  // named already; four of five shared players is the same squad. Names only:
+  // the package's round ids were baked on the user's PC.
+  await applyLibraryTeamNamesToRecord(user, ready, files);
 
   await writeMaterialized(user, ready, files);
   return ready;

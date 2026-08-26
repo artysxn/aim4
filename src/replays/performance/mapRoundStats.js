@@ -4,9 +4,14 @@
 //
 // The Team Overview asks how often a team runs a call. The reader here is one
 // player, so the question is a different one: how do I play when that call is
-// on. Rating and swing are this player's over exactly those rounds, the
-// winrate is the team's, and both are split by whether we ran the call or the
-// other side ran it at us.
+// on. Rating, swing and opening duels are this player's over exactly those
+// rounds, the winrate is the team's, and both are split by whether we ran the
+// call or the other side ran it at us.
+//
+// teamMapRoundGrid answers the team's version of the same question with the
+// team's own metrics: round win rate, the opening duel, and what the side does
+// with the man advantage either way (5v4 / 4v5). Same walk, same buckets, one
+// aggregation call per cell instead of two grids over one payload.
 //
 // Every bucket is filled in one walk. Tags sit on the row for both sides at
 // once (roundTags.js), so a round the player spent on CT feeds the CT table's
@@ -17,8 +22,14 @@
 import { hasRoundLibrary, roundTypeRows } from '../analytics/roundLibrary.js';
 import { rowTags } from '../analytics/roundTags.js';
 import { MAP_CODES } from '../shared/roundId.js';
-import { aggregatePlayers, demoTimestamp, rowPasses } from '../shared/statsMath.js';
-import { lastDemoIds } from './performanceMath.js';
+import {
+  aggregatePlayers,
+  aggregateTeams,
+  demoTimestamp,
+  rowPasses,
+  teamNameKey
+} from '../shared/statsMath.js';
+import { lastDemoIds, lastTeamDemoIds, teamSideOf } from './performanceMath.js';
 
 /** Maps the round library can read, in the site's map order. */
 export const MAP_ROUND_CODES = MAP_CODES.filter((code) => hasRoundLibrary(code));
@@ -52,7 +63,29 @@ export function mapGridFilter(ui = {}) {
 }
 
 function emptyCell() {
-  return { rounds: 0, wins: 0, winrate: null, rating: null, swing: null, files: [] };
+  return {
+    rounds: 0,
+    wins: 0,
+    winrate: null,
+    rating: null,
+    swing: null,
+    opkRate: null,
+    files: []
+  };
+}
+
+function emptyTeamCell() {
+  return {
+    rounds: 0,
+    wins: 0,
+    winrate: null,
+    opkRate: null,
+    conv5v4: null,
+    conv4v5: null,
+    openKills: 0,
+    openDeaths: 0,
+    files: []
+  };
 }
 
 /**
@@ -62,7 +95,19 @@ function emptyCell() {
  * @property {number|null} winrate  percent, the team's, over these rounds
  * @property {number|null} rating   Rating 3.0 for this player, over these rounds
  * @property {number|null} swing    this player's PRW swing
+ * @property {number|null} opkRate  this player's opening duel win rate, percent
  * @property {string[]} files       newest first, capped for a timeline link
+ *
+ * @typedef {object} TeamRoundTypeCell
+ * @property {number} rounds
+ * @property {number} wins
+ * @property {number|null} winrate   percent, over these rounds
+ * @property {number|null} opkRate   share of these rounds the team opened
+ * @property {number|null} conv5v4   win rate in the ones it opened
+ * @property {number|null} conv4v5   win rate in the ones it lost the opening of
+ * @property {number} openKills
+ * @property {number} openDeaths
+ * @property {string[]} files
  *
  * @typedef {object} RoundTypeRow
  * @property {string} key
@@ -139,6 +184,10 @@ export function mapRoundGrid(payload, playerId, ui = {}, players, demos) {
       winrate: (bag.wins / bag.rows.length) * 100,
       rating: Number.isFinite(p?.rating) ? p.rating : null,
       swing: Number.isFinite(p?.prwSwing) ? p.prwSwing : null,
+      opkRate:
+        (p?.openKills || 0) + (p?.openDeaths || 0) > 0 && Number.isFinite(p?.opkRate)
+          ? p.opkRate
+          : null,
       files: [...new Set(files)].slice(0, LINK_FILES_MAX)
     };
   };
@@ -146,6 +195,117 @@ export function mapRoundGrid(payload, playerId, ui = {}, players, demos) {
   const out = {};
   for (const code of MAP_ROUND_CODES) {
     out[code] = { T: [], CT: [] };
+    for (const side of ['T', 'CT']) {
+      out[code][side] = roundTypeRows(code, side).map((def) => ({
+        key: def.key,
+        label: def.label,
+        desc: def.desc,
+        ran: cellOf(bags.get(`${code}|${side}|${def.key}|r`)),
+        faced: cellOf(bags.get(`${code}|${side}|${def.key}|f`))
+      }));
+    }
+  }
+  return out;
+}
+
+/**
+ * The same grid for a team, with the team's own metrics.
+ *
+ * A player's cell answers "how did I play in these rounds"; a team's answers
+ * "what happened in them" — did we win the round, did we win the opening duel,
+ * and did we convert the man advantage or survive the deficit. Every number
+ * comes from the shared team aggregation, so a cell here and a row in the
+ * Database's Teams tab over the same rounds cannot disagree.
+ *
+ * `map` is left out of the filter for the same reason as the player grid: a
+ * section IS a map. Side is left out because a table IS a side, and half of
+ * each is deliberately the rounds spent on the other one.
+ *
+ * @param {{ demos?: Array }} payload  a payload scoped to this team
+ * @param {string} teamKey
+ * @param {object} ui                  the toolbar state
+ * @param {Map} players
+ * @param {Map} demos
+ * @returns {Record<string, {
+ *   T: Array<{ key, label, desc, ran: TeamRoundTypeCell, faced: TeamRoundTypeCell }>,
+ *   CT: Array<object>,
+ *   total: TeamRoundTypeCell
+ * }>} keyed by map code
+ */
+export function teamMapRoundGrid(payload, teamKey, ui = {}, players, demos) {
+  const key = teamNameKey(teamKey);
+  const active = mapGridFilter(ui);
+  const allowed = lastTeamDemoIds(payload, teamKey, Number(ui.last) || 0, active, players, demos);
+
+  /** `map|side|type|r|f` -> the rounds that landed in it, plus `map|all`. */
+  const bags = new Map();
+  const grab = (bagKey) => {
+    let bag = bags.get(bagKey);
+    if (!bag) {
+      bag = { rows: [], wins: 0, files: [] };
+      bags.set(bagKey, bag);
+    }
+    return bag;
+  };
+
+  for (const demo of payload?.demos || []) {
+    const code = String(demo.map || '').toUpperCase();
+    if (!hasRoundLibrary(code)) continue;
+    if (!allowed.has(demo.id)) continue;
+    const side = teamSideOf(demo, key);
+    if (!side) continue;
+    const at = demoTimestamp(demo);
+    for (const row of demo.rounds || []) {
+      if (!rowPasses(row, active, side, players, demos)) continue;
+      const won = row.w === side;
+      const file = String(row.f || '').trim();
+      // The map line counts every passing round, tagged or not: it is the map's
+      // record, and a round the library could not name is still a round played.
+      const all = grab(`${code}|all`);
+      all.rows.push(row);
+      if (won) all.wins++;
+      if (file) all.files.push({ file, at });
+      if (!row.rl) continue;
+      for (const tableSide of ['T', 'CT']) {
+        const tags = rowTags(row, tableSide);
+        if (!tags.length) continue;
+        const runner = (row.s1 || 'T') === tableSide ? 1 : 2;
+        const lane = runner === side ? 'r' : 'f';
+        for (const tag of tags) {
+          const bag = grab(`${code}|${tableSide}|${tag.k}|${lane}`);
+          bag.rows.push(row);
+          if (won) bag.wins++;
+          if (file) bag.files.push({ file, at });
+        }
+      }
+    }
+  }
+
+  const cellOf = (bag) => {
+    if (!bag?.rows.length) return emptyTeamCell();
+    // Rows are already filtered, so the aggregate takes no filter of its own —
+    // the same call teamStats makes for the Summary chapter's cards.
+    const t = aggregateTeams(bag.rows, players, demos, {}).find((x) => x.key === key);
+    const files = [...bag.files].sort((a, b) => b.at - a.at).map((x) => x.file);
+    const finite = (n) => (Number.isFinite(n) ? n : null);
+    const openKills = t?.openKills || 0;
+    const openDeaths = t?.openDeaths || 0;
+    return {
+      rounds: bag.rows.length,
+      wins: bag.wins,
+      winrate: (bag.wins / bag.rows.length) * 100,
+      opkRate: openKills + openDeaths > 0 ? finite(t?.opkRate) : null,
+      conv5v4: openKills > 0 ? finite(t?.conv5v4) : null,
+      conv4v5: openDeaths > 0 ? finite(t?.conv4v5) : null,
+      openKills,
+      openDeaths,
+      files: [...new Set(files)].slice(0, LINK_FILES_MAX)
+    };
+  };
+
+  const out = {};
+  for (const code of MAP_ROUND_CODES) {
+    out[code] = { T: [], CT: [], total: cellOf(bags.get(`${code}|all`)) };
     for (const side of ['T', 'CT']) {
       out[code][side] = roundTypeRows(code, side).map((def) => ({
         key: def.key,

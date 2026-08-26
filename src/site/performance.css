@@ -236,6 +236,27 @@
   color: var(--text);
 }
 
+/* Map name and, on a team's page, the map's own record on the same line. */
+.pf-map-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+}
+
+.pf-map-sum {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.pf-map-sum-item b {
+  color: var(--text);
+  font-weight: 600;
+}
+
 .pf-map-pair {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -254,11 +275,12 @@
 }
 
 .pf-mt-col-name {
-  width: 34%;
+  width: 28%;
 }
 
+/* Eight numeric columns a table: four per lane, Ran and Faced. */
 .pf-mt-col-num {
-  width: 11%;
+  width: 9%;
 }
 
 /* These tables do not scroll, so their headers must not stick: two header rows
