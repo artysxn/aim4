@@ -224,7 +224,7 @@ export function initStrategyCreatorView({ auth, escapeHtml }) {
 
   function render() {
     if (!loaded) {
-      shellEl.innerHTML = spinnerHtml();
+      shellEl.innerHTML = spinnerHtml('Loading your rounds…');
       return;
     }
     if (panel || shareView) return;

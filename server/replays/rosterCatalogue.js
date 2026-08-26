@@ -21,6 +21,31 @@ const CACHE_TTL_MS = 60_000;
 
 /** @type {Map<string, { stamp: string, at: number, value: object }>} */
 const cache = new Map();
+/**
+ * One build per library at a time.
+ *
+ * Every scoped page asks for this before it asks for anything else, so a cold
+ * catalogue is requested by the Database, Performance and the team page within
+ * the same second — and each of them used to walk the library separately,
+ * three times the reads to produce three identical answers.
+ *
+ * @type {Map<string, Promise<object>>}
+ */
+const building = new Map();
+
+/**
+ * Records handled between releases of the thread.
+ *
+ * Most of them cost nothing (the roster is already on the record), but the
+ * stragglers each read and parse an index — and Node has one thread, so a
+ * library of those is a walk that answers nothing else while it runs.
+ */
+const YIELD_EVERY = 64;
+
+/** Let other HTTP requests in between record bursts. */
+function yieldEventLoop() {
+  return new Promise((resolve) => setImmediate(resolve));
+}
 
 /**
  * Cheap identity for a record list: adding, removing or reparsing changes it.
@@ -69,7 +94,10 @@ export async function buildRoster(io, user, records, opts = {}) {
     return at;
   };
 
+  let done = 0;
   for (const record of records) {
+    done += 1;
+    if (done % YIELD_EVERY === 0) await yieldEventLoop();
     let roster = Array.isArray(record.players) ? record.players : [];
     let map = record.map || '';
     // A manifest can lack either — statsIndex falls back to the rounds for both
@@ -116,9 +144,22 @@ export async function getRoster(io, user, records, opts = {}) {
   const stamp = stampOf(records);
   const hit = cache.get(user);
   if (hit && hit.stamp === stamp && hit.at > Date.now() - CACHE_TTL_MS) return hit.value;
-  const value = await buildRoster(io, user, records, opts);
-  cache.set(user, { stamp, at: Date.now(), value });
-  return value;
+  // A build already running for this library answers everyone waiting on it.
+  // Unlike the stats store this is worth AWAITING rather than answering "not
+  // ready": it is bounded by the record list the process already holds, and
+  // every scoped page needs it before it can name the demos it wants.
+  const pending = building.get(user);
+  if (pending) return pending;
+  const job = buildRoster(io, user, records, opts)
+    .then((value) => {
+      cache.set(user, { stamp, at: Date.now(), value });
+      return value;
+    })
+    .finally(() => {
+      if (building.get(user) === job) building.delete(user);
+    });
+  building.set(user, job);
+  return job;
 }
 
 /**

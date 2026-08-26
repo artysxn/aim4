@@ -12,6 +12,14 @@
 // Memory is bounded by the player count, not the demo count: entries are
 // accumulated one at a time and released, so a 4100-demo library never exists
 // in the heap at once.
+//
+// TIME is bounded by nothing, which is the other half of the problem and the
+// reason this file yields. Node has one thread; a walk of 4100 indexes that
+// never lets go of it means every other request on the box — the listing, a
+// round pack, the Database's own table — waits for the Performance page's six
+// means. `await` alone does not help: loadStoredEntry answers from an
+// in-memory LRU most of the time, and awaiting an already-resolved promise
+// only drains microtasks. See yieldEventLoop below.
 // ---------------------------------------------------------------------------
 
 import {
@@ -22,6 +30,8 @@ import {
 } from '../../src/replays/shared/statsMath.js';
 import { CARD_METRICS } from '../../src/replays/performance/performanceMath.js';
 import { loadStoredEntry } from './statsIndex.js';
+import { getHotStore, visibilityMask } from './statsHotService.js';
+import { aggregateHot } from './statsHotAggregate.js';
 
 /** Matches PEER_MIN_ROUNDS in performanceMath: enough rounds to be a data point. */
 const PEER_MIN_ROUNDS = 20;
@@ -29,6 +39,20 @@ const PEER_MIN_ROUNDS = 20;
 const ROLE_MIN_ROUNDS = 8;
 
 const CACHE_TTL_MS = 10 * 60_000;
+
+/**
+ * Demos packed between releases of the thread.
+ *
+ * The same cadence statsHotService uses for the resident store, for the same
+ * reason: one JSON.parse plus its accumulation is sync, so without a real
+ * macrotask boundary the whole walk is one uninterruptible block.
+ */
+const YIELD_EVERY = 8;
+
+/** Let other HTTP requests in between JSON.parse / accumulate bursts. */
+function yieldEventLoop() {
+  return new Promise((resolve) => setImmediate(resolve));
+}
 
 /**
  * Cap on distinct (map, date-window, library) results held at once.
@@ -107,7 +131,11 @@ function evict() {
  * @param {string} user
  * @param {object[]} records  ready demos the caller may read
  * @param {{ map?: string, dateFrom?: string, dateTo?: string }} [filter]
- * @param {{ stamp?: string, onProgress?: (p: object) => void }} [opts]
+ * @param {{
+ *   stamp?: string,
+ *   onProgress?: (p: object) => void,
+ *   readEntry?: (user: string, id: string) => Promise<object|null>
+ * }} [opts]
  */
 export async function peerAverages(io, user, records, filter = {}, opts = {}) {
   // Identity of the record set, not merely its size. Two callers seeing the
@@ -121,6 +149,11 @@ export async function peerAverages(io, user, records, filter = {}, opts = {}) {
   if (running) return running;
 
   const job = (async () => {
+    // The same seam getRoster takes. In production it is loadStoredEntry, whose
+    // answer comes from the in-memory LRU as often as not — which is precisely
+    // the case the yield below exists for, and the one a test cannot reach
+    // through the disk.
+    const load = opts.readEntry || ((u, id) => loadStoredEntry(io, u, id));
     const acc = createPlayerAccumulator();
     /** Seat lookup and demo identity, both keyed the way statsMath expects. */
     const players = new Map();
@@ -162,58 +195,88 @@ export async function peerAverages(io, user, records, filter = {}, opts = {}) {
       votes.set(label, (votes.get(label) || 0) + 1);
     };
 
-    let done = 0;
-    for (const record of records) {
-      const entry = await loadStoredEntry(io, user, record.id);
-      done += 1;
-      opts.onProgress?.({ done, total: records.length, phase: 'peers' });
-      if (!entry?.rounds?.length) continue;
-      // Only this demo's seats are added, and both maps are cleared below —
-      // holding every seat for 4100 demos is itself tens of MB.
+    /**
+     * One demo into the accumulators.
+     *
+     * Seats go in and come straight back out: holding every seat for 4100
+     * demos is itself tens of MB. The `finally` is what guarantees that even
+     * when the entry turns out to be unreadable partway through, so a bad
+     * index cannot leave the next demo accumulating against stale seats.
+     */
+    const accumulateEntry = (entry) => {
       demos.set(entry.id, entry);
       for (const p of entry.players || []) {
         players.set(`${entry.id}:${p.id}`, { name: p.name, team: p.team });
       }
-      accumulatePlayers(acc, entry.rounds, players, active, demos);
-      const wantMap = filter.map ? String(filter.map).toUpperCase() : '';
-      const code = String(entry.map || '').toUpperCase();
-      if ((!wantMap || code === wantMap) && code) {
-        accumulatePlayers(
-          accOf(code, 'T'),
-          entry.rounds,
-          players,
-          { ...active, maps: [code], side: 'T' },
-          demos
-        );
-        accumulatePlayers(
-          accOf(code, 'CT'),
-          entry.rounds,
-          players,
-          { ...active, maps: [code], side: 'CT' },
-          demos
-        );
-      }
-      if (demoPassesDate(entry, active)) {
-        for (const row of entry.rounds) {
-          const rowMap = String(row.m || entry.map || '').toUpperCase();
-          if (wantMap && rowMap !== wantMap) continue;
-          const tTeam = (row.s1 || 'T') === 'T' ? 1 : 2;
-          bumpSide(rowMap, 'T', row.w === tTeam);
-          bumpSide(rowMap, 'CT', row.w === (tTeam === 1 ? 2 : 1));
+      try {
+        accumulatePlayers(acc, entry.rounds, players, active, demos);
+        const wantMap = filter.map ? String(filter.map).toUpperCase() : '';
+        const code = String(entry.map || '').toUpperCase();
+        if ((!wantMap || code === wantMap) && code) {
+          accumulatePlayers(
+            accOf(code, 'T'),
+            entry.rounds,
+            players,
+            { ...active, maps: [code], side: 'T' },
+            demos
+          );
+          accumulatePlayers(
+            accOf(code, 'CT'),
+            entry.rounds,
+            players,
+            { ...active, maps: [code], side: 'CT' },
+            demos
+          );
         }
-        for (const [map, sides] of Object.entries(entry.roles?.maps || {})) {
-          const m = String(map).toUpperCase();
-          if (wantMap && m !== wantMap) continue;
-          for (const side of ['T', 'CT']) {
-            for (const [id, role] of Object.entries(sides?.[side] || {})) {
-              votePos(id, m, side, String(role?.label || '').trim());
+        if (demoPassesDate(entry, active)) {
+          for (const row of entry.rounds) {
+            const rowMap = String(row.m || entry.map || '').toUpperCase();
+            if (wantMap && rowMap !== wantMap) continue;
+            const tTeam = (row.s1 || 'T') === 'T' ? 1 : 2;
+            bumpSide(rowMap, 'T', row.w === tTeam);
+            bumpSide(rowMap, 'CT', row.w === (tTeam === 1 ? 2 : 1));
+          }
+          for (const [map, sides] of Object.entries(entry.roles?.maps || {})) {
+            const m = String(map).toUpperCase();
+            if (wantMap && m !== wantMap) continue;
+            for (const side of ['T', 'CT']) {
+              for (const [id, role] of Object.entries(sides?.[side] || {})) {
+                votePos(id, m, side, String(role?.label || '').trim());
+              }
             }
           }
         }
+      } finally {
+        demos.delete(entry.id);
+        for (const p of entry.players || []) players.delete(`${entry.id}:${p.id}`);
       }
-      demos.delete(entry.id);
-      for (const p of entry.players || []) players.delete(`${entry.id}:${p.id}`);
+    };
+
+    let done = 0;
+    let skipped = 0;
+    for (const record of records) {
+      const entry = await load(user, record.id);
+      done += 1;
+      opts.onProgress?.({ done, total: records.length, phase: 'peers' });
+      if (entry?.rounds?.length) {
+        // One unreadable index costs that demo its contribution to the means,
+        // never the whole page. Everyone awaiting this key is parked on the
+        // same promise, so a throw here used to leave the Performance cards
+        // bare for every viewer at once — and the next request started the
+        // entire 4100-demo walk over to fail the same way.
+        try {
+          accumulateEntry(entry);
+        } catch (err) {
+          skipped += 1;
+          console.warn(`[peers] skipped ${record.id}: ${err?.message || err}`);
+        }
+      }
+      // Hand the thread back. Without this the Performance page's comparison
+      // line is paid for by every other request on the box: they queue behind
+      // a walk that can run for tens of seconds and never once lets go.
+      if (done % YIELD_EVERY === 0) await yieldEventLoop();
     }
+    if (skipped) console.warn(`[peers] computed with ${skipped} demos skipped`);
 
     const list = derivePlayers(acc).filter((p) => p.rounds >= PEER_MIN_ROUNDS);
     const out = { sample: list.length, metrics: {}, mapSides: {}, roles: {} };
@@ -250,6 +313,161 @@ export async function peerAverages(io, user, records, filter = {}, opts = {}) {
 
   inflight.set(key, job);
   return job;
+}
+
+// ---------------------------------------------------------------------------
+// The same answer from the resident store.
+//
+// The walk above reads every stats index to compute six means; the hot store
+// already holds every one of those rounds as columns the /aggregate endpoint
+// scans in milliseconds. When the store is warm, this produces the identical
+// output from those columns; when it is cold, it answers null (kicking the
+// background build, same contract as /aggregate) and the caller falls back to
+// the walk. The walk therefore stays what it always was — the answer of last
+// resort — instead of the price of every Performance page.
+// ---------------------------------------------------------------------------
+
+/**
+ * Position label votes per (player, MAP, side), from the roles tables the
+ * store's demos carry. Mirrors the walk's votePos over entry.roles.maps: one
+ * vote per demo, only demos inside the date window, only readable demos.
+ */
+function hotPosVotes(store, filter, allowedIds, wantMap) {
+  const votes = new Map();
+  for (const demo of store.demos) {
+    if (allowedIds && !allowedIds.has(demo.id)) continue;
+    if (!demoPassesDate(demo, filter)) continue;
+    for (const [map, sides] of Object.entries(demo.roles?.maps || {})) {
+      const m = String(map).toUpperCase();
+      if (wantMap && m !== wantMap) continue;
+      for (const side of ['T', 'CT']) {
+        for (const [id, role] of Object.entries(sides?.[side] || {})) {
+          const label = String(role?.label || '').trim();
+          if (!label) continue;
+          const k = `${id}|${m}|${side}`;
+          let bag = votes.get(k);
+          if (!bag) votes.set(k, (bag = new Map()));
+          bag.set(label, (bag.get(label) || 0) + 1);
+        }
+      }
+    }
+  }
+  return votes;
+}
+
+/**
+ * @param {object} io
+ * @param {string} user
+ * @param {object[]} records  the WHOLE ready library — store identity, like
+ *   every other hot caller. Visibility comes in as `opts.allowedIds`.
+ * @param {{ map?: string, dateFrom?: string, dateTo?: string }} [filter]
+ * @param {{ allowedIds?: Set<string>|null }} [opts]
+ * @returns {Promise<object|null>} null while the store is cold
+ */
+export async function peerAveragesHot(io, user, records, filter = {}, opts = {}) {
+  const allowedIds = opts.allowedIds || null;
+  const stamp = `hot|${setStamp(records)}|${allowedIds ? allowedIds.size : 'all'}`;
+  const key = cacheKey(user, filter, stamp);
+  const hit = cache.get(key);
+  if (hit && hit.at > Date.now() - CACHE_TTL_MS) return hit.value;
+
+  const store = await getHotStore(io, user, records, { requireWarm: true });
+  if (!store) return null;
+  const allow = visibilityMask(store, allowedIds);
+
+  const dateWindow = { dateFrom: filter.dateFrom || '', dateTo: filter.dateTo || '' };
+  const wantMap = filter.map ? String(filter.map).toUpperCase() : '';
+  // The store keeps map codes verbatim; the walk compared them uppercased. A
+  // wanted map resolves to every stored value that folds to it, and an
+  // unmatched one forces the empty result rather than "no filter".
+  const rawsFor = (code) => {
+    const raws = store.maps.values.filter((v) => v && String(v).toUpperCase() === code);
+    return raws.length ? raws : [code];
+  };
+
+  const rows = aggregateHot(
+    store,
+    { ...dateWindow, maps: wantMap ? rawsFor(wantMap) : [] },
+    allow
+  );
+  const list = rows.filter((p) => (p.rounds || 0) >= PEER_MIN_ROUNDS);
+  const out = { sample: list.length, metrics: {}, mapSides: {}, roles: {} };
+  for (const m of CARD_METRICS) out.metrics[m.key] = mean(list.map(m.read));
+
+  // Per-map side winrates, straight off the round columns. Same rule as the
+  // walk: every round of a date-passing demo counts once for T and once for
+  // CT, and T won when the winner is whichever team held the T side.
+  {
+    const { nRounds, rDemo, rMap, rSide1, rWinner } = store;
+    const sideTId = store.sides.values.indexOf('T');
+    // Date pass per demo, memoized: nRounds is millions, demos are thousands.
+    const datePass = new Uint8Array(store.demos.length);
+    for (let d = 0; d < store.demos.length; d++) {
+      if (demoPassesDate(store.demos[d], dateWindow)) datePass[d] = 1;
+    }
+    const bags = new Map();
+    for (let r = 0; r < nRounds; r++) {
+      const d = rDemo[r];
+      if (allow && !allow[d]) continue;
+      if (!datePass[d]) continue;
+      const code = String(store.maps.lookup(rMap[r]) || '').toUpperCase();
+      if (!code || (wantMap && code !== wantMap)) continue;
+      let bag = bags.get(code);
+      if (!bag) bags.set(code, (bag = { T: { r: 0, w: 0 }, CT: { r: 0, w: 0 } }));
+      const tTeam = rSide1[r] === sideTId ? 1 : 2;
+      const w = rWinner[r];
+      bag.T.r += 1;
+      bag.CT.r += 1;
+      if (w === tTeam) bag.T.w += 1;
+      else bag.CT.w += 1;
+    }
+    for (const [code, bag] of bags) {
+      out.mapSides[code] = {
+        T: bag.T.r ? (bag.T.w / bag.T.r) * 100 : null,
+        CT: bag.CT.r ? (bag.CT.w / bag.CT.r) * 100 : null
+      };
+    }
+  }
+
+  // Role averages: per (map, side), the same aggregation the walk ran through
+  // its per-map accumulators, over the same rows, keyed by the same votes.
+  {
+    const votes = hotPosVotes(store, dateWindow, allowedIds, wantMap);
+    // The walk emitted a key for every map an eligible demo carried, even when
+    // no player cleared the bar — an empty {T:{},CT:{}} rather than absence.
+    const mapCodes = new Set();
+    for (const demo of store.demos) {
+      if (allowedIds && !allowedIds.has(demo.id)) continue;
+      const code = String(demo.map || '').toUpperCase();
+      if (code && (!wantMap || code === wantMap)) mapCodes.add(code);
+    }
+    for (const code of mapCodes) {
+      out.roles[code] = { T: {}, CT: {} };
+      for (const side of ['T', 'CT']) {
+        const sideRows = aggregateHot(
+          store,
+          { ...dateWindow, maps: rawsFor(code), side },
+          allow
+        );
+        const bags = {};
+        for (const p of sideRows) {
+          if ((p.rounds || 0) < ROLE_MIN_ROUNDS) continue;
+          const pos = modeLabel(votes.get(`${p.id}|${code}|${side}`));
+          if (!pos) continue;
+          if (!bags[pos]) bags[pos] = { r: [], s: [] };
+          if (Number.isFinite(p.rating)) bags[pos].r.push(p.rating);
+          if (Number.isFinite(p.prwSwing)) bags[pos].s.push(p.prwSwing);
+        }
+        for (const [pos, bag] of Object.entries(bags)) {
+          out.roles[code][side][pos] = { rating: mean(bag.r), swing: mean(bag.s) };
+        }
+      }
+    }
+  }
+
+  cache.set(key, { at: Date.now(), stamp, value: out });
+  evict();
+  return out;
 }
 
 export function invalidatePeerAverages() {

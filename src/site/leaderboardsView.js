@@ -188,7 +188,7 @@ export function initLeaderboardsView({ auth, escapeHtml, openProfile }) {
   async function render() {
     const seq = ++renderSeq;
     syncControls();
-    body.innerHTML = spinnerHtml();
+    body.innerHTML = spinnerHtml('Loading leaderboard…');
     const { list, error } = await fetchBoard(board);
     if (seq !== renderSeq) return;
     body.innerHTML = rowsHtml(list || [], board, error);

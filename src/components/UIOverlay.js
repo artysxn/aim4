@@ -5211,7 +5211,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
       body.innerHTML = this._lockedHtml(CAP.AIM_REPLAYS, 'best_and_recent');
       return;
     }
-    body.innerHTML = spinnerHtml();
+    body.innerHTML = spinnerHtml('Loading your replays…');
     let rows;
     try {
       rows = await listAccountReplays(uid);

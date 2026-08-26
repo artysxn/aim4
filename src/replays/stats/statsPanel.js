@@ -58,6 +58,7 @@ import {
   statsTableHtml
 } from './statsTables.js';
 import {
+  etaLabel,
   setSpinnerLabel,
   spinnerHtml,
   statsProgressLabel,
@@ -3124,8 +3125,12 @@ export function createStatsPanel({
    */
   const AGGREGATE_TIMEOUT_MS = 8_000;
 
+  /** Last "store still building" progress a 503 carried, for the spinner. */
+  let serverBuilding = null;
+
   async function refreshServerTables() {
     const token = ++serverToken;
+    serverBuilding = null;
     // `roles: true` asks for the role columns even with no role chip set: the
     // table shows a Role column whenever the library has roles at all.
     // min-rounds is applied on the server: the bar hides most of a big
@@ -3159,7 +3164,13 @@ export function createStatsPanel({
       serverTables = res;
       renderFromServer();
       return true;
-    } catch {
+    } catch (err) {
+      // A 503 while the statistics store builds carries where the build is.
+      // The paged fallback is about to own the spinner; this hands it a real
+      // starting line instead of a bare "Loading rounds".
+      if (err?.status === 503 && err?.body?.building) {
+        serverBuilding = err.body.progress || { building: true };
+      }
       return false;
     }
   }
@@ -3447,6 +3458,22 @@ export function createStatsPanel({
       if (token !== loadToken) return;
       setSpinnerLabel(bodyEl, waited ? `${phaseLabel} · ${waited}s` : phaseLabel);
     };
+    // Rate → ETA, measured between this load's own progress events so a warm
+    // cache start does not flatter the estimate. Needs a few seconds and a few
+    // demos before it says anything: a promise made after one data point is a
+    // number pulled out of thin air.
+    let etaBase = null;
+    const etaFor = (done, total) => {
+      if (!Number.isFinite(done) || !Number.isFinite(total) || total <= 0) return undefined;
+      if (!etaBase) {
+        etaBase = { atWaited: waited, done };
+        return undefined;
+      }
+      const dt = waited - etaBase.atWaited;
+      const dd = done - etaBase.done;
+      if (dt < 3 || dd < 3 || done >= total) return undefined;
+      return (dt / dd) * (total - done);
+    };
     const clock = setInterval(() => {
       if (token !== loadToken) {
         clearInterval(clock);
@@ -3507,9 +3534,17 @@ export function createStatsPanel({
       // The aggregate could not answer: an older server, an error, or a store
       // still building. The payload path below is the whole feature either way,
       // and it paints page by page. Re-rendering the spinner drops the label
-      // the clock has been writing, so hand it straight back.
-      bodyEl.innerHTML = spinnerHtml('Loading rounds…');
-      showProgress('Loading rounds…');
+      // the clock has been writing, so hand it straight back — with the
+      // server's own build position when the 503 carried one.
+      const b = serverBuilding;
+      const buildingLabel =
+        b && Number(b.total) > 0
+          ? `Server preparing statistics ${Number(b.done) || 0}/${Number(b.total)}${
+              etaLabel(b.etaSeconds) ? ` · ${etaLabel(b.etaSeconds)}` : ''
+            } · loading rounds meanwhile`
+          : 'Loading rounds…';
+      bodyEl.innerHTML = spinnerHtml(buildingLabel);
+      showProgress(buildingLabel);
     }
 
     try {
@@ -3523,8 +3558,11 @@ export function createStatsPanel({
           noteLibraryProgress({ loaded: p?.libraryLoaded, total: p?.libraryTotal });
           if (painted) return;
           // Through the clock, so the elapsed seconds ride along and a phase
-          // that goes quiet does not leave a frozen label behind it.
-          showProgress(statsProgressLabel(p));
+          // that goes quiet does not leave a frozen label behind it. The ETA
+          // comes from this load's own rate over the library-wide counts.
+          const done = Number(p?.libraryLoaded ?? p?.done);
+          const total = Number(p?.libraryTotal ?? p?.total);
+          showProgress(statsProgressLabel({ ...p, etaSeconds: etaFor(done, total) }));
         },
         onBatch: (batch) => {
           if (token !== loadToken) return;

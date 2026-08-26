@@ -44,7 +44,7 @@ export function initProfileModal({ escapeHtml }) {
     document.body.classList.add('profile-open');
     if (titleEl) titleEl.textContent = username || 'Player';
     if (metaEl) metaEl.textContent = '';
-    bodyEl.innerHTML = spinnerHtml();
+    bodyEl.innerHTML = spinnerHtml('Loading profile…');
     loadProfile(userId, username, seq);
   }
 

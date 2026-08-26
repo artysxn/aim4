@@ -1588,7 +1588,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     }
     if (!payload) {
       rememberRadarView();
-      mainEl.innerHTML = spinnerHtml();
+      mainEl.innerHTML = spinnerHtml('Loading rounds…');
       return;
     }
     const token = ++renderToken;

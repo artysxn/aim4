@@ -72,8 +72,8 @@ import { cpuProbe, memorySnapshot } from './hostMemory.js';
 import { forgetDemoIndex, loadStoredEntry, refreshLibraryStats, scheduleStatsIndex, STATS_LIBRARY_PAGE, statsPayload } from './statsIndex.js';
 import { ColumnContractError, resolveColumns } from '../../src/replays/shared/statsColumns.js';
 import { getRoster, scopeRoster } from './rosterCatalogue.js';
-import { peerAverages } from './peerAverages.js';
-import { hotStoreStatus, hotMatches, hotTables } from './statsHotService.js';
+import { peerAverages, peerAveragesHot } from './peerAverages.js';
+import { hotBuildProgress, hotStoreStatus, hotMatches, hotTables } from './statsHotService.js';
 import { isAcceptedUpload, rarSupport } from './archive.js';
 import { allJobs, batchStatus, enqueueParse, forgetJob, getBatch, jobStatus, startIngest } from './jobs.js';
 import { SHARED_LIBRARY, authStatus, identify } from './auth.js';
@@ -1335,10 +1335,14 @@ export async function handleReplayRequest(req, res, url) {
         });
 
     if (!tables) {
+      // Say WHERE the build is, not just that it exists. "Still loading" with
+      // no number is indistinguishable from stuck; done/total/eta lets the
+      // client draw a real progress line while it rides the paged fallback.
       json(res, 503, {
         error: 'Statistics are still loading. This page will fill in shortly.',
         building: true,
         ...(storeDisabled ? { disabled: true } : {}),
+        progress: hotBuildProgress(user),
         demos: ready.length
       });
       return true;
@@ -1460,7 +1464,8 @@ export async function handleReplayRequest(req, res, url) {
     if (!rows) {
       json(res, 503, {
         error: 'Statistics are still loading. This page will fill in shortly.',
-        building: true
+        building: true,
+        progress: hotBuildProgress(user)
       });
       return true;
     }
@@ -1482,19 +1487,34 @@ export async function handleReplayRequest(req, res, url) {
   }
 
   // ---- peer averages -------------------------------------------------------
-  // The Performance cards compare against the whole library, so this is the one
-  // query that legitimately walks every demo. It does so here, once, cached,
-  // accumulating a demo at a time — rather than shipping 4100 indexes to a
-  // browser so it can compute six means.
+  // The Performance cards compare against the whole library. When the resident
+  // store is warm this is a column scan like /aggregate — milliseconds. When it
+  // is cold (the hot path answers null and kicks the background build), the
+  // demo-at-a-time walk still answers, slower but correct, so the cards never
+  // depend on the store being up. Same accelerator-with-a-fallback contract as
+  // everything else here; AIM4_HOT_STORE=off pins the walk.
   if (req.method === 'GET' && p === '/api/replays/peers') {
-    const { allowed } = await readable();
+    const { records: allRecords, allowed } = await readable();
+    const readyAll = allRecords.filter((r) => (r.status || 'ready') === 'ready');
     const records = allowed.filter((r) => (r.status || 'ready') === 'ready');
     const filter = {
       map: url.searchParams.get('map') || '',
       dateFrom: url.searchParams.get('from') || '',
       dateTo: url.searchParams.get('to') || ''
     };
-    const out = await peerAverages(statsIo, user, records, filter);
+    let out = null;
+    if (String(process.env.AIM4_HOT_STORE || '').toLowerCase() !== 'off') {
+      try {
+        out = await peerAveragesHot(statsIo, user, readyAll, filter, {
+          allowedIds: new Set(records.map((r) => r.id))
+        });
+      } catch (err) {
+        // The fallback is the feature; a hot-path bug must cost speed, not the page.
+        console.warn('[peers] hot path failed, walking instead:', err?.message || err);
+        out = null;
+      }
+    }
+    if (!out) out = await peerAverages(statsIo, user, records, filter);
     res.setHeader?.('Cache-Control', 'private, max-age=300');
     json(res, 200, out);
     return true;

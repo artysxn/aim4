@@ -3,7 +3,9 @@
 // Owns the resident store: builds it, caches it, answers queries from it.
 // ---------------------------------------------------------------------------
 
+import path from 'node:path';
 import { createPacker } from './statsHotStore.js';
+import { loadSnapshot, saveSnapshot } from './statsHotSnapshot.js';
 import {
   aggregateHot,
   aggregateHotMatches,
@@ -58,6 +60,146 @@ const BUILD_RETRY_MS = 5 * 60 * 1000;
 let lastBuildFailure = { at: 0, message: '' };
 
 /**
+ * Where the running build is, for anyone who asks.
+ *
+ * The build is detached — no request waits on it — which means no request can
+ * see it either, and "still loading" with no number is indistinguishable from
+ * "stuck". The loop below updates this as it goes; the 503 responses and the
+ * admin status endpoint both read it, so a client can say "1,234 of 4,900,
+ * about 90s left" instead of asking the user to take it on faith.
+ *
+ * @type {Map<string, { done: number, total: number, startedAt: number }>}
+ */
+const buildProgress = new Map();
+
+/** Progress plus a rate-based ETA, or null when nothing is building. */
+export function hotBuildProgress(user) {
+  const p = buildProgress.get(LIB(user));
+  if (!p) return null;
+  const elapsed = (Date.now() - p.startedAt) / 1000;
+  const eta =
+    p.done > 0 && p.total > p.done
+      ? Math.max(1, Math.round((elapsed / p.done) * (p.total - p.done)))
+      : null;
+  return { done: p.done, total: p.total, elapsedSeconds: Math.round(elapsed), etaSeconds: eta };
+}
+
+// ---------------------------------------------------------------------------
+// Snapshot: the packed store on disk, so a deploy does not cold-build it.
+//
+// Written (debounced) after every successful build or append; tried once per
+// process before the first build. The load path installs a cache entry through
+// the same packer the live build uses, so appends afterwards behave as if the
+// process had built the store itself. Everything about a snapshot is
+// best-effort: a missing, torn or stale file falls through to exactly the
+// behavior this file already has — background build, 503 until warm.
+// ---------------------------------------------------------------------------
+
+const SNAPSHOT_FILE = '_hotstore.a4s';
+/** Trailing debounce, so a burst of uploads writes the file once, not per demo. */
+const snapshotWriteDelayMs = () => Number(process.env.AIM4_HOT_SNAPSHOT_DELAY_MS ?? 10_000);
+const snapshotEnabled = () =>
+  String(process.env.AIM4_HOT_SNAPSHOT || '').toLowerCase() !== 'off';
+/** @type {Map<string, { done?: boolean, promise?: Promise<void> }>} */
+const snapshotState = new Map();
+/** @type {Map<string, ReturnType<typeof setTimeout>>} */
+const snapshotTimers = new Map();
+/** @type {Map<string, Promise<void>>} */
+const snapshotWrites = new Map();
+
+const snapshotPath = (io, user) => path.join(io.userDir(user), 'stats', SNAPSHOT_FILE);
+
+/**
+ * Try the snapshot exactly once per process (per library). Resolves when the
+ * attempt is over, having installed a cache entry on success. `wanted` is the
+ * live record set: a snapshot the append path could not carry to current —
+ * demos removed, or more new ones than APPEND_LIMIT — is not worth the
+ * hydration copy and is skipped before it costs anything.
+ */
+function ensureSnapshotLoaded(io, user, wanted) {
+  const key = LIB(user);
+  const st = snapshotState.get(key);
+  if (st?.done) return null;
+  if (st?.promise) return st.promise;
+  const promise = (async () => {
+    const snap = await loadSnapshot(snapshotPath(io, user));
+    if (!snap) return;
+    const have = new Set(snap.ids);
+    let missing = 0;
+    for (const k of wanted.keys()) if (!have.has(k)) missing++;
+    const removed = have.size - (wanted.size - missing);
+    if (removed > 0 || missing > APPEND_LIMIT) {
+      console.log(
+        `[stats] hot snapshot stale (${missing} new, ${removed} removed), rebuilding instead`
+      );
+      return;
+    }
+    // Hydrate through the packer so appends work; the store served is the
+    // packer's own finish(), and the file's buffers are garbage after this.
+    const packer = createPacker(snap.store.nRounds, snap.store);
+    const store = packer.finish();
+    cache.clear();
+    cache.set(key, {
+      packer,
+      store,
+      ids: have,
+      builtAt: snap.savedAt || Date.now(),
+      appends: 0
+    });
+    console.log(
+      `[stats] hot store loaded from snapshot: ${store.demos.length} demos, ` +
+        `${Math.round(store.bytes / 1048576)} MB, ${missing} to append`
+    );
+  })()
+    .catch((err) => {
+      console.warn('[stats] hot snapshot ignored:', err?.message || err);
+    })
+    .finally(() => {
+      snapshotState.set(key, { done: true });
+    });
+  snapshotState.set(key, { promise });
+  return promise;
+}
+
+/** Debounced, deduped write of the current cache entry for this library. */
+function scheduleSnapshotWrite(io, user) {
+  if (!snapshotEnabled()) return;
+  const key = LIB(user);
+  clearTimeout(snapshotTimers.get(key));
+  const timer = setTimeout(() => {
+    snapshotTimers.delete(key);
+    if (snapshotWrites.has(key)) {
+      // A write is running with older columns; go again after it.
+      snapshotWrites.get(key).finally(() => scheduleSnapshotWrite(io, user));
+      return;
+    }
+    const hit = cache.get(key);
+    if (!hit) return;
+    const startedAt = Date.now();
+    const job = saveSnapshot(snapshotPath(io, user), hit.store, hit.ids)
+      .then((bytes) => {
+        // The file now reflects a store this process trusts; a later load may
+        // try it again (invalidation clears the once-per-process latch).
+        snapshotState.set(key, { done: true });
+        console.log(
+          `[stats] hot snapshot written: ${Math.round(bytes / 1048576)} MB in ` +
+            `${Date.now() - startedAt} ms`
+        );
+      })
+      .catch((err) => {
+        console.warn('[stats] hot snapshot write failed:', err?.message || err);
+      })
+      .finally(() => {
+        if (snapshotWrites.get(key) === job) snapshotWrites.delete(key);
+      });
+    snapshotWrites.set(key, job);
+  }, snapshotWriteDelayMs());
+  // Never the reason the process stays alive.
+  timer.unref?.();
+  snapshotTimers.set(key, timer);
+}
+
+/**
  * One entry into the packer, contained.
  *
  * An index written by an older code path — or healed with inert defaults —
@@ -93,6 +235,18 @@ export async function getHotStore(io, user, records, opts = {}) {
   const key = LIB(user);
   const wanted = new Map(records.map((r) => [recordKey(r), r]));
 
+  // Cold process, snapshot on disk: try that before any thought of building.
+  // The request path (requireWarm) answers "still building" while the file
+  // loads rather than waiting on it; the load is seconds, not minutes, so the
+  // next poll is warm. The awaited path (tests, boot code) waits.
+  if (!cache.has(key) && !building.has(key) && snapshotEnabled()) {
+    const loading = ensureSnapshotLoaded(io, user, wanted);
+    if (loading) {
+      if (opts.requireWarm) return null;
+      await loading;
+    }
+  }
+
   const hit = cache.get(key);
   if (hit) {
     // Nothing changed: serve what is resident.
@@ -123,6 +277,7 @@ export async function getHotStore(io, user, records, opts = {}) {
         hit.store = hit.packer.finish();
         hit.builtAt = Date.now();
         hit.appends += 1;
+        scheduleSnapshotWrite(io, user);
         return hit.store;
       })().finally(() => {
         if (building.get(key) === job) building.delete(key);
@@ -160,6 +315,7 @@ function startBuild(io, user, records, opts = {}) {
   const key = LIB(user);
   const wanted = new Map(records.map((r) => [recordKey(r), r]));
   const startedAt = Date.now();
+  buildProgress.set(key, { done: 0, total: records.length, startedAt });
 
   const job = (async () => {
     // Capacity from the manifests, which the caller already holds. A hint only
@@ -176,6 +332,8 @@ function startBuild(io, user, records, opts = {}) {
     for (const record of records) {
       const entry = await loadStoredEntry(io, user, record.id);
       done += 1;
+      const bp = buildProgress.get(key);
+      if (bp) bp.done = done;
       opts.onProgress?.({ done, total: records.length, phase: 'packing' });
       if (entry?.rounds?.length && !addGuarded(packer, entry)) skipped += 1;
       // JSON.parse + rating context for one demo is sync. Without this a cold
@@ -198,6 +356,7 @@ function startBuild(io, user, records, opts = {}) {
       `[stats] hot store built: ${records.length} demos in ${Math.round((Date.now() - startedAt) / 1000)}s`
     );
     lastBuildFailure = { at: 0, message: '' };
+    scheduleSnapshotWrite(io, user);
     return store;
   })();
 
@@ -212,6 +371,7 @@ function startBuild(io, user, records, opts = {}) {
     })
     .finally(() => {
       if (building.get(key) === tracked) building.delete(key);
+      buildProgress.delete(key);
     });
 
   building.set(key, tracked);
@@ -238,7 +398,7 @@ export async function hotPlayers(io, user, records, filter = {}, opts = {}) {
  * @param {Set<string>|null} allowedIds demo ids the caller may read
  * @returns {Uint8Array|null} null when the caller may read everything
  */
-function visibilityMask(store, allowedIds) {
+export function visibilityMask(store, allowedIds) {
   if (!allowedIds) return null;
   if (allowedIds.size === store.demos.length) {
     // Everything is readable; skip the per-round check entirely.
@@ -340,9 +500,21 @@ export function hotStoreStatus() {
       bytes: v.store.bytes
     });
   }
+  const progress = [...buildProgress.entries()].map(([key, p]) => ({
+    key,
+    done: p.done,
+    total: p.total,
+    startedAt: p.startedAt
+  }));
   return {
     stores: out,
     building: building.size > 0,
+    progress,
+    snapshot: {
+      enabled: snapshotEnabled(),
+      writing: snapshotWrites.size > 0,
+      pendingWrite: snapshotTimers.size > 0
+    },
     // Why statistics are not loading, when they are not. Empty means no
     // failed build on record.
     lastBuildFailure: lastBuildFailure.at
@@ -353,4 +525,15 @@ export function hotStoreStatus() {
 
 export function invalidateHotStore() {
   cache.clear();
+  // The cooldown is a brake on retrying a build that just failed. Dropping the
+  // store is a deliberate "build it again", so it must not be held behind a
+  // failure the caller has, by definition, already responded to.
+  lastBuildFailure = { at: 0, message: '' };
+  // The once-per-process snapshot latch opens again: after an invalidate the
+  // next cold call may load whatever the last WRITE left on disk (writes only
+  // happen after a build this process trusted), and the staleness check
+  // against the live records still guards the file on every load.
+  snapshotState.clear();
+  for (const t of snapshotTimers.values()) clearTimeout(t);
+  snapshotTimers.clear();
 }

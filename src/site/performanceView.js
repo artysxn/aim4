@@ -896,7 +896,7 @@ export function initPerformanceView({ auth, escapeHtml }) {
         ? demosForTeam(roster, teamKey)
         : [];
     if (ids.length && scopedTo !== scopeStamp(ids)) {
-      host.innerHTML = `<div class="is-loading" role="status">${spinnerHtml()}</div>`;
+      host.innerHTML = `<div class="is-loading" role="status">${spinnerHtml('Loading matches…')}</div>`;
       try {
         await ensurePayload();
       } catch (err) {
@@ -1103,7 +1103,7 @@ export function initPerformanceView({ auth, escapeHtml }) {
 
   async function show(params = {}) {
     visible = true;
-    host.innerHTML = `<div class="is-loading" role="status">${spinnerHtml()}</div>`;
+    host.innerHTML = `<div class="is-loading" role="status">${spinnerHtml('Loading player list…')}</div>`;
     // The catalogue first: the selection has to be known before there is
     // anything worth fetching stats for.
     try {

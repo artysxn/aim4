@@ -3431,7 +3431,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
   async function loadPlaylistsPage() {
     if (!playlistsBody) return;
     setPlaylistStatus('');
-    playlistsBody.innerHTML = spinnerHtml();
+    playlistsBody.innerHTML = spinnerHtml('Loading playlists…');
     try {
       playlistLists = await fetchPlaylists();
       renderPlaylistsPage();
@@ -3962,7 +3962,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     const cancelSlow =
       showLibraryChrome && filtersEl && resultEl
         ? (() => {
-            if (!filtersEl.innerHTML.trim()) filtersEl.innerHTML = spinnerHtml();
+            if (!filtersEl.innerHTML.trim()) filtersEl.innerHTML = spinnerHtml('Loading filters…');
             if (!resultEl.innerHTML.trim()) resultEl.innerHTML = spinnerHtml('Loading demos…');
             const a = watchSlowLoad(filtersEl);
             const b = watchSlowLoad(resultEl, {
@@ -4193,7 +4193,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       } else {
         // Paint loaders before the network wait so the page never sits blank.
         if (page === 'library') {
-          if (filtersEl && !filtersEl.innerHTML.trim()) filtersEl.innerHTML = spinnerHtml();
+          if (filtersEl && !filtersEl.innerHTML.trim()) filtersEl.innerHTML = spinnerHtml('Loading filters…');
           if (resultEl && !resultEl.innerHTML.trim()) {
             resultEl.innerHTML = spinnerHtml('Loading demos…');
           }

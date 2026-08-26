@@ -355,17 +355,22 @@ setTimeout(() => warmCloakBrowserCache(loadIngestConfig()).catch(() => {}), 90 *
 //
 // Building the store reads every stats index in the library. At ~4,900 demos
 // that is hundreds of MB of JSON parsed against a 1 GB heap, so it does not
-// finish in seconds — it grinds. Meanwhile getHotStore() dedupes concurrent
-// builds by handing every caller the SAME in-flight promise, which is correct
-// and is exactly what turned a slow build into a dead endpoint: the warm
-// started at boot, and every /aggregate request after it waited on that one
-// promise. The Database sat on "Loading database…" for as long as the build
-// took, on every single deploy.
+// finish in seconds — it grinds. getHotStore() dedupes concurrent builds by
+// handing every caller the SAME in-flight promise, which is correct and is
+// exactly what turned a slow build into a dead endpoint: the warm started at
+// boot, and every /aggregate request after it waited on that one promise. The
+// Database sat on "Loading database…" for as long as the build took, on every
+// single deploy.
 //
-// A visitor-triggered build has the same cost but only when someone actually
-// asks, and it starts after the boot scramble rather than in the middle of it.
-// Warming is worth revisiting once the build itself is cheap (reading the
-// columnar sidecars instead of whole indexes); until then it is a liability.
+// The request path no longer waits on a build at all — it passes requireWarm,
+// gets null while the store is cold, and answers 503 so the browser can take
+// the paged path. That removes the hang but not the cost: the build is still
+// CPU the box does not have to spare during the first minute of a deploy, and
+// it would be competing with the paged fallback it just sent everyone to. So
+// it stays visitor-triggered, starting after the boot scramble rather than in
+// the middle of it. Warming is worth revisiting once the build itself is cheap
+// (reading the columnar sidecars instead of whole indexes); until then it is a
+// liability.
 
 server.listen(PORT, HOST, async () => {
   if (SERVE_STATIC) {

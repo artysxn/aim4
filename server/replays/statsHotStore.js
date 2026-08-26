@@ -55,6 +55,10 @@ const SEAT = PLAYER_SLOTS;          // 10 stat slots per seat
 const SEATS_PER_ROUND = 10;
 
 /** Sides and maps are interned so a round's metadata is one byte each. */
+export function createInterner() {
+  return interner();
+}
+
 function interner() {
   const to = new Map();
   const from = [];
@@ -104,10 +108,16 @@ function interner() {
  * Capacity comes from the demo records' `roundCount`, which the caller already
  * has in memory. It is a hint, not a contract: the arrays grow if it is short.
  *
+ * `seed` rebuilds a packer from a finished store — the append path after a
+ * snapshot load. Interners are re-added in stored order so every index comes
+ * out where it was, columns are copied whole, and finish() on the result is
+ * byte-for-byte the store that was saved.
+ *
  * @param {number} capacityRounds expected round count
+ * @param {object|null} [seed] a finished store to adopt
  */
-export function createPacker(capacityRounds = 1024) {
-  let nRounds = Math.max(1, Math.floor(capacityRounds) || 1);
+export function createPacker(capacityRounds = 1024, seed = null) {
+  let nRounds = Math.max(1, Math.floor(capacityRounds) || 1, seed?.nRounds || 0);
   let nSeats = nRounds * SEATS_PER_ROUND;
 
   const maps = interner();
@@ -216,6 +226,21 @@ export function createPacker(capacityRounds = 1024) {
     nSeats = nRounds * SEATS_PER_ROUND;
   }
   seatCols.sPlayer.fill(-1);
+
+  if (seed) {
+    // Adopt a finished store: columns copied whole, interners re-added in
+    // stored order so every index lands where it was. Growth and appends work
+    // from here exactly as they would after a live build.
+    for (const k of Object.keys(roundCols)) roundCols[k].set(seed[k]);
+    for (const k of Object.keys(seatCols)) seatCols[k].set(seed[k]);
+    for (const v of seed.maps.values) maps.id(v);
+    for (const v of seed.sides.values) sides.id(v);
+    for (const v of seed.players.values) players.id(v);
+    for (const v of seed.names.values) names.id(v);
+    for (const v of seed.files.values) files.id(v);
+    demos.push(...seed.demos);
+    r = seed.nRounds;
+  }
 
   function addEntry(e) {
     if (!e || !Array.isArray(e.rounds) || !e.rounds.length) return;

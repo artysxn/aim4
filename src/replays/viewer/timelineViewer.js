@@ -3286,7 +3286,7 @@ export function createTimelineViewer({
   function renderPlaylists() {
     const file = files[activeIndex];
     if (!playlists) {
-      playlistListEl.innerHTML = spinnerHtml('', { size: 'sm' });
+      playlistListEl.innerHTML = spinnerHtml('Loading playlists…', { size: 'sm' });
       return;
     }
     if (!playlists.length) {
@@ -3767,7 +3767,7 @@ export function createTimelineViewer({
 
   function renderScoreboard() {
     if (!statsPayload) {
-      boardBody.innerHTML = spinnerHtml();
+      boardBody.innerHTML = spinnerHtml('Loading match stats…');
       return;
     }
     const demo = statsPayload.demos?.[0];

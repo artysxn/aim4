@@ -90,6 +90,24 @@ const grown = await getRoster({}, 'u', [...records, { id: 'd', uploadedAt: 900, 
 assert.notEqual(grown, first, 'a new demo rebuilds the catalogue');
 assert.equal(grown.demos.length, 5);
 
+// --- one build serves every concurrent caller --------------------------------
+// Every scoped page (Database, Performance, the team page) asks for this before
+// it asks for anything else, so a cold catalogue is requested several times in
+// the same second. Each of those used to walk the library separately, doing the
+// backfill reads over and over to produce identical answers.
+{
+  invalidateRoster(null);
+  reads = 0;
+  const [x, y, z] = await Promise.all([
+    getRoster({}, 'u', records, { readEntry }),
+    getRoster({}, 'u', records, { readEntry }),
+    getRoster({}, 'u', records, { readEntry })
+  ]);
+  assert.equal(x, y, 'concurrent callers share one catalogue');
+  assert.equal(y, z, 'all of them, not just the first two');
+  assert.equal(reads, 2, 'the backfill reads happen once, not once per caller');
+}
+
 // --- visibility scoping -----------------------------------------------------
 // The catalogue is built over the whole library and narrowed per caller, so a
 // narrowed copy must not name a demo — or a player — the caller cannot open.

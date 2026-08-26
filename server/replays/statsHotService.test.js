@@ -163,4 +163,81 @@ assert.deepEqual(hotStoreStatus().stores, [], 'invalidate clears');
   await fsp.rm(tmp, { recursive: true, force: true });
 }
 
-console.log('statsHotService.test.js: appends, growth, trimming and requireWarm all pass');
+// --- snapshot: a restart serves the store without re-reading a single index --
+// The deploy-time contract: build once, write the file; the next process loads
+// the file. The indexes are DELETED before the reload here, so a warm store
+// can only have come from the snapshot — any fallback to a rebuild would
+// produce an empty one and fail the round-count check.
+{
+  process.env.AIM4_HOT_SNAPSHOT_DELAY_MS = '0';
+  const fsp = await import('node:fs/promises');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'aim4-hotsnap-'));
+  await fsp.mkdir(path.join(tmp, 'stats'), { recursive: true });
+  const half = ids.slice(0, 20);
+  for (const id of half) {
+    await fsp.writeFile(path.join(tmp, 'stats', `${id}.json`), JSON.stringify(ENTRIES.get(id)));
+  }
+  const io3 = { userDir: () => tmp };
+  const records = half.map(recordFor);
+
+  const built = await getHotStore(io3, 'local', records);
+  const snapFile = path.join(tmp, 'stats', '_hotstore.a4s');
+  let snapped = false;
+  for (let i = 0; i < 400 && !snapped; i++) {
+    await new Promise((r) => setTimeout(r, 25));
+    snapped = await fsp.stat(snapFile).then(() => true, () => false);
+    // The write is atomic; give the rename a beat.
+    if (snapped) await new Promise((r) => setTimeout(r, 50));
+  }
+  assert.ok(snapped, 'a successful build writes the snapshot');
+
+  // "Restart": drop the resident store AND the indexes it was built from.
+  invalidateHotStore();
+  for (const id of half) await fsp.rm(path.join(tmp, 'stats', `${id}.json`));
+
+  const cold = await getHotStore(io3, 'local', records, { requireWarm: true });
+  assert.equal(cold, null, 'the request path does not wait for the snapshot load either');
+  let warm = null;
+  for (let i = 0; i < 400 && !warm; i++) {
+    await new Promise((r) => setTimeout(r, 25));
+    warm = await getHotStore(io3, 'local', records, { requireWarm: true });
+  }
+  assert.ok(warm, 'the snapshot came up without a build');
+  assert.equal(warm.nRounds, built.nRounds, 'every round is there, with no index left to read');
+  const before = aggregateHot(built, {});
+  const after = aggregateHot(warm, {});
+  assert.equal(after.length, before.length, 'same players');
+  for (let i = 0; i < before.length; i++) {
+    assert.equal(after[i].id, before[i].id);
+    assert.ok(Math.abs(after[i].rating - before[i].rating) < 1e-9, 'ratings identical from disk');
+  }
+
+  // New demos append onto the loaded snapshot exactly as onto a live build.
+  const extra = ids.slice(20, 24);
+  for (const id of extra) {
+    await fsp.writeFile(path.join(tmp, 'stats', `${id}.json`), JSON.stringify(ENTRIES.get(id)));
+  }
+  const grown = await getHotStore(io3, 'local', [...records, ...extra.map(recordFor)]);
+  const expect = built.nRounds + extra.reduce((n, id) => n + ENTRIES.get(id).rounds.length, 0);
+  assert.equal(grown.nRounds, expect, 'appends after a snapshot load land on the hydrated packer');
+
+  // A stale snapshot (library shrank) is skipped, not served. The indexes go
+  // back on disk first: the point of this check is WHICH source answers, and a
+  // rebuild with nothing to read would look like a skip for the wrong reason.
+  invalidateHotStore();
+  for (const id of half) {
+    await fsp.writeFile(path.join(tmp, 'stats', `${id}.json`), JSON.stringify(ENTRIES.get(id)));
+  }
+  const fewer = records.slice(0, 10);
+  const rebuilt = await getHotStore(io3, 'local', fewer);
+  const fewerRounds = half.slice(0, 10).reduce((n, id) => n + ENTRIES.get(id).rounds.length, 0);
+  assert.equal(rebuilt.nRounds, fewerRounds, 'a shrunken library rebuilds rather than serving the old file');
+
+  invalidateHotStore();
+  delete process.env.AIM4_HOT_SNAPSHOT_DELAY_MS;
+  await fsp.rm(tmp, { recursive: true, force: true });
+}
+
+console.log('statsHotService.test.js: appends, growth, trimming, requireWarm and snapshots all pass');

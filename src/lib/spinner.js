@@ -151,10 +151,28 @@ export function watchSlowLoad(host, opts = {}) {
 }
 
 /**
+ * "~40s left" / "~3m left", or '' when there is nothing worth promising.
+ * Anything under two seconds is noise, not information.
+ */
+export function etaLabel(seconds) {
+  if (!Number.isFinite(seconds) || seconds < 2) return '';
+  if (seconds < 90) return `~${Math.round(seconds)}s left`;
+  return `~${Math.round(seconds / 60)}m left`;
+}
+
+/**
  * Human label for a stats-stream progress event.
- * @param {{ done?: number, total?: number, current?: string|null, phase?: string }} p
+ * `etaSeconds`, when the caller can compute one from its own clock, rides on
+ * the end of the label: "Loading stats 1,234/4,900 · demo.dem · ~40s left".
+ * @param {{ done?: number, total?: number, current?: string|null, phase?: string, etaSeconds?: number }} p
  */
 export function statsProgressLabel(p) {
+  const eta = etaLabel(p?.etaSeconds);
+  const withEta = (label) => (eta ? `${label} · ${eta}` : label);
+  return withEta(statsProgressBase(p));
+}
+
+function statsProgressBase(p) {
   if (!p || !Number(p.total)) {
     if (p?.phase === 'packing') return 'Packing database…';
     if (p?.phase === 'receiving') return 'Receiving database…';

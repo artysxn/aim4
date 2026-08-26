@@ -734,7 +734,7 @@ export function initTeamView({ auth, escapeHtml }) {
 
   function mapsBodyHtml() {
     if (overviewMapsLoading && !overviewMaps.length) {
-      return `<div class="is-loading" role="status" aria-live="polite">${spinnerHtml()}</div>`;
+      return `<div class="is-loading" role="status" aria-live="polite">${spinnerHtml('Loading map stats…')}</div>`;
     }
     const rows = overviewMaps.length ? overviewMaps : emptyMapStats();
     /**
@@ -1901,7 +1901,7 @@ export function initTeamView({ auth, escapeHtml }) {
             <span class="tm-ac-legend">total · avg/r · <span class="ok">✓</span> ack · <span class="deny">✗</span> deny</span>
           </div>
           <div class="tm-ac-player-list">${
-            autocoachLoading ? spinnerHtml() : playerRows
+            autocoachLoading ? spinnerHtml('Loading AutoCoach…') : playerRows
           }</div>
         </section>
         ${focusPanel}
@@ -1926,7 +1926,7 @@ export function initTeamView({ auth, escapeHtml }) {
               : ''
           }
           ${reviewPicker}
-          <div class="tm-ac-demo-list">${autocoachLoading ? spinnerHtml() : demoRows}</div>
+          <div class="tm-ac-demo-list">${autocoachLoading ? spinnerHtml('Loading AutoCoach…') : demoRows}</div>
         </section>
       </div>`;
   }
@@ -2787,7 +2787,7 @@ export function initTeamView({ auth, escapeHtml }) {
         editor = null;
         mountedDocId = '';
       }
-      shellEl.innerHTML = spinnerHtml();
+      shellEl.innerHTML = spinnerHtml('Loading team…');
       return;
     }
     // Guest (or member) viewing a /d/<code> link: keep the read-only surface.
