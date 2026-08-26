@@ -1,7 +1,8 @@
 // ---------------------------------------------------------------------------
 // replays/shared/vrsRanks.js
 // Global VRS ranking (three regional tables pooled by points) and the Rank
-// filter: "50" = top 50, "20-50" = that band, empty = all.
+// Rank filter: "50" = top 50, "20-50" = that band, "30-300" = 30+ on VRS plus
+// every unranked team, empty = all.
 // ---------------------------------------------------------------------------
 
 /** Must match statsMath.teamNameKey for named orgs (placeholders stay unranked). */
@@ -58,7 +59,7 @@ export function buildGlobalRanks(teams) {
 
 /**
  * @param {string} raw
- * @returns {{ min: number, max: number } | null}
+ * @returns {{ min: number, max: number, includeUnranked?: boolean } | null}
  */
 export function parseRankSpec(raw) {
   const s = String(raw || '').trim();
@@ -73,7 +74,11 @@ export function parseRankSpec(raw) {
       min = max;
       max = t;
     }
-    return { min: Math.max(1, min), max: Math.max(1, max) };
+    min = Math.max(1, min);
+    max = Math.max(1, max);
+    const spec = { min, max };
+    if (max > VRS_RANGE_UNRANKED_FROM) spec.includeUnranked = true;
+    return spec;
   }
   if (!/^\d+$/.test(s)) return null;
   const n = Math.max(1, Math.floor(Number(s)));
@@ -84,8 +89,13 @@ export function hasRankFilter(filter = {}) {
   return Boolean(parseRankSpec(filter.rankOwn) || parseRankSpec(filter.rankOpp));
 }
 
-/** Off the VRS ladder. `50-9999` includes these; `50` (top 50) does not. */
+/** Off the VRS ladder. `50` (top 50) does not include these. A range whose
+ *  upper bound is above 200 (e.g. `30-300`) does: that means the rest of the
+ *  VRS table plus every team with no VRS rank. */
 export const UNRANKED_RANK = 9999;
+
+/** VRS global list is treated as 200 deep. A range max above this also matches unranked. */
+const VRS_RANGE_UNRANKED_FROM = 200;
 
 /** Rank for a display name. Unknown orgs sit at UNRANKED_RANK so open-ended ranges include them. */
 export function rankOfName(name, table) {
@@ -99,7 +109,8 @@ export function rankInSpec(rank, spec) {
   if (!spec) return true;
   const n = Number(rank);
   if (!Number.isFinite(n)) return false;
-  return n >= spec.min && n <= spec.max;
+  if (n >= spec.min && n <= spec.max) return true;
+  return Boolean(spec.includeUnranked) && n === UNRANKED_RANK;
 }
 
 function tableOf(filter) {

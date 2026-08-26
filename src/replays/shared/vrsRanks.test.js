@@ -21,7 +21,8 @@ assert.deepEqual(parseRankSpec('  '), null);
 assert.deepEqual(parseRankSpec('50'), { min: 1, max: 50 });
 assert.deepEqual(parseRankSpec('20-50'), { min: 20, max: 50 });
 assert.deepEqual(parseRankSpec('50-20'), { min: 20, max: 50 });
-assert.deepEqual(parseRankSpec('50-9999'), { min: 50, max: 9999 });
+assert.deepEqual(parseRankSpec('50-9999'), { min: 50, max: 9999, includeUnranked: true });
+assert.deepEqual(parseRankSpec('30-300'), { min: 30, max: 300, includeUnranked: true });
 assert.equal(parseRankSpec('abc'), null);
 assert.equal(parseRankSpec('20-'), null);
 
@@ -45,8 +46,13 @@ assert.equal(rankInSpec(51, { min: 1, max: 50 }), false);
 assert.equal(rankInSpec(6, { min: 50, max: 9999 }), false);
 assert.equal(rankInSpec(6, parseRankSpec('50-9999')), false);
 assert.equal(rankInSpec(6, parseRankSpec('5-9999')), true);
+assert.equal(rankInSpec(9999, parseRankSpec('30-200')), false, '200 is still VRS-only');
+assert.equal(rankInSpec(9999, parseRankSpec('30-300')), true, 'max above 200 includes unranked');
+assert.equal(rankInSpec(9999, parseRankSpec('201')), false, 'a single Top N does not include unranked');
+assert.equal(rankInSpec(50, parseRankSpec('30-300')), true);
 
-assert.equal(sidesPassRank('Spirit', 'Falcons', '1', '', table), true);
+assert.equal(sidesPassRank('Unknown mix', 'Spirit', '30-300', '', table), true, '30-300 includes unranked own');
+assert.equal(sidesPassRank('Unknown mix', 'Spirit', '30-200', '', table), false, '30-200 excludes unranked');
 assert.equal(sidesPassRank('9z', 'Falcons', '2', '', table), false, 'single value is 1..N');
 assert.equal(sidesPassRank('9z', 'Spirit', '3-10', '1-2', table), true);
 assert.equal(sidesPassRank('Spirit', '9z', '3-10', '1-2', table), false, 'subject orientation');
