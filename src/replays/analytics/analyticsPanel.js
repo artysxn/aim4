@@ -54,6 +54,7 @@ import { iconImgHtml } from '../viewer/equipmentIcons.js';
 import { hasRoundLibrary, roundTypeRows } from './roundLibrary.js';
 import { mbIcon, mbSummary, mbWrap } from '../../icons/menubuttons.js';
 import {
+  etaLabel,
   setSpinnerLabel,
   spinnerHtml,
   statsProgressLabel,
@@ -1684,8 +1685,23 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
         // guess at while a cold aggregate store built itself.
         const scanned = agg.files.length.toLocaleString();
         const startedAt = Date.now();
+        // While the statistics store is cold the server answers 503 with the
+        // build's position; `prep` carries that into the ticking label so the
+        // reader watches the build move instead of reading a failure.
+        let prep = null;
         const tick = () => {
           const secs = Math.round((Date.now() - startedAt) / 1000);
+          if (prep) {
+            const n = Number(prep.total)
+              ? ` ${(Number(prep.done) || 0).toLocaleString()}/${Number(prep.total).toLocaleString()}`
+              : '…';
+            const eta = etaLabel(prep.etaSeconds);
+            setMatchingLabel(
+              token,
+              `Server preparing statistics${n}${eta ? ` · ${eta}` : ''}${secs >= 1 ? ` · ${secs}s` : ''}`
+            );
+            return;
+          }
           setMatchingLabel(
             token,
             `Building the leaderboard… ${scanned} rounds${secs >= 1 ? ` · ${secs}s` : ''}`
@@ -1694,9 +1710,25 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
         tick();
         const timer = setInterval(tick, 1000);
         try {
-          const tables = await fetchAggregateForRounds(agg.files, { tables: 'players,teams' });
-          lb = tables.players || [];
-          teamLb = tables.teams || [];
+          // A cold store is a WAIT, not a failure: it heals by itself and says
+          // where it is. Retry until it is warm. Only errors that will not
+          // heal on their own — the store switched off, anything else — reach
+          // the card as text.
+          for (;;) {
+            try {
+              const tables = await fetchAggregateForRounds(agg.files, { tables: 'players,teams' });
+              lb = tables.players || [];
+              teamLb = tables.teams || [];
+              break;
+            } catch (err) {
+              const body = err?.status === 503 ? err.body : null;
+              if (!body?.building || body?.disabled) throw err;
+              prep = body.progress || {};
+              tick();
+              await new Promise((r) => setTimeout(r, 3000));
+              if (token !== renderToken) return;
+            }
+          }
         } catch (err) {
           lbError = err?.message || String(err);
         } finally {

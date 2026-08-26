@@ -309,8 +309,21 @@ export function initPerformanceView({ auth, escapeHtml }) {
       }
       teamPeers = { metrics, sample: list.length };
       teamPeersFor = stamp;
-    } catch {
+    } catch (err) {
       teamPeers = { metrics: {}, sample: 0 };
+      // A cold statistics store heals on its own. Ask again once it should be
+      // warmer, so the comparison line fills in without the reader having to
+      // touch a filter. Anything else stays what it was: cards without the
+      // library line, retried on the next filter change.
+      const body = err?.status === 503 ? err.body : null;
+      if (body?.building && !body?.disabled) {
+        setTimeout(() => {
+          if (!visible || !teamKey || teamPeersFor === stamp) return;
+          void ensureTeamPeers().then((fetched) => {
+            if (fetched && visible && teamKey) render();
+          });
+        }, 4000);
+      }
     }
     return true;
   }
