@@ -778,6 +778,20 @@ function formatMatchDate(ts) {
   }
 }
 
+/**
+ * The library link that opens one match in the timeline viewer.
+ *
+ * Empty for a row with no match behind it — a synthetic average, an
+ * absent-player filler — so those stay plain text instead of linking nowhere.
+ * The id is checked against the charset the store sanitizes to rather than
+ * escaped, because it goes into an href and a validated id needs neither.
+ */
+export function matchHref(row) {
+  const id = String(row?.demoId || '').trim();
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) return '';
+  return `/demos?demo=${encodeURIComponent(id)}`;
+}
+
 /** Sticky identity columns for player/team match drill-down tables. */
 export const MATCH_IDENTITY_COLUMNS = [
   {
@@ -820,7 +834,20 @@ export const MATCH_IDENTITY_COLUMNS = [
     align: 'left',
     noAvg: true,
     get: (r) => Number(r.uploadedAt) || 0,
-    cell: (r) => formatMatchDate(r.uploadedAt)
+    cell: (r) => formatMatchDate(r.uploadedAt),
+    /**
+     * The date is the row's handle on the match. Every table that carries these
+     * columns is one row per game, and "watch that game" is the next thing a
+     * reader wants from a row that looks interesting; opening it in a new tab
+     * keeps the filtered table they found it in.
+     */
+    html: (r) => {
+      const text = formatMatchDate(r.uploadedAt);
+      const href = matchHref(r);
+      if (!href) return text;
+      return `<a class="st-link" href="${href}" target="_blank" rel="noopener noreferrer"
+        title="Open this match in the viewer">${text}</a>`;
+    }
   }
 ];
 

@@ -1301,6 +1301,13 @@ export async function handleReplayRequest(req, res, url) {
       // the server ignores repaints the same table under a changed bar.
       hasAwp: argFlag('hasAwp'),
       oppHasAwp: argFlag('oppHasAwp'),
+      // Round-library calls and the round clock. The store carries the tags a
+      // round was given and when each one came true, so these are answered here
+      // rather than by shipping the library to the browser to be filtered.
+      roundOwn: argList('roundOwn') || [],
+      roundOpp: argList('roundOpp') || [],
+      fromSec: argHas('fromSec') ? Number(arg('fromSec')) : null,
+      toSec: argHas('toSec') ? Number(arg('toSec')) : null,
       result: arg('result') || '',
       advantage: arg('advantage') || '',
       teamName: arg('teamName') || '',
@@ -1475,6 +1482,10 @@ export async function handleReplayRequest(req, res, url) {
       oppEcon: argHas('oppEcon') ? Number(arg('oppEcon')) : null,
       hasAwp: argFlag('hasAwp'),
       oppHasAwp: argFlag('oppHasAwp'),
+      roundOwn: argList('roundOwn') || [],
+      roundOpp: argList('roundOpp') || [],
+      fromSec: argHas('fromSec') ? Number(arg('fromSec')) : null,
+      toSec: argHas('toSec') ? Number(arg('toSec')) : null,
       result: arg('result') || '',
       advantage: arg('advantage') || '',
       rankOwn: arg('rankOwn') || '',

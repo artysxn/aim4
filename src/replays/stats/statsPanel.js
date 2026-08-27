@@ -27,7 +27,6 @@ import {
   aggregateTeams,
   allRows,
   demoPassesDate,
-  filterNeedsRounds,
   indexMaps,
   rowPasses,
   teamNameKey
@@ -2669,12 +2668,7 @@ export function createStatsPanel({
       (detail && !roster) ||
       (lockedTeamName && !roster) ||
       (hasEntityPick() && !roster) ||
-      (scope.demos?.length && scope.demos.length <= 1) ||
-      // A call pick or a round-clock window. The aggregate cannot see either
-      // (filterNeedsRounds says why), and asking it anyway returns the table
-      // UNFILTERED — the filter bar moves and the numbers do not, which is
-      // exactly how this used to read as "the Database ignored my filter".
-      filterNeedsRounds(filter)
+      (scope.demos?.length && scope.demos.length <= 1)
     );
   }
 
@@ -3554,10 +3548,6 @@ export function createStatsPanel({
       !detail &&
       !lockedTeamName &&
       !hasEntityPick() &&
-      // A restored call pick or clock window: the aggregate would answer it
-      // unfiltered, and this query PAINTS. Without this line a share link
-      // carrying one flashes the wrong numbers before the rounds land.
-      !filterNeedsRounds(filter) &&
       !(scope.demos?.length && scope.demos.length <= 1);
     const earlyTables = canServeEarly ? refreshServerTables().catch(() => false) : null;
     // The catalogue decides whether a detail view or a search pick can be

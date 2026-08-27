@@ -1,10 +1,5 @@
 import assert from 'node:assert/strict';
-import {
-  filterNeedsRounds,
-  rowHasAnyRoundTag,
-  rowHasRoundTag,
-  rowPasses
-} from './statsMath.js';
+import { rowHasAnyRoundTag, rowHasRoundTag, rowPasses } from './statsMath.js';
 
 const row = {
   f: 'r1',
@@ -92,29 +87,6 @@ assert.equal(
   rowPasses(row, { side: 'CT', roundOwn: 'a-fake' }, 2),
   false,
   'CT side did not run a-fake'
-);
-
-// ---- which filters can only be answered from a round ----------------------
-//
-// Everything above reads `row.rl`. The server's aggregate does not carry it, so
-// a caller has to know to stay off that endpoint: this predicate is that answer,
-// and a filter that slips out of it comes back UNFILTERED rather than refused.
-assert.equal(filterNeedsRounds({}), false, 'the default filter is answerable');
-assert.equal(filterNeedsRounds(), false);
-assert.equal(
-  filterNeedsRounds({ maps: ['NUK'], side: 'T', econ: 4, result: 'won', hasAwp: true }),
-  false,
-  'map, side, buy, result and AWP are all one line per round'
-);
-assert.equal(filterNeedsRounds({ roundOwn: ['a-fake'] }), true);
-assert.equal(filterNeedsRounds({ roundOwn: 'a-fake' }), true, 'a bare string counts');
-assert.equal(filterNeedsRounds({ roundOpp: ['lobby-crunch'] }), true);
-assert.equal(filterNeedsRounds({ fromSec: 0 }), true, 'zero is a window, not absent');
-assert.equal(filterNeedsRounds({ toSec: 35 }), true);
-assert.equal(
-  filterNeedsRounds({ roundOwn: [], roundOpp: [], fromSec: null, toSec: null }),
-  false,
-  'cleared is not set'
 );
 
 console.log('statsMath.roundTags.test.js ok');

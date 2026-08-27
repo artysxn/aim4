@@ -399,6 +399,12 @@ export async function fetchAggregate(filter = {}, opts = {}) {
   }
   if (filter.hasAwp) params.set('hasAwp', '1');
   if (filter.oppHasAwp) params.set('oppHasAwp', '1');
+  const roundOwn = Array.isArray(filter.roundOwn) ? filter.roundOwn.filter(Boolean) : [];
+  const roundOpp = Array.isArray(filter.roundOpp) ? filter.roundOpp.filter(Boolean) : [];
+  if (roundOwn.length) params.set('roundOwn', roundOwn.join(','));
+  if (roundOpp.length) params.set('roundOpp', roundOpp.join(','));
+  if (Number.isFinite(filter.fromSec)) params.set('fromSec', String(filter.fromSec));
+  if (Number.isFinite(filter.toSec)) params.set('toSec', String(filter.toSec));
   if (filter.result) params.set('result', filter.result);
   if (filter.advantage) params.set('advantage', filter.advantage);
   if (filter.teamName) params.set('teamName', filter.teamName);
@@ -452,15 +458,12 @@ export async function fetchAggregateMatches(want, demos, filter = {}) {
 /**
  * The GET params as a POST body. Same names, same meanings, no length limit.
  *
- * Not every filter the Database offers appears here, and the omissions are
- * deliberate: `roundOwn` / `roundOpp` / `fromSec` / `toSec` read the round
- * library tags off a round, which the aggregate's resident store does not
- * carry. Sending them would be worse than leaving them out. The query comes
- * back UNFILTERED and the table repaints identical numbers under a changed
- * filter bar, which is what "the Database ignored my filter" was.
- * `statsMath.filterNeedsRounds` is the predicate that keeps a caller off this
- * endpoint while one of them is set; aggregateFilters.test.js holds the two
- * together. Add to all three or to none.
+ * EVERY filter the Database can set has to appear here and in the query-string
+ * builder above. A field that is quietly left out does not fail: the request
+ * comes back UNFILTERED and the table repaints identical numbers under a
+ * changed filter bar, which is exactly how the round-library picks read as "the
+ * Database ignored my filter". aggregateFilters.test.js walks the whole filter
+ * field by field to keep that from happening again.
  */
 function aggregateBody(filter = {}, opts = {}) {
   const body = {};
@@ -471,6 +474,12 @@ function aggregateBody(filter = {}, opts = {}) {
   if (filter.oppEcon !== null && filter.oppEcon !== undefined) body.oppEcon = filter.oppEcon;
   if (filter.hasAwp) body.hasAwp = 1;
   if (filter.oppHasAwp) body.oppHasAwp = 1;
+  const roundOwn = Array.isArray(filter.roundOwn) ? filter.roundOwn.filter(Boolean) : [];
+  const roundOpp = Array.isArray(filter.roundOpp) ? filter.roundOpp.filter(Boolean) : [];
+  if (roundOwn.length) body.roundOwn = roundOwn;
+  if (roundOpp.length) body.roundOpp = roundOpp;
+  if (Number.isFinite(filter.fromSec)) body.fromSec = filter.fromSec;
+  if (Number.isFinite(filter.toSec)) body.toSec = filter.toSec;
   if (filter.result) body.result = filter.result;
   if (filter.advantage) body.advantage = filter.advantage;
   if (filter.teamName) body.teamName = filter.teamName;

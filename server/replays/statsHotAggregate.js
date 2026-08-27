@@ -82,6 +82,77 @@ function econHasAwp(code) {
   return (Number(code) || 0) === 5;
 }
 
+/**
+ * The round-library half of a filter, resolved against one store.
+ *
+ * Returns null when the filter asks nothing of the calls, so the hot path pays
+ * one null check instead of anything per round. A pick naming calls this store
+ * has never interned resolves to an EMPTY id set, which excludes every round —
+ * the same answer rowPasses gives, and the opposite of ignoring the filter.
+ */
+function roundTagQuery(store, filter) {
+  const keys = (raw) => {
+    const list = Array.isArray(raw) ? raw : raw ? [String(raw)] : [];
+    return list.map((k) => String(k || '').trim()).filter(Boolean);
+  };
+  const own = keys(filter.roundOwn);
+  const opp = keys(filter.roundOpp);
+  const from = Number.isFinite(filter.fromSec) ? filter.fromSec : null;
+  const to = Number.isFinite(filter.toSec) ? filter.toSec : null;
+  if (!own.length && !opp.length && from === null && to === null) return null;
+  const ids = (list) => new Set(list.map((k) => store.tags.find(k)).filter((i) => i >= 0));
+  return {
+    own: own.length ? ids(own) : null,
+    opp: opp.length ? ids(opp) : null,
+    windowed: from !== null || to !== null,
+    lo: from === null ? -Infinity : from,
+    hi: to === null ? Infinity : to,
+    // With no call picked, the window asks about any NAMED call the side made,
+    // so "default" is the one key it does not count (statsMath.rowTagInWindow).
+    defaultId: store.tags.find('default')
+  };
+}
+
+/**
+ * Does this round pass the call / clock filter, for a side?
+ *
+ * `ownIsT` is the subject side, absolutely. Mirrors the last block of
+ * rowPasses: own picks and opponent picks are each an OR over the keys, and the
+ * window is asked of the OWN side's picked calls (or of any named call when
+ * nothing is picked). A round the library never tagged carries no run at all
+ * and so fails any pick, which is what excludes it.
+ */
+function roundTagsPass(q, store, r, ownIsT) {
+  // A store packed before the tag columns existed has no runs at all. Reading
+  // it as "no round made any call" excludes everything, which is visibly wrong;
+  // reading it as "no filter" would include everything, which is the silent
+  // kind. The snapshot layout stamp makes this unreachable in practice.
+  if (!store.rTagLen) return false;
+  const start = store.rTagOff[r];
+  const count = store.rTagLen[r];
+  let ownHit = !q.own;
+  let oppHit = !q.opp;
+  let windowHit = !q.windowed;
+  for (let i = 0; i < count; i++) {
+    const at = start + i;
+    const isOwn = (store.gTagSide[at] === 1) === ownIsT;
+    const key = store.gTagKey[at];
+    if (isOwn) {
+      if (q.own && q.own.has(key)) ownHit = true;
+      if (q.windowed && !windowHit && (q.own ? q.own.has(key) : key !== q.defaultId)) {
+        const when = store.gTagAt[at];
+        // NaN is a call that records no moment; a window is a claim about a
+        // clock and an untimed call has not made it.
+        if (when >= q.lo && when <= q.hi) windowHit = true;
+      }
+    } else if (q.opp && q.opp.has(key)) {
+      oppHit = true;
+    }
+    if (ownHit && oppHit && windowHit) return true;
+  }
+  return ownHit && oppHit && windowHit;
+}
+
 
 /**
  * @param {object} store  from packStore
@@ -130,6 +201,7 @@ export function aggregateHot(store, filter = {}, allowDemo = null) {
   const wantResult = filter.result || '';
   const wantAdvantage = filter.advantage || '';
   const wantTeamName = filter.teamName ? teamNameKey(filter.teamName) : '';
+  const tagQuery = roundTagQuery(store, filter);
   const rankFilter = hasRankFilter(filter)
     ? { ...filter, vrsRanks: filter.vrsRanks || loadGlobalRanks() }
     : filter;
@@ -178,6 +250,8 @@ export function aggregateHot(store, filter = {}, allowDemo = null) {
       if (wantOppEcon !== null && buyBucket(opp) !== wantOppEcon) continue;
       if (wantAwp && !econHasAwp(own)) continue;
       if (wantOppAwp && !econHasAwp(opp)) continue;
+      // Calls and clocks. Last of the cheap tests on purpose: it walks a run.
+      if (tagQuery && !roundTagsPass(tagQuery, store, r, sideIsT)) continue;
       const won = winner === team;
       if (wantResult === 'won' && !won) continue;
       if (wantResult === 'lost' && won) continue;
@@ -430,6 +504,7 @@ export function aggregateTeamsHot(store, filter = {}, playerRows = null, allowDe
   const wantResult = filter.result || '';
   const wantAdvantage = filter.advantage || '';
   const wantTeamName = filter.teamName ? teamNameKey(filter.teamName) : '';
+  const tagQuery = roundTagQuery(store, filter);
   const rankFilter = hasRankFilter(filter)
     ? { ...filter, vrsRanks: filter.vrsRanks || loadGlobalRanks() }
     : filter;
@@ -482,6 +557,8 @@ export function aggregateTeamsHot(store, filter = {}, playerRows = null, allowDe
       if (wantOppEcon !== null && buyBucket(opp) !== wantOppEcon) continue;
       if (wantAwp && !econHasAwp(own)) continue;
       if (wantOppAwp && !econHasAwp(opp)) continue;
+      // Calls and clocks. Last of the cheap tests on purpose: it walks a run.
+      if (tagQuery && !roundTagsPass(tagQuery, store, r, sideIsT)) continue;
       const won = winner === team;
       if (wantResult === 'won' && !won) continue;
       if (wantResult === 'lost' && won) continue;

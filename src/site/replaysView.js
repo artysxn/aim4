@@ -918,6 +918,48 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     renderResults();
   }
 
+  /**
+   * Open one whole match in the timeline: the library's play button, and the
+   * `/demos?demo=` link every per-match table row now carries on its date.
+   *
+   * Its own function because the two entry points must not drift. Whether the
+   * viewer gets the WHOLE match matters beyond the round list: statsDemoId is
+   * what turns the live scoreboard and the coach on, and a link that opened the
+   * same rounds without it would look identical and quietly lack both.
+   */
+  async function openDemoById(id, { announce = false } = {}) {
+    const key = String(id || '').trim();
+    if (!key) return false;
+    let demo = demos.find((d) => d.id === key);
+    if (!demo) {
+      try {
+        demo = (await fetchDemo(key))?.demo || null;
+      } catch {
+        demo = null;
+      }
+    }
+    if (!demo) {
+      // A click in the library can only miss on a demo that just went away; a
+      // link can arrive for anything, so that case gets told.
+      if (announce) setStatus('That match is not in this library.', true);
+      return false;
+    }
+    const list = (demo.rounds || []).map((r) => ({
+      ...r,
+      map: demo.map,
+      tickRate: r.tickRate || demo.tickRate
+    }));
+    // statsDemoId marks a full unspliced match: live scoreboard + coach.
+    // Round picks / playlists omit it so those tools stay unavailable.
+    launchViewer(
+      list,
+      'timeline',
+      `${demo.team1?.name || 'Team 1'} vs ${demo.team2?.name || 'Team 2'}`,
+      { statsDemoId: demo.id }
+    );
+    return true;
+  }
+
   async function handleDemoAction(target) {
     const open = target.closest('[data-open]');
     const del = target.closest('[data-delete]');
@@ -926,30 +968,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     const demoStats = target.closest('[data-demo-stats]');
 
     if (open) {
-      const id = open.dataset.open;
-      let demo = demos.find((d) => d.id === id);
-      if (!demo) {
-        try {
-          demo = (await fetchDemo(id))?.demo || null;
-        } catch {
-          demo = null;
-        }
-      }
-      if (demo) {
-        const list = (demo.rounds || []).map((r) => ({
-          ...r,
-          map: demo.map,
-          tickRate: r.tickRate || demo.tickRate
-        }));
-        // statsDemoId marks a full unspliced match: live scoreboard + coach.
-        // Round picks / playlists omit it so those tools stay unavailable.
-        launchViewer(
-          list,
-          'timeline',
-          `${demo.team1?.name || 'Team 1'} vs ${demo.team2?.name || 'Team 2'}`,
-          { statsDemoId: demo.id }
-        );
-      }
+      await openDemoById(open.dataset.open);
       return true;
     }
     if (demoStats) {
@@ -4233,6 +4252,15 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
         } else if (params.round && params.round !== openedRound) {
           openedRound = params.round;
           openSharedRound(params.round, momentFromParams(params));
+        } else if (params.demo) {
+          // One whole match, by id. Namespaced in the same guard the round
+          // links use so closing the viewer rewrites the URL and re-entering
+          // the view does not reopen what was closed.
+          const key = `demo:${params.demo}`;
+          if (key !== openedRound) {
+            openedRound = key;
+            void openDemoById(params.demo, { announce: true });
+          }
         }
       }
     },

@@ -123,6 +123,7 @@ export function createPacker(capacityRounds = 1024, seed = null) {
   const maps = interner();
   const sides = interner();
   const players = interner();
+  const tags = interner();
 
   // ---- per round -----------------------------------------------------------
   const rDemo = new Int32Array(nRounds);
@@ -137,6 +138,13 @@ export function createPacker(capacityRounds = 1024, seed = null) {
   const rHasCore = new Uint8Array(nRounds); // row.cok / row.cod present
   const rFileIdx = new Int32Array(nRounds); // into `files`, for filter.files
   const files = interner();
+  // Round-library tags, the one thing on a round that is a LIST: a side can
+  // have made several calls, each with its own clock. Held the way a sparse
+  // matrix is — a run per round in the flat tag columns below — because the
+  // alternative (a fixed slot per possible call, per side, per round) is 27
+  // columns of mostly zero on Anubis alone.
+  const rTagOff = new Int32Array(nRounds);
+  const rTagLen = new Uint8Array(nRounds);
   // Team-level round columns, for the Teams table. Held per round rather than
   // per seat: possession, PRW and advantage conversion are properties of a
   // side, not of a player.
@@ -184,15 +192,27 @@ export function createPacker(capacityRounds = 1024, seed = null) {
   const demos = [];
   const DUEL_STRIDE = 3 + DUEL_BUCKETS * 3;
 
+  // ---- per tag -------------------------------------------------------------
+  // Two or three per round in practice, so the capacity hint is rounds x 4 and
+  // it grows like everything else when a map's library is denser than that.
+  let nTags = Math.max(4, nRounds * 4, seed?.gTagKey?.length || 0);
+  const gTagKey = new Int32Array(nTags);   // into `tags`
+  const gTagSide = new Uint8Array(nTags);  // 1 = T, 2 = CT, absolute
+  /** Trigger clock in seconds, or NaN for a call that records no moment. */
+  const gTagAt = new Float32Array(nTags);
+
   /** Live counts, as opposed to allocated capacity. */
   let r = 0;
+  let t = 0;
 
   /** Column table, so growth does not mean naming every array twice. */
   const roundCols = {
     rDemo, rMap, rSide1, rEcon1, rEcon2, rWinner, rOkSeat, rOdSeat, rHasDuel, rHasCore, rFileIdx,
+    rTagOff, rTagLen,
     rPrw1, rPrw2, rHasPrw1, rHasPrw2, rPos1, rPos2, rHasPos1, rHasPos2,
     rAca1, rAck1, rAca2, rAck2, rHasAc, rUtt1, rUtt2, rHasUtt1, rHasUtt2
   };
+  const tagCols = { gTagKey, gTagSide, gTagAt };
   const seatCols = {
     sPlayer, sTeam, sStats, sSwing, sHasSwing, sR3, sAim, sHasAim, sUtil, sHasUtil,
     sDuel, sHasDuelSeat, sPsdt, sHasPsdt, sDt, sHasDt, sAwHold, sCoreKill, sCoreDeath, sName
@@ -225,6 +245,19 @@ export function createPacker(capacityRounds = 1024, seed = null) {
     nRounds = next;
     nSeats = nRounds * SEATS_PER_ROUND;
   }
+
+  /** Tags grow on their own axis: a round can carry any number of them. */
+  function growTags(needTags) {
+    if (needTags <= nTags) return;
+    const next = Math.max(needTags, Math.ceil(nTags * 1.5));
+    for (const k of Object.keys(tagCols)) {
+      const old = tagCols[k];
+      const bigger = new old.constructor(next);
+      bigger.set(old);
+      tagCols[k] = bigger;
+    }
+    nTags = next;
+  }
   seatCols.sPlayer.fill(-1);
 
   if (seed) {
@@ -233,13 +266,17 @@ export function createPacker(capacityRounds = 1024, seed = null) {
     // from here exactly as they would after a live build.
     for (const k of Object.keys(roundCols)) roundCols[k].set(seed[k]);
     for (const k of Object.keys(seatCols)) seatCols[k].set(seed[k]);
+    growTags(seed.nTags || 0);
+    for (const k of Object.keys(tagCols)) tagCols[k].set(seed[k]);
     for (const v of seed.maps.values) maps.id(v);
     for (const v of seed.sides.values) sides.id(v);
     for (const v of seed.players.values) players.id(v);
     for (const v of seed.names.values) names.id(v);
     for (const v of seed.files.values) files.id(v);
+    for (const v of seed.tags.values) tags.id(v);
     demos.push(...seed.demos);
     r = seed.nRounds;
+    t = seed.nTags || 0;
   }
 
   function addEntry(e) {
@@ -247,6 +284,7 @@ export function createPacker(capacityRounds = 1024, seed = null) {
     grow(r + e.rounds.length);
     const {
       rDemo, rMap, rSide1, rEcon1, rEcon2, rWinner, rOkSeat, rOdSeat, rHasDuel, rHasCore, rFileIdx,
+      rTagOff, rTagLen,
       rPrw1, rPrw2, rHasPrw1, rHasPrw2, rPos1, rPos2, rHasPos1, rHasPos2,
       rAca1, rAck1, rAca2, rAck2, rHasAc, rUtt1, rUtt2, rHasUtt1, rHasUtt2
     } = roundCols;
@@ -284,6 +322,36 @@ export function createPacker(capacityRounds = 1024, seed = null) {
       rFileIdx[r] = files.id(row.f || '');
       rHasDuel[r] = row.du != null && typeof row.du === 'object' ? 1 : 0;
       rHasCore[r] = Array.isArray(row.cok) || Array.isArray(row.cod) ? 1 : 0;
+      // The round-library bag, flattened. `m` is a set of named moments and the
+      // tag's clock is the LAST of them (statsMath.tagTrigger: every mark is a
+      // criterion, so the latest is when the read came true). An untimed call
+      // keeps NaN, which is what excludes it from a window rather than parking
+      // it at zero.
+      rTagOff[r] = t;
+      {
+        let count = 0;
+        for (const [side, list] of [[1, row.rl?.t], [2, row.rl?.ct]]) {
+          if (!Array.isArray(list)) continue;
+          for (const tag of list) {
+            const key = String(tag?.k || '').trim();
+            if (!key || count >= 255) continue;
+            growTags(t + 1);
+            tagCols.gTagKey[t] = tags.id(key);
+            tagCols.gTagSide[t] = side;
+            let at = null;
+            const marks = tag?.m;
+            if (marks && typeof marks === 'object') {
+              for (const value of Object.values(marks)) {
+                if (Number.isFinite(value) && (at === null || value > at)) at = value;
+              }
+            }
+            tagCols.gTagAt[t] = at === null ? NaN : at;
+            t += 1;
+            count += 1;
+          }
+        }
+        rTagLen[r] = count;
+      }
       rOkSeat[r] = -1;
       rOdSeat[r] = -1;
       if (Number.isFinite(row.prw1)) { rPrw1[r] = row.prw1; rHasPrw1[r] = 1; }
@@ -407,6 +475,7 @@ export function createPacker(capacityRounds = 1024, seed = null) {
   function finish() {
     const {
       rDemo, rMap, rSide1, rEcon1, rEcon2, rWinner, rOkSeat, rOdSeat, rHasDuel, rHasCore, rFileIdx,
+      rTagOff, rTagLen,
       rPrw1, rPrw2, rHasPrw1, rHasPrw2, rPos1, rPos2, rHasPos1, rHasPos2,
       rAca1, rAck1, rAca2, rAck2, rHasAc, rUtt1, rUtt2, rHasUtt1, rHasUtt2
     } = roundCols;
@@ -414,6 +483,7 @@ export function createPacker(capacityRounds = 1024, seed = null) {
       sPlayer, sTeam, sStats, sSwing, sHasSwing, sR3, sAim, sHasAim, sUtil, sHasUtil,
       sDuel, sHasDuelSeat, sPsdt, sHasPsdt, sDt, sHasDt, sAwHold, sCoreKill, sCoreDeath, sName
     } = seatCols;
+    const { gTagKey, gTagSide, gTagAt } = tagCols;
     const usedRounds = r;
     const usedSeats = r * SEATS_PER_ROUND;
     // Trim to what was actually filled. subarray shares the buffer, so an
@@ -421,9 +491,12 @@ export function createPacker(capacityRounds = 1024, seed = null) {
     const cutR = (a) => a.subarray(0, usedRounds);
     const cutS = (a, w) => a.subarray(0, usedSeats * w);
 
+    const cutT = (a) => a.subarray(0, t);
+
     const out = {
       nRounds: usedRounds,
       nSeats: usedSeats,
+      nTags: t,
       seatsPerRound: SEATS_PER_ROUND,
       duelStride: DUEL_STRIDE,
       demos,
@@ -432,10 +505,13 @@ export function createPacker(capacityRounds = 1024, seed = null) {
       players,
       names,
       files,
+      tags,
       rDemo: cutR(rDemo), rMap: cutR(rMap), rSide1: cutR(rSide1),
       rEcon1: cutR(rEcon1), rEcon2: cutR(rEcon2), rWinner: cutR(rWinner),
       rOkSeat: cutR(rOkSeat), rOdSeat: cutR(rOdSeat),
       rHasDuel: cutR(rHasDuel), rHasCore: cutR(rHasCore), rFileIdx: cutR(rFileIdx),
+      rTagOff: cutR(rTagOff), rTagLen: cutR(rTagLen),
+      gTagKey: cutT(gTagKey), gTagSide: cutT(gTagSide), gTagAt: cutT(gTagAt),
       rPrw1: cutR(rPrw1), rPrw2: cutR(rPrw2),
       rHasPrw1: cutR(rHasPrw1), rHasPrw2: cutR(rHasPrw2),
       rPos1: cutR(rPos1), rPos2: cutR(rPos2),

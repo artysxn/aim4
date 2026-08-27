@@ -29,7 +29,16 @@ function entryFor(i) {
     return { f: `d${i}-r${k}`, d: `d${i}`, m: map, n: k + 1, w: (k % 2) + 1,
       s1: k < 2 ? 'T' : 'CT', s2: k < 2 ? 'CT' : 'T', e1: rnd(6), e2: rnd(6),
       ok: pids[rnd(10)], od: pids[rnd(10)], p, sw, du, am, ut,
-      cok: [], cod: [], mv: {}, aw: {}, ph: {}, utt: {}, rl: null, dur: 60, pt: null,
+      cok: [], cod: [], mv: {}, aw: {}, ph: {}, utt: {},
+      // A call a side and a clock on one of them: the tag columns are a run per
+      // round, so an empty `rl` everywhere would let this file pass while the
+      // snapshot silently dropped them.
+      rl: {
+        v: 7,
+        t: [{ k: `t-call-${k % 3}`, m: { entry: 10 + k } }],
+        ct: [{ k: `ct-call-${k % 2}`, m: k % 2 ? {} : { setup: 20 + k } }]
+      },
+      dur: 60, pt: null,
       kt: [], ev: [], pos1: 0.5, pos2: 0.5, prw1: 0.5, prw2: 0.5, aca1: 0, ack1: 0, aca2: 0, ack2: 0 };
   });
   return { id: `d${i}`, v: 19, key: `19|${i}|${i}|${rounds.length}|A|B`, map, mapName: map,
@@ -42,7 +51,11 @@ function entryFor(i) {
 const ENTRIES = [];
 for (let i = 0; i < 24; i++) ENTRIES.push(entryFor(i));
 const FILTERS = [{}, { maps: ['de_nuke'] }, { side: 'CT' }, { result: 'won' }, { econ: 4 },
-  { dateFrom: '2026-01-05', dateTo: '2026-01-20' }];
+  { dateFrom: '2026-01-05', dateTo: '2026-01-20' },
+  // The tag columns, through the file and through an append onto it.
+  { side: 'T', roundOwn: ['t-call-1'] },
+  { roundOpp: ['ct-call-0'] },
+  { fromSec: 12, toSec: 30 }];
 
 const sameRows = (a, b, what) => {
   assert.equal(b.length, a.length, `${what}: row count`);
@@ -85,6 +98,26 @@ for (const filter of FILTERS) {
   );
 }
 assert.deepEqual([...snap.store.maps.values], [...built.maps.values], 'interner order preserved');
+assert.deepEqual(
+  [...snap.store.tags.values],
+  [...built.tags.values],
+  'the tag interner round-trips, so a stored key id still means that call'
+);
+assert.equal(snap.store.nTags, built.nTags, 'and every tag came back');
+assert.ok(built.nTags > built.nRounds, 'the fixture really does tag both sides');
+assert.deepEqual([...snap.store.rTagLen], [...built.rTagLen], 'run lengths');
+assert.deepEqual([...snap.store.rTagOff], [...built.rTagOff], 'run offsets');
+{
+  // A timed call keeps its clock through the file; an untimed one keeps its NaN,
+  // which is what excludes it from a window rather than parking it at zero.
+  const clocks = [...built.gTagAt];
+  assert.ok(clocks.some((n) => Number.isFinite(n)), 'some calls are timed');
+  assert.ok(clocks.some((n) => Number.isNaN(n)), 'and some are not');
+  const same = [...snap.store.gTagAt].every(
+    (n, i) => (Number.isNaN(n) && Number.isNaN(clocks[i])) || n === clocks[i]
+  );
+  assert.ok(same, 'every clock, NaN included, survives the round trip');
+}
 
 // --- appending onto a loaded snapshot == packing everything at once ----------
 {
@@ -94,6 +127,8 @@ assert.deepEqual([...snap.store.maps.values], [...built.maps.values], 'interner 
   const appended = packer.finish();
   const full = packStore(ENTRIES);
   assert.equal(appended.nRounds, full.nRounds, 'appended rounds all landed');
+  assert.equal(appended.nTags, full.nTags, 'and so did their tags');
+  assert.deepEqual([...appended.rTagOff], [...full.rTagOff], 'runs continue past the seeded tags');
   for (const filter of FILTERS) {
     sameRows(aggregateHot(full, filter), aggregateHot(appended, filter), `append ${JSON.stringify(filter)}`);
   }

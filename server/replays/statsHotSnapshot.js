@@ -49,7 +49,12 @@ function layoutStamp() {
     duelBuckets: DUEL_BUCKETS,
     r3: R3_FIELDS.join('|'),
     aim: AIM_FIELDS.join('|'),
-    util: UTILITY_FIELDS.join('|')
+    util: UTILITY_FIELDS.join('|'),
+    // The round-library tag run: off/len per round into key/side/clock. Named
+    // here so every snapshot written before the tags existed is discarded — the
+    // columns are read back by name, and a store missing them would answer a
+    // call filter with "no round has ever made that call".
+    tags: 'off|len:key|side|at'
   };
 }
 
@@ -57,10 +62,11 @@ const CTORS = {
   Int8Array,
   Uint8Array,
   Int32Array,
+  Float32Array,
   Float64Array
 };
 
-const INTERNERS = ['maps', 'sides', 'players', 'names', 'files'];
+const INTERNERS = ['maps', 'sides', 'players', 'names', 'files', 'tags'];
 
 /** Column keys in the store, in a fixed serialization order. */
 function columnKeys(store) {
@@ -89,6 +95,7 @@ export async function saveSnapshot(file, store, ids) {
     layout: layoutStamp(),
     nRounds: store.nRounds,
     nSeats: store.nSeats,
+    nTags: store.nTags || 0,
     seatsPerRound: store.seatsPerRound,
     duelStride: store.duelStride,
     savedAt: Date.now(),
@@ -153,6 +160,7 @@ export async function loadSnapshot(file) {
     const store = {
       nRounds: header.nRounds,
       nSeats: header.nSeats,
+      nTags: header.nTags || 0,
       seatsPerRound: header.seatsPerRound,
       duelStride: header.duelStride,
       demos: header.demos

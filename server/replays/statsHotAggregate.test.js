@@ -18,6 +18,26 @@ import { attachExpectedRatings } from '../../src/replays/shared/expectedRating.j
 import { attachPlayerRoles } from '../../src/replays/roles/assignRoles.js';
 
 const MAPS = ['de_nuke', 'de_mirage', 'de_inferno'];
+
+// Round-library calls, so the tag columns have something to be compared over.
+// Deliberately not drawn from the generator below: these have to be stable
+// while the numeric fixture keeps its existing sequence.
+const T_CALLS = ['t-a-fake', 't-mid-take', 't-b-split', 'default'];
+const CT_CALLS = ['ct-lobby-crunch', 'ct-water', 'default'];
+
+/**
+ * The `rl` bag for one round: a timed call, sometimes a second untimed one, and
+ * every seventh round with no bag at all — an index written before the library
+ * covered its map, which a call filter has to exclude rather than wave through.
+ */
+function tagsFor(i, k) {
+  if ((i + k) % 7 === 0) return null;
+  const t = [{ k: T_CALLS[(i + k) % T_CALLS.length], m: { entry: 8 + ((i * 3 + k) % 40) } }];
+  if (k % 3 === 0) t.push({ k: T_CALLS[(i + k + 1) % T_CALLS.length], m: {} });
+  const ct = [{ k: CT_CALLS[(i + k) % CT_CALLS.length], m: { setup: 5 + ((i + k * 2) % 30) } }];
+  return { v: 7, t, ct };
+}
+
 let seed = 42;
 const rnd = (n) => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed % n; };
 
@@ -53,7 +73,7 @@ function makeEntry(i) {
       ok: pids[rnd(10)], od: pids[rnd(10)], p, sw, am, ut, du, mv, aw,
       cok: rnd(2) ? [pids[rnd(10)]] : [], cod: rnd(2) ? [pids[rnd(10)]] : [],
       dur: 40 + rnd(50), pt: rnd(2) ? rnd(60) : null,
-      kt: [], ev: [], ph: {}, utt: {}, rl: null,
+      kt: [], ev: [], ph: {}, utt: {}, rl: tagsFor(i, k),
       pos1: 0.5, pos2: 0.5, prw1: 0.5, prw2: 0.5, aca1: 0, ack1: 0, aca2: 0, ack2: 0 };
   });
   return { id: `d${i}`, v: 19, key: `19|${i}|${i}|${rounds.length}|T${i % 4}|T${(i + 1) % 4}`,
@@ -111,9 +131,23 @@ const FILTERS = [
   ['oppHasAwp', { oppHasAwp: true }],
   ['both AWPs', { hasAwp: true, oppHasAwp: true }],
   ['hasAwp + side', { hasAwp: true, side: 'T' }],
+  ['call own', { side: 'T', roundOwn: ['t-a-fake'] }],
+  ['call own, no side', { roundOwn: ['t-a-fake'] }],
+  ['call opp', { side: 'CT', roundOpp: ['t-a-fake'] }],
+  ['two calls', { roundOwn: ['t-a-fake', 't-mid-take'] }],
+  ['own and opp calls', { side: 'T', roundOwn: ['t-mid-take'], roundOpp: ['ct-water'] }],
+  ['unknown call', { roundOwn: ['nope-never-tagged'] }],
+  ['window', { fromSec: 10, toSec: 40 }],
+  ['window, open ended', { fromSec: 30 }],
+  ['call in window', { side: 'T', roundOwn: ['t-a-fake'], fromSec: 0, toSec: 30 }],
+  ['default only', { roundOwn: ['default'] }],
   ['teamName', { teamName: 'Team 1' }],
   ['date window', { dateFrom: '2026-01-05', dateTo: '2026-01-20' }],
-  ['combined', { maps: ['de_mirage'], side: 'CT', econ: 4, result: 'won' }]
+  ['combined', { maps: ['de_mirage'], side: 'CT', econ: 4, result: 'won' }],
+  [
+    'the reported shape',
+    { maps: ['de_nuke'], side: 'T', roundOwn: ['t-mid-take'], hasAwp: true }
+  ]
 ];
 
 let checked = 0;
@@ -400,6 +434,42 @@ assert.deepEqual(aggregateTeamsHot(store, { maps: ['de_train'] }), []);
   assert.ok(
     teamRounds({ hasAwp: true }) > 0 && teamRounds({ hasAwp: true }) < teamRounds({}),
     'and the Teams tab is filtered too, not only Players'
+  );
+}
+
+// The call and clock filters have to BITE too, and for the same reason: two
+// implementations that both ignore a filter agree with each other perfectly.
+{
+  const roundsOf = (filter) =>
+    aggregateHot(store, filter).reduce((n, p) => n + (p.rounds || 0), 0);
+  const open = roundsOf({});
+  const oneCall = roundsOf({ side: 'T', roundOwn: ['t-a-fake'] });
+  assert.ok(oneCall > 0, 'the fixture has rounds tagged with that call');
+  assert.ok(oneCall < open, 'and picking it excludes the rounds without it');
+  assert.ok(
+    roundsOf({ roundOwn: ['t-a-fake', 't-mid-take'] }) > roundsOf({ roundOwn: ['t-a-fake'] }),
+    'two calls are an OR, not an AND'
+  );
+  assert.equal(
+    aggregateHot(store, { roundOwn: ['nope-never-tagged'] }).length,
+    0,
+    'a call no round ever made matches no round, rather than every round'
+  );
+  const windowed = roundsOf({ fromSec: 10, toSec: 20 });
+  assert.ok(windowed > 0 && windowed < open, 'the clock window narrows too');
+  assert.ok(
+    roundsOf({ side: 'T', roundOwn: ['t-a-fake'], fromSec: 0, toSec: 12 }) < oneCall,
+    'and it narrows the call it is asked with'
+  );
+  const teamRounds = (filter) =>
+    aggregateTeamsHot(store, filter, aggregateHot(store, filter)).reduce(
+      (n, t) => n + (t.rounds || 0),
+      0
+    );
+  assert.ok(
+    teamRounds({ side: 'T', roundOwn: ['t-a-fake'] }) > 0 &&
+      teamRounds({ side: 'T', roundOwn: ['t-a-fake'] }) < teamRounds({ side: 'T' }),
+    'the Teams tab is filtered by calls as well'
   );
 }
 
