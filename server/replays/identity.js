@@ -87,6 +87,33 @@ export function isConfigured() {
 }
 
 /**
+ * May this account add demos to the shared library?
+ *
+ * Registration by username is deliberately cheap, and cheap registration plus
+ * upload rights would fill the shared store anonymously. Writing demos
+ * therefore requires one real identity behind the account: Google (a Supabase
+ * identity) or Steam (verified OpenID link on the profile). Watching,
+ * practising and share links ask for nothing.
+ *
+ * Pure and exported so the rule is testable without a request in hand.
+ */
+export function demoUploadIdentity(me) {
+  if (!me?.signedIn) return { ok: false, error: 'Sign in first.' };
+  const providers = me.providers || [];
+  const anchored =
+    me.admin ||
+    me.provider === 'google' ||
+    providers.includes('google') ||
+    Boolean(me.steamId);
+  if (anchored) return { ok: true };
+  return {
+    ok: false,
+    error:
+      'Link Google or Steam to your account before uploading demos. Open Account, then Connections.'
+  };
+}
+
+/**
  * Verify the bearer token and attach admin status and entitlements. Cached by
  * token, so the three lookups happen once per minute per session rather than
  * once per request.
@@ -108,7 +135,12 @@ async function resolveActor(req) {
       const body = await res.json();
       if (body?.id) {
         const id = String(body.id);
-        const [admin, entitlements] = await Promise.all([isSiteAdmin(id), loadEntitlements(id)]);
+        const [admin, entitlements, profile] = await Promise.all([
+          isSiteAdmin(id),
+          loadEntitlements(id),
+          // The linked Steam identity lives on the profile, not in auth.
+          db.selectOne('profiles', { select: 'steam_id', id: `eq.${id}` }).catch(() => null)
+        ]);
         user = Object.freeze({
           id,
           username: usernameOf(body),
@@ -116,6 +148,14 @@ async function resolveActor(req) {
           // and never used to key anything: the id is the identity.
           email: String(body.email || ''),
           provider: String(body.app_metadata?.provider || ''),
+          // Every identity attached to the account, which is what the upload
+          // gate reads: a username account that has since linked Google keeps
+          // provider 'email' but gains 'google' here.
+          providers: Object.freeze(
+            (Array.isArray(body.app_metadata?.providers) ? body.app_metadata.providers : [])
+              .map((p) => String(p))
+          ),
+          steamId: String(profile?.steam_id || ''),
           createdAt: String(body.created_at || ''),
           signedIn: true,
           admin,

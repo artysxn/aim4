@@ -13,14 +13,19 @@
 .pf-search {
   box-sizing: border-box;
   width: 220px;
-  height: 32px;
+  height: 34px;
   margin: 0;
-  padding: 0 10px;
+  padding: 0 16px 0 36px;
   border: 0;
-  border-radius: var(--radius-sm);
-  background: #050505;
-  color: #5c5c62;
-  font: 400 14px var(--font-body);
+  /* The Database page-head's search pill, as a live input. */
+  border-radius: 999px;
+  background-color: rgba(255, 255, 255, 0.07);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23888890' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cline x1='16.5' y1='16.5' x2='21' y2='21'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: 13px center;
+  background-size: 14px;
+  color: #9a9aa2;
+  font: 400 13px var(--font-body);
   outline: none;
   appearance: none;
   -webkit-appearance: none;

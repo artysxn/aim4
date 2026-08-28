@@ -188,6 +188,7 @@
           </a>
         </nav>
 
+        <div class="side-divider" aria-hidden="true"></div>
         <button type="button" class="side-account" id="side-account-btn">
           <span class="side-icon" data-icon="account"></span>
           <span class="side-label side-account-text">
@@ -365,6 +366,11 @@
             </div>
           </section>
 
+          <!-- Changelog, docs, contact ------------------------------------ -->
+          <section class="view" data-view="changelog"></section>
+          <section class="view" data-view="docs"></section>
+          <section class="view" data-view="contact"></section>
+
           <!-- Routines --------------------------------------------------- -->
           <section class="view" data-view="routines">
             <div class="view-pad">
@@ -448,19 +454,24 @@
               <a href="/leaderboards" data-nav="leaderboards">Leaderboards</a>
               <a href="/demos" data-nav="demos">Demo Manager</a>
               <a href="/database" data-nav="database">Database</a>
-              <a href="/football" data-nav="football">Football</a>
             </div>
             <div class="foot-col">
-              <h4>Tools</h4>
+              <h4>Resources</h4>
+              <a href="/docs" data-nav="docs">Documentation</a>
+              <a href="/changelog" data-nav="changelog">Changelog</a>
               <a href="/tools/level-editor.html">Level Editor</a>
             </div>
             <div class="foot-col">
-              <h4>Community</h4>
+              <h4>Support</h4>
+              <a href="/contact" data-nav="contact">Contact</a>
+              <a href="/account" data-nav="account">My Account</a>
               <a href="https://x.com/artys4n" target="_blank" rel="noopener noreferrer">X (Twitter)</a>
             </div>
           </div>
           <div class="foot-bottom">
             <span>Made by <a href="https://x.com/artys4n" target="_blank" rel="noopener noreferrer">@artys4n</a></span>
+            <span class="foot-sep">·</span>
+            <a href="/changelog" data-nav="changelog">What's new</a>
           </div>
         </footer>
       </div>
@@ -489,15 +500,26 @@
         </button>
         <p class="auth-divider">or</p>
         <label class="auth-field">
-          <span>Username or email</span>
+          <span id="auth-identifier-label">Username or email</span>
           <input type="text" id="auth-identifier" maxlength="120" spellcheck="false" autocomplete="username" />
         </label>
         <label class="auth-field">
           <span>Password</span>
           <input type="password" id="auth-password" autocomplete="current-password" />
         </label>
+        <!-- Registration only: what a fresh username account can and cannot
+             do, said before the account exists rather than at the first
+             upload attempt. -->
+        <p class="auth-register-note" id="auth-register-note" hidden>
+          A username account can watch, practise, and join a team.
+          Link Google or Steam later to upload demos.
+        </p>
         <p class="auth-status" id="auth-status"></p>
         <button type="button" class="btn primary" id="auth-submit" style="width:100%">Sign in</button>
+        <p class="auth-switch">
+          <span id="auth-switch-text">New here?</span>
+          <button type="button" class="auth-switch-btn" id="auth-switch-btn">Create an account</button>
+        </p>
       </div>
     </div>
 

@@ -427,13 +427,45 @@ body {
   pointer-events: none;
 }
 
+/* The map's own screenshot behind the bar, with a scrim so the name, the
+   percent, and the tip stay readable over any part of any map. Blurred a
+   touch and dimmed: it is a backdrop, not the map yet — the sharp version is
+   what the reveal underneath delivers. */
+.c3-boot-shot {
+  position: absolute;
+  inset: 0;
+  background-size: cover;
+  background-position: center;
+  filter: blur(3px) brightness(0.6) saturate(0.9);
+  transform: scale(1.04); /* hide the blur's soft edges */
+}
+
+.c3-boot.has-shot::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse at center, rgba(0, 0, 0, 0.25) 0%, rgba(0, 0, 0, 0.55) 100%),
+    linear-gradient(to top, rgba(0, 0, 0, 0.65), rgba(0, 0, 0, 0) 30%);
+}
+
+/* Everything readable sits above the shot and the scrim. The tip is not in
+   this list: it positions itself absolutely and carries its own z-index. */
+.c3-boot > .c3-boot-name,
+.c3-boot > .c3-boot-bar,
+.c3-boot > .c3-boot-text {
+  position: relative;
+  z-index: 1;
+}
+
 .c3-boot-name {
   font-family: var(--font-display, inherit);
-  font-size: 22px;
+  font-size: 26px;
   font-weight: 600;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
   color: #ffffff;
+  text-shadow: 0 2px 12px rgba(0, 0, 0, 0.6);
 }
 
 .c3-boot-bar {
@@ -457,6 +489,45 @@ body {
   color: rgba(255, 255, 255, 0.68);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
+}
+
+/* The rotating tip, pinned to the bottom so the center stays calm. Absolute,
+   so it works over both boot layouts (the Hud's flex column and the
+   timeline's) without either knowing it is there. */
+.c3-boot-tip {
+  position: absolute;
+  z-index: 1;
+  left: 50%;
+  bottom: clamp(24px, 7vh, 64px);
+  transform: translateX(-50%);
+  width: min(560px, 84vw);
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 10px;
+  text-align: center;
+  opacity: 1;
+  transition: opacity 0.3s ease;
+}
+
+.c3-boot-tip.is-swapping {
+  opacity: 0;
+}
+
+.c3-boot-tip-label {
+  flex: none;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--accent, #e60611);
+}
+
+.c3-boot-tip-text {
+  font-size: 13px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.85);
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.7);
 }
 
 .c3-load {

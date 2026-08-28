@@ -19,7 +19,9 @@ import { ensureEffectiveEntitlements } from '../entitlements/load.js';
 import { whoami } from '../replays/identity.js';
 import {
   activeSubscription,
+  cancelSubscription,
   cancelTrial,
+  resumeSubscription,
   seatsHeldBy,
   startTrial,
   trialDays,
@@ -27,9 +29,12 @@ import {
   trialPlan,
   trialsEnabled
 } from '../entitlements/subscriptions.js';
+import { billingConfigured, provider } from '../billing/provider.js';
 import { ValidationError } from '../entitlements/grants.js';
 import { db } from '../entitlements/service.js';
 import { passwordLogin } from './login.js';
+import { registerAccount } from './register.js';
+import { completeLink, startUrl } from './steam.js';
 import {
   cancelDeletion,
   deleteAccount,
@@ -142,6 +147,59 @@ async function route(req, res, url, me) {
     return true;
   }
 
+  // ---- registration --------------------------------------------------------
+  // Public like login: the caller has no session yet. Rate limits, the
+  // internal login email, and the link-before-upload rule are in register.js.
+  if (req.method === 'POST' && p === '/api/account/register') {
+    const body = await readJson(req, 4 * 1024);
+    const { status, body: out } = await registerAccount(req, {
+      username: body.username,
+      password: body.password
+    });
+    json(res, status, out);
+    return true;
+  }
+
+  // ---- Steam link ----------------------------------------------------------
+  // /start is a POST answered with the Steam URL rather than a 302: the
+  // session lives in the Authorization header, and a top-level navigation
+  // carries no header. The client fetches the URL, then navigates to it; the
+  // signed state inside it is what ties the return leg back to this account.
+  if (req.method === 'POST' && p === '/api/account/steam/start') {
+    if (!me.signedIn) {
+      json(res, 401, { error: 'Sign in first.' });
+      return true;
+    }
+    const to = startUrl(req, me.id);
+    if (!to) {
+      json(res, 503, { error: 'Steam linking is not configured on this deployment.' });
+      return true;
+    }
+    json(res, 200, { url: to });
+    return true;
+  }
+
+  if (req.method === 'GET' && p === '/api/account/steam/return') {
+    // No session required here: the state token IS the tie to the account.
+    // Steam redirects the top-level browser, and some setups drop the
+    // Authorization-carrying fetch layer entirely on that navigation.
+    const result = await completeLink(url.searchParams);
+    const to = result.ok ? '/account?steam=linked' : `/account?steam=${result.error}`;
+    res.writeHead(302, { Location: to, 'Cache-Control': 'no-store' });
+    res.end();
+    return true;
+  }
+
+  if (req.method === 'POST' && p === '/api/account/steam/unlink') {
+    if (!me.signedIn) {
+      json(res, 401, { error: 'Sign in first.' });
+      return true;
+    }
+    await db.update('profiles', { id: `eq.${me.id}` }, { steam_id: null });
+    json(res, 200, { ok: true });
+    return true;
+  }
+
   // ---- who am I, and what may I do ----------------------------------------
   if (req.method === 'GET' && p === '/api/me') {
     if (me.signedIn) {
@@ -163,7 +221,14 @@ async function route(req, res, url, me) {
         admin: me.admin,
         email: me.email || '',
         provider: me.provider || '',
-        createdAt: me.createdAt || ''
+        createdAt: me.createdAt || '',
+        // What actually anchors the account, for the Connections section and
+        // the upload gate's UI: uploads need google or steam to be true.
+        linked: {
+          google: me.provider === 'google' || (me.providers || []).includes('google'),
+          steam: Boolean(me.steamId),
+          steamId: me.steamId || ''
+        }
       },
       entitlements: me.entitlements,
       impersonating: me.impersonating,
@@ -208,6 +273,34 @@ async function route(req, res, url, me) {
     const row = await startTrial({ userId: me.id, source: 'trial', req });
     json(res, 201, {
       subscription: { id: row.id, planId: row.plan_id, trialEndsAt: row.trial_ends_at }
+    });
+    return true;
+  }
+
+  // ---- own subscription ----------------------------------------------------
+  // Cancellation works before payments do: an admin-granted or migrated
+  // subscription can be wound down by its owner, and when a billing provider
+  // lands the same route also tells it, so the customer stops being charged.
+  if (req.method === 'POST' && p === '/api/account/subscription/cancel') {
+    if (!requireUser()) return true;
+    const row = await cancelSubscription({ userId: me.id, actorId: me.id, req });
+    if (billingConfigured() && row?.provider_subscription_id) {
+      await provider
+        .cancelSubscription({ subscriptionId: row.provider_subscription_id, atPeriodEnd: true })
+        .catch((err) => console.warn('[billing] provider cancel failed:', err?.message || err));
+    }
+    json(res, 200, {
+      subscription: { id: row.id, cancelAtPeriodEnd: row.cancel_at_period_end },
+      accessUntil: row.current_period_end || row.trial_ends_at || null
+    });
+    return true;
+  }
+
+  if (req.method === 'POST' && p === '/api/account/subscription/resume') {
+    if (!requireUser()) return true;
+    const row = await resumeSubscription({ userId: me.id, actorId: me.id, req });
+    json(res, 200, {
+      subscription: { id: row.id, cancelAtPeriodEnd: row.cancel_at_period_end }
     });
     return true;
   }

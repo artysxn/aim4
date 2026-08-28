@@ -339,7 +339,7 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange }) {
     }
 
     const mapName = cs3dMap(slug)?.name || slug;
-    boot = createBootScreen(container, mapName);
+    boot = createBootScreen(container, mapName, slug);
 
     pack = new MapPack({
       slug,

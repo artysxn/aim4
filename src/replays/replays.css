@@ -3064,6 +3064,15 @@ body.rv-open:has(.side-collapsed) .rv-side-show {
   color: var(--rv-ct);
 }
 
+/* Round 1 was missing from the demo file: present but inert, so the strip
+   starting at 02 reads as a fact about the file, not a bug in the viewer. */
+.rv-round.is-missing {
+  color: var(--rv-muted, #666);
+  opacity: 0.45;
+  cursor: default;
+  text-decoration: line-through;
+}
+
 .rv-chrome.wt .rv-scrub-fill {
   background: var(--rv-t);
 }
@@ -4296,11 +4305,7 @@ body.rv-open:has(.side-collapsed) .rv-side-show {
 
 .st-tabs {
   display: inline-flex;
-  overflow: hidden;
-  gap: 0;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: rgba(255, 255, 255, 0.03);
+  gap: 2px;
 }
 
 .st-tabs .seg-tab {
@@ -6401,15 +6406,12 @@ body.rv-open:has(.side-collapsed) .rv-side-show {
 
 /* ---- Pattern finder chapters (rendered in the page title row) ----------- */
 
+/* Same underline tabs as .seg-tab: one look for every page-level tab row. */
 .an-chapters {
   display: inline-flex;
   flex-wrap: nowrap;
   justify-content: flex-end;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: rgba(255, 255, 255, 0.03);
-  gap: 0;
+  gap: 2px;
 }
 
 .an-chapter-btn {
@@ -6417,32 +6419,27 @@ body.rv-open:has(.side-collapsed) .rv-side-show {
   align-items: center;
   gap: 6px;
   margin: 0;
-  padding: 6px 12px;
+  padding: 9px 14px;
   border: 0;
-  border-right: 1px solid var(--border);
+  border-bottom: 2px solid transparent;
   border-radius: 0;
   background: transparent;
   color: var(--muted);
   font: inherit;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
   cursor: pointer;
   white-space: nowrap;
-}
-
-.an-chapter-btn:last-child {
-  border-right: 0;
+  transition: color 0.15s ease, border-color 0.15s ease;
 }
 
 .an-chapter-btn:hover {
-  background: rgba(255, 255, 255, 0.04);
   color: var(--text);
 }
 
 .an-chapter-btn.active {
-  background: rgba(255, 255, 255, 0.1);
   color: var(--text);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+  border-bottom-color: var(--accent);
 }
 
 .an-chapter-icon {
@@ -12942,4 +12939,326 @@ a.ua-link:visited {
 }
 .rv-viewmode-btn.is-busy {
   cursor: progress;
+}
+
+/* ---------------------------------------------------------------------------
+   Voice comms
+   A recorded TeamSpeak session attached to a demo. In 2D the words are drawn
+   on the droplets by the canvas renderer; everything styled here is the 3D
+   sidebar and the attach dialog behind the microphone button.
+   --------------------------------------------------------------------------- */
+
+.rv-comms-side {
+  position: absolute;
+  top: 64px;
+  right: 12px;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 232px;
+  max-width: 38vw;
+  pointer-events: none;
+}
+
+.rv-comms-side .rv-comms-row {
+  display: grid;
+  grid-template-columns: 8px auto;
+  grid-template-areas: 'dot name' 'dot said';
+  gap: 0 7px;
+  padding: 6px 9px;
+  border-radius: var(--radius-xs);
+  /* Dark plate, not the side colour: these rows are text to read. */
+  background: rgba(12, 14, 18, 0.82);
+  border-left: 2px solid rgba(255, 255, 255, 0.16);
+  opacity: 0.62;
+  transition: opacity 140ms ease;
+}
+
+.rv-comms-side .rv-comms-row.is-live {
+  opacity: 1;
+  background: rgba(14, 17, 22, 0.94);
+}
+
+.rv-comms-side .rv-comms-row[data-side='T'] {
+  border-left-color: var(--rv-t);
+}
+
+.rv-comms-side .rv-comms-row[data-side='CT'] {
+  border-left-color: var(--rv-ct);
+}
+
+.rv-comms-dot {
+  grid-area: dot;
+  align-self: center;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.rv-comms-row.is-live .rv-comms-dot {
+  background: #4ade80;
+  box-shadow: 0 0 6px rgba(74, 222, 128, 0.75);
+}
+
+.rv-comms-name {
+  grid-area: name;
+  font-size: 11px;
+  font-weight: 600;
+  color: #e8ecf2;
+}
+
+.rv-comms-said {
+  grid-area: said;
+  font-size: 11px;
+  line-height: 1.34;
+  color: rgba(232, 236, 242, 0.78);
+  /* Two lines, then clipped: the sidebar is a glance, not a transcript. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.rv-comms-row.is-live .rv-comms-said {
+  color: #fff;
+}
+
+/* ---- attach dialog ---- */
+
+.rv-comms-dialog {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.rv-comms-panel {
+  width: min(520px, 92vw);
+  max-height: 86vh;
+  overflow: auto;
+  border-radius: var(--radius-sm);
+  background: var(--rv-panel);
+  border: 1px solid var(--line, rgba(255, 255, 255, 0.12));
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.6);
+}
+
+.rv-comms-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line, rgba(255, 255, 255, 0.1));
+}
+
+.rv-comms-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #e8ecf2;
+}
+
+.rv-comms-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+}
+
+.rv-comms-dialog.is-busy .rv-comms-body {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+.rv-comms-drop {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  padding: 30px 16px;
+  border: 1px dashed rgba(255, 255, 255, 0.24);
+  border-radius: var(--radius-xs);
+  color: var(--muted);
+  text-align: center;
+  cursor: pointer;
+}
+
+.rv-comms-drop strong {
+  font-size: 13px;
+  color: #e8ecf2;
+}
+
+.rv-comms-drop span {
+  font-size: 11px;
+}
+
+.rv-comms-drop.is-over,
+.rv-comms-drop:focus-visible {
+  border-color: var(--rv-team1);
+  background: rgba(56, 163, 232, 0.08);
+  outline: none;
+}
+
+.rv-comms-file {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.rv-comms-file strong {
+  font-size: 13px;
+  color: #e8ecf2;
+}
+
+.rv-comms-file span {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.rv-comms-sync {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 11px;
+  border-radius: var(--radius-xs);
+  border-left: 2px solid transparent;
+  background: rgba(255, 255, 255, 0.04);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.rv-comms-sync.is-ok {
+  border-left-color: #4ade80;
+}
+
+.rv-comms-sync.is-warn {
+  border-left-color: #fbbf24;
+}
+
+.rv-comms-sync-label {
+  font-weight: 600;
+  color: #e8ecf2;
+}
+
+.rv-comms-nudge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+}
+
+.rv-comms-cands {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.rv-comms-cand {
+  padding: 4px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: #e8ecf2;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.rv-comms-cand span {
+  color: var(--muted);
+}
+
+.rv-comms-cand.is-active {
+  border-color: var(--rv-team1);
+  background: rgba(56, 163, 232, 0.12);
+}
+
+.rv-comms-map {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.rv-comms-map .rv-comms-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.rv-comms-speaker {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.rv-comms-speaker strong {
+  font-size: 12px;
+  color: #e8ecf2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rv-comms-talk {
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.rv-comms-map .site-select {
+  width: 190px;
+  flex: none;
+}
+
+.rv-comms-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 2px;
+}
+
+.rv-comms-actions .btn:first-child {
+  margin-right: auto;
+}
+
+.rv-comms-status {
+  margin: 0;
+  min-height: 14px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.rv-comms-status.is-error {
+  color: #f87171;
+}
+
+.rv-comms-get {
+  margin: 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.rv-comms-get a {
+  color: var(--rv-team1);
+  text-decoration: none;
+}
+
+.rv-comms-get a:hover {
+  text-decoration: underline;
+}
+
+.rv-comms-get span {
+  opacity: 0.7;
+}
+
+/* Attached, but with no sync point yet: a job to finish, not a mode that is
+   on. Amber rather than the active colour, matching the dialog's sync bar. */
+.rv-tool#rv-comms.needs-sync {
+  color: #fbbf24;
 }

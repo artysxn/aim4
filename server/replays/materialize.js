@@ -16,6 +16,7 @@ import { buildRoundId, MAPS } from '../../src/replays/shared/roundId.js';
 import { sliceStride } from '../../src/replays/shared/tickFormat.js';
 import { encodeTickz, TICKZ_EXT } from './tickCodec.js';
 import { applyStandingsToDemo } from './teamStandingsDb.js';
+import { fixNormalizedDemo } from './pistolFix.js';
 
 const COARSE_STRIDE = 100;
 const COARSE_EXT = '.c100.bin';
@@ -31,6 +32,9 @@ export function materializeDemo(demo, demoId, meta = {}, onProgress = () => {}) 
   // Prefer Valve standings org names when a side's handles match a roster
   // (≥3 players). Runs before round ids are built so short ids stay aligned.
   applyStandingsToDemo(demo);
+  // Trim a glued knife round out of round 1 and renumber past a missing
+  // pistol round, before ids and economy digits are baked into filenames.
+  fixNormalizedDemo(demo);
 
   const files = new Map();
   const rounds = [];
@@ -73,6 +77,7 @@ export function materializeDemo(demo, demoId, meta = {}, onProgress = () => {}) 
       id,
       file: stem,
       round: r.round,
+      ...(r.pistolMissingBefore ? { pistolMissingBefore: true } : {}),
       winner: r.winner,
       winnerSide: r.winnerSide || null,
       team1Side: r.team1Side || null,
@@ -107,6 +112,9 @@ export function materializeDemo(demo, demoId, meta = {}, onProgress = () => {}) 
     players: demo.rounds[0]?.players ?? [],
     score: scoreOf(demo.rounds),
     roundCount: rounds.length,
+    // Carried onto the record so the viewer can say "round 1 unavailable"
+    // instead of silently starting at 2.
+    ...(demo.pistolFix ? { pistolFix: demo.pistolFix } : {}),
     rounds
   };
 

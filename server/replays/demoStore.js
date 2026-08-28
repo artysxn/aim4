@@ -85,6 +85,13 @@ export const userDir = (user) => path.join(ROOT, userKey(user));
 const demosDir = (user) => path.join(userDir(user), 'demos');
 const roundsDir = (user) => path.join(userDir(user), 'rounds');
 export const uploadsDir = (user) => path.join(userDir(user), 'uploads');
+/**
+ * Attached voice comms. Defined here with the other library folders rather
+ * than in commsStore, so the storage meter can size it without importing that
+ * module and forming a cycle: commsStore already depends on this one for
+ * userDir().
+ */
+export const commsDir = (user) => path.join(userDir(user), 'comms');
 
 /**
  * Every library folder under ROOT.
@@ -673,18 +680,23 @@ export async function usage(user, { fresh = false } = {}) {
     if (inflight) return inflight;
   }
   const build = (async () => {
-    const [demoBytes, roundBytes, records] = await Promise.all([
+    const [demoBytes, roundBytes, commsBytes, records] = await Promise.all([
       dirBytes(demosDir(user)),
       dirBytes(roundsDir(user)),
+      // Attached recordings are small next to a demo (~2 MB against hundreds),
+      // but they are still the library's bytes on the library's disk, and a
+      // meter that quietly omits a whole category stops being a meter.
+      dirBytes(commsDir(user)),
       listDemos(user, { fresh })
     ]);
-    const bytes = demoBytes + roundBytes;
+    const bytes = demoBytes + roundBytes + commsBytes;
     const value = {
       demos: records.length,
       bytes,
       maxBytes: MAX_BYTES,
       demoBytes,
       roundBytes,
+      commsBytes,
       bytesLeft: Math.max(0, MAX_BYTES - bytes)
     };
     usageCache.set(key, { value, expires: Date.now() + USAGE_TTL_MS });
@@ -1504,6 +1516,15 @@ export async function deleteDemo(user, id) {
     }
   }
   if (touched) await savePlaylists(user, lists);
+  // Voice comms are attached to a demo and mean nothing without it. Imported
+  // late to keep the dependency one-way: commsStore builds its paths on this
+  // module's userDir().
+  try {
+    const { deleteComms } = await import('./commsStore.js');
+    await deleteComms(user, demoId);
+  } catch {
+    /* nothing attached, or the folder never existed */
+  }
   // Drop note-index entries for rounds that went with the demo.
   try {
     const noted = await listNotedRounds(user);

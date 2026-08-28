@@ -54,6 +54,22 @@ export const accountApi = {
       await fetch(`${API_BASE}/api/trials/cancel`, { method: 'POST', headers: await headers() })
     ),
 
+  cancelSubscription: async () =>
+    asJson(
+      await fetch(`${API_BASE}/api/account/subscription/cancel`, {
+        method: 'POST',
+        headers: await headers()
+      })
+    ),
+
+  resumeSubscription: async () =>
+    asJson(
+      await fetch(`${API_BASE}/api/account/subscription/resume`, {
+        method: 'POST',
+        headers: await headers()
+      })
+    ),
+
   exportData: async () =>
     asJson(
       await fetch(`${API_BASE}/api/account/export`, { method: 'POST', headers: await headers() })
@@ -77,6 +93,39 @@ export const accountApi = {
     ),
 
   billingStatus: async () => asJson(await fetch(`${API_BASE}/api/billing/status`)),
+
+  steamStart: async () =>
+    asJson(
+      await fetch(`${API_BASE}/api/account/steam/start`, {
+        method: 'POST',
+        headers: await headers()
+      })
+    ),
+
+  steamUnlink: async () =>
+    asJson(
+      await fetch(`${API_BASE}/api/account/steam/unlink`, {
+        method: 'POST',
+        headers: await headers()
+      })
+    ),
+
+  checkout: async (planId, term) =>
+    asJson(
+      await fetch(`${API_BASE}/api/billing/checkout`, {
+        method: 'POST',
+        headers: await headers(),
+        body: JSON.stringify({ planId, term })
+      })
+    ),
+
+  billingPortal: async () =>
+    asJson(
+      await fetch(`${API_BASE}/api/billing/portal`, {
+        method: 'POST',
+        headers: await headers()
+      })
+    ),
 
   exportUrl: (path) => `${API_BASE}${path}`
 };

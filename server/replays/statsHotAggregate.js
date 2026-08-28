@@ -618,7 +618,10 @@ export function aggregateTeamsHot(store, filter = {}, playerRows = null, allowDe
     }
   }
 
-  const demoMap = new Map(store.demos.map((d) => [d.id, d]));
+  // Live copies only: after a heal an id can appear twice, and team identity
+  // must come from the version whose rounds counted.
+  const demoMap = new Map();
+  for (const d of store.demos) if (!d.dead) demoMap.set(d.id, d);
   return deriveTeams(acc, playerRows || aggregateHot(store, filter, allowDemo), demoMap);
 }
 
@@ -650,7 +653,11 @@ export function aggregateTeamsHot(store, filter = {}, playerRows = null, allowDe
  * @returns {Array<object>} rows, each stamped with the demo it came from
  */
 export function aggregateHotMatches(store, demoIds, filter, allowDemo, want) {
-  const byId = new Map(store.demos.map((d, i) => [d.id, i]));
+  // Live copies only, for the same reason as deriveTeams' demoMap above.
+  const byId = new Map();
+  store.demos.forEach((d, i) => {
+    if (!d.dead) byId.set(d.id, i);
+  });
   const wantKey = want?.kind === 'team' ? teamNameKey(String(want.id || '')) : '';
   const wantPlayer = String(want?.id || '');
   const out = [];

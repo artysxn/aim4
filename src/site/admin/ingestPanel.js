@@ -488,12 +488,177 @@ function probeBlock() {
   };
 }
 
+/**
+ * The Google Drive queue: paste a shared folder link, and everything demo-
+ * shaped inside it — subfolders included — gets downloaded, parsed, and
+ * imported. The other place demos come from when HLTV is fully synced.
+ */
+function driveBlock() {
+  const root = el('div', 'ingest-tools-card ingest-drive');
+  let timer = 0;
+  let st = null;
+  let busy = false;
+
+  const head = el('div', 'ingest-tools-head');
+  head.appendChild(el('span', null, 'Google Drive queue'));
+  const chip = el('span', 'ingest-chip is-stopped', 'Idle');
+  head.appendChild(chip);
+  root.appendChild(head);
+
+  const urlInput = input('text', '', 'https://drive.google.com/drive/folders/…');
+  urlInput.className = 'ingest-field ingest-drive-url';
+  urlInput.setAttribute('aria-label', 'Drive folder link');
+  const addBtn = button('Add', add, 'btn btn-primary btn-sm');
+  root.appendChild(row(urlInput, addBtn));
+
+  const meta = el('div', 'ingest-tools-meta');
+  root.appendChild(meta);
+  const list = el('div', 'ingest-drive-jobs');
+  root.appendChild(list);
+  const foot = el('div', 'ingest-drive-foot');
+  const resumeBtn = button('Resume queue', () => act(adminApi.ingestDriveStart), 'btn btn-sm');
+  const stopBtn = button('Stop', () => act(adminApi.ingestDriveStop), 'btn btn-danger btn-sm');
+  foot.append(resumeBtn, stopBtn);
+  root.appendChild(foot);
+
+  async function add() {
+    const url = urlInput.value.trim();
+    if (!url) {
+      notice(root, 'Paste a Drive folder link.', 'error');
+      return;
+    }
+    if (busy) return;
+    busy = true;
+    addBtn.disabled = true;
+    try {
+      st = await adminApi.ingestDriveAdd(url);
+      urlInput.value = '';
+      schedule(1200);
+    } catch (err) {
+      notice(root, err.message, 'error');
+    } finally {
+      busy = false;
+      addBtn.disabled = false;
+      paint();
+    }
+  }
+
+  async function act(call) {
+    if (busy) return;
+    busy = true;
+    try {
+      st = await call();
+    } catch (err) {
+      notice(root, err.message, 'error');
+    } finally {
+      busy = false;
+      paint();
+      schedule(1200);
+    }
+  }
+
+  async function remove(id) {
+    try {
+      st = await adminApi.ingestDriveRemove(id);
+      paint();
+    } catch (err) {
+      notice(root, err.message, 'error');
+    }
+  }
+
+  const STATUS_CHIP = {
+    running: ['is-running', 'Running'],
+    queued: ['is-warn', 'Queued'],
+    done: ['is-running', 'Done'],
+    failed: ['is-warn', 'Failed'],
+    cancelled: ['is-stopped', 'Stopped']
+  };
+
+  function jobRow(job) {
+    const item = el('div', `ingest-drive-job is-${job.status}`);
+    const top = el('div', 'ingest-drive-job-top');
+    const [chipCls, chipText] = STATUS_CHIP[job.status] || ['is-stopped', job.status];
+    top.appendChild(el('span', `ingest-chip ${chipCls}`, chipText));
+    top.appendChild(el('span', 'ingest-drive-job-name', job.name || job.targetId));
+    if (job.status !== 'running') {
+      const rm = button('×', () => remove(job.id), 'btn btn-sm ingest-drive-remove');
+      rm.title = 'Remove from the queue';
+      top.appendChild(rm);
+    }
+    item.appendChild(top);
+
+    const c = job.counts || {};
+    const bits = [];
+    if (job.status === 'running' && job.live) {
+      bits.push(
+        `${job.live.stage}${job.live.detail ? ` ${job.live.detail}` : ''}` +
+          (job.live.received ? ` · ${bytes(job.live.received)}${job.live.total ? ` / ${bytes(job.live.total)}` : ''}` : '')
+      );
+    }
+    if (c.matched) bits.push(`${c.imported || 0}/${c.matched} imported`);
+    if (c.skippedSeen) bits.push(`${c.skippedSeen} already known`);
+    if (c.failed) bits.push(`${c.failed} failed`);
+    if (job.error) bits.push(job.error);
+    if (bits.length) item.appendChild(el('div', 'ingest-drive-job-meta', bits.join(' · ')));
+
+    const lastLine = job.log?.[job.log.length - 1];
+    if (job.status === 'running' && lastLine) {
+      item.appendChild(el('div', 'ingest-drive-job-log', lastLine.text));
+    }
+    return item;
+  }
+
+  function paint() {
+    const jobs = st?.jobs || [];
+    const running = Boolean(st?.running);
+    const queued = jobs.filter((j) => j.status === 'queued').length;
+    chip.textContent = running ? 'Live' : queued ? `${queued} queued` : 'Idle';
+    chip.className = `ingest-chip ${running ? 'is-running' : queued ? 'is-warn' : 'is-stopped'}`;
+
+    meta.textContent = st
+      ? `${st.transport === 'api' ? 'Drive API key' : 'No API key: folder-view scrape (works, but set GOOGLE_DRIVE_API_KEY for the reliable path)'}` +
+        `${st.seenCount ? ` · ${st.seenCount} files remembered` : ''}`
+      : '';
+
+    list.replaceChildren(...jobs.slice(-12).reverse().map(jobRow));
+    resumeBtn.hidden = running || !queued;
+    stopBtn.hidden = !running;
+  }
+
+  async function poll() {
+    try {
+      st = await adminApi.ingestDriveStatus();
+      paint();
+    } catch {
+      /* ignore */
+    }
+    schedule(st?.running ? 1500 : 6000);
+  }
+
+  function schedule(delay) {
+    if (timer) window.clearTimeout(timer);
+    timer = delay ? window.setTimeout(poll, delay) : 0;
+  }
+
+  return {
+    root,
+    start() {
+      poll();
+    },
+    stop() {
+      schedule(0);
+    },
+    hasFocus: () => document.activeElement === urlInput
+  };
+}
+
 export function ingestPanel() {
   const root = el('div', 'admin-ingest');
   const consoleUi = consoleBlock();
   const proxies = proxiesBlock();
   const disk = diskBlock();
   const probe = probeBlock();
+  const drive = driveBlock();
 
   let timer = 0;
   let busy = false;
@@ -513,7 +678,7 @@ export function ingestPanel() {
   const barWrap = el('div', 'ingest-progress');
   const errorSlot = el('div');
   const tools = el('div', 'ingest-tools');
-  tools.append(proxies.root, disk.root, probe.root);
+  tools.append(proxies.root, disk.root, probe.root, drive.root);
 
   shell.append(hero, seekRow, metrics, stages, barWrap, errorSlot, consoleUi.root, tools);
   root.appendChild(shell);
@@ -736,6 +901,7 @@ export function ingestPanel() {
     refresh();
     consoleUi.start();
     probe.start();
+    drive.start();
     proxies.refresh();
     disk.refresh();
     timer = window.setInterval(() => {
@@ -750,6 +916,7 @@ export function ingestPanel() {
     timer = 0;
     consoleUi.stop();
     probe.stop();
+    drive.stop();
   }
 
   root.addEventListener('admin:panel-hidden', stop);

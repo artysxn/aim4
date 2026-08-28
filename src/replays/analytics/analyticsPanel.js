@@ -154,13 +154,12 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
   }
 
   function renderChapterNav() {
-    chaptersEl.innerHTML = CHAPTERS.map((c) => {
-      const icon = c.icon
-        ? `<span class="an-chapter-icon" aria-hidden="true">${c.icon}</span>`
-        : '';
-      return `<button type="button" class="an-chapter-btn${c.key === chapter ? ' active' : ''}"
-        data-an-chapter="${c.key}">${icon}${escapeHtml(c.label)}</button>`;
-    }).join('');
+    // Text only: the underline tab style carries no icons, and the Charts
+    // icon in particular was asked off by name.
+    chaptersEl.innerHTML = CHAPTERS.map(
+      (c) => `<button type="button" class="an-chapter-btn${c.key === chapter ? ' active' : ''}"
+        data-an-chapter="${c.key}">${escapeHtml(c.label)}</button>`
+    ).join('');
   }
 
   function shareParams() {

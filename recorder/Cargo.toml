@@ -1,0 +1,25 @@
+# Two crates, split along one line: what needs a window and what does not.
+#
+# `core` is the contract with the site — the .aim4comms container and the sync
+# countdown — and depends on nothing heavier than gzip and serde. That is what
+# makes `cargo test -p aim4-recorder-core` a couple of seconds rather than a
+# GUI toolkit build, and it is the half that has an exact specification to be
+# tested against (aim4's shared/comms/*.js and their test vectors).
+#
+# `app` is the program: window, TeamSpeak capture, Whisper, self-update.
+[workspace]
+members = ["core", "app"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[profile.release]
+# A single file people download, so size is a feature.
+lto = true
+codegen-units = 1
+strip = true
+opt-level = "z"
+panic = "abort"

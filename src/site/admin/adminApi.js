@@ -66,6 +66,25 @@ export const adminApi = {
   ingestProbeStart: (url) => send('POST', '/api/admin/ingest/probe', { url }),
   ingestProbeCancel: () => send('POST', '/api/admin/ingest/probe/cancel'),
 
+  // Google Drive queue: folders the ingest also pulls from.
+  ingestDriveStatus: () => get('/api/admin/ingest/gdrive'),
+  ingestDriveAdd: (url) => send('POST', '/api/admin/ingest/gdrive', { url }),
+  ingestDriveStart: () => send('POST', '/api/admin/ingest/gdrive/start'),
+  ingestDriveStop: () => send('POST', '/api/admin/ingest/gdrive/stop'),
+  ingestDriveRemove: (id) => send('DELETE', `/api/admin/ingest/gdrive/jobs/${encodeURIComponent(id)}`),
+  ingestDriveForget: () => send('POST', '/api/admin/ingest/gdrive/forget'),
+
+  // Pistol-round repair over the stored library.
+  pistolFixStatus: () => get('/api/admin/replays/pistol-fix'),
+  pistolFixStart: (force = false) => send('POST', '/api/admin/replays/pistol-fix', { force }),
+
+  // Support inbox: the admin half of /contact.
+  supportTickets: (status = '') =>
+    get(`/api/admin/support${status ? `?status=${encodeURIComponent(status)}` : ''}`),
+  supportReply: (id, text) => send('POST', `/api/admin/support/${encodeURIComponent(id)}/reply`, { text }),
+  supportStatus: (id, status) =>
+    send('POST', `/api/admin/support/${encodeURIComponent(id)}/status`, { status }),
+
   // CloakBrowser proxy pool (public list + verified working set).
   ingestProxies: () => get('/api/admin/ingest/proxies'),
   ingestProxiesSave: (body) => send('POST', '/api/admin/ingest/proxies', body),

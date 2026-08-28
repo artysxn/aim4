@@ -106,30 +106,60 @@ export function overviewTab(state, { reload, auth }) {
   }
 
   // ---- connections --------------------------------------------------------
-  // One row per identity provider. Google is live; Steam and X are declared
-  // here so the section, the row shape, and the copy exist before the OAuth
-  // work does. Wiring one up later is filling in `connect` on its row.
+  // One row per identity provider, driven by account.linked from /api/me.
+  // Google and Steam are live; X stays declared so the section remains a map
+  // of what the account can be connected to.
+  const linked = account.linked || {};
   const conns = el('section', 'account-card');
   conns.appendChild(el('h3', 'account-card-title', 'Connections'));
   conns.appendChild(
-    el('p', 'account-muted', 'Linked accounts can sign in here and attach their identity to your stats.')
+    el(
+      'p',
+      'account-muted',
+      linked.google || linked.steam
+        ? 'Linked accounts can sign in here and attach their identity to your stats.'
+        : 'Link Google or Steam to upload demos. A username account can do everything else without one.'
+    )
   );
+  // The return leg of the Steam link lands back here with ?steam=<result>.
+  const steamNotice = steamReturnNotice();
+  if (steamNotice) conns.appendChild(steamNotice);
+
   const list = el('div', 'account-connections');
   list.appendChild(
     connectionRow({
       name: 'Google',
       icon: 'G',
-      connected: account.signedIn && (account.provider === 'google' || !account.provider),
-      detail: account.email || ''
+      connected: account.signedIn && Boolean(linked.google),
+      detail: linked.google ? account.email || '' : 'Sign in with Google and unlock demo uploads.',
+      connect: account.signedIn
+        ? async () => {
+            // Redirects away; errors are the only thing to render here.
+            await auth?.linkGoogle?.();
+          }
+        : null
     })
   );
   list.appendChild(
     connectionRow({
       name: 'Steam',
       icon: 'S',
-      connected: false,
-      detail: 'Link your Steam profile to claim your in-game stats.',
-      soon: true
+      connected: account.signedIn && Boolean(linked.steam),
+      detail: linked.steam
+        ? `SteamID ${linked.steamId}`
+        : 'Verify through Steam sign-in and unlock demo uploads.',
+      connect: account.signedIn
+        ? async () => {
+            const res = await accountApi.steamStart();
+            window.location.href = res.url;
+          }
+        : null,
+      unlink: linked.steam
+        ? async () => {
+            await accountApi.steamUnlink();
+            reload();
+          }
+        : null
     })
   );
   list.appendChild(
@@ -216,7 +246,7 @@ function metaRow(label, value, mono = false) {
  * a map of what the account can be connected to, and a bridge that is not
  * built yet still belongs on the map.
  */
-function connectionRow({ name, icon, connected, detail = '', soon = false }) {
+function connectionRow({ name, icon, connected, detail = '', soon = false, connect = null, unlink = null }) {
   const row = el('div', `account-conn${connected ? ' is-connected' : ''}`);
   row.appendChild(el('span', `account-conn-icon conn-${name.toLowerCase()}`, icon));
   const mid = el('div', 'account-conn-main');
@@ -225,12 +255,70 @@ function connectionRow({ name, icon, connected, detail = '', soon = false }) {
   row.appendChild(mid);
   if (connected) {
     row.appendChild(el('span', 'account-conn-state is-on', 'Connected'));
+    if (unlink) {
+      row.appendChild(
+        button(
+          'Unlink',
+          async () => {
+            try {
+              await unlink();
+            } catch (err) {
+              notice(row, err.message, 'error');
+            }
+          },
+          'btn btn-sm'
+        )
+      );
+    }
   } else if (soon) {
     row.appendChild(el('span', 'account-conn-state', 'Soon'));
+  } else if (connect) {
+    const btn = button(
+      'Connect',
+      async () => {
+        btn.disabled = true;
+        try {
+          await connect();
+        } catch (err) {
+          notice(row, err.message, 'error');
+        } finally {
+          btn.disabled = false;
+        }
+      },
+      'btn btn-sm'
+    );
+    row.appendChild(btn);
   } else {
-    row.appendChild(button('Connect', () => {}, 'btn btn-sm'));
+    row.appendChild(el('span', 'account-conn-state', 'Sign in first'));
   }
   return row;
+}
+
+/** What ?steam=<code> from the link's return redirect means, said once. */
+const STEAM_RETURN_COPY = {
+  linked: 'Steam linked. Demo uploads are unlocked.',
+  expired: 'The Steam link expired. Start it again below.',
+  cancelled: 'Steam sign-in was cancelled.',
+  invalid: 'Steam did not confirm that sign-in.',
+  unreachable: 'Steam could not be reached. Try again in a minute.',
+  in_use: 'That Steam account is already linked to a different aim4 account.',
+  unavailable: 'Steam linking is not configured on this deployment.'
+};
+
+/** The notice for a Steam return code in the URL, and the URL cleaned up. */
+function steamReturnNotice() {
+  const params = new URLSearchParams(window.location.search);
+  const code = params.get('steam');
+  if (!code || !STEAM_RETURN_COPY[code]) return null;
+  params.delete('steam');
+  const rest = params.toString();
+  // Cleared so a reload or a copied link does not re-announce old news.
+  window.history.replaceState({}, '', window.location.pathname + (rest ? `?${rest}` : ''));
+  return el(
+    'p',
+    code === 'linked' ? 'account-notice' : 'account-warning',
+    STEAM_RETURN_COPY[code]
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -239,6 +327,12 @@ export function subscriptionTab(state, { reload, billing }) {
   const root = el('div', 'account-panel');
   const currentTier = state.entitlements?.tier || 'free';
   const sub = state.subscription;
+
+  // The provider bounces back here with ?checkout=success|cancelled once
+  // payments are live; saying nothing on that return would leave the user
+  // guessing whether their card just worked.
+  const returned = checkoutReturnNotice();
+  if (returned) root.appendChild(returned);
 
   // ---- current state ------------------------------------------------------
   const head = el('section', 'account-card account-sub-head');
@@ -261,6 +355,7 @@ export function subscriptionTab(state, { reload, billing }) {
         )
       );
     }
+    head.appendChild(manageRow(sub, { reload, billing }));
   }
   if (state.entitlements?.source === 'seat' && sub) {
     head.appendChild(
@@ -275,16 +370,48 @@ export function subscriptionTab(state, { reload, billing }) {
   }
   root.appendChild(head);
 
-  // ---- tier cards ---------------------------------------------------------
+  // ---- term, then the tier cards ------------------------------------------
+  // One term for the whole grid rather than a switch per card: the question
+  // "monthly or yearly" is asked once, and every price on screen answers it.
+  let term = sub?.term === 'yearly' ? 'yearly' : 'monthly';
+  const termRow = el('div', 'plan-term');
   const grid = el('div', 'plan-grid');
-  for (const planId of PLAN_IDS) {
-    grid.appendChild(planCard(planId, currentTier, billing));
-  }
+
+  const renderTerm = () => {
+    termRow.replaceChildren();
+    for (const [id, label] of [
+      ['monthly', 'Monthly'],
+      ['yearly', 'Yearly · 2 months free']
+    ]) {
+      const btn = el('button', `plan-term-btn${term === id ? ' is-on' : ''}`, label);
+      btn.type = 'button';
+      btn.addEventListener('click', () => {
+        if (term === id) return;
+        term = id;
+        renderTerm();
+        renderCards();
+      });
+      termRow.appendChild(btn);
+    }
+  };
+  const renderCards = () => {
+    grid.replaceChildren();
+    for (const planId of PLAN_IDS) {
+      grid.appendChild(planCard(planId, currentTier, billing, term, root));
+    }
+  };
+  renderTerm();
+  renderCards();
+  root.appendChild(termRow);
   root.appendChild(grid);
 
   if (!billing?.configured) {
     root.appendChild(
-      el('p', 'account-muted account-billing-note', 'Payments open soon. Plans and prices are final; checkout is not wired up yet.')
+      el(
+        'p',
+        'account-muted account-billing-note',
+        'Payments open soon. Plans and prices are final; checkout switches on the day they do.'
+      )
     );
   }
 
@@ -292,6 +419,94 @@ export function subscriptionTab(state, { reload, billing }) {
   root.appendChild(featureMatrix(currentTier));
 
   return root;
+}
+
+/**
+ * Cancel / resume / manage billing for the subscription the account owns.
+ *
+ * Trials keep their own controls on the overview tab; this row handles the
+ * real thing, and it works before payments do — an admin-granted subscription
+ * winds down the same way a paid one will.
+ */
+function manageRow(sub, { reload, billing }) {
+  const row = el('div', 'account-sub-manage');
+  const isTrial = sub.status === 'trialing' || sub.source === 'trial';
+
+  if (!isTrial) {
+    if (sub.cancelAtPeriodEnd) {
+      row.appendChild(
+        button(
+          'Keep my subscription',
+          async () => {
+            try {
+              await accountApi.resumeSubscription();
+              notice(row, 'Kept. It renews as before.');
+              reload();
+            } catch (err) {
+              notice(row, err.message, 'error');
+            }
+          },
+          'btn'
+        )
+      );
+    } else {
+      row.appendChild(
+        button(
+          'Cancel at period end',
+          async () => {
+            try {
+              const res = await accountApi.cancelSubscription();
+              notice(
+                row,
+                res.accessUntil
+                  ? `Cancelled. Access continues until ${date(res.accessUntil)}.`
+                  : 'Cancelled at the period end.'
+              );
+              reload();
+            } catch (err) {
+              notice(row, err.message, 'error');
+            }
+          },
+          'btn'
+        )
+      );
+    }
+  }
+
+  if (billing?.configured) {
+    row.appendChild(
+      button(
+        'Manage billing',
+        async () => {
+          try {
+            const res = await accountApi.billingPortal();
+            if (res?.url) window.location.href = res.url;
+          } catch (err) {
+            notice(row, err.message, 'error');
+          }
+        },
+        'btn'
+      )
+    );
+  }
+  return row;
+}
+
+/** The notice for ?checkout=<result> in the URL, and the URL cleaned up. */
+function checkoutReturnNotice() {
+  const params = new URLSearchParams(window.location.search);
+  const code = params.get('checkout');
+  if (code !== 'success' && code !== 'cancelled') return null;
+  params.delete('checkout');
+  const rest = params.toString();
+  window.history.replaceState({}, '', window.location.pathname + (rest ? `?${rest}` : ''));
+  return el(
+    'p',
+    code === 'success' ? 'account-notice' : 'account-warning',
+    code === 'success'
+      ? 'Payment received. Your plan is active; this page may take a moment to catch up.'
+      : 'Checkout was cancelled. Nothing was charged.'
+  );
 }
 
 /** "50", "Unlimited", "✓", "✗", or an enum mode spelled out. */
@@ -374,7 +589,7 @@ function featureMatrix(currentTier) {
   return wrap;
 }
 
-function planCard(planId, currentTier, billing) {
+function planCard(planId, currentTier, billing, term = 'monthly', noticeHost = null) {
   const price = PLAN_PRICES[planId] || { monthly: 0, yearlyMonthly: 0 };
   const isCurrent = planId === currentTier;
   const popular = planId === 'team_premium';
@@ -383,17 +598,27 @@ function planCard(planId, currentTier, billing) {
   if (popular) card.appendChild(el('span', 'plan-flag', 'Most popular'));
   card.appendChild(el('h4', 'plan-name', PLAN_NAMES[planId]));
 
+  // The shown price is the effective monthly price on the chosen term. On
+  // yearly the honest total appears underneath: "€8.33/mo" with no yearly sum
+  // is how pricing pages earn distrust.
+  const shown = term === 'yearly' ? price.yearlyMonthly : price.monthly;
   const priceRow = el('div', 'plan-price');
   if (price.monthly === 0) {
     priceRow.appendChild(el('span', 'plan-price-value', '€0'));
   } else {
-    priceRow.appendChild(el('span', 'plan-price-value', `€${price.monthly.toFixed(2)}`));
+    priceRow.appendChild(el('span', 'plan-price-value', `€${shown.toFixed(2)}`));
     priceRow.appendChild(el('span', 'plan-price-unit', '/month'));
   }
   card.appendChild(priceRow);
-  if (price.monthly > 0 && price.yearlyMonthly < price.monthly) {
+  if (price.monthly > 0) {
     card.appendChild(
-      el('p', 'plan-price-yearly', `€${price.yearlyMonthly.toFixed(2)}/mo billed yearly`)
+      el(
+        'p',
+        'plan-price-yearly',
+        term === 'yearly'
+          ? `€${(price.yearlyMonthly * 12).toFixed(2)} billed once a year`
+          : `€${price.yearlyMonthly.toFixed(2)}/mo on the yearly term`
+      )
     );
   }
   card.appendChild(el('p', 'plan-tagline', PLAN_TAGLINES[planId] || ''));
@@ -413,9 +638,26 @@ function planCard(planId, currentTier, billing) {
     const cta = el('button', 'btn plan-cta' + (downgrade ? '' : ' btn-primary'));
     cta.type = 'button';
     cta.textContent = downgrade ? 'Downgrade' : 'Upgrade';
-    if (!billing?.configured) {
+    if (!billing?.configured || planId === 'free') {
+      // Wired but parked: the click path below goes live the day a provider
+      // is configured, with no client change.
       cta.disabled = true;
-      cta.title = 'Payments open soon';
+      cta.title = planId === 'free' ? 'Cancel your plan instead' : 'Payments open soon';
+    } else {
+      cta.addEventListener('click', async () => {
+        cta.disabled = true;
+        try {
+          const res = await accountApi.checkout(planId, term);
+          if (res?.url) {
+            window.location.href = res.url;
+            return;
+          }
+          throw new Error('Checkout did not return a payment page.');
+        } catch (err) {
+          if (noticeHost) notice(noticeHost, err.message, 'error');
+          cta.disabled = false;
+        }
+      });
     }
     card.appendChild(cta);
   }
@@ -633,10 +875,15 @@ export function securityTab(state, { auth }) {
   const root = el('div', 'account-panel');
   root.appendChild(el('h2', null, 'Security'));
 
+  const linked = state.account?.linked || {};
   root.appendChild(
     table(
       ['Sign in method', 'Status'],
-      [['Google', state.account?.signedIn ? 'Connected' : 'Not connected']]
+      [
+        ['Username and password', state.account?.provider === 'google' ? 'Not set' : 'Active'],
+        ['Google', linked.google ? 'Connected' : 'Not connected'],
+        ['Steam', linked.steam ? 'Connected' : 'Not connected']
+      ]
     )
   );
 

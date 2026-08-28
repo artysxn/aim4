@@ -1,0 +1,16 @@
+[package]
+name = "aim4-recorder-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The .aim4comms container and the sync countdown: the contract between the recorder and the aim4 site."
+
+[dependencies]
+# gzip + JSON is the entire dependency surface of the file format, deliberately.
+flate2 = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Countdown matching folds diacritics away, because Whisper is inconsistent
+# about them ("tva" / "två"). Same NFD-then-strip-combining-marks that the
+# JavaScript does with String.normalize, so both halves agree on what a word is.
+unicode-normalization = "0.1"

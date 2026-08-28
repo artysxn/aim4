@@ -30,7 +30,14 @@ const authStub = http.createServer((req, res) => {
   res.end(
     JSON.stringify(
       authorized
-        ? { id: 'user-1', email: 'tester@aim4.io', user_metadata: { username: 'tester' } }
+        ? {
+            id: 'user-1',
+            email: 'tester@aim4.io',
+            user_metadata: { username: 'tester' },
+            // Uploads require a linked identity; the test user is the normal
+            // case, a Google account.
+            app_metadata: { provider: 'google', providers: ['google'] }
+          }
         : { error: 'bad token' }
     )
   );

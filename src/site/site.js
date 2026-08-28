@@ -50,6 +50,10 @@ import { initLeaderboardsView } from './leaderboardsView.js';
 import { initFootballView } from './footballView.js';
 import { initPlayerProfileView } from './playerProfileView.js';
 import { initHomeView } from './homeView.js';
+import { initChangelogView } from './changelogView.js';
+import { initDocsView } from './docsView.js';
+import { initContactView } from './contactView.js';
+import { initNotifications } from './notify.js';
 import { initAccountView } from './account/accountView.js';
 import { getEntitlements } from '../lib/entitlements.js';
 import { upgradePrompt } from './upgradeGate.js';
@@ -280,14 +284,37 @@ function setAuthStatus(msg, ok = true) {
 const authIdentifier = document.getElementById('auth-identifier');
 const authPassword = document.getElementById('auth-password');
 const authSubmit = document.getElementById('auth-submit');
+const authTitle = document.getElementById('auth-title');
+const authIdentifierLabel = document.getElementById('auth-identifier-label');
+const authRegisterNote = document.getElementById('auth-register-note');
+const authSwitchText = document.getElementById('auth-switch-text');
+const authSwitchBtn = document.getElementById('auth-switch-btn');
 
 /**
- * Two ways in: Google, or a username and password. Registration is still
- * Google-only, so `mode` is accepted and ignored the way it has been since
- * the sign-up form went away.
+ * Three ways in: Google, a username and password, or a brand-new username
+ * account. `authMode` flips the same form between the last two — same fields,
+ * different endpoint — because a second modal would be the same modal twice.
  */
-function openAuth() {
+let authMode = 'login';
+
+function setAuthMode(mode) {
+  authMode = mode;
+  const registering = mode === 'register';
   setAuthStatus('');
+  if (authTitle) authTitle.textContent = registering ? 'Create account' : 'Sign in';
+  if (authIdentifierLabel) authIdentifierLabel.textContent = registering ? 'Username' : 'Username or email';
+  if (authSubmit) authSubmit.textContent = registering ? 'Create account' : 'Sign in';
+  if (authRegisterNote) authRegisterNote.hidden = !registering;
+  if (authSwitchText) authSwitchText.textContent = registering ? 'Already have an account?' : 'New here?';
+  if (authSwitchBtn) authSwitchBtn.textContent = registering ? 'Sign in' : 'Create an account';
+  // The browser's password tooling should offer to SAVE a new password here,
+  // not fill an old one.
+  authPassword?.setAttribute('autocomplete', registering ? 'new-password' : 'current-password');
+  authIdentifier?.setAttribute('autocomplete', registering ? 'off' : 'username');
+}
+
+function openAuth(mode = 'login') {
+  setAuthMode(mode === 'register' ? 'register' : 'login');
   if (authIdentifier) authIdentifier.value = '';
   if (authPassword) authPassword.value = '';
   authModal.hidden = false;
@@ -295,6 +322,11 @@ function openAuth() {
   // because the modal is still hidden as this runs.
   requestAnimationFrame(() => authIdentifier?.focus());
 }
+
+authSwitchBtn?.addEventListener('click', () => {
+  setAuthMode(authMode === 'register' ? 'login' : 'register');
+  requestAnimationFrame(() => authIdentifier?.focus());
+});
 
 function closeAuth() {
   authModal.hidden = true;
@@ -324,17 +356,24 @@ async function submitAuth() {
   const identifier = authIdentifier?.value.trim() || '';
   const password = authPassword?.value || '';
   if (!identifier || !password) {
-    setAuthStatus('Enter your username and password.', false);
+    setAuthStatus(
+      authMode === 'register' ? 'Pick a username and a password.' : 'Enter your username and password.',
+      false
+    );
     return;
   }
   signingIn = true;
   if (authSubmit) authSubmit.disabled = true;
-  setAuthStatus('Signing in…');
+  setAuthStatus(authMode === 'register' ? 'Creating your account…' : 'Signing in…');
   try {
-    await auth.signIn({ identifier, password });
+    if (authMode === 'register') {
+      await auth.register({ username: identifier, password });
+    } else {
+      await auth.signIn({ identifier, password });
+    }
     closeAuth();
   } catch (e) {
-    setAuthStatus(e.message || 'Sign-in failed.', false);
+    setAuthStatus(e.message || (authMode === 'register' ? 'Could not create the account.' : 'Sign-in failed.'), false);
   } finally {
     signingIn = false;
     if (authSubmit) authSubmit.disabled = false;
@@ -568,6 +607,9 @@ const ROUTES = {
   'replay-viewer': { title: 'Replay Viewer', path: '/replay-viewer', shell: 'replay-viewer' },
   football: { title: 'Football', path: '/football', shell: 'football' },
   tools: { title: 'Tools', path: '/tools', shell: 'tools' },
+  changelog: { title: 'Changelog', path: '/changelog', shell: 'changelog' },
+  docs: { title: 'Documentation', path: '/docs', shell: 'docs' },
+  contact: { title: 'Contact', path: '/contact', shell: 'contact' },
   // Admin-only, chromeless. The view refuses non-admins itself; the route
   // entry only stops the deep link from falling through to the trainer.
   pitchdeck: { title: 'Pitch deck', path: '/tools/pitchdeck', shell: 'pitchdeck' },
@@ -866,11 +908,25 @@ viewControllers.football = initFootballView({ auth, escapeHtml });
 viewControllers.player = initPlayerProfileView({ escapeHtml });
 viewControllers['map-practice'] = initMapPracticeView({ escapeHtml });
 viewControllers.home = initHomeView({ auth, escapeHtml });
+viewControllers.changelog = initChangelogView(
+  document.querySelector('.view[data-view="changelog"]'),
+  { escapeHtml }
+);
+viewControllers.docs = initDocsView(document.querySelector('.view[data-view="docs"]'), {
+  escapeHtml
+});
+viewControllers.contact = initContactView(document.querySelector('.view[data-view="contact"]'), {
+  auth,
+  escapeHtml
+});
 // One manager per page, refreshed whenever the session changes. Gates read it
 // for UI state only; the server has already made every decision it reflects.
 const entitlements = getEntitlements(auth);
 entitlements.refresh();
 initIngestReminder(auth, entitlements);
+// Server-side notifications (ticket replies, admin news) surface as the same
+// toasts the ingest reminder uses.
+initNotifications(auth);
 
 viewControllers.account = initAccountView(
   document.querySelector('.view[data-view="account"]'),

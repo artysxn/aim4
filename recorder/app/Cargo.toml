@@ -1,0 +1,50 @@
+[package]
+name = "aim4-recorder"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Records a TeamSpeak channel per speaker, transcribes it locally, and writes a .aim4comms file for the aim4 viewer."
+
+[[bin]]
+name = "aim4-recorder"
+path = "src/main.rs"
+
+[dependencies]
+aim4-recorder-core = { path = "../core" }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Self-update against /api/recorder/latest. ureq is blocking with no async
+# runtime behind it; sha2 verifies the download before it is allowed to
+# overwrite the running program; self_replace does the rename-then-write dance
+# Windows requires for replacing a running executable.
+ureq = { version = "2", features = ["json", "tls"] }
+sha2 = "0.10"
+self-replace = "1"
+
+# TeamSpeak 3 client protocol including voice. Incoming packets are
+# AudioData::S2C { from, codec, data }, so per-speaker separation is what the
+# protocol hands over rather than something reconstructed from a mix.
+tsclientlib = "0.2"
+tsproto-packets = "0.1"
+futures = "0.3"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net", "signal"] }
+
+# Packing voice down to the 2 MB budget. audiopus is pinned to the same 0.2
+# tsclientlib already links, so both share one libopus; ogg writes the
+# per-speaker Ogg/Opus streams the site's audio index points into.
+audiopus = "0.2"
+ogg = "0.9.2"
+
+# whisper.cpp compiled in, so there is no Python and no model runtime beside
+# the binary. The model itself is downloaded on first use, not shipped.
+whisper-rs = "0.16.0"
+
+# The window. One self-contained .exe rules Tauri out: its updater is built
+# around installer artifacts and it needs WebView2 present. egui compiles the
+# UI into the binary.
+eframe = "0.36.1"
+
+# recordedAt timestamps in the manifest, RFC 3339 like the site writes.
+time = { version = "0.3.55", features = ["formatting"] }

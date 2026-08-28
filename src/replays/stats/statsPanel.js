@@ -136,9 +136,16 @@ export function createStatsPanel({
             <span class="spinner spinner-sm" aria-hidden="true"></span>
           </span>
           <button type="button" class="btn btn-sm" data-st-library-retry hidden>Retry</button>
+          <button type="button" class="head-search-pill" data-st-search-toggle aria-expanded="false" aria-controls="st-search">
+            <img src="${MENU_BTN.search}" alt="" width="14" height="14" draggable="false" />
+            <span>Search…</span>
+          </button>
+          <button type="button" class="head-icon-btn" data-st-filters-toggle aria-expanded="false" aria-controls="st-filters" title="Filters" aria-label="Filters">
+            <img src="${filtersIcon}" alt="" width="16" height="16" draggable="false" />
+          </button>
           <div class="st-tabs">
-          <button type="button" class="seg-tab active" data-tab="players">${mbIcon('player')}Players</button>
-          <button type="button" class="seg-tab" data-tab="teams">${mbIcon('team')}Teams</button>
+          <button type="button" class="seg-tab active" data-tab="players">Players</button>
+          <button type="button" class="seg-tab" data-tab="teams">Teams</button>
         </div>
         </div>`
         }
@@ -147,18 +154,6 @@ export function createStatsPanel({
       <span class="st-scope" id="st-scope"></span>
       <div class="st-head-actions">
         <span class="st-saved" id="st-saved"></span>
-        ${
-          usePageHead
-            ? ''
-            : `<button type="button" class="btn btn-sm st-filters-toggle" data-st-filters-toggle aria-expanded="false" aria-controls="st-filters">
-          <img src="${filtersIcon}" alt="" width="16" height="16" draggable="false" />
-          Filters
-        </button>
-        <button type="button" class="btn btn-sm st-filters-toggle" data-st-search-toggle aria-expanded="false" aria-controls="st-search">
-          <img src="${MENU_BTN.search}" alt="" width="16" height="16" draggable="false" />
-          Search
-        </button>`
-        }
       </div>
     </div>
     <div class="st-filters" id="st-filters" hidden></div>
@@ -175,18 +170,17 @@ export function createStatsPanel({
         <span class="spinner spinner-sm" aria-hidden="true"></span>
       </span>
       <button type="button" class="btn btn-sm" data-st-library-retry hidden>Retry</button>
-      <div class="st-tabs">
-        <button type="button" class="seg-tab active" data-tab="players">${mbIcon('player')}Players</button>
-        <button type="button" class="seg-tab" data-tab="teams">${mbIcon('team')}Teams</button>
-      </div>
-      <button type="button" class="btn btn-sm st-filters-toggle" data-st-filters-toggle aria-expanded="false" aria-controls="st-filters">
-        <img src="${filtersIcon}" alt="" width="16" height="16" draggable="false" />
-        Filters
+      <button type="button" class="head-search-pill" data-st-search-toggle aria-expanded="false" aria-controls="st-search">
+        <img src="${MENU_BTN.search}" alt="" width="14" height="14" draggable="false" />
+        <span>Search…</span>
       </button>
-      <button type="button" class="btn btn-sm st-filters-toggle" data-st-search-toggle aria-expanded="false" aria-controls="st-search">
-        <img src="${MENU_BTN.search}" alt="" width="16" height="16" draggable="false" />
-        Search
-      </button>`;
+      <button type="button" class="head-icon-btn" data-st-filters-toggle aria-expanded="false" aria-controls="st-filters" title="Filters" aria-label="Filters">
+        <img src="${filtersIcon}" alt="" width="16" height="16" draggable="false" />
+      </button>
+      <div class="st-tabs">
+        <button type="button" class="seg-tab active" data-tab="players">Players</button>
+        <button type="button" class="seg-tab" data-tab="teams">Teams</button>
+      </div>`;
   }
 
   const filtersEl = el.querySelector('#st-filters');
@@ -264,6 +258,22 @@ export function createStatsPanel({
       );
     }
     if (libraryStreaming) return 'Loading matches…';
+    if (busyCount > 0) return 'Updating the tables for these filters.';
+    if (serverRefreshing) {
+      const total = Number(serverRefreshing.total) || 0;
+      const done = Math.min(Number(serverRefreshing.done) || 0, total);
+      // A rebuild replaces the whole statistics store; the tables shown are
+      // the previous numbers until it lands. An append is a demo or two.
+      if (serverRefreshing.mode === 'rebuild') {
+        return (
+          `Statistics are being refreshed (${countFmt.format(done)}/${countFmt.format(total)})\n` +
+          'The tables show the previous numbers meanwhile.'
+        );
+      }
+      return total === 1
+        ? '1 new demo is being processed\nThe tables update as soon as it lands.'
+        : `${countFmt.format(total)} new demos are being processed\nThe tables update as soon as they land.`;
+    }
     return 'Updating the tables for these filters.';
   }
 
@@ -274,12 +284,18 @@ export function createStatsPanel({
       return `Loading matches, ${Math.min(loaded, total)} of ${total} loaded`;
     }
     if (libraryStreaming) return 'Loading more matches';
+    if (busyCount === 0 && serverRefreshing) {
+      const total = Number(serverRefreshing.total) || 0;
+      return serverRefreshing.mode === 'rebuild'
+        ? 'Refreshing statistics'
+        : `Processing ${total} new demo${total === 1 ? '' : 's'}`;
+    }
     return 'Updating the tables';
   }
 
   /** Visibility and text of every copy of the ring. */
   function paintLoadRing() {
-    const on = libraryStreaming || busyCount > 0;
+    const on = libraryStreaming || busyCount > 0 || Boolean(serverRefreshing);
     const text = loadRingText();
     const label = loadRingLabel();
     const roots = [el, pageHeadEl].filter(Boolean);
@@ -3143,6 +3159,95 @@ export function createStatsPanel({
   /** Last "store still building" progress a 503 carried, for the spinner. */
   let serverBuilding = null;
 
+  /**
+   * What the server said its store is catching up on, from the last 200:
+   * `{ mode: 'append'|'rebuild', done, total }` or null when current.
+   *
+   * The tables on screen are real numbers either way — this is the footnote
+   * that says a demo or two (or, during a rebuild, the whole store) is being
+   * folded in behind them. The load ring shows it, and a light poll below
+   * repaints the tables once the server reports it has caught up.
+   */
+  let serverRefreshing = null;
+  let refreshPollTimer = null;
+  let refreshPollCount = 0;
+  /** Between polls. A heal lands in seconds; a rebuild within a few minutes. */
+  const REFRESH_POLL_MS = 5_000;
+  /** Give up badging after ~5 minutes of "still refreshing". */
+  const REFRESH_POLL_MAX = 60;
+
+  function setServerRefreshing(next) {
+    serverRefreshing = next && Number(next.total) > 0 ? next : null;
+    if (!serverRefreshing) refreshPollCount = 0;
+    paintLoadRing();
+    if (serverRefreshing) scheduleRefreshPoll();
+  }
+
+  function clearRefreshPoll() {
+    clearTimeout(refreshPollTimer);
+    refreshPollTimer = null;
+    refreshPollCount = 0;
+    serverRefreshing = null;
+  }
+
+  function scheduleRefreshPoll() {
+    if (refreshPollTimer) return;
+    const token = loadToken;
+    refreshPollTimer = setTimeout(() => {
+      refreshPollTimer = null;
+      void pollServerRefreshing(token);
+    }, REFRESH_POLL_MS);
+  }
+
+  /**
+   * Ask only "are you still refreshing?", then repaint once the answer is no.
+   *
+   * The poll is not refreshServerTables: repainting a table every few seconds
+   * under someone reading it is worse than the staleness it fixes. So the
+   * cheapest aggregate the endpoint will answer — a min-rounds bar no player
+   * clears — carries the state over, and the one real repaint happens on the
+   * transition to "caught up".
+   */
+  async function pollServerRefreshing(token) {
+    if (token !== loadToken || !serverRefreshing) return;
+    // Rounds in the browser, a detail view, or a locked team: the main tables
+    // are not on screen, so there is nothing for the badge to promise.
+    if (payload || detail || lockedTeamName) {
+      setServerRefreshing(null);
+      return;
+    }
+    refreshPollCount += 1;
+    if (refreshPollCount > REFRESH_POLL_MAX) {
+      setServerRefreshing(null);
+      return;
+    }
+    let state = null;
+    try {
+      const res = await fetchAggregate(
+        { minRounds: 1_000_000 },
+        { tables: 'players', limit: 1, demos: serverDemoScope() }
+      );
+      state = res?.refreshing || null;
+    } catch {
+      // A 503 means the store went cold under us; anything else means the
+      // poll could not ask. Either way the badge has nothing true to say.
+      if (token === loadToken) setServerRefreshing(null);
+      return;
+    }
+    if (token !== loadToken) return;
+    if (state && Number(state.total) > 0) {
+      serverRefreshing = state;
+      paintLoadRing();
+      scheduleRefreshPoll();
+      return;
+    }
+    // Caught up: one repaint with the fresh numbers, through the same query
+    // the tables were painted with (which also re-reads `refreshing`, so a
+    // drip that started meanwhile re-badges rather than being missed).
+    setServerRefreshing(null);
+    await trackBusy(refreshServerTables({ timeoutMs: FILTER_TIMEOUT_MS }));
+  }
+
   async function refreshServerTables(opts = {}) {
     const token = ++serverToken;
     serverBuilding = null;
@@ -3174,11 +3279,13 @@ export function createStatsPanel({
         // Retire this token so the response, if it ever lands, does not paint
         // over whatever the fallback has put on screen by then.
         serverToken += 1;
+        setServerRefreshing(null);
         opts.onFail?.();
         return false;
       }
       if (token !== serverToken) return false;
       serverTables = res;
+      setServerRefreshing(res?.refreshing || null);
       renderFromServer();
       return true;
     } catch (err) {
@@ -3190,7 +3297,11 @@ export function createStatsPanel({
       }
       // Only the query that is still the current one may paint an error over
       // the table; a superseded one is about to be answered by its successor.
-      if (token === serverToken) opts.onFail?.();
+      if (token === serverToken) {
+        // No served tables means nothing for the refresh badge to annotate.
+        setServerRefreshing(null);
+        opts.onFail?.();
+      }
       return false;
     }
   }
@@ -3453,6 +3564,7 @@ export function createStatsPanel({
     resetLibraryProgress();
     setLibraryLoading(false);
     setLibraryRetry(false);
+    clearRefreshPoll();
     bodyEl.innerHTML = spinnerHtml('Loading database…');
     filtersEl.innerHTML = '';
     const cancelSlow = watchSlowLoad(bodyEl, {

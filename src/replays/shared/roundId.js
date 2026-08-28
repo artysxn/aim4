@@ -205,6 +205,37 @@ export function isRoundId(id) {
   return parseRoundId(id) !== null;
 }
 
+/**
+ * The demo a round file belongs to, from its `~<demoId>` suffix, or ''.
+ *
+ * Rounds materialized before that suffix existed have no answer; callers must
+ * treat '' as "unknown", never as a demo id.
+ */
+export function demoIdFromFile(file) {
+  const name = String(file ?? '');
+  const at = name.lastIndexOf('~');
+  return at < 0 ? '' : name.slice(at + 1);
+}
+
+/**
+ * The one demo a round list comes from, or '' when it is not exactly one.
+ *
+ * Used to decide whether a per-demo feature applies to whatever the viewer was
+ * handed: a whole match and a single shared round both resolve, while a
+ * playlist drawn from several demos correctly resolves to nothing rather than
+ * picking one of them.
+ */
+export function soleDemoId(rounds) {
+  let found = '';
+  for (const r of rounds || []) {
+    const id = demoIdFromFile(r?.file);
+    if (!id) return '';
+    if (!found) found = id;
+    else if (found !== id) return '';
+  }
+  return found;
+}
+
 /** True when either team ran the given economy bucket. */
 export function roundHasEconomy(meta, econ) {
   return meta.econ1 === econ || meta.econ2 === econ;

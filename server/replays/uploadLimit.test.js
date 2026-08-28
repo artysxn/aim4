@@ -26,16 +26,29 @@ process.env.AIM4_MAX_UPLOAD_BYTES = String(CAP);
 // point it at a stub that answers Supabase's /auth/v1/user, so the real
 // verification path (bearer header, fetch, cache) is what the test exercises.
 const TOKEN = 'test-token';
+// A username account that never linked anything: allowed in, but not to write.
+const TOKEN_UNLINKED = 'test-token-unlinked';
 const authStub = http.createServer((req, res) => {
-  const authorized = req.headers.authorization === `Bearer ${TOKEN}`;
-  res.writeHead(authorized ? 200 : 401, { 'Content-Type': 'application/json' });
-  res.end(
-    JSON.stringify(
-      authorized
-        ? { id: 'user-1', email: 'tester@aim4.io', user_metadata: { username: 'tester' } }
-        : { error: 'bad token' }
-    )
-  );
+  const bearer = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+  const users = {
+    [TOKEN]: {
+      id: 'user-1',
+      email: 'tester@aim4.io',
+      user_metadata: { username: 'tester' },
+      // Uploads require a real identity behind the account; the main test
+      // user is the normal case, a Google account.
+      app_metadata: { provider: 'google', providers: ['google'] }
+    },
+    [TOKEN_UNLINKED]: {
+      id: 'user-2',
+      email: 'loner@users.aim4.io',
+      user_metadata: { username: 'loner' },
+      app_metadata: { provider: 'email', providers: ['email'] }
+    }
+  };
+  const hit = users[bearer];
+  res.writeHead(hit ? 200 : 401, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(hit || { error: 'bad token' }));
 });
 await new Promise((r) => authStub.listen(0, '127.0.0.1', r));
 process.env.SUPABASE_URL = `http://127.0.0.1:${authStub.address().port}`;
@@ -96,6 +109,18 @@ function post(body, { filename = 'bundle.zip', length = null, token = TOKEN } = 
   const tmp = (await fsp.readdir(ROOT)).filter((f) => f.startsWith('.upload-'));
   assert(tmp.length === 0, 'nothing was written for a signed-out upload');
   console.log('  signed-out upload refused before any bytes land');
+}
+
+// ---- a bare username account cannot upload ----------------------------------
+
+{
+  const res = await post(Buffer.alloc(1024, 3), { filename: 'ok.zip', token: TOKEN_UNLINKED });
+  assert(res.status === 403, `unlinked account should be 403, got ${res.status}`);
+  assert(/link_required/.test(res.text), `the client is told why: ${res.text}`);
+  assert(/google or steam/i.test(res.text), 'and what fixes it');
+  const tmp = (await fsp.readdir(ROOT)).filter((f) => f.startsWith('.upload-'));
+  assert(tmp.length === 0, 'nothing was written for an unlinked upload');
+  console.log('  unlinked username account refused with directions');
 }
 
 // ---- declared oversize is refused before anything is written ----------------

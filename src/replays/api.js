@@ -594,6 +594,99 @@ export async function setDemoVisibility(id, visibility) {
   );
 }
 
+// ---- voice comms ----------------------------------------------------------
+
+/**
+ * The comms attached to a demo, plus remembered speaker identities.
+ * `comms` is null when nothing is attached, which is not an error.
+ */
+export async function fetchDemoComms(id) {
+  return asJson(
+    await safeFetch(`${API_BASE}/api/replays/demos/${encodeURIComponent(id)}/comms`, {
+      headers: await headers()
+    })
+  );
+}
+
+/**
+ * The .aim4comms container itself.
+ *
+ * Kept separate from the metadata call on purpose: the sidecar is a few
+ * hundred bytes and answers "is anything attached", while this is the ~2 MB
+ * file, and the viewer only wants it once the user is actually watching.
+ */
+export async function fetchDemoCommsFile(id, version = '') {
+  // `version` is the sidecar's uploadedAt, and it is load-bearing rather than
+  // decorative: the response is cacheable, so replacing a recording with a
+  // corrected one would otherwise keep serving the old transcript from the
+  // browser's cache with nothing to explain why.
+  const bust = version ? `?v=${encodeURIComponent(version)}` : '';
+  const res = await safeFetch(
+    `${API_BASE}/api/replays/demos/${encodeURIComponent(id)}/comms/file${bust}`,
+    { headers: await headers() }
+  );
+  if (!res.ok) {
+    const detail = await res.json().catch(() => null);
+    throw new Error(detail?.error || `HTTP ${res.status}`);
+  }
+  return new Uint8Array(await res.arrayBuffer());
+}
+
+/** Upload a recorded session against a demo. `file` is a File or Blob. */
+export async function uploadDemoComms(id, file) {
+  const body = await file.arrayBuffer();
+  return asJson(
+    await safeFetch(`${API_BASE}/api/replays/demos/${encodeURIComponent(id)}/comms`, {
+      method: 'POST',
+      headers: await headers({
+        'Content-Type': 'application/octet-stream',
+        'X-Aim4-Filename': file.name || ''
+      }),
+      body
+    })
+  );
+}
+
+/** Save the speaker mapping, resolved anchor tick, and any manual nudge. */
+export async function saveDemoCommsAttachment(id, patch) {
+  return asJson(
+    await safeFetch(`${API_BASE}/api/replays/demos/${encodeURIComponent(id)}/comms/attach`, {
+      method: 'POST',
+      headers: await headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(patch)
+    })
+  );
+}
+
+/**
+ * The recorder build a user should download, or null when none is published.
+ *
+ * Public and unauthenticated, same as the endpoint: the download has to work
+ * before anyone has installed anything.
+ */
+export async function fetchRecorderLatest() {
+  const res = await safeFetch(`${API_BASE}/api/recorder/latest`).catch(() => null);
+  if (!res?.ok) return null;
+  const body = await res.json().catch(() => null);
+  return body?.latest || null;
+}
+
+/** Where the browser should send someone to get the recorder. */
+export function recorderDownloadUrl(version = '') {
+  return version
+    ? `${API_BASE}/api/recorder/download/${encodeURIComponent(version)}`
+    : `${API_BASE}/api/recorder/download`;
+}
+
+export async function deleteDemoComms(id) {
+  return asJson(
+    await safeFetch(`${API_BASE}/api/replays/demos/${encodeURIComponent(id)}/comms`, {
+      method: 'DELETE',
+      headers: await headers()
+    })
+  );
+}
+
 /** Replace a demo's tag list. Tags are free text the uploader chooses. */
 export async function setDemoTags(id, tags) {
   return asJson(

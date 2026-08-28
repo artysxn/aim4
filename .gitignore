@@ -57,3 +57,8 @@ scripts/round-cache/
 # Source only; rebuild with `dotnet build -c Release`.
 /tools/cs3d-tex/bin/
 /tools/cs3d-tex/obj/
+
+# Rust build output for the desktop recorder (recorder/). Gigabytes, and
+# rebuilt from source; the shipped artifact is published through
+# /api/recorder, never committed.
+recorder/target

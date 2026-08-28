@@ -157,6 +157,34 @@ export async function cancelSubscription({
   return updated;
 }
 
+/**
+ * Undo a cancel-at-period-end before the period actually ends.
+ *
+ * The mirror of cancelSubscription's soft path, and only that: a subscription
+ * whose status already moved past active is history, not something a button
+ * can revive.
+ */
+export async function resumeSubscription({ userId, actorId = null, req = null }) {
+  const existing = await activeSubscription(userId);
+  if (!existing) throw new ValidationError('No subscription to resume.');
+  if (!existing.cancel_at_period_end) return existing;
+
+  const [updated] = await db.update(
+    'subscriptions',
+    { id: `eq.${existing.id}` },
+    { cancel_at_period_end: false, updated_at: new Date().toISOString() }
+  );
+  await recomputeUser(existing.user_id);
+  await writeAudit({
+    actorId: actorId || existing.user_id,
+    action: 'subscription.resume',
+    targetUser: existing.user_id,
+    payload: { subscriptionId: existing.id },
+    req
+  });
+  return updated;
+}
+
 export async function setSubscriptionStatus({ subscriptionId, status, patch = {}, actorId = null }) {
   const [updated] = await db.update(
     'subscriptions',

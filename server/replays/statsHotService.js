@@ -30,7 +30,25 @@ const building = new Map();
  * append path re-runs finish() per batch and grows the columns geometrically,
  * and a first-ever load looks like "everything is new".
  */
-const APPEND_LIMIT = 250;
+const appendLimit = () => Number(process.env.AIM4_HOT_APPEND_LIMIT ?? 250);
+
+/**
+ * Dead demos tolerated in the columns before a rebuild compacts them away.
+ *
+ * A reparse or a deletion cannot pull rounds back out of packed columns, so a
+ * demo that changed is DEAD-MARKED — its rounds stay in the buffers and the
+ * visibility mask stops counting them — and the new version is appended. Each
+ * dead demo costs its rounds' bytes until the next full rebuild, so past this
+ * many the columns are rebuilt (detached, while the old store keeps serving).
+ *
+ * Why this exists at all: the ingest pipeline re-materializes existing demos
+ * a few at a time, and every one of those used to be `removed > 0` →
+ * cache.delete → a full 4,900-demo rebuild → a cold Database for everyone.
+ * On 2026-08-27 that drip was measured evicting the store every couple of
+ * minutes, which meant the store was cold at almost every moment anyone
+ * actually looked at it.
+ */
+const removeLimit = () => Number(process.env.AIM4_HOT_REMOVE_LIMIT ?? 250);
 
 /** Let other HTTP requests in between JSON.parse / packer.add bursts. */
 function yieldEventLoop() {
@@ -85,6 +103,16 @@ let lastBuildFailure = { at: 0, message: '' };
  */
 const buildProgress = new Map();
 
+/**
+ * Where a running HEAL is: the handful of new or reparsed demos being folded
+ * into a store that is still serving. Separate from buildProgress because the
+ * two mean opposite things to a client — a build says "you got a 503, here is
+ * why", a heal says "you got an answer, and it is this many demos behind".
+ *
+ * @type {Map<string, { done: number, total: number, startedAt: number }>}
+ */
+const healProgress = new Map();
+
 /** Progress plus a rate-based ETA, or null when nothing is building. */
 export function hotBuildProgress(user) {
   const p = buildProgress.get(LIB(user));
@@ -95,6 +123,28 @@ export function hotBuildProgress(user) {
       ? Math.max(1, Math.round((elapsed / p.done) * (p.total - p.done)))
       : null;
   return { done: p.done, total: p.total, elapsedSeconds: Math.round(elapsed), etaSeconds: eta };
+}
+
+/**
+ * What a SERVED answer is currently behind on, or null when it is current.
+ *
+ * `append`: a heal is folding this many new/reparsed demos into the resident
+ * store. `rebuild`: the store was too far behind to heal and a full rebuild is
+ * running detached while the old store keeps answering. Either way the caller
+ * just got real rows — this is the footnote, not the error. The aggregate
+ * route stamps it on 200 responses so the Database can say "1 new demo is
+ * being processed" instead of silently serving numbers that are about to move.
+ *
+ * A rebuild with NO resident store is not "refreshing" — that caller got a
+ * 503 with hotBuildProgress, which is the other half of this story.
+ */
+export function hotRefreshing(user) {
+  const key = LIB(user);
+  const h = healProgress.get(key);
+  if (h && h.total > 0) return { mode: 'append', done: h.done, total: h.total };
+  const p = buildProgress.get(key);
+  if (p && cache.has(key)) return { mode: 'rebuild', done: p.done, total: p.total };
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -141,7 +191,12 @@ function ensureSnapshotLoaded(io, user, wanted) {
     let missing = 0;
     for (const k of wanted.keys()) if (!have.has(k)) missing++;
     const removed = have.size - (wanted.size - missing);
-    if (removed > 0 || missing > APPEND_LIMIT) {
+    // Drift the heal path can absorb — a few new demos, a few reparsed or
+    // deleted ones — does NOT void the file: the store is installed as-is and
+    // the first getHotStore call afterwards dead-marks and appends the
+    // difference. Discarding on any removal is what kept every deploy cold
+    // while the ingest pipeline re-materialized demos in the background.
+    if (removed > removeLimit() || missing > appendLimit()) {
       console.log(
         `[stats] hot snapshot stale (${missing} new, ${removed} removed), rebuilding instead`
       );
@@ -151,17 +206,22 @@ function ensureSnapshotLoaded(io, user, wanted) {
     // packer's own finish(), and the file's buffers are garbage after this.
     const packer = createPacker(snap.store.nRounds, snap.store);
     const store = packer.finish();
+    // Dead-marks ride the demos JSON in the header, so a snapshot written
+    // mid-drip reloads with the same rounds masked out it had when saved.
+    let dead = 0;
+    for (const d of store.demos) if (d.dead) dead++;
     cache.clear();
     cache.set(key, {
       packer,
       store,
       ids: have,
       builtAt: snap.savedAt || Date.now(),
-      appends: 0
+      appends: 0,
+      dead
     });
     console.log(
       `[stats] hot store loaded from snapshot: ${store.demos.length} demos, ` +
-        `${Math.round(store.bytes / 1048576)} MB, ${missing} to append`
+        `${Math.round(store.bytes / 1048576)} MB, ${missing} new / ${removed} removed to heal`
     );
   })()
     .catch((err) => {
@@ -260,11 +320,13 @@ function addGuarded(packer, entry) {
  * index off disk, and letting two requests do that at once is how a server runs
  * out of memory.
  *
- * `opts.requireWarm`: never make an HTTP request wait for a cold build. A
- * resident or cheaply-appendable store is returned as usual; a cold one starts
- * building DETACHED and this resolves null so the route can answer "still
- * building" immediately. The request path sets this; boot code and tests,
- * which genuinely want to await the build, do not.
+ * `opts.requireWarm`: never make an HTTP request wait for ANY of the work
+ * here. A current store is returned as usual; a resident store that is behind
+ * the record set is returned AS IS while the heal or rebuild runs detached
+ * (hotRefreshing says by how much); only a truly cold store — nothing
+ * resident at all — resolves null so the route can answer "still building".
+ * The request path sets this; boot code and tests, which genuinely want to
+ * await the work, do not.
  */
 export async function getHotStore(io, user, records, opts = {}) {
   const key = LIB(user);
@@ -290,39 +352,48 @@ export async function getHotStore(io, user, records, opts = {}) {
     const removed = hit.ids.size - (wanted.size - missing);
     if (!missing && !removed) return hit.store;
 
-    // Additions only — the common case, since uploads append. Pack just the new
-    // demos onto the existing columns instead of re-reading four thousand
-    // indexes to learn what we already knew.
-    if (!removed && missing <= APPEND_LIMIT) {
-      const pending = building.get(key);
-      if (pending) return pending;
-      const job = (async () => {
-        let n = 0;
-        for (const [k, record] of wanted) {
-          if (hit.ids.has(k)) continue;
-          const entry = await loadStoredEntry(io, user, record.id);
-          if (entry?.rounds?.length) addGuarded(hit.packer, entry);
-          hit.ids.add(k);
-          n += 1;
-          if (n % 8 === 0) await yieldEventLoop();
-        }
-        // finish() hands back views over the current buffers, so it must be
-        // re-run after an append: growth reallocates, and the previous views
-        // would still point at the old ones.
-        hit.store = hit.packer.finish();
-        hit.builtAt = Date.now();
-        hit.appends += 1;
-        scheduleSnapshotWrite(io, user);
-        return hit.store;
-      })().finally(() => {
-        if (building.get(key) === job) building.delete(key);
-      });
+    // A heal or rebuild is already running. The resident store keeps
+    // answering — stale by the demos in flight, which hotRefreshing reports —
+    // rather than anyone waiting on the job or eating a 503.
+    const pending = building.get(key);
+    if (pending) {
+      if (opts.requireWarm) return hit.store;
+      return pending;
+    }
+
+    // A bounded change set is HEALED in place: demos whose key left the
+    // record set (reparsed, renamed, deleted) are dead-marked — their rounds
+    // stay in the columns and visibilityMask stops counting them — and the
+    // new versions are appended, exactly like an upload. This is the whole
+    // answer to the ingest drip: re-materializing one demo used to be
+    // `removed > 0` → cache.delete → a full library rebuild, every few
+    // minutes, forever. Dead demos cost their bytes until a rebuild compacts
+    // them, which is what removeLimit bounds.
+    if (missing <= appendLimit() && removed + hit.dead <= removeLimit()) {
+      const job = healStore(io, user, key, hit, wanted);
       building.set(key, job);
+      if (opts.requireWarm) {
+        // The request path serves the stale store NOW; the heal lands
+        // detached. Its failure is the next request's retry, not a crash.
+        job.catch((err) =>
+          console.warn('[stats] hot store heal failed:', err?.message || err)
+        );
+        return hit.store;
+      }
       return job;
     }
-    // A demo left the library, or too many arrived to be worth appending.
-    // Holes would need tombstones and the columns are cheap to rebuild.
-    cache.delete(key);
+
+    // Too much changed to heal. The old move was cache.delete — a cold
+    // Database for everyone while the rebuild ran. Keep serving the resident
+    // store and rebuild DETACHED; startBuild swaps the finished store in
+    // whole, and until then every answer is honest-but-stale.
+    if (opts.requireWarm) {
+      if (Date.now() - lastBuildFailure.at >= BUILD_RETRY_MS) {
+        startBuild(io, user, records).catch(() => {});
+      }
+      return hit.store;
+    }
+    return startBuild(io, user, records, opts);
   }
 
   const inflight = building.get(key);
@@ -344,6 +415,67 @@ export async function getHotStore(io, user, records, opts = {}) {
   }
 
   return startBuild(io, user, records, opts);
+}
+
+/**
+ * Fold a bounded change set into a store that keeps serving throughout.
+ *
+ * Dead-marking first, then appends: a reparsed demo is its old copy going
+ * dead plus its new copy arriving, and doing the marking up front means even
+ * the stale answers served mid-heal have stopped counting rounds that are
+ * known to be superseded. The demo id is recovered from the vanished key
+ * itself — recordKey starts `${id}:` precisely so a key whose record is gone
+ * still says which demo it was.
+ *
+ * The caller owns putting the job into `building` (and, on the request path,
+ * attaching the catch); this just does the work.
+ */
+function healStore(io, user, key, hit, wanted) {
+  const gone = [];
+  for (const k of hit.ids) if (!wanted.has(k)) gone.push(k);
+  let adding = 0;
+  for (const k of wanted.keys()) if (!hit.ids.has(k)) adding++;
+  if (adding) healProgress.set(key, { done: 0, total: adding, startedAt: Date.now() });
+
+  const job = (async () => {
+    if (gone.length) {
+      const liveAt = new Map();
+      for (let i = 0; i < hit.store.demos.length; i++) {
+        if (!hit.store.demos[i].dead) liveAt.set(hit.store.demos[i].id, i);
+      }
+      for (const k of gone) {
+        const at = liveAt.get(k.slice(0, k.indexOf(':')));
+        if (at !== undefined && !hit.store.demos[at].dead) {
+          hit.store.demos[at].dead = true;
+          hit.dead += 1;
+        }
+        hit.ids.delete(k);
+      }
+    }
+    let n = 0;
+    const hp = healProgress.get(key);
+    for (const [k, record] of wanted) {
+      if (hit.ids.has(k)) continue;
+      const entry = await loadStoredEntry(io, user, record.id);
+      if (entry?.rounds?.length) addGuarded(hit.packer, entry);
+      hit.ids.add(k);
+      n += 1;
+      if (hp) hp.done = n;
+      if (n % 8 === 0) await yieldEventLoop();
+    }
+    // finish() hands back views over the current buffers, so it must be
+    // re-run after an append: growth reallocates, and the previous views
+    // would still point at the old ones.
+    hit.store = hit.packer.finish();
+    hit.builtAt = Date.now();
+    hit.appends += 1;
+    scheduleSnapshotWrite(io, user);
+    return hit.store;
+  })().finally(() => {
+    if (building.get(key) === job) building.delete(key);
+    healProgress.delete(key);
+  });
+  return job;
 }
 
 function startBuild(io, user, records, opts = {}) {
@@ -394,14 +526,17 @@ function startBuild(io, user, records, opts = {}) {
     }
     if (skipped) console.warn(`[stats] hot store built with ${skipped} demos skipped`);
     const store = packer.finish();
-    // Only one build is kept: each is hundreds of MB.
+    // Only one build is kept: each is hundreds of MB. Until this line the
+    // previous store (if any) kept serving; the swap is the first moment a
+    // caller can see the rebuilt columns — and the last it can see stale ones.
     cache.clear();
     cache.set(key, {
       packer,
       store,
       ids: new Set(wanted.keys()),
       builtAt: Date.now(),
-      appends: 0
+      appends: 0,
+      dead: 0
     });
     console.log(
       `[stats] hot store built: ${records.length} demos in ${Math.round((Date.now() - startedAt) / 1000)}s`
@@ -445,26 +580,28 @@ export async function hotPlayers(io, user, records, filter = {}, opts = {}) {
  * requests would each see the other's demos as added or removed and force a
  * full repack every time.
  *
+ * Dead demos are cut here too, for every caller: their rounds are still in
+ * the packed columns (a heal cannot pull bytes back out of them), and this
+ * mask is the single place they stop counting. That makes deadness impossible
+ * to forget in a new aggregate — anything that honours visibility honours it.
+ *
  * @param {object} store
  * @param {Set<string>|null} allowedIds demo ids the caller may read
- * @returns {Uint8Array|null} null when the caller may read everything
+ * @returns {Uint8Array|null} null when everything is readable and live
  */
 export function visibilityMask(store, allowedIds) {
-  if (!allowedIds) return null;
-  if (allowedIds.size === store.demos.length) {
-    // Everything is readable; skip the per-round check entirely.
-    let all = true;
-    for (const d of store.demos) {
-      if (!allowedIds.has(d.id)) {
-        all = false;
-        break;
-      }
+  const demos = store.demos;
+  let mask = null;
+  const cut = (i) => {
+    if (!mask) {
+      mask = new Uint8Array(demos.length);
+      mask.fill(1);
     }
-    if (all) return null;
-  }
-  const mask = new Uint8Array(store.demos.length);
-  for (let i = 0; i < store.demos.length; i++) {
-    if (allowedIds.has(store.demos[i].id)) mask[i] = 1;
+    mask[i] = 0;
+  };
+  for (let i = 0; i < demos.length; i++) {
+    if (demos[i].dead) cut(i);
+    else if (allowedIds && !allowedIds.has(demos[i].id)) cut(i);
   }
   return mask;
 }
@@ -517,7 +654,10 @@ export async function hotMatches(io, user, records, demoIds, filter = {}, opts =
   if (!store) return null;
   const allow = visibilityMask(store, opts.allowedIds || null);
   const rows = aggregateHotMatches(store, demoIds, filter, allow, opts.want || {});
-  const demoById = new Map(store.demos.map((d) => [d.id, d]));
+  // Skip dead copies: after a heal the same id can appear twice, and the
+  // identity stamped on a row must come from the version whose rounds counted.
+  const demoById = new Map();
+  for (const d of store.demos) if (!d.dead) demoById.set(d.id, d);
   // Stamp each row with the match it describes. The client needs the same
   // identity columns the payload path gave it — map, score, result, opponent —
   // and only the store knows which side the entity was on.
@@ -557,7 +697,12 @@ export async function hotMatches(io, user, records, demoIds, filter = {}, opts =
 export function patchHotStoreTeamNames(io, user, records) {
   const hit = cache.get(LIB(user));
   if (!hit || !records?.length) return 0;
-  const at = new Map(hit.store.demos.map((d, i) => [d.id, i]));
+  // Only live copies may take the rename: a dead copy's key already left
+  // hit.ids, and re-keying it would resurrect a demo a heal retired.
+  const at = new Map();
+  hit.store.demos.forEach((d, i) => {
+    if (!d.dead) at.set(d.id, i);
+  });
   let n = 0;
   for (const r of records) {
     const i = at.get(r.id);
@@ -589,6 +734,7 @@ export function hotStoreStatus() {
       rounds: v.store.nRounds,
       players: v.store.players.size,
       demos: v.store.demos.length,
+      dead: v.dead,
       bytes: v.store.bytes
     });
   }
@@ -598,10 +744,17 @@ export function hotStoreStatus() {
     total: p.total,
     startedAt: p.startedAt
   }));
+  const healing = [...healProgress.entries()].map(([key, p]) => ({
+    key,
+    done: p.done,
+    total: p.total,
+    startedAt: p.startedAt
+  }));
   return {
     stores: out,
     building: building.size > 0,
     progress,
+    healing,
     snapshot: {
       enabled: snapshotEnabled(),
       writing: snapshotWrites.size > 0,

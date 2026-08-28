@@ -19,12 +19,14 @@ import { coachSmokesPanel } from './coachSmokesPanel.js';
 import { uploadsPanel } from './uploadsPanel.js';
 import { perfPanel } from './perfPanel.js';
 import { pitchPanel } from './pitchPanel.js';
+import { supportPanel } from './supportPanel.js';
 import { spinnerNode } from '../../lib/spinner.js';
 
 const TABS = [
   { id: 'users', label: 'Users' },
   { id: 'uploads', label: 'Uploads' },
   { id: 'ingest', label: 'Ingest' },
+  { id: 'support', label: 'Support' },
   { id: 'tools', label: 'Tools' },
   { id: 'models', label: 'Models' },
   { id: 'smokes', label: 'Utility' },
@@ -77,6 +79,8 @@ export function initAdminView(host) {
       panel.appendChild(livePanel);
     } else if (tab === 'uploads') {
       panel.appendChild(uploadsPanel());
+    } else if (tab === 'support') {
+      panel.appendChild(supportPanel());
     } else if (tab === 'audit') {
       panel.appendChild(auditPanel());
     } else if (tab === 'tools') {

@@ -69,6 +69,8 @@ import chartIcon from '../../icons/demos_chart.svg?raw';
 import zonesIcon from '../../icons/demos_zones.svg?raw';
 import duelsIcon from '../../icons/demos_duels.svg?raw';
 import povIcon from '../../icons/demo_pov.svg?raw';
+import commsIcon from '../../icons/demos_comms.svg?raw';
+import { commsSidebarHtml, commsSidebarKey, createCommsController } from './commsOverlay.js';
 import { createPovVision, povDuelOverlay, povZonePaint } from './teamPov.js';
 import { rememberRound } from '../../site/homeView.js';
 import { createDuelOverlay } from '../duels/duelOverlay.js';
@@ -85,6 +87,7 @@ import { resolveSeats, saveStrategyFromRound, sidePlayers } from '../strategy/ad
 import { nadeMarkColor } from '../strategy/utilityImport.js';
 import { ROLE_SCAN_ROUNDS } from '../strategy/roundRoles.js';
 import { cs3dMap } from '../../../shared/cs3d/maps.js';
+import { soleDemoId } from '../shared/roundId.js';
 import view2dIcon from '../../icons/demo_2d.svg?raw';
 import view3dIcon from '../../icons/demo_3d.svg?raw';
 import explore3dIcon from '../../icons/demo_3d_EXPLORE.svg?raw';
@@ -166,6 +169,19 @@ export function createTimelineViewer({
    * would land in the team's tally if it could be clicked.
    */
   const teamReview = Boolean(coachTeamId);
+
+  /**
+   * The demo whose voice comms these rounds belong to.
+   *
+   * Not statsDemoId: that one deliberately marks a WHOLE unspliced match,
+   * because the live scoreboard and Coach are wrong without every round. Comms
+   * have no such requirement — ticks are absolute within a demo, so one round
+   * opened from a share link aligns to the same recording the full match does.
+   * All that is actually needed is that the rounds come from ONE demo, which
+   * their file names say: every modern round carries a `~<demoId>` suffix.
+   * A playlist spanning several demos has no answer here, and gets no button.
+   */
+  const commsDemoId = statsDemoId || soleDemoId(rounds);
 
   const el = document.createElement('div');
   el.className = 'rv-timeline';
@@ -320,7 +336,7 @@ export function createTimelineViewer({
         }>${icon(coachIcon)}</button>
         <button type="button" class="rv-tool" id="rv-bookmark" title="Save to a playlist">${icon(bookmarkAddIcon)}</button>
         <button type="button" class="rv-tool" id="rv-note" title="Notes">${icon(commentsIcon)}</button>
-        <!-- Always in the bar. It is one of the eight tools, and a tool that
+        <!-- Always in the bar. It is one of the nine tools, and a tool that
              comes and goes leaves a hole where the user learned a button was;
              when 3D is not available for a demo it says so instead. -->
         <button type="button" class="rv-tool rv-tool-3d" id="rv-toggle3d" title="Switch to 3D"
@@ -335,6 +351,9 @@ export function createTimelineViewer({
           title="Duel stats: xK beside fighters; hover a player or line for win %">${icon(duelsIcon)}</button>
         <button type="button" class="rv-tool" id="rv-pov"
           title="Team POV: one team's map control and only the enemies they can see">${icon(povIcon)}</button>
+        <button type="button" class="rv-tool" id="rv-comms" title="Voice comms" ${
+          commsDemoId ? '' : 'hidden'
+        }>${icon(commsIcon)}</button>
       </div>
     </aside>
     <button type="button" class="rv-side-show" id="rv-side-show"
@@ -343,6 +362,10 @@ export function createTimelineViewer({
       <div class="rv-stage">
         <div class="rv-map">
           <canvas class="rv-canvas" id="rv-canvas"></canvas>
+          <!-- 3D has no room above a player's head for a caption, so comms
+               become a list down the side: who is talking, and what they said.
+               DOM rather than drawn into the scene, because it is text. -->
+          <div class="rv-comms-side" id="rv-comms-side" hidden></div>
           <div class="rv-clock-row" id="rv-clock-row">
             <div class="rv-clock-side is-left">
               <span class="rv-clock-odds" id="rv-odds-left" data-side="T" hidden></span>
@@ -500,6 +523,7 @@ export function createTimelineViewer({
   const zonesBtn = el.querySelector('#rv-zones');
   const duelsBtn = el.querySelector('#rv-duels');
   const povBtn = el.querySelector('#rv-pov');
+  const commsBtn = el.querySelector('#rv-comms');
   const coachBtn = el.querySelector('#rv-coach');
   const coachPick = el.querySelector('#rv-coach-pick');
   const coachPickTitle = el.querySelector('#rv-coach-pick-title');
@@ -723,6 +747,93 @@ export function createTimelineViewer({
    */
   const coachAvailable = Boolean(statsDemoId);
   const states = [];
+
+  // ---- voice comms ---------------------------------------------------------
+  // A recorded TeamSpeak session, aligned to this demo's ticks. Both views draw
+  // from the one controller: captions above droplets in 2D, a sidebar in 3D.
+  // Needs a demo id, same as Coach: comms belong to a match, not to a loose
+  // handful of rounds someone assembled from a playlist.
+  const comms = createCommsController({
+    demoId: commsDemoId,
+    rounds,
+    players: () => activeMeta?.players || [],
+    onChange: () => {
+      syncCommsBtn();
+      draw();
+    }
+  });
+  let commsDialog = null;
+
+  function syncCommsBtn() {
+    if (!commsBtn) return;
+    // Lit only when comms are actually being drawn. A recording that is
+    // attached but has no sync point yet must not look switched on while the
+    // map stays silent: that reads as broken rather than as one click away.
+    const on = comms.placed && comms.state.enabled;
+    commsBtn.classList.toggle('active', on);
+    commsBtn.classList.toggle('needs-sync', comms.needsSync);
+    commsBtn.title = !comms.attached
+      ? 'Voice comms: attach a recording'
+      : comms.needsSync
+        ? 'Voice comms: pick a sync point'
+        : on
+          ? 'Voice comms on. Shift-click to edit the mapping'
+          : 'Voice comms off. Shift-click to edit the mapping';
+  }
+
+  const commsSideEl = el.querySelector('#rv-comms-side');
+  /** Last rendered row text, so the sidebar only touches the DOM on change. */
+  let commsSideKey = '';
+
+  /**
+   * The 3D comms sidebar.
+   *
+   * Only in 3D: in 2D the words sit on the droplet that said them, which is
+   * strictly better, and running both at once would say everything twice.
+   */
+  function syncCommsSidebar(tick) {
+    if (!commsSideEl) return;
+    const rows = mode3d ? comms.sidebarRows(tick) : null;
+    if (!rows?.length) {
+      if (!commsSideEl.hidden) {
+        commsSideEl.hidden = true;
+        commsSideEl.innerHTML = '';
+        commsSideKey = '';
+      }
+      return;
+    }
+    // Rebuilding this HTML every frame at 128 ticks a second would be the most
+    // expensive thing in the loop for no visible gain; the text changes when
+    // someone speaks, not when the clock moves.
+    const key = commsSidebarKey(rows);
+    if (key === commsSideKey) return;
+    commsSideKey = key;
+    commsSideEl.hidden = false;
+    commsSideEl.innerHTML = commsSidebarHtml(rows, escapeHtml, {
+      1: activeMeta?.team1Side,
+      2: activeMeta?.team2Side
+    });
+  }
+
+  async function openComms() {
+    if (commsDialog) {
+      commsDialog.close();
+      commsDialog = null;
+      return;
+    }
+    const { openCommsDialog } = await import('./commsOverlay.js');
+    commsDialog = openCommsDialog({
+      host: el,
+      controller: comms,
+      demoId: commsDemoId,
+      players: () => activeMeta?.players || [],
+      onDone: () => {
+        commsDialog = null;
+        syncCommsBtn();
+        draw();
+      }
+    });
+  }
 
   // ---- 2D / 3D view switching ---------------------------------------------
   // The 3D scene replaces the radar canvas and nothing else: the timeline,
@@ -1029,7 +1140,14 @@ export function createTimelineViewer({
   // ---- round chips --------------------------------------------------------
 
   function renderRoundStrip() {
-    roundsEl.innerHTML = rounds
+    // A demo whose pistol round was missing from the file starts at round 2;
+    // an inert chip says so, so the gap reads as a fact and not a bug.
+    const missingLead = rounds[0]?.pistolMissingBefore
+      ? `<button type="button" class="rv-round is-missing" disabled title="${escapeHtml(
+          'Round 1 was missing from this demo file'
+        )}">01</button>`
+      : '';
+    roundsEl.innerHTML = missingLead + rounds
       .map((r, i) => {
         const side = winningSide(r);
         const sideClass = side === 'T' ? 'wt' : 'wct';
@@ -4878,6 +4996,17 @@ export function createTimelineViewer({
     draw();
   })();
 
+  // Comms load themselves if this demo has any: the point of attaching a
+  // recording is that it is simply there next time, not that it has to be
+  // switched on again. One small request when nothing is attached.
+  void (async () => {
+    if (!commsDemoId) return;
+    await comms.load();
+    if (destroyed) return;
+    syncCommsBtn();
+    if (comms.attached) draw();
+  })();
+
   zonesBtn?.addEventListener('click', async () => {
     // Map control is Team Premium and up, metered at one a day there and
     // unlimited on Elite. Only charged on the way on, never on the way off.
@@ -4913,6 +5042,22 @@ export function createTimelineViewer({
     if (povTeam) await ensureZoneNetwork();
     renderScoreboards();
     draw();
+  });
+
+  // The mic button is a toggle once comms are attached and a way in to the
+  // attach dialog before that. Shift-click always opens the dialog, so a
+  // mapping can be fixed without detaching first.
+  commsBtn?.addEventListener('click', async (e) => {
+    // Toggling only makes sense once there is something to toggle. Before
+    // that — nothing attached, or attached with no sync point — a click opens
+    // the dialog, which is where both of those get fixed.
+    if (comms.placed && !e.shiftKey) {
+      comms.setEnabled(!comms.state.enabled);
+      syncCommsBtn();
+      draw();
+      return;
+    }
+    await openComms();
   });
 
   duelsBtn?.addEventListener('click', async () => {
@@ -5339,6 +5484,11 @@ export function createTimelineViewer({
         scoreCt: s1 === 'CT' ? wins.team1 : wins.team2
       });
     }
+
+    // Captions ride on the renderer rather than the frame: they are a property
+    // of the view (on or off, faded or not), not of the tick data.
+    renderer.commsLines = comms.linesAt(tick);
+    syncCommsSidebar(tick);
 
     renderer.render({
       tick,

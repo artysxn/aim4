@@ -25,6 +25,11 @@
 //   POST   /api/replays/zones/:map               save zone polygons + names
 //   GET    /api/replays/coach-smokes             maps with Autocoach smoke DB
 //   GET    /api/replays/coach-smokes/:map        basic smoke landing spots
+//   GET    /api/replays/demos/:id/comms          attached voice comms, or null
+//   GET    /api/replays/demos/:id/comms/file     the .aim4comms container
+//   POST   /api/replays/demos/:id/comms          upload a .aim4comms container
+//   POST   /api/replays/demos/:id/comms/attach   speaker mapping / sync nudge
+//   DELETE /api/replays/demos/:id/comms          detach
 //
 // Uploads stream straight to disk: a demo / package is hundreds of megabytes
 // and must never be buffered in memory or pass through the JSON body reader.
@@ -37,6 +42,7 @@ import { promisify } from 'node:util';
 
 const gzip = promisify(zlib.gzip);
 import { parserStatus } from '../demoparser/index.js';
+import { MAX_FILE_BYTES as COMMS_FILE_MAX_BYTES } from '../../shared/comms/format.js';
 import {
   ROOT,
   MAX_BYTES,
@@ -75,6 +81,7 @@ import { getRoster, invalidateRoster, scopeRoster } from './rosterCatalogue.js';
 import { peerAverages, peerAveragesHot } from './peerAverages.js';
 import {
   hotBuildProgress,
+  hotRefreshing,
   hotStoreStatus,
   hotMatches,
   hotTables,
@@ -83,7 +90,7 @@ import {
 import { isAcceptedUpload, rarSupport } from './archive.js';
 import { allJobs, batchStatus, enqueueParse, forgetJob, getBatch, jobStatus, startIngest } from './jobs.js';
 import { SHARED_LIBRARY, authStatus, identify } from './auth.js';
-import { LEGACY_UPLOADER, isConfigured, whoami } from './identity.js';
+import { LEGACY_UPLOADER, demoUploadIdentity, isConfigured, whoami } from './identity.js';
 import { UNLIMITED } from '../../shared/entitlements/catalogue.js';
 import { CAP } from '../../shared/entitlements/keys.js';
 import {
@@ -151,6 +158,15 @@ const CORS = {
   'Access-Control-Allow-Headers':
     'Authorization, Content-Type, X-Aim4-User, X-Aim4-Filename, X-Aim4-Visibility'
 };
+
+/**
+ * Upload ceiling for a comms container.
+ *
+ * The recorder aims at 2 MB and packs its audio against that budget, so this
+ * is the rail rather than the target: a chatty session at the codec's floor
+ * can run a little over, and anything near this limit is not a comms file.
+ */
+const COMMS_MAX_BYTES = COMMS_FILE_MAX_BYTES;
 
 function json(res, status, body, extraHeaders = null) {
   const payload = JSON.stringify(body);
@@ -799,6 +815,14 @@ export async function handleReplayRequest(req, res, url) {
 
   if (req.method === 'POST' && p === '/api/replays/demos') {
     if (!requireUser()) return true;
+    // A username account uploads nothing until a real identity anchors it.
+    // 403 with a reason, not 402: this is not a plan problem, and the client
+    // routes the user to Connections rather than to pricing.
+    const anchored = demoUploadIdentity(me);
+    if (!anchored.ok) {
+      json(res, 403, { error: anchored.error, reason: 'link_required' });
+      return true;
+    }
     const cap = await uploadCap(user, me);
     if (!cap.allowed) {
       // 402, not 403: this is "not on your plan", and the client shows an
@@ -883,6 +907,16 @@ export async function handleReplayRequest(req, res, url) {
   // Prefer this path in production: parse on the user's PC, upload only the
   // already-named rounds. No demoparser process runs on the server.
   if (req.method === 'POST' && p === '/api/replays/import') {
+    // Same identity rule as the raw upload path. Only for signed-in callers:
+    // anonymous imports into the shared library predate accounts and keep
+    // their existing behaviour.
+    if (me.signedIn) {
+      const anchored = demoUploadIdentity(me);
+      if (!anchored.ok) {
+        json(res, 403, { error: anchored.error, reason: 'link_required' });
+        return true;
+      }
+    }
     const filename = String(req.headers['x-aim4-filename'] || `match${PACKAGE_EXT}`).slice(0, 160);
     if (!filename.toLowerCase().endsWith(PACKAGE_EXT)) {
       json(res, 400, { error: `Only ${PACKAGE_EXT} packages can be imported.` });
@@ -1035,6 +1069,158 @@ export async function handleReplayRequest(req, res, url) {
 
   // Tags are the uploader's own labels (scrim, faceit, an opponent name), so
   // the only thing enforced is shape; setDemoTags does that.
+  // ---- voice comms --------------------------------------------------------
+  // A recorded TeamSpeak session attached to one demo. The container arrives
+  // finished from the desktop recorder: the server validates it, stores it,
+  // and serves it back. No transcription, no audio work, nothing on the
+  // request path — see shared/comms/format.js for what is in the file.
+  const commsMatch = p.match(
+    /^\/api\/replays\/demos\/([A-Za-z0-9_-]+)\/comms(?:\/(file|attach))?$/
+  );
+  if (commsMatch) {
+    const id = commsMatch[1];
+    const sub = commsMatch[2] || '';
+    const {
+      deleteComms,
+      readComms,
+      readCommsFile,
+      readIdentities,
+      saveComms,
+      updateCommsAttachment
+    } = await import('./commsStore.js');
+
+    const record = await readRecord(user, id);
+
+    if (req.method === 'GET') {
+      if (!record || !canSee(record, access, { viaLink: true })) {
+        json(res, 404, { error: 'Replay not found.' });
+        return true;
+      }
+      const meta = await readComms(user, id);
+      if (!meta) {
+        json(res, sub === 'file' ? 404 : 200, sub === 'file' ? { error: 'No comms attached.' } : { comms: null });
+        return true;
+      }
+      if (sub === 'file') {
+        const bytes = await readCommsFile(user, id);
+        if (!bytes) {
+          json(res, 404, { error: 'No comms attached.' });
+          return true;
+        }
+        res.writeHead(200, {
+          ...CORS,
+          'Content-Type': 'application/octet-stream',
+          'Content-Length': String(bytes.length),
+          // Immutable for as long as it is attached: replacing a session
+          // rewrites the sidecar, and the viewer asks for the meta first.
+          'Cache-Control': 'private, max-age=300'
+        });
+        res.end(bytes);
+        return true;
+      }
+      // Remembered identities ride along so the attach dialog can pre-fill
+      // without a second request; the same five people scrim every week.
+      json(res, 200, { comms: meta, identities: await readIdentities(user) });
+      return true;
+    }
+
+    if (req.method === 'POST' || req.method === 'DELETE') {
+      if (!record) {
+        json(res, 404, { error: 'Replay not found.' });
+        return true;
+      }
+      if (!canManage(record, me)) {
+        json(res, 403, { error: 'Only the uploader can change that demo’s comms.' });
+        return true;
+      }
+    }
+
+    if (req.method === 'DELETE') {
+      await deleteComms(user, id);
+      json(res, 200, { ok: true, comms: null, usage: await usage(user) });
+      return true;
+    }
+
+    if (req.method === 'POST' && sub === 'attach') {
+      // A mapping of five speakers and a nudge is a few hundred bytes; 64 KB
+      // is generous. Without a cap this loop would buffer whatever a client
+      // chose to stream at it.
+      const ATTACH_MAX_BYTES = 64 * 1024;
+      const chunks = [];
+      let attachTotal = 0;
+      for await (const chunk of req) {
+        attachTotal += chunk.length;
+        if (attachTotal > ATTACH_MAX_BYTES) {
+          req.destroy();
+          json(res, 413, { error: 'Attach body is too large.' });
+          return true;
+        }
+        chunks.push(chunk);
+      }
+      let body = {};
+      try {
+        body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
+      } catch {
+        json(res, 400, { error: 'Invalid JSON body.' });
+        return true;
+      }
+      const meta = await updateCommsAttachment(user, id, body);
+      if (!meta) {
+        json(res, 404, { error: 'No comms attached.' });
+        return true;
+      }
+      json(res, 200, { comms: meta });
+      return true;
+    }
+
+    if (req.method === 'POST') {
+      // Metered while it streams rather than buffered and checked after: a
+      // comms file is ~2 MB, so anything wildly over is not a comms file and
+      // there is no reason to hold it in memory to find that out.
+      const chunks = [];
+      let total = 0;
+      let tooBig = false;
+      for await (const chunk of req) {
+        total += chunk.length;
+        if (total > COMMS_MAX_BYTES) {
+          tooBig = true;
+          break;
+        }
+        chunks.push(chunk);
+      }
+      if (tooBig) {
+        req.destroy();
+        json(res, 413, {
+          error: `Comms file is too large (limit ${Math.round(COMMS_MAX_BYTES / 1024 / 1024)} MB).`
+        });
+        return true;
+      }
+      // Comms count toward the storage quota, so the quota also gates them —
+      // counting without gating would let a full library keep growing 32 MB
+      // at a time. A replace only charges the difference: the old file's
+      // bytes come back the moment the new one lands.
+      const existing = await readComms(user, id);
+      const netNewBytes = Math.max(0, total - (existing?.sizeBytes || 0));
+      const gate = await checkQuota(user, netNewBytes);
+      if (!gate.ok) {
+        json(res, 413, { error: gate.error, usage: gate.usage });
+        return true;
+      }
+      let meta;
+      try {
+        meta = await saveComms(user, id, Buffer.concat(chunks), {
+          uploadedBy: me?.id || null,
+          filename: String(req.headers['x-aim4-filename'] || '')
+        });
+      } catch (err) {
+        json(res, 400, { error: err?.message || 'That is not a comms file.' });
+        return true;
+      }
+      json(res, 200, { comms: meta, identities: await readIdentities(user), usage: await usage(user) });
+      return true;
+    }
+  }
+
   const tagsMatch = p.match(/^\/api\/replays\/demos\/([A-Za-z0-9_-]+)\/tags$/);
   if (req.method === 'POST' && tagsMatch) {
     const id = tagsMatch[1];
@@ -1405,6 +1591,12 @@ export async function handleReplayRequest(req, res, url) {
     };
     const offset = Math.max(0, Math.floor(Number(arg('offset')) || 0));
 
+    // A served answer can still be behind: a heal is folding freshly parsed
+    // demos in, or a rebuild is running while the old store keeps answering.
+    // The Database shows this as "N new demos being processed" instead of
+    // silently painting numbers that are about to move.
+    const refreshing = hotRefreshing(user);
+
     // Trimmed to the caller's tier before it leaves the process. This shape —
     // `{ players, teams }` — is exactly what gateStatsPayload was written for,
     // and unlike the streamed round payload (which carries `demos` and is
@@ -1418,7 +1610,8 @@ export async function handleReplayRequest(req, res, url) {
         playersTotal: rankedPlayers.length,
         ...(wantTeams ? { teams: page(teams), teamsTotal: teams.length } : {}),
         maps,
-        offset
+        offset,
+        ...(refreshing ? { refreshing } : {})
       }),
       req
     );

@@ -1,11 +1,13 @@
 // Incremental appends must be indistinguishable from a rebuild.
 import assert from 'node:assert/strict';
-import { aggregateHot } from './statsHotAggregate.js';
+import { aggregateHot, aggregateTeamsHot } from './statsHotAggregate.js';
 import {
   getHotStore,
   invalidateHotStore,
+  hotRefreshing,
   hotStoreStatus,
   patchHotStoreTeamNames,
+  visibilityMask,
   warmHotStoreFromSnapshot
 } from './statsHotService.js';
 
@@ -58,6 +60,34 @@ import { createPacker, packStore } from './statsHotStore.js';
 
 const ids = [...ENTRIES.keys()];
 const FILTERS = [{}, { maps: ['de_nuke'] }, { side: 'CT' }, { result: 'won' }, { econ: 4 }];
+
+/**
+ * A healed store must aggregate exactly like a from-scratch pack of the same
+ * library. Order-free (a heal appends where a rebuild interleaves) and through
+ * visibilityMask, which is where dead demos stop counting in production.
+ */
+function assertSameAggregates(actual, expected, label) {
+  const allow = visibilityMask(actual, null);
+  for (const filter of FILTERS) {
+    const got = aggregateHot(actual, filter, allow);
+    const want = aggregateHot(expected, filter);
+    assert.equal(got.length, want.length, `${label}: row count for ${JSON.stringify(filter)}`);
+    const byId = new Map(got.map((row) => [row.id, row]));
+    for (const w of want) {
+      const g = byId.get(w.id);
+      assert.ok(g, `${label}: ${w.id} present for ${JSON.stringify(filter)}`);
+      for (const k of Object.keys(w)) {
+        const x = w[k];
+        if (typeof x === 'number' && Number.isFinite(x)) {
+          assert.ok(
+            Math.abs(x - g[k]) <= Math.max(1e-9, Math.abs(x) * 1e-12),
+            `${label} ${JSON.stringify(filter)} ${w.name}.${k}: ${x} vs ${g[k]}`
+          );
+        }
+      }
+    }
+  }
+}
 
 // --- appending in batches == packing everything at once ---------------------
 {
@@ -247,8 +277,13 @@ assert.deepEqual(hotStoreStatus().stores, [], 'invalidate clears');
       'no file, no store, and crucially no build'
     );
     assert.deepEqual(hotStoreStatus().stores, [], 'nothing resident after a fileless warm');
-    // Put the snapshot back for the phases below.
+    // Put the snapshot back for the phases below — indexes restored first, so
+    // the file holds real rounds rather than the empty shells of a build that
+    // had nothing to read.
     invalidateHotStore();
+    for (const id of half) {
+      await fsp.writeFile(path.join(tmp, 'stats', `${id}.json`), JSON.stringify(ENTRIES.get(id)));
+    }
     const again = await getHotStore(io3, 'local', records);
     assert.ok(again, 'rebuild for the remaining phases');
     let waited = 0;
@@ -258,29 +293,32 @@ assert.deepEqual(hotStoreStatus().stores, [], 'invalidate clears');
     }
   }
 
-  // A stale snapshot (library shrank) is skipped, not served. The indexes go
-  // back on disk first: the point of this check is WHICH source answers, and a
-  // rebuild with nothing to read would look like a skip for the wrong reason.
+  // A snapshot the library has SHRUNK past is no longer discarded: it loads,
+  // the demos that left go dead, and their rounds stop counting. The answer
+  // must equal a from-scratch pack of the smaller library — and the dead
+  // count is the proof it came from the healed file, not a rebuild.
   invalidateHotStore();
-  for (const id of half) {
-    await fsp.writeFile(path.join(tmp, 'stats', `${id}.json`), JSON.stringify(ENTRIES.get(id)));
-  }
   const fewer = records.slice(0, 10);
   const rebuilt = await getHotStore(io3, 'local', fewer);
-  const fewerRounds = half.slice(0, 10).reduce((n, id) => n + ENTRIES.get(id).rounds.length, 0);
-  assert.equal(rebuilt.nRounds, fewerRounds, 'a shrunken library rebuilds rather than serving the old file');
+  assertSameAggregates(
+    rebuilt,
+    packStore(half.slice(0, 10).map((id) => ENTRIES.get(id))),
+    'shrunken library'
+  );
+  assert.equal(hotStoreStatus().stores[0].dead, 10, 'the shrunk-away demos are dead, not rebuilt away');
 
   invalidateHotStore();
   delete process.env.AIM4_HOT_SNAPSHOT_DELAY_MS;
   await fsp.rm(tmp, { recursive: true, force: true });
 }
 
-// --- a rename invalidates the store AND refuses the stale snapshot -----------
+// --- a rename never leaves the old names standing ----------------------------
 // The packed columns carry the team names, so a store built before a rename
 // keeps serving the old ones. The record key hashes the names precisely so a
-// renamed demo reads as removed-plus-added: resident store rebuilt, and a
-// snapshot written before the rename fails its staleness check instead of
-// resurrecting the old names after a deploy.
+// renamed demo reads as removed-plus-added: the resident store heals (old
+// copy dead, renamed copy appended), and a snapshot written before the rename
+// loads only to be healed the same way — a deploy can briefly serve the old
+// name mid-heal, but never settle on it.
 {
   process.env.AIM4_HOT_SNAPSHOT_DELAY_MS = '0';
   const fsp = await import('node:fs/promises');
@@ -309,23 +347,28 @@ assert.deepEqual(hotStoreStatus().stores, [], 'invalidate clears');
   await fsp.writeFile(path.join(tmp, 'stats', `${three[0]}.json`), JSON.stringify(renamedEntry));
   const renamedRecords = three.map((id, i) => recWithNames(id, i === 0 ? 'NewName' : 'OldName'));
 
-  // Resident store: the changed key forces a rebuild with the new name.
+  // Resident store: the changed key heals to the new name without a rebuild.
   const after = await getHotStore(io4, 'local', renamedRecords);
   assert.ok(
-    after.demos.some((d) => d.name1 === 'NewName'),
+    after.demos.some((d) => !d.dead && d.name1 === 'NewName'),
     'a rename reaches the resident store without a restart'
   );
 
-  // "Restart": the pre-rename snapshot must NOT come back.
+  // "Restart": the pre-rename snapshot may load, but must heal to the new
+  // name rather than settling on the old one.
   invalidateHotStore();
   const cold = await getHotStore(io4, 'local', renamedRecords, { requireWarm: true });
   assert.equal(cold, null, 'cold answers null while deciding');
   let warm = null;
-  for (let i = 0; i < 400 && !warm; i++) {
+  for (let i = 0; i < 400; i++) {
     await new Promise((r) => setTimeout(r, 25));
     warm = await getHotStore(io4, 'local', renamedRecords, { requireWarm: true });
+    if (warm?.demos.some((d) => !d.dead && d.name1 === 'NewName')) break;
   }
-  assert.ok(warm.demos.some((d) => d.name1 === 'NewName'), 'the stale snapshot was refused');
+  assert.ok(
+    warm?.demos.some((d) => !d.dead && d.name1 === 'NewName'),
+    'the pre-rename snapshot cannot outlive the rename'
+  );
 
   invalidateHotStore();
   delete process.env.AIM4_HOT_SNAPSHOT_DELAY_MS;
@@ -381,4 +424,147 @@ assert.deepEqual(hotStoreStatus().stores, [], 'invalidate clears');
   await fsp.rm(tmp, { recursive: true, force: true });
 }
 
-console.log('statsHotService.test.js: appends, growth, trimming, requireWarm, snapshots, renames and name patching all pass');
+// --- a reparsed demo heals in place; the store never goes cold ---------------
+// The ingest pipeline re-materializes existing demos a few at a time, and
+// each one used to be `removed > 0` → cache.delete → a full library rebuild.
+// Measured on prod (2026-08-27): the store was evicted every couple of
+// minutes and was cold at almost every moment anyone opened the Database.
+// Now the old copy is dead-marked, the new copy is appended, and every
+// request in between is answered from the resident store — annotated, via
+// hotRefreshing, as "this many demos behind".
+{
+  process.env.AIM4_HOT_SNAPSHOT_DELAY_MS = '0';
+  const fsp = await import('node:fs/promises');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const { loadSnapshot } = await import('./statsHotSnapshot.js');
+  const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'aim4-hotheal-'));
+  await fsp.mkdir(path.join(tmp, 'stats'), { recursive: true });
+  const six = ids.slice(0, 6);
+  for (const id of six) {
+    await fsp.writeFile(path.join(tmp, 'stats', `${id}.json`), JSON.stringify(ENTRIES.get(id)));
+  }
+  const io6 = { userDir: () => tmp };
+  const records = six.map(recordFor);
+  const before = await getHotStore(io6, 'local', records);
+
+  // "Reparse": same id, different rounds, a new parsedAt.
+  const reparsed = { ...ENTRIES.get(six[0]), rounds: ENTRIES.get(six[0]).rounds.slice(1) };
+  await fsp.writeFile(path.join(tmp, 'stats', `${six[0]}.json`), JSON.stringify(reparsed));
+  const after = records.map((r, i) =>
+    i === 0 ? { ...r, parsedAt: 999_999, roundCount: reparsed.rounds.length } : r
+  );
+
+  const served = await getHotStore(io6, 'local', after, { requireWarm: true });
+  assert.equal(served, before, 'the request is answered from the resident store, stale, immediately');
+  const note = hotRefreshing('local');
+  assert.equal(note?.mode, 'append', 'the served answer is annotated as catching up');
+  assert.equal(note?.total, 1, 'by exactly the one reparsed demo');
+
+  let healed = null;
+  for (let i = 0; i < 400; i++) {
+    await new Promise((r) => setTimeout(r, 25));
+    healed = await getHotStore(io6, 'local', after, { requireWarm: true });
+    if (healed && healed !== before) break;
+  }
+  const freshEntries = [reparsed, ...six.slice(1).map((id) => ENTRIES.get(id))];
+  assertSameAggregates(healed, packStore(freshEntries), 'reparse heal');
+  assert.equal(hotRefreshing('local'), null, 'caught up, nothing to annotate');
+  assert.equal(hotStoreStatus().stores[0].dead, 1, 'the superseded copy is dead, pending compaction');
+
+  // Team rows read demo identity by id; the dead copy must not shadow it.
+  {
+    const allow = visibilityMask(healed, null);
+    const gotTeams = aggregateTeamsHot(healed, {}, null, allow);
+    const wantTeams = aggregateTeamsHot(packStore(freshEntries), {}, null, null);
+    assert.equal(gotTeams.length, wantTeams.length, 'team rows survive a heal');
+    const byKey = new Map(gotTeams.map((t) => [t.key, t]));
+    for (const w of wantTeams) {
+      assert.equal(byKey.get(w.key)?.rounds, w.rounds, `team ${w.key} rounds after heal`);
+    }
+  }
+
+  // A deletion is the removal half of a heal on its own.
+  const shorter = after.slice(0, 5);
+  const stale = await getHotStore(io6, 'local', shorter, { requireWarm: true });
+  assert.ok(stale, 'a deletion also serves stale rather than 503');
+  let pruned = null;
+  for (let i = 0; i < 400; i++) {
+    pruned = await getHotStore(io6, 'local', shorter, { requireWarm: true });
+    if (pruned && hotStoreStatus().stores[0]?.dead === 2) break;
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  assertSameAggregates(
+    pruned,
+    packStore([reparsed, ...six.slice(1, 5).map((id) => ENTRIES.get(id))]),
+    'deletion heal'
+  );
+
+  // The dead-marks ride the snapshot: a "restart" comes back already healed.
+  const snapFile = path.join(tmp, 'stats', '_hotstore.a4s');
+  let snapHealed = false;
+  for (let i = 0; i < 400 && !snapHealed; i++) {
+    await new Promise((r) => setTimeout(r, 25));
+    const snap = await loadSnapshot(snapFile);
+    snapHealed = Boolean(snap?.store.demos.some((d) => d.dead));
+  }
+  assert.ok(snapHealed, 'the dead-marks reach the file');
+  invalidateHotStore();
+  const reloaded = await getHotStore(io6, 'local', shorter);
+  assertSameAggregates(
+    reloaded,
+    packStore([reparsed, ...six.slice(1, 5).map((id) => ENTRIES.get(id))]),
+    'snapshot reload with dead demos'
+  );
+
+  invalidateHotStore();
+  delete process.env.AIM4_HOT_SNAPSHOT_DELAY_MS;
+  await fsp.rm(tmp, { recursive: true, force: true });
+}
+
+// --- past the heal limits the store STILL never goes cold --------------------
+// Too much drift means a rebuild — but the rebuild runs detached while the
+// resident store keeps answering, where it used to be cache.delete → 503s
+// for everyone for the length of the build.
+{
+  process.env.AIM4_HOT_SNAPSHOT = 'off';
+  process.env.AIM4_HOT_REMOVE_LIMIT = '0';
+  const fsp = await import('node:fs/promises');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'aim4-hotrebuild-'));
+  await fsp.mkdir(path.join(tmp, 'stats'), { recursive: true });
+  const five = ids.slice(0, 5);
+  for (const id of five) {
+    await fsp.writeFile(path.join(tmp, 'stats', `${id}.json`), JSON.stringify(ENTRIES.get(id)));
+  }
+  const io7 = { userDir: () => tmp };
+  const records = five.map(recordFor);
+  const before = await getHotStore(io7, 'local', records);
+
+  // With the remove tolerance forced to zero, one deletion exceeds the heal.
+  const fewer = records.slice(1);
+  const served = await getHotStore(io7, 'local', fewer, { requireWarm: true });
+  assert.equal(served, before, 'past the heal limit the stale store is served, not a 503');
+
+  let rebuilt = null;
+  for (let i = 0; i < 400; i++) {
+    await new Promise((r) => setTimeout(r, 25));
+    rebuilt = await getHotStore(io7, 'local', fewer, { requireWarm: true });
+    if (rebuilt && rebuilt.demos.length === 4) break;
+  }
+  assert.equal(rebuilt?.demos.length, 4, 'the detached rebuild swaps in');
+  assertSameAggregates(
+    rebuilt,
+    packStore(five.slice(1).map((id) => ENTRIES.get(id))),
+    'detached rebuild'
+  );
+  assert.equal(hotStoreStatus().stores[0].dead, 0, 'a rebuild compacts the dead away');
+
+  invalidateHotStore();
+  delete process.env.AIM4_HOT_SNAPSHOT;
+  delete process.env.AIM4_HOT_REMOVE_LIMIT;
+  await fsp.rm(tmp, { recursive: true, force: true });
+}
+
+console.log('statsHotService.test.js: appends, growth, trimming, requireWarm, snapshots, renames, name patching, heals and stale-serving all pass');

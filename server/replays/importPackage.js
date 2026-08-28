@@ -15,6 +15,7 @@ import { checkQuota, readRecord, writeMaterialized } from './demoStore.js';
 import { TICKZ_EXT } from './tickCodec.js';
 import { applyStandingsToRecord } from './teamStandingsDb.js';
 import { applyLibraryTeamNamesToRecord } from './lineupNames.js';
+import { scheduleImportIndex } from './autoIndex.js';
 
 /**
  * @param {string} user
@@ -121,5 +122,8 @@ export async function importReplayPackage(user, buf, meta = {}) {
   await applyLibraryTeamNamesToRecord(user, ready, files);
 
   await writeMaterialized(user, ready, files);
+  // The demo counts toward the database from now, not from whenever a visitor
+  // next makes the stats page pay for every pending index at once.
+  scheduleImportIndex(user, ready);
   return ready;
 }

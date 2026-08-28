@@ -4,6 +4,11 @@
 # phase. That runs at /app, where there is no project or solution file, so it
 # dies with MSB1003 and the whole deploy rolls back. This is a Node service:
 # say so rather than letting detection guess.
+#
+# recorder/ is the same shape of hazard: a Cargo.toml for the desktop voice
+# recorder, built on a developer machine and published as a binary through
+# /api/recorder, never compiled here. It is in .dockerignore for the same
+# reason, and this pin is what stops nixpacks from trying to build it.
 providers = ["node"]
 
 # The heap ceiling, set HERE and not only in the Dockerfile.

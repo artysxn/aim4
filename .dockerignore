@@ -20,3 +20,9 @@ server/data
 .env
 .env.*
 *.md
+
+# The desktop recorder is Rust source built on a developer machine and
+# published as a binary through /api/recorder. The image has no Rust toolchain
+# and never builds it; keeping it out of the context also keeps nixpacks from
+# noticing a Cargo.toml, the same trap tools/cs3d-tex/ set with its .csproj.
+recorder

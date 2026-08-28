@@ -19,11 +19,13 @@ import { MultiplayerServer } from './lobby.js';
 import { FootballServer } from './football.js';
 import { tryServeStatic, distExists } from './static.js';
 import { handleReplayRequest } from './replays/routes.js';
+import { handleRecorderRequest } from './recorder/routes.js';
 import { handleSampleDemoRequest } from './replays/sampleDemos.js';
 import { handleTeamRequest } from './replays/teamRoutes.js';
 import { handleAdminRequest } from './admin/routes.js';
 import { handleSimRequest } from './sim/routes.js';
 import { handleAccountRequest } from './account/routes.js';
+import { handleSupportRequest } from './support/routes.js';
 import { handlePitchRequest } from './pitchRoutes.js';
 import { handleBillingRequest } from './billing/routes.js';
 import { handleFaceitWebhookRequest } from './ingest/faceit/webhookRoutes.js';
@@ -123,6 +125,13 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // The desktop recorder's download and update feed. Ahead of the JSON body
+    // reader for the same reason replays are: publishing a build streams an
+    // executable through, and serving one sends binary back.
+    if (url.pathname.startsWith('/api/recorder') && (await handleRecorderRequest(req, res, url))) {
+      return;
+    }
+
     // Same reasoning as replays: teams answer their own preflight, because the
     // generic OPTIONS reply below does not allow the Authorization header.
     if (url.pathname.startsWith('/api/teams') && (await handleTeamRequest(req, res, url))) {
@@ -161,6 +170,12 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (await handleAccountRequest(req, res, url)) {
+      return;
+    }
+
+    // Tickets from /contact and the notification feed. Reads its own JSON
+    // bodies like account does, so it runs ahead of the generic reader too.
+    if (await handleSupportRequest(req, res, url)) {
       return;
     }
 

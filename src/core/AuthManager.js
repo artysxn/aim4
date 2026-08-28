@@ -318,6 +318,52 @@ export class AuthManager {
   }
 
   /**
+   * Create a username account and sign it in, one call.
+   *
+   * The server owns the whole recipe (internal login email, throttle, the
+   * link-before-upload rule); this installs the session it returns exactly
+   * the way signIn does. A registration that ends signed out would drop the
+   * brand-new user straight back onto a login form.
+   */
+  async register({ username, password }) {
+    if (!this.isConfigured) throw new Error('Accounts are not configured on this deployment.');
+    const name = String(username || '').trim();
+    if (!name) throw new Error('Pick a username.');
+    if (!password) throw new Error('Pick a password.');
+
+    let res;
+    try {
+      res = await fetch(`${API_BASE}/api/account/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: name, password })
+      });
+    } catch {
+      throw new Error('Could not reach the server. Check your connection and try again.');
+    }
+
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || 'Could not create the account.');
+    if (!body.access_token || !body.refresh_token) {
+      // Created but not signed in (a hiccup on the grant): the account is
+      // real, so send them through the door that exists.
+      throw new Error('Account created. Sign in with your new username.');
+    }
+
+    const sb = getSupabase();
+    const { data, error } = await sb.auth.setSession({
+      access_token: body.access_token,
+      refresh_token: body.refresh_token
+    });
+    if (error) throw new Error(error.message || 'Account created. Sign in with your new username.');
+    const user = data?.user || data?.session?.user || null;
+    if (!user) throw new Error('Account created. Sign in with your new username.');
+
+    await this._applySession(user);
+    return this.profile;
+  }
+
+  /**
    * Sign in or sign up with Google (OAuth). Redirects away from the page; on
    * return the session is restored via detectSessionInUrl in the Supabase client.
    */

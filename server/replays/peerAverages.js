@@ -335,6 +335,9 @@ export async function peerAverages(io, user, records, filter = {}, opts = {}) {
 function hotPosVotes(store, filter, allowedIds, wantMap) {
   const votes = new Map();
   for (const demo of store.demos) {
+    // A dead copy is a demo a heal replaced; its live successor is also in
+    // the list, and counting both would double this demo's vote.
+    if (demo.dead) continue;
     if (allowedIds && !allowedIds.has(demo.id)) continue;
     if (!demoPassesDate(demo, filter)) continue;
     for (const [map, sides] of Object.entries(demo.roles?.maps || {})) {
@@ -437,6 +440,7 @@ export async function peerAveragesHot(io, user, records, filter = {}, opts = {})
     // no player cleared the bar — an empty {T:{},CT:{}} rather than absence.
     const mapCodes = new Set();
     for (const demo of store.demos) {
+      if (demo.dead) continue;
       if (allowedIds && !allowedIds.has(demo.id)) continue;
       const code = String(demo.map || '').toUpperCase();
       if (code && (!wantMap || code === wantMap)) mapCodes.add(code);

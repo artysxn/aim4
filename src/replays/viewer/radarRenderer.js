@@ -152,6 +152,14 @@ export class RadarRenderer {
     this.showNames = true;
     this.showWeapons = true;
     this.showTrails = false;
+    /**
+     * Voice comms captions: player id -> `{ text, speaking, alpha }`.
+     *
+     * Set per frame by the viewer from the attached recording; null when no
+     * comms are attached, which is the normal case and costs nothing here.
+     * @type {Map<string, {text: string, speaking: boolean, alpha: number}> | null}
+     */
+    this.commsLines = null;
     this.dpr = Math.min(2, window.devicePixelRatio || 1);
     this._pt = { x: 0, y: 0 };
     /** @type {number[]} previous health per slot, for damage flash */
@@ -889,9 +897,12 @@ export class RadarRenderer {
           this.drawHeldGrenadeBadge(ctx, pt.x, pt.y, r, rawW, colors);
         }
 
-        // Stack above the droplet: weapon → name pill → droplet.
+        // Stack above the droplet: caption → weapon → name pill → droplet.
         const pillH = 14 * this.dpr;
         const pillBy = pt.y - r * 1.7 - pillH;
+        // Tracks the top of what has been drawn so the caption can sit above
+        // the weapon icon whether or not one is showing.
+        let stackTop = pillBy;
 
         if (this.showWeapons && rawW && !holdingNade && !isKnife(rawW)) {
           const img = loadEquipmentIcon(rawW, () => this.onIconLoad?.());
@@ -903,11 +914,17 @@ export class RadarRenderer {
             const ih = img.naturalHeight * scale;
             const gap = 3 * this.dpr;
             const wy = pillBy - gap - ih;
+            stackTop = wy;
             ctx.save();
             ctx.globalAlpha = floorAlpha * 0.95;
             ctx.drawImage(img, pt.x - iw / 2, wy, iw, ih);
             ctx.restore();
           }
+        }
+
+        const said = this.commsLines?.get(p.id);
+        if (said?.text) {
+          this.drawCommsCaption(ctx, pt.x, stackTop, said, colors, floorAlpha);
         }
 
         if (this.showNames) {
@@ -947,6 +964,59 @@ export class RadarRenderer {
       }
       ctx.restore();
     }
+  }
+
+  /**
+   * What this player is saying, above everything else on their droplet.
+   *
+   * Dark plate rather than the team colour the name pill uses: a caption is
+   * text to read, and two lines of dark-on-bright at this size is not. The
+   * side only shows as a stripe down the left, which is enough to tell two
+   * overlapping captions apart.
+   *
+   * @param {number} bottomY  the caption's bottom edge (top of the stack below)
+   * @param {{text: string, speaking: boolean, alpha: number}} said
+   */
+  drawCommsCaption(ctx, cx, bottomY, said, colors, floorAlpha) {
+    const fontPx = 10 * this.dpr;
+    ctx.save();
+    ctx.font = `500 ${fontPx}px "PP Mori", system-ui, sans-serif`;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+
+    const maxW = 132 * this.dpr;
+    const lines = wrapText(ctx, said.text, maxW, 2);
+    const lineH = fontPx * 1.32;
+    const padX = 6 * this.dpr;
+    const padY = 4 * this.dpr;
+    const stripe = 2 * this.dpr;
+    const textW = Math.max(...lines.map((l) => ctx.measureText(l).width));
+    const w = textW + padX * 2 + stripe;
+    const h = lines.length * lineH + padY * 2;
+    const x = cx - w / 2;
+    const y = bottomY - (5 * this.dpr) - h;
+
+    // Fades with the linger, and never fully opaque so the map stays readable
+    // under a wall of callouts.
+    ctx.globalAlpha = Math.max(0, Math.min(1, said.alpha)) * floorAlpha;
+
+    roundPill(ctx, x, y, w, h, 4 * this.dpr);
+    ctx.fillStyle = 'rgba(12, 14, 18, 0.86)';
+    ctx.fill();
+
+    // Left stripe in the player's colour; brighter while actually talking.
+    ctx.save();
+    roundPill(ctx, x, y, w, h, 4 * this.dpr);
+    ctx.clip();
+    ctx.fillStyle = said.speaking ? colors.bright : colors.dim || colors.base;
+    ctx.fillRect(x, y, stripe, h);
+    ctx.restore();
+
+    ctx.fillStyle = said.speaking ? '#ffffff' : 'rgba(232, 236, 242, 0.82)';
+    lines.forEach((line, i) => {
+      ctx.fillText(line, x + stripe + padX, y + padY + lineH * (i + 0.5));
+    });
+    ctx.restore();
   }
 
   /**
@@ -1666,6 +1736,44 @@ function blindnessAt(pops, state, tick, tickRate) {
 }
 
 /** Droplet path in local space: tip at `tip` (negative Y), round body toward `bot`. */
+/**
+ * Break a caption into at most `maxLines`, ellipsising what will not fit.
+ *
+ * Word-wrapped rather than hard-cut: comms are sentences, and cutting
+ * "rotate to B now" mid-word costs the reader more than the missing tail does.
+ * A single word longer than the line (a pasted URL, a keysmash) still gets cut,
+ * because nothing else can be done with it.
+ */
+function wrapText(ctx, text, maxWidth, maxLines = 2) {
+  const words = String(text).split(/\s+/).filter(Boolean);
+  if (!words.length) return [];
+  const lines = [];
+  let line = '';
+
+  for (const word of words) {
+    const next = line ? `${line} ${word}` : word;
+    if (ctx.measureText(next).width <= maxWidth || !line) {
+      line = next;
+      continue;
+    }
+    lines.push(line);
+    line = word;
+    if (lines.length === maxLines) break;
+  }
+  if (lines.length < maxLines && line) lines.push(line);
+
+  // Anything past the last line becomes an ellipsis on it.
+  const consumed = lines.join(' ').split(/\s+/).length;
+  if (consumed < words.length || ctx.measureText(lines[lines.length - 1]).width > maxWidth) {
+    let last = lines[lines.length - 1] || '';
+    while (last && ctx.measureText(`${last}…`).width > maxWidth) {
+      last = last.slice(0, -1);
+    }
+    lines[lines.length - 1] = `${last.trimEnd()}…`;
+  }
+  return lines;
+}
+
 function pathDroplet(ctx, tip, bot, halfW) {
   const mid = (tip + bot) * 0.35;
   ctx.beginPath();

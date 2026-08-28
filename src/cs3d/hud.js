@@ -6,6 +6,7 @@
 // ---------------------------------------------------------------------------
 
 import { CS3D_MAPS } from '../../shared/cs3d/maps.js';
+import { decorateBoot } from './bootScreen.js';
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
@@ -81,6 +82,9 @@ export class Hud {
     this.loadText = root.querySelector('.c3-load-text');
     this.bootBar = root.querySelector('.c3-boot-bar span');
     this.bootText = root.querySelector('.c3-boot-text');
+    // Screenshot backdrop and rotating tips, shared with the timeline's boot
+    // screen so the two loading experiences are one experience.
+    this.bootTips = decorateBoot(this.el.boot, map.slug);
     /** True once the map has been revealed; the boot screen never comes back. */
     this.booted = false;
     this.tooltips = false;
@@ -320,6 +324,7 @@ export class Hud {
     this.booted = true;
     this.bootBar.style.width = '100%';
     this.el.boot.classList.add('is-done');
+    this.bootTips?.stop();
   }
 
   /**

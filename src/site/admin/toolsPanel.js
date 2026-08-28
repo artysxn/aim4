@@ -206,6 +206,79 @@ function buildJobs(selectedFields) {
   ];
 }
 
+/**
+ * The pistol-round repair: trims knife rounds glued into round 1 and
+ * renumbers demos whose pistol round is missing. Safe to run repeatedly —
+ * checked demos are remembered and skipped.
+ */
+function pistolFixCard() {
+  const card = el('div', 'admin-tool-card');
+  card.appendChild(el('h3', 'admin-tool-title', 'Pistol rounds'));
+  card.appendChild(
+    el(
+      'p',
+      'admin-muted',
+      'Repairs stored demos: cuts knife rounds out of round 1, and renumbers demos whose pistol round was missing so second rounds stop counting as pistols. New parses fix themselves.'
+    )
+  );
+  const status = el('div', 'admin-tool-status');
+  const runBtn = button('Fix pistol rounds', () => start(false), 'btn btn-primary btn-sm');
+  const forceBtn = button('Re-check everything', () => start(true), 'btn btn-sm');
+  const row = el('div', 'admin-inline');
+  row.append(runBtn, forceBtn);
+  card.append(row, status);
+
+  let timer = 0;
+
+  function paint(st) {
+    if (!st) return;
+    runBtn.disabled = st.running;
+    forceBtn.disabled = st.running;
+    if (st.running) {
+      status.textContent = `Checking ${st.progress.done} / ${st.progress.total}…`;
+    } else if (st.result) {
+      const r = st.result;
+      status.textContent =
+        `Scanned ${r.scanned}. Knife rounds trimmed: ${r.knifeTrimmed}. ` +
+        `Missing pistols flagged: ${r.missingPistol}. Reindexed: ${r.reindexed}.` +
+        (r.failed ? ` Failed: ${r.failed}.` : '');
+    } else if (st.error) {
+      status.textContent = `Failed: ${st.error}`;
+    } else {
+      status.textContent = '';
+    }
+  }
+
+  async function poll() {
+    try {
+      const st = await adminApi.pistolFixStatus();
+      paint(st);
+      if (st.running) {
+        timer = window.setTimeout(poll, 1500);
+      }
+    } catch {
+      /* quiet */
+    }
+  }
+
+  async function start(force) {
+    runBtn.disabled = true;
+    forceBtn.disabled = true;
+    try {
+      paint(await adminApi.pistolFixStart(force));
+      timer = window.setTimeout(poll, 1200);
+    } catch (err) {
+      status.textContent = err.message;
+      runBtn.disabled = false;
+      forceBtn.disabled = false;
+    }
+  }
+
+  void poll();
+  card.addEventListener('admin:panel-hidden', () => window.clearTimeout(timer));
+  return card;
+}
+
 export function toolsPanel() {
   const root = el('div', 'admin-panel');
   const status = el('p', 'admin-note', '');
@@ -475,7 +548,9 @@ export function toolsPanel() {
   card.appendChild(progressWrap);
   card.appendChild(status);
 
-  render(root, card);
+  const wrap = el('div');
+  wrap.append(card, pistolFixCard());
+  render(root, wrap);
 
   // If a rebuild is already running (other tab, prior click, deploy), show it
   // before anyone presses the button again.

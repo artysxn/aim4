@@ -4,8 +4,33 @@
     {
       "name": "aim4-dev",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
+      "runtimeArgs": [
+        "run",
+        "dev"
+      ],
       "port": 5173
+    },
+    {
+      "name": "aim4-api",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "server"
+      ],
+      "port": 3784
+    },
+    {
+      "name": "aim4-comms-host",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "host"
+      ],
+      "port": 3799,
+      "autoPort": false,
+      "env": {
+        "AIM4_API_PORT": "3799"
+      }
     }
   ]
 }

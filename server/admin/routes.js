@@ -35,6 +35,9 @@ import {
   writeProxySettings
 } from '../ingest/hltv/proxyPool.js';
 import { deleteIngestDisk, listIngestDisk } from '../ingest/hltv/disk.js';
+import * as gdriveQueue from '../ingest/gdrive/queue.js';
+import { countOpenTickets, listTickets, replyToTicket, setTicketStatus } from '../support/store.js';
+import { pistolFixStatus, startPistolFixRun } from '../replays/pistolFixRunner.js';
 import {
   assignSeat,
   cancelSubscription,
@@ -796,6 +799,148 @@ async function route(req, res, url, me) {
     const result = await cancelProbe();
     await writeAudit({ actorId: me.id, action: 'ingest.probe.cancel', payload: result, req });
     json(res, req, 200, { ...result, ...(await probeState()) });
+    return true;
+  }
+
+  // ---- Google Drive queue --------------------------------------------------
+  // Folders the ingest should also pull from: small tournaments hand demos
+  // around in shared Drive folders, and this is where those links go when
+  // HLTV is fully synced. Runs in-process like the probe; see gdrive/queue.js.
+  if (req.method === 'GET' && p === '/api/admin/ingest/gdrive') {
+    json(res, req, 200, await gdriveQueue.queueState());
+    return true;
+  }
+
+  if (req.method === 'POST' && p === '/api/admin/ingest/gdrive') {
+    const body = await readJson(req);
+    const result = await gdriveQueue.addJob(body.url);
+    await writeAudit({
+      actorId: me.id,
+      action: 'ingest.gdrive.add',
+      payload: { url: String(body.url || '').slice(0, 500), added: Boolean(result.added) },
+      req
+    });
+    if (result.invalid) {
+      json(res, req, 400, { error: result.error });
+      return true;
+    }
+    if (result.duplicate) {
+      json(res, req, 409, { error: 'That folder is already queued.', ...(await gdriveQueue.queueState()) });
+      return true;
+    }
+    json(res, req, 200, await gdriveQueue.queueState());
+    return true;
+  }
+
+  if (req.method === 'POST' && p === '/api/admin/ingest/gdrive/start') {
+    const result = await gdriveQueue.startQueue();
+    await writeAudit({ actorId: me.id, action: 'ingest.gdrive.start', payload: result, req });
+    json(res, req, 200, { ...result, ...(await gdriveQueue.queueState()) });
+    return true;
+  }
+
+  if (req.method === 'POST' && p === '/api/admin/ingest/gdrive/stop') {
+    const result = await gdriveQueue.stopQueue();
+    await writeAudit({ actorId: me.id, action: 'ingest.gdrive.stop', payload: result, req });
+    json(res, req, 200, { ...result, ...(await gdriveQueue.queueState()) });
+    return true;
+  }
+
+  const gdriveJob = p.match(/^\/api\/admin\/ingest\/gdrive\/jobs\/([A-Za-z0-9_-]+)$/);
+  if (req.method === 'DELETE' && gdriveJob) {
+    const result = await gdriveQueue.removeJob(gdriveJob[1]);
+    await writeAudit({
+      actorId: me.id,
+      action: 'ingest.gdrive.remove',
+      payload: { id: gdriveJob[1], removed: result.removed },
+      req
+    });
+    if (!result.removed && result.reason === 'running') {
+      json(res, req, 409, { error: 'Stop the queue before removing the running job.' });
+      return true;
+    }
+    json(res, req, 200, { ...result, ...(await gdriveQueue.queueState()) });
+    return true;
+  }
+
+  // ---- pistol-round repair -------------------------------------------------
+  // One sweep over the stored library: trim glued knife rounds out of round 1
+  // and renumber demos whose pistol round is missing. New parses fix
+  // themselves in materialize; this is for what was already on disk.
+  if (req.method === 'GET' && p === '/api/admin/replays/pistol-fix') {
+    json(res, req, 200, pistolFixStatus());
+    return true;
+  }
+
+  if (req.method === 'POST' && p === '/api/admin/replays/pistol-fix') {
+    const body = await readJson(req).catch(() => ({}));
+    const result = startPistolFixRun({ force: Boolean(body.force) });
+    await writeAudit({
+      actorId: me.id,
+      action: 'replays.pistolFix',
+      payload: { force: Boolean(body.force), ...result },
+      req
+    });
+    json(res, req, result.busy ? 409 : 200, { ...result, ...pistolFixStatus() });
+    return true;
+  }
+
+  // ---- support inbox -------------------------------------------------------
+  // The admin half of /contact: read every ticket, answer, close. Answers
+  // notify the ticket's owner; the store owns that coupling.
+  if (req.method === 'GET' && p === '/api/admin/support') {
+    const status = String(url.searchParams.get('status') || '');
+    json(res, req, 200, {
+      tickets: await listTickets({ status }),
+      open: await countOpenTickets()
+    });
+    return true;
+  }
+
+  const supportReply = p.match(/^\/api\/admin\/support\/([A-Za-z0-9_-]+)\/reply$/);
+  if (req.method === 'POST' && supportReply) {
+    const body = await readJson(req);
+    const result = await replyToTicket(supportReply[1], {
+      text: body.text,
+      asAdmin: true,
+      by: me.username || 'admin'
+    });
+    await writeAudit({
+      actorId: me.id,
+      action: 'support.reply',
+      payload: { ticket: supportReply[1] },
+      req
+    });
+    if (result.error) {
+      json(res, req, 400, { error: result.error });
+      return true;
+    }
+    json(res, req, 200, result);
+    return true;
+  }
+
+  const supportStatus = p.match(/^\/api\/admin\/support\/([A-Za-z0-9_-]+)\/status$/);
+  if (req.method === 'POST' && supportStatus) {
+    const body = await readJson(req);
+    const result = await setTicketStatus(supportStatus[1], String(body.status || ''));
+    await writeAudit({
+      actorId: me.id,
+      action: 'support.status',
+      payload: { ticket: supportStatus[1], status: body.status },
+      req
+    });
+    if (result.error) {
+      json(res, req, 400, { error: result.error });
+      return true;
+    }
+    json(res, req, 200, result);
+    return true;
+  }
+
+  if (req.method === 'POST' && p === '/api/admin/ingest/gdrive/forget') {
+    const result = await gdriveQueue.clearSeen();
+    await writeAudit({ actorId: me.id, action: 'ingest.gdrive.forget', payload: result, req });
+    json(res, req, 200, { ...result, ...(await gdriveQueue.queueState()) });
     return true;
   }
 
