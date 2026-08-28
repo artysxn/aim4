@@ -56,24 +56,50 @@ function yieldEventLoop() {
 }
 
 /**
- * Per-demo identity. A reparse or rename changes it, so a record whose key
- * moved is not the demo we packed even though the id matches.
+ * Per-demo identity. A reparse that changed anything, a rename, or a round
+ * renumbering changes it, so a record whose key moved is not the demo we
+ * packed even though the id matches.
+ *
+ * Deliberately CONTENT identity, not `parsedAt`: the ingest pipeline
+ * re-materializes existing demos in bulk (parser upgrades, re-imports), and
+ * every one of those stamps a fresh `parsedAt` even when the parse output is
+ * identical. Keying on the timestamp made each of those look like a changed
+ * demo — measured on 2026-08-28 as ~300 spurious "changes" a night, which is
+ * past the heal limits and forced a full rebuild on every deploy. The round-id
+ * list is deterministic content (teams, players, winner, economy, round
+ * numbers are hashed into each id), and the parser revision covers a reparse
+ * that changed HOW those rounds were measured without changing the list.
  *
  * Team names are part of the key because the packed columns CARRY them: the
  * Teams table groups by the names baked in at pack time. Without the name
  * hash, renaming a team (one demo by hand, or the whole library through the
  * identity rescan) left the resident store — and the snapshot on disk —
  * serving the old names until the process died. With it, a renamed demo reads
- * as removed-plus-added, which is exactly the signal that forces the rebuild.
+ * as removed-plus-added, which is exactly the signal that forces the heal.
  */
+const recordKeyCache = new WeakMap();
 function recordKey(r) {
+  const cached = recordKeyCache.get(r);
+  if (cached) return cached;
   let h = 0x811c9dc5;
-  const names = `${r.team1?.name || ''}|${r.team2?.name || ''}`;
-  for (let i = 0; i < names.length; i++) {
-    h ^= names.charCodeAt(i);
-    h = Math.imul(h, 0x01000193) >>> 0;
+  const feed = (s) => {
+    for (let i = 0; i < s.length; i++) {
+      h ^= s.charCodeAt(i);
+      h = Math.imul(h, 0x01000193) >>> 0;
+    }
+  };
+  feed(`${r.team1?.name || ''}|${r.team2?.name || ''}`);
+  feed(`|${r.parser?.revision ?? ''}:${r.parser?.version || ''}`);
+  if (Array.isArray(r.rounds) && r.rounds.length) {
+    for (const round of r.rounds) feed(`|${round?.id || ''}`);
+  } else {
+    // A manifest without its round list cannot prove its content; fall back
+    // to the timestamp identity rather than treating every parse as equal.
+    feed(`|${r.parsedAt || 0}`);
   }
-  return `${r.id}:${r.parsedAt || 0}:${r.roundCount || 0}:${h.toString(36)}`;
+  const key = `${r.id}:${r.roundCount || 0}:${h.toString(36)}`;
+  recordKeyCache.set(r, key);
+  return key;
 }
 
 /** One library, one store. Keyed on the user, not on the record set. */
@@ -197,10 +223,24 @@ function ensureSnapshotLoaded(io, user, wanted) {
     // difference. Discarding on any removal is what kept every deploy cold
     // while the ingest pipeline re-materialized demos in the background.
     if (removed > removeLimit() || missing > appendLimit()) {
+      // Past the heal limits, but still a picture of most of the library:
+      // install it anyway and let getHotStore serve it STALE while the full
+      // rebuild runs detached. Rejecting it here is what made every deploy
+      // after a busy ingest night start cold — 503s on /aggregate, and every
+      // open Database falling back to downloading the raw library while the
+      // rebuild fought those downloads for the same disk and thread. Only a
+      // snapshot that no longer covers even half the records is a different
+      // library and not worth hydrating.
+      const overlap = wanted.size - missing;
+      if (overlap * 2 < wanted.size) {
+        console.log(
+          `[stats] hot snapshot discarded (covers ${overlap}/${wanted.size} demos)`
+        );
+        return;
+      }
       console.log(
-        `[stats] hot snapshot stale (${missing} new, ${removed} removed), rebuilding instead`
+        `[stats] hot snapshot stale (${missing} new, ${removed} removed), serving it while rebuilding`
       );
-      return;
     }
     // Hydrate through the packer so appends work; the store served is the
     // packer's own finish(), and the file's buffers are garbage after this.

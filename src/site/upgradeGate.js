@@ -135,8 +135,9 @@ export function quotaBadge(ents, key) {
   const q = ents.quota(key);
   if (q.unlimited) return '';
   if (q.limit <= 0) return '';
-  if (q.spent) return q.resetsAt ? `resets in ${untilText(q.resetsAt)}` : 'none left today';
-  return `${q.remaining} left today`;
+  const forTeam = q.shared ? ' for the team' : '';
+  if (q.spent) return q.resetsAt ? `resets in ${untilText(q.resetsAt)}${forTeam}` : `none left today${forTeam}`;
+  return `${q.remaining} left today${forTeam}`;
 }
 
 /** Inline cap text, e.g. "40 / 40 on this map". */

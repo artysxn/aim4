@@ -25,8 +25,17 @@ import {
   sanitizeEncodedRound
 } from '../../src/replays/creator/recordingFormat.js';
 
-/** Rounds one team may keep per map. */
-export const MAX_ROUNDS_PER_MAP = 8;
+/**
+ * The store's ceiling on rounds per map. NOT the product limit.
+ *
+ * How many 2D strategies a team may keep per map is `team.strategy_creator_2d`
+ * in the catalogue (3 on Tier 3, 9 on Tier 2, unlimited on Tier 1), checked in
+ * teamRoutes.js before a save reaches this file. This number only exists so a
+ * runaway client cannot fill the disk with half-megabyte round files, so it
+ * sits far above any plan's allowance: at the top tier "unlimited" has to mean
+ * unlimited in practice, and a store constant of 8 quietly made it mean 8.
+ */
+export const MAX_ROUNDS_PER_MAP = 500;
 /**
  * A serialized round over this is refused. The encoder puts a full ten-body
  * round at ~85 KB, so anything past 512 KB is not a round this tool produced.
@@ -120,13 +129,14 @@ export async function saveRound(actor, teamId, patch = {}) {
     throw new Error('That round is too large to save.');
   }
 
-  // The cap is per map, so a team can fill out one map's book without spending
-  // the allowance the rest of the pool needs.
+  // The plan's per-map allowance was already checked at the route. This is the
+  // storage ceiling underneath it, and reaching it means something is wrong
+  // with the client rather than with the caller's subscription.
   if (!existing) {
     const onMap = rounds.filter((r) => r.map === round.map).length;
     if (onMap >= MAX_ROUNDS_PER_MAP) {
       throw new Error(
-        `That map already has ${MAX_ROUNDS_PER_MAP} strategy rounds. Delete one first.`
+        `That map is at the storage ceiling of ${MAX_ROUNDS_PER_MAP} strategy rounds. Delete one first.`
       );
     }
   }

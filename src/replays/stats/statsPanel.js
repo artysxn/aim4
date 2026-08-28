@@ -7,7 +7,7 @@
 // ---------------------------------------------------------------------------
 
 import { formatApiError } from '../api.js';
-import { getStatsPayload } from '../statsCache.js';
+import { getStatsPayload, peekStatsCache } from '../statsCache.js';
 import { fetchAggregate, fetchAggregateMatches, fetchRoster, fetchVrsRanks } from '../api.js';
 import { scheduleUiJob } from '../../lib/frameBudget.js';
 import {
@@ -66,8 +66,24 @@ import {
 } from '../../lib/spinner.js';
 import { createSavedViews } from '../savedViews.js';
 import { upgradePrompt } from '../../site/upgradeGate.js';
+import { CAP } from '../../../shared/entitlements/keys.js';
+import { PLAN_NAMES, requiredPlanFor } from '../../../shared/entitlements/catalogue.js';
 import { POSITION_MAPS } from '../roles/teamPositions.js';
+import {
+  PLAYER_COLUMN_INFO,
+  TEAM_COLUMN_INFO,
+  columnPrefId,
+  databaseColumnGroups,
+  dropHiddenColumns,
+  hiddenColumnKeys
+} from './columnCatalog.js';
+import {
+  disabledStatsColumns,
+  onStatsColumnsChange,
+  setDisabledStatsColumns
+} from './columnPrefs.js';
 import filtersIcon from '../../icons/icon_filters.svg?url';
+import columnsIcon from '../../icons/icon_columns.svg?url';
 import calendarIcon from '../../icons/icon_calendar.svg?url';
 import { MENU_BTN, mbIcon, mbSummary, mbWrap } from '../../icons/menubuttons.js';
 import { placeRankMenu, rankFilterHtml, syncRankSummary } from '../shared/vrsRanks.js';
@@ -93,6 +109,20 @@ export function isStatsScopeFiltered(scope = {}) {
     (Array.isArray(scope.files) && scope.files.length > 0) ||
     Boolean(String(scope.teamName || '').trim())
   );
+}
+
+/**
+ * The display name of the cheapest plan that includes a capability.
+ *
+ * Never a tier name typed into a string. The ladder has been renamed once
+ * already, and every hardcoded name outlived the tier it named: locked columns
+ * went on naming plans that could no longer be bought. Empty when nothing on
+ * the ladder offers the capability, which the callers word around rather than
+ * printing a blank tier.
+ */
+function planNameFor(key) {
+  const plan = requiredPlanFor(key);
+  return plan ? PLAN_NAMES[plan] || plan : '';
 }
 
 /** True when the view names at least one map. */
@@ -153,6 +183,9 @@ export function createStatsPanel({
           <button type="button" class="head-icon-btn" data-st-filters-toggle aria-expanded="false" aria-controls="st-filters" title="Filters" aria-label="Filters">
             <img src="${filtersIcon}" alt="" width="16" height="16" draggable="false" />
           </button>
+          <button type="button" class="head-icon-btn" data-st-columns-toggle aria-expanded="false" aria-controls="st-columns" title="Columns" aria-label="Columns">
+            <img src="${columnsIcon}" alt="" width="16" height="16" draggable="false" />
+          </button>
           <div class="st-tabs">
           <button type="button" class="seg-tab active" data-tab="players">Players</button>
           <button type="button" class="seg-tab" data-tab="teams">Teams</button>
@@ -167,6 +200,7 @@ export function createStatsPanel({
       </div>
     </div>
     <div class="st-filters" id="st-filters" hidden></div>
+    <div class="st-filters st-columns" id="st-columns" hidden></div>
     <div class="st-body" id="st-body"><div class="is-loading" role="status" aria-live="polite"><span class="spinner" aria-hidden="true"></span><span class="sr-only">Loading</span></div></div>`;
 
   /** @type {HTMLElement | null} */
@@ -183,6 +217,9 @@ export function createStatsPanel({
       <button type="button" class="head-icon-btn" data-st-filters-toggle aria-expanded="false" aria-controls="st-filters" title="Filters" aria-label="Filters">
         <img src="${filtersIcon}" alt="" width="16" height="16" draggable="false" />
       </button>
+      <button type="button" class="head-icon-btn" data-st-columns-toggle aria-expanded="false" aria-controls="st-columns" title="Columns" aria-label="Columns">
+        <img src="${columnsIcon}" alt="" width="16" height="16" draggable="false" />
+      </button>
       <div class="st-tabs">
         <button type="button" class="seg-tab active" data-tab="players">Players</button>
         <button type="button" class="seg-tab" data-tab="teams">Teams</button>
@@ -190,9 +227,13 @@ export function createStatsPanel({
   }
 
   const filtersEl = el.querySelector('#st-filters');
+  const columnsEl = el.querySelector('#st-columns');
   const filtersToggleEl =
     pageHeadEl?.querySelector('[data-st-filters-toggle]') ||
     el.querySelector('[data-st-filters-toggle]');
+  const columnsToggleEl =
+    pageHeadEl?.querySelector('[data-st-columns-toggle]') ||
+    el.querySelector('[data-st-columns-toggle]');
   const searchWrapEl =
     pageHeadEl?.querySelector('[data-st-search]') || el.querySelector('[data-st-search]');
   const searchInputEl = searchWrapEl?.querySelector('#st-entity-search');
@@ -209,6 +250,8 @@ export function createStatsPanel({
     paintLoadRing();
     filtersToggleEl?.classList.toggle('active', filtersOpen);
     filtersToggleEl?.setAttribute('aria-expanded', filtersOpen ? 'true' : 'false');
+    columnsToggleEl?.classList.toggle('active', columnsOpen);
+    columnsToggleEl?.setAttribute('aria-expanded', columnsOpen ? 'true' : 'false');
   }
 
   function syncTabButtons() {
@@ -380,6 +423,10 @@ export function createStatsPanel({
 
   /** Filters bar is closed by default so the table owns the viewport. */
   let filtersOpen = false;
+  /** Columns picker, same shape as the filters bar. */
+  let columnsOpen = false;
+  /** Table column keys currently switched off, per table. */
+  let hiddenCols = hiddenColumnKeys(disabledStatsColumns());
   /** Search lives inline in the head pill; only its suggestion menu opens. */
   let searchQuery = '';
   let searchMenuOpen = false;
@@ -648,7 +695,124 @@ export function createStatsPanel({
     filtersToggleEl?.classList.toggle('active', filtersOpen);
     filtersToggleEl?.setAttribute('aria-expanded', filtersOpen ? 'true' : 'false');
     if (!filtersOpen) calendarOpen = false;
+    if (filtersOpen && columnsOpen) setColumnsOpen(false);
   }
+
+  // ---- the Columns picker ---------------------------------------------------
+  // Every metric column, on by default, each with a plain-language line on
+  // what it measures. Switching one off hides it from every table on this
+  // page AND drops its data from the raw-library download (the identity
+  // columns and the filters keep working regardless, see columnCatalog.js).
+
+  function setColumnsOpen(open) {
+    columnsOpen = Boolean(open);
+    if (columnsEl) columnsEl.hidden = !columnsOpen;
+    columnsToggleEl?.classList.toggle('active', columnsOpen);
+    columnsToggleEl?.setAttribute('aria-expanded', columnsOpen ? 'true' : 'false');
+    if (columnsOpen) {
+      renderColumnsPanel();
+      if (filtersOpen) setFiltersOpen(false);
+    }
+  }
+
+  function renderColumnsPanel() {
+    if (!columnsEl) return;
+    const off = new Set(disabledStatsColumns());
+    const section = (title, table, infos) => `
+      <div class="st-columns-section">
+        <h4 class="st-columns-title">${escapeHtml(title)}</h4>
+        ${infos
+          .map((info) => {
+            const id = columnPrefId(table, info.key);
+            const on = !off.has(id);
+            return `<label class="st-columns-row${on ? '' : ' is-off'}">
+              <input type="checkbox" data-st-column="${escapeHtml(id)}" ${on ? 'checked' : ''} />
+              <span class="st-columns-name">${escapeHtml(info.label)}</span>
+              <span class="st-columns-about">${escapeHtml(info.about)}</span>
+            </label>`;
+          })
+          .join('')}
+      </div>`;
+    columnsEl.innerHTML = `
+      <div class="st-columns-head">
+        <span class="st-columns-note">Columns you switch off are hidden from the tables and their data is not downloaded. Saved to your account.</span>
+        <button type="button" class="btn btn-sm" data-st-columns-reset ${off.size ? '' : 'disabled'}>Enable all</button>
+      </div>
+      ${section('Players', 'players', PLAYER_COLUMN_INFO)}
+      ${section('Teams', 'teams', TEAM_COLUMN_INFO)}`;
+    columnsEl.querySelector('[data-st-columns-reset]')?.addEventListener('click', () => {
+      setDisabledStatsColumns([]);
+    });
+    columnsEl.querySelectorAll('[data-st-column]').forEach((box) => {
+      box.addEventListener('change', () => {
+        const id = box.dataset.stColumn;
+        const next = new Set(disabledStatsColumns());
+        if (box.checked) next.delete(id);
+        else next.add(id);
+        setDisabledStatsColumns([...next]);
+      });
+    });
+  }
+
+  /**
+   * Bring the open picker's checkboxes in line with the stored preference
+   * WITHOUT rebuilding its DOM: a rebuild on every toggle threw away the
+   * scroll position mid-list and detached the row under the cursor.
+   */
+  function syncColumnsPanel() {
+    if (!columnsEl || !columnsOpen) return;
+    if (!columnsEl.querySelector('[data-st-column]')) {
+      renderColumnsPanel();
+      return;
+    }
+    const off = new Set(disabledStatsColumns());
+    columnsEl.querySelectorAll('[data-st-column]').forEach((box) => {
+      const on = !off.has(box.dataset.stColumn);
+      box.checked = on;
+      box.closest('.st-columns-row')?.classList.toggle('is-off', !on);
+    });
+    const reset = columnsEl.querySelector('[data-st-columns-reset]');
+    if (reset) reset.disabled = off.size === 0;
+  }
+
+  /** Keep the sort on a column that is still visible. */
+  function repairSortForHidden() {
+    if (hiddenCols.players.has(sort.players.key)) {
+      sort.players = {
+        key: hiddenCols.players.has('rating') ? 'rounds' : 'rating',
+        dir: 'desc'
+      };
+    }
+    if (hiddenCols.teams.has(sort.teams.key)) {
+      sort.teams = {
+        key: hiddenCols.teams.has('avgRating') ? 'rounds' : 'avgRating',
+        dir: 'desc'
+      };
+    }
+    if (detail && detailSort && hiddenCols[detail.kind === 'team' ? 'teams' : 'players'].has(detailSort.key)) {
+      detailSort = { key: 'date', dir: 'desc' };
+    }
+  }
+
+  const detachColumnPrefs = onStatsColumnsChange(() => {
+    hiddenCols = hiddenColumnKeys(disabledStatsColumns());
+    repairSortForHidden();
+    syncColumnsPanel();
+    // Re-enabling a column whose data the loaded payload never carried needs a
+    // refetch with the wider contract; everything else is a repaint. In server
+    // mode the aggregate rows carry every column, so a repaint always
+    // suffices. A load still streaming is left to finish with the contract it
+    // started with rather than being restarted from page zero.
+    if (
+      payload &&
+      !libraryStreaming &&
+      !peekStatsCache(scope.demos || null, databaseColumnGroups(disabledStatsColumns()))
+    ) {
+      void load(viewState());
+      return;
+    }
+    void scheduleRender({ rebuildFilters: false });
+  });
 
   function hasEntityPick() {
     return entityPick.players.length > 0 || entityPick.teams.length > 0;
@@ -1121,6 +1285,10 @@ export function createStatsPanel({
 
   filtersToggleEl?.addEventListener('click', () => {
     setFiltersOpen(!filtersOpen);
+  });
+
+  columnsToggleEl?.addEventListener('click', () => {
+    setColumnsOpen(!columnsOpen);
   });
 
   searchWrapEl?.addEventListener('input', (e) => {
@@ -2422,7 +2590,7 @@ export function createStatsPanel({
         const named = data.find((r) => r.name);
         if (named?.name) detail.label = named.name;
       }
-      const cols = playerMatchColumns();
+      const cols = dropHiddenColumns(playerMatchColumns(), hiddenCols.players);
       // The per-match table is one view of a player; the profile is the whole
       // of them. Linked from here because this is where someone already is
       // when they start asking about a person rather than a match.
@@ -2450,7 +2618,7 @@ export function createStatsPanel({
       const named = data.find((r) => r.name);
       if (named?.name) detail.label = named.name;
     }
-    const cols = teamMatchColumns();
+    const cols = dropHiddenColumns(teamMatchColumns(), hiddenCols.teams);
     setBodyHtml(statsTableHtml(data, {
       columns: cols.columns,
       fixedCount: cols.fixedCount,
@@ -2694,6 +2862,7 @@ export function createStatsPanel({
     setSpinnerLabel(bodyEl, 'Loading rounds…');
     try {
       const res = await getStatsPayload(scope.demos || null, {
+        columns: databaseColumnGroups(disabledStatsColumns()),
         onProgress: (p) => {
           if (token !== loadToken) return;
           noteLibraryProgress({ loaded: p?.libraryLoaded, total: p?.libraryTotal });
@@ -2735,12 +2904,39 @@ export function createStatsPanel({
     const ent = serverTables?.entitlements || payload?.entitlements;
     if (!ent) return null;
     if (table === 'players' && ent.playerMetricsFull === false) {
-      return { keys: new Set(['dt', 'psdt', 'accuracy']), plan: 'Premium' };
+      return {
+        keys: new Set(['dt', 'psdt', 'accuracy']),
+        plan: planNameFor(CAP.STATS_METRICS_PLAYER_FULL)
+      };
     }
     if (table === 'teams' && ent.teamMetricsFull === false) {
-      return { keys: new Set(['prw', 'possession']), plan: 'Team Elite' };
+      return {
+        keys: new Set(['prw', 'possession']),
+        plan: planNameFor(CAP.STATS_METRICS_TEAM_FULL)
+      };
     }
     return null;
+  }
+
+  /** Player columns for the current view, minus the ones switched off. */
+  function currentPlayerCols(mode) {
+    let cols = mode
+      ? playerColumnsWithRoles(mode)
+      : { columns: PLAYER_COLUMNS, fixedCount: PLAYER_FIXED_BASE.length };
+    if (omitTeamColumn) cols = omitPlayerTeamColumn(cols);
+    return dropHiddenColumns(cols, hiddenCols.players);
+  }
+
+  /** Team columns minus the ones switched off (same set for the map variant). */
+  function currentTeamCols(base = TEAM_COLUMNS) {
+    return dropHiddenColumns({ columns: base, fixedCount: 2 }, hiddenCols.teams);
+  }
+
+  /** Per-match drill-down columns for the open detail, minus switched off. */
+  function currentDetailCols() {
+    return detail?.kind === 'team'
+      ? dropHiddenColumns(teamMatchColumns(), hiddenCols.teams)
+      : dropHiddenColumns(playerMatchColumns(), hiddenCols.players);
   }
 
   /** Render the two tables straight from server rows. */
@@ -2757,11 +2953,7 @@ export function createStatsPanel({
       // Scoping the query to the picked demos also returns everyone else who
       // played in them; the pick still decides which rows are shown.
       data = applyEntityPickPlayers(data);
-      const mode = roleMode();
-      let cols = mode
-        ? playerColumnsWithRoles(mode)
-        : { columns: PLAYER_COLUMNS, fixedCount: PLAYER_FIXED_BASE.length };
-      if (omitTeamColumn) cols = omitPlayerTeamColumn(cols);
+      const cols = currentPlayerCols(roleMode());
       paintTable(data, {
         columns: cols.columns,
         fixedCount: cols.fixedCount,
@@ -2777,17 +2969,20 @@ export function createStatsPanel({
         lockedCols: lockedColsFor('players')
       });
     } else {
-      // Team statistics are withheld entirely below Team Premium: the server
-      // sends no teams table at all. Without this branch the tab said
-      // "Nothing matches these filters", which is a lie — the data exists,
-      // the plan does not include it. Locked, never hidden.
+      // Team statistics are withheld below the plan that includes them: the
+      // server sends no teams table at all. Without this branch the tab said
+      // "Nothing matches these filters", which is a lie. The data exists, the
+      // plan does not include it. Locked, never hidden.
       const ent = serverTables.entitlements;
       if (ent && ent.teamStatistics === false && !Array.isArray(serverTables.teams)) {
+        const plan = requiredPlanFor(CAP.STATS_TEAM_STATISTICS);
         bodyEl.innerHTML = '';
         bodyEl.appendChild(
           upgradePrompt({
-            message: 'Team statistics are available on Team Premium.',
-            requiredTier: 'team_premium'
+            message: plan
+              ? `Team statistics are available on ${PLAN_NAMES[plan] || plan}.`
+              : 'Team statistics are not available on your plan.',
+            requiredTier: plan
           })
         );
         bodyEl.removeAttribute('aria-busy');
@@ -2797,9 +2992,10 @@ export function createStatsPanel({
       let data = serverTables.teams || [];
       if (minR > 0) data = data.filter((t) => (t.rounds || 0) >= minR);
       data = applyEntityPickTeams(data);
+      const cols = currentTeamCols();
       paintTable(data, {
-        columns: TEAM_COLUMNS,
-        fixedCount: 2,
+        columns: cols.columns,
+        fixedCount: cols.fixedCount,
         escapeHtml,
         sortKey: sort.teams.key,
         sortDir: sort.teams.dir,
@@ -2984,11 +3180,7 @@ export function createStatsPanel({
           ? serverLocked.players.filter((p) => (p.rounds || 0) >= minR)
           : serverLocked.players;
       data = applyEntityPickPlayers(data);
-      const mode = roleModeOf(data);
-      let cols = mode
-        ? playerColumnsWithRoles(mode)
-        : { columns: PLAYER_COLUMNS, fixedCount: PLAYER_FIXED_BASE.length };
-      if (omitTeamColumn) cols = omitPlayerTeamColumn(cols);
+      const cols = currentPlayerCols(roleModeOf(data));
       paintTable(data, {
         columns: cols.columns,
         fixedCount: cols.fixedCount,
@@ -3004,9 +3196,10 @@ export function createStatsPanel({
       });
     } else if (!serverLocked.oneMap) {
       let data = applyEntityPickTeams(serverLocked.mapRows);
+      const cols = currentTeamCols(TEAM_MAP_COLUMNS);
       setBodyHtml(statsTableHtml(data, {
-        columns: TEAM_MAP_COLUMNS,
-        fixedCount: 2,
+        columns: cols.columns,
+        fixedCount: cols.fixedCount,
         escapeHtml,
         preserveOrder: true,
         showAverage: true,
@@ -3042,9 +3235,10 @@ export function createStatsPanel({
       }
       push(us, 'us');
       const data = applyEntityPickTeams(display);
+      const cols = currentTeamCols();
       setBodyHtml(statsTableHtml(data, {
-        columns: TEAM_COLUMNS,
-        fixedCount: 2,
+        columns: cols.columns,
+        fixedCount: cols.fixedCount,
         escapeHtml,
         preserveOrder: true,
         showAverage: true,
@@ -3099,7 +3293,7 @@ export function createStatsPanel({
       const named = data.find((r) => r.name);
       if (named?.name) detail.label = named.name;
     }
-    const cols = detail.kind === 'team' ? teamMatchColumns() : playerMatchColumns();
+    const cols = currentDetailCols();
     const profileLink =
       detail.kind === 'player'
         ? `<p class="st-profile-link">
@@ -3372,11 +3566,7 @@ export function createStatsPanel({
       return;
     }
 
-    const mode = roleMode();
-    let playerCols = mode
-      ? playerColumnsWithRoles(mode)
-      : { columns: PLAYER_COLUMNS, fixedCount: PLAYER_FIXED_BASE.length };
-    if (omitTeamColumn) playerCols = omitPlayerTeamColumn(playerCols);
+    const playerCols = currentPlayerCols(roleMode());
 
     // Entity search means "show these rows"; do not also hide them under min-rounds.
     const searching = hasEntityPick();
@@ -3419,9 +3609,10 @@ export function createStatsPanel({
         // Any map: one row per map for the locked team.
         let data = lockedTeamPerMapRows(rows, players, demos, active);
         data = applyEntityPickTeams(data);
+        const cols = currentTeamCols(TEAM_MAP_COLUMNS);
         setBodyHtml(statsTableHtml(data, {
-          columns: TEAM_MAP_COLUMNS,
-          fixedCount: 2,
+          columns: cols.columns,
+          fixedCount: cols.fixedCount,
           escapeHtml,
           preserveOrder: true,
           showAverage: true,
@@ -3439,9 +3630,10 @@ export function createStatsPanel({
           minR
         );
         const data = applyEntityPickTeams(compared.rows);
+        const cols = currentTeamCols();
         setBodyHtml(statsTableHtml(data, {
-          columns: TEAM_COLUMNS,
-          fixedCount: 2,
+          columns: cols.columns,
+          fixedCount: cols.fixedCount,
           escapeHtml,
           preserveOrder: true,
           showAverage: true,
@@ -3453,9 +3645,10 @@ export function createStatsPanel({
         let data = aggregateTeams(rows, players, demos, active);
         if (minR > 0) data = data.filter((t) => (t.rounds || 0) >= minR);
         data = applyEntityPickTeams(data);
+        const cols = currentTeamCols();
         paintTable(data, {
-          columns: TEAM_COLUMNS,
-          fixedCount: 2,
+          columns: cols.columns,
+          fixedCount: cols.fixedCount,
           escapeHtml,
           sortKey: sort.teams.key,
           sortDir: sort.teams.dir,
@@ -3741,6 +3934,10 @@ export function createStatsPanel({
     try {
       let painted = false;
       const res = await getStatsPayload(scope.demos || null, {
+        // Only the groups the enabled columns and the filters read. With
+        // everything on this still drops the groups no Database column uses
+        // (phase, held guns); every column switched off shrinks it further.
+        columns: databaseColumnGroups(disabledStatsColumns()),
         onProgress: (p) => {
           if (token !== loadToken) return;
           // Demo-by-demo inside the page in flight, so the hover count moves
@@ -3850,6 +4047,7 @@ export function createStatsPanel({
     setLibraryLoading(true);
     try {
       const res = await getStatsPayload(scope.demos || null, {
+        columns: databaseColumnGroups(disabledStatsColumns()),
         onProgress: (p) => {
           if (token !== loadToken) return;
           noteLibraryProgress({ loaded: p?.libraryLoaded, total: p?.libraryTotal });
@@ -3897,6 +4095,14 @@ export function createStatsPanel({
     mountPageHead,
     /** The loaded payload, so panels beside this one can reuse the fetch. */
     getPayload: () => payload,
+    /**
+     * True when the panel is showing real data from ANY source. The server
+     * aggregate path never sets `payload`, and re-entry guards that only
+     * checked getPayload() re-ran load() on every visit to /database — each
+     * one a fresh aggregate round-trip, and a whole library download whenever
+     * the aggregate happened to be cold that time.
+     */
+    hasData: () => Boolean(payload || serverTables || serverDetail || serverLocked),
     /** False while the payload is still narrowed to a team or a selection. */
     isLibraryScope: () => !scope.demos?.length && !scope.files?.length,
     viewState,
@@ -3905,6 +4111,7 @@ export function createStatsPanel({
     clearDetail,
     getDetail: () => detail,
     destroy() {
+      detachColumnPrefs();
       setLibraryLoading(false);
       setLibraryRetry(false);
       if (usePageHead && pageHeadEl) {

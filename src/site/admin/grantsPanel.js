@@ -8,9 +8,37 @@
 // look at the Free experience without cancelling your own plan.
 // ---------------------------------------------------------------------------
 
-import { CAPABILITY_KEYS, PLAN_IDS, PLAN_NAMES } from '../../../shared/entitlements/catalogue.js';
+import {
+  CAPABILITY_KEYS,
+  PLAN_IDS,
+  PLAN_NAMES,
+  SOLO_PLAN_IDS,
+  requiredPlanFor
+} from '../../../shared/entitlements/catalogue.js';
+import { CAP } from '../../../shared/entitlements/keys.js';
 import { adminApi } from './adminApi.js';
 import { button, date, el, field, input, notice, select, table } from './dom.js';
+
+/** Every plan dropdown in this panel, in ladder order. */
+const PLAN_OPTIONS = PLAN_IDS.map((id) => ({ value: id, label: PLAN_NAMES[id] }));
+
+/**
+ * What the plan dropdowns open on.
+ *
+ * All three are read off the ladder rather than typed in. A hardcoded default
+ * outlives the plan it names: these selects opened on two ids from the previous
+ * four-plan ladder long after both were gone, and `select()` answers an unknown
+ * value by falling back to the first option, so each of them silently opened on
+ * the free tier instead.
+ *
+ * Grants open on the cheapest paid plan, because granting too little is a
+ * smaller mistake than granting too much. Trials open on the cheapest plan that
+ * can actually create a team: a trial that can only join one has nothing to
+ * join, which is what made gifted trials look broken.
+ */
+const DEFAULT_GRANT_PLAN = SOLO_PLAN_IDS[0];
+const DEFAULT_TRIAL_PLAN = requiredPlanFor(CAP.TEAM_CREATE_LIMIT) || DEFAULT_GRANT_PLAN;
+const TOP_PLAN = PLAN_IDS[PLAN_IDS.length - 1];
 
 export function grantsPanel({ userId, detail, onChanged }) {
   const root = el('div', 'admin-subpanel');
@@ -52,7 +80,7 @@ export function grantsPanel({ userId, detail, onChanged }) {
     { value: 'plan', label: 'Whole tier' },
     { value: 'capability', label: 'One capability' }
   ]);
-  const plan = select(PLAN_IDS.map((id) => ({ value: id, label: PLAN_NAMES[id] })), 'premium');
+  const plan = select(PLAN_OPTIONS, DEFAULT_GRANT_PLAN);
   const capability = select(CAPABILITY_KEYS.map((k) => ({ value: k, label: k })));
   const value = input('text', '', 'JSON value, e.g. 25 or "full" or true');
   const mode = select([
@@ -120,7 +148,7 @@ export function grantsPanel({ userId, detail, onChanged }) {
   const subs = el('div', 'admin-subpanel');
   subs.appendChild(el('h3', null, 'Subscription'));
 
-  const subPlan = select(PLAN_IDS.map((id) => ({ value: id, label: PLAN_NAMES[id] })), 'premium');
+  const subPlan = select(PLAN_OPTIONS, DEFAULT_GRANT_PLAN);
   const subTerm = select(['month', 'quarter', 'year', 'lifetime'], 'month');
   const subEnd = input('datetime-local', '');
 
@@ -147,13 +175,14 @@ export function grantsPanel({ userId, detail, onChanged }) {
       'btn btn-primary'
     ),
     // Used constantly during development, so it is one click rather than four
-    // fields and a date picker.
+    // fields and a date picker. The label names whatever the top of the ladder
+    // currently is, which is also the plan the endpoint grants.
     button(
-      'Grant infinite Elite',
+      `Grant infinite ${PLAN_NAMES[TOP_PLAN]}`,
       async () => {
         try {
           await adminApi.grantElite(userId, 'Development grant');
-          notice(subs, 'Infinite Elite granted.');
+          notice(subs, `Infinite ${PLAN_NAMES[TOP_PLAN]} granted.`);
           onChanged();
         } catch (err) {
           notice(subs, err.message, 'error');
@@ -164,12 +193,7 @@ export function grantsPanel({ userId, detail, onChanged }) {
   );
 
   const trialDays = input('number', '7');
-  // Team Premium unlocks create-team + Team Replays / Autocoach. Premium alone
-  // can only join an existing team, which is why gifted "trials" looked broken.
-  const trialPlan = select(
-    PLAN_IDS.map((id) => ({ value: id, label: PLAN_NAMES[id] })),
-    'team_premium'
-  );
+  const trialPlan = select(PLAN_OPTIONS, DEFAULT_TRIAL_PLAN);
   subs.append(
     el('h3', null, 'Trial'),
     field('Plan', trialPlan),

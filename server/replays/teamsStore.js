@@ -2,9 +2,11 @@
 // replays/teamsStore.js
 // Teams, membership, invites, roles, per-map positions, documents and stratbook.
 //
-// One JSON file next to the replay library. A user may belong to many teams but
-// own exactly one: ownership is what grants the invite link, the kick/ban list
-// and the role table, so it has to be single-valued.
+// One JSON file next to the replay library. A user may belong to many teams and
+// own several of them: ownership is what grants the invite link, the kick/ban
+// list and the role table, and how many teams one account may own is a property
+// of its plan (team.create_limit), enforced in teamRoutes.js. This store holds
+// no opinion about it beyond the runaway guard in createTeam().
 //
 //   server/data/replays/teams.json
 // ---------------------------------------------------------------------------
@@ -29,17 +31,27 @@ export const UNLIMITED_MEMBERS = -1;
 
 /**
  * Seat capacity is a property of the owner's *subscription*, not of the team:
- * Team Elite's 14 seats are pooled across the 2 teams it may create, so
+ * Team Tier 2's 14 seats are pooled across the 2 teams it may create, so
  * counting members of one team is the wrong question. The resolved number is
  * denormalised onto the team record by recomputeUser(), the same way
  * profiles.effective_capabilities is, because publicTeam() is synchronous and
  * called from a dozen places that have no business awaiting an entitlement
  * lookup.
+ *
+ * A stored 0 is a real answer and not a missing one. It is what an owner who
+ * lapsed to Free resolves to, and reading it as "nothing written yet" handed
+ * that team the default 7 seats: the one case where the denormalised number
+ * matters most was the one case it was ignored. Only an absent or unparseable
+ * value falls back to the default; -1 still means unlimited.
  */
 export function seatCapacityOf(team) {
-  const stored = Number(team?.seatCapacity);
-  if (Number.isFinite(stored) && (stored > 0 || stored === UNLIMITED_MEMBERS)) return stored;
-  return DEFAULT_MAX_MEMBERS;
+  const raw = team?.seatCapacity;
+  if (raw === undefined || raw === null || raw === '') return DEFAULT_MAX_MEMBERS;
+  const stored = Number(raw);
+  if (!Number.isFinite(stored)) return DEFAULT_MAX_MEMBERS;
+  if (stored === UNLIMITED_MEMBERS) return UNLIMITED_MEMBERS;
+  // Any other negative is nonsense rather than a second spelling of unlimited.
+  return Math.max(0, stored);
 }
 
 export function teamIsFull(team) {
@@ -136,10 +148,24 @@ export async function teamsOf(userId) {
     .sort((a, b) => Number(isOwner(b, userId)) - Number(isOwner(a, userId)));
 }
 
-/** The one team a user owns, if any. */
-export async function ownedTeam(userId) {
+/** Every team a user owns, in creation order. */
+export async function ownedTeams(userId) {
+  if (!userId) return [];
   const { teams } = await readTeams();
-  return teams.find((t) => isOwner(t, userId)) || null;
+  return teams.filter((t) => isOwner(t, userId));
+}
+
+/**
+ * The first team a user owns, if any.
+ *
+ * An account may now own up to `team.create_limit` teams, so "first" is a
+ * genuine choice rather than the only answer. Callers that need a specific
+ * team must ask for one by id; this stays for the paths that only want a
+ * sensible default.
+ */
+export async function ownedTeam(userId) {
+  const [first] = await ownedTeams(userId);
+  return first || null;
 }
 
 /**
@@ -152,7 +178,7 @@ export async function teammateIds(userId) {
   const out = new Set([userId]);
   for (const team of mine) {
     for (const m of team.members || []) {
-      // Placeholders are not accounts — they must not unlock unlisted demos.
+      // Placeholders are not accounts, so they must not unlock unlisted demos.
       if (!isDummyMember(m)) out.add(m.id);
     }
   }
@@ -181,14 +207,27 @@ async function updateTeam(id, mutate) {
 }
 
 /**
+ * Teams one account may own before the store itself says no.
+ *
+ * This is a guard against a runaway client, not the product limit. How many
+ * teams a plan may create is `team.create_limit` in the catalogue, checked in
+ * teamRoutes.js before this function is reached, and the top tier's answer is
+ * 3. The number here sits well above that so it can never be the thing that
+ * refuses a legitimate team, and low enough that a loop hammering POST
+ * /api/teams cannot grow teams.json without bound.
+ */
+export const MAX_OWNED_TEAMS = 12;
+
+/**
  * @param {{id: string, username: string}} user
  */
 export async function createTeam(user, name) {
   const label = String(name || '').trim().slice(0, 40);
   if (!label) throw new Error('Give the team a name.');
   const state = await readTeams();
-  if (state.teams.some((t) => isOwner(t, user.id))) {
-    throw new Error('You already own a team. A user can only own one.');
+  const owned = state.teams.filter((t) => isOwner(t, user.id)).length;
+  if (owned >= MAX_OWNED_TEAMS) {
+    throw new Error(`A user can own at most ${MAX_OWNED_TEAMS} teams.`);
   }
   const team = {
     id: newTeamId(),
@@ -205,7 +244,7 @@ export async function createTeam(user, name) {
     positions: {},
     documents: [],
     stratbook: [],
-    /** demoId -> { side: 1|2, analyzedAt, analyzedBy } — Autocoach pass registry */
+    /** demoId -> { side: 1|2, analyzedAt, analyzedBy }, the Autocoach pass registry */
     autocoach: { demos: {} }
   };
   state.teams.push(team);
@@ -349,6 +388,13 @@ export async function transferOwnership(actor, teamId, memberId) {
   const next = memberOf(team, memberId);
   if (!next) throw new Error('That member is not on the team.');
   if (isDummyMember(next)) throw new Error('Cannot transfer ownership to a placeholder.');
+  // A transfer hands someone a team they did not create, so it must not become
+  // the way around team.create_limit. That limit is resolved from the *new*
+  // owner's plan, which this store cannot read: it holds teams, not
+  // entitlements, and the route only ever has the actor's own capabilities in
+  // hand. So the transfer path stays at one team per recipient, which is the
+  // limit of the cheapest plan that may own a team at all and therefore safe
+  // for every recipient.
   if (state.teams.some((t) => t.id !== teamId && isOwner(t, memberId))) {
     throw new Error('That member already owns a team.');
   }
@@ -714,7 +760,7 @@ export async function markAutocoachDemo(actor, teamId, demoId, side) {
     const seat = side === 2 ? 2 : 1;
     t.autocoach = t.autocoach && typeof t.autocoach === 'object' ? t.autocoach : { demos: {} };
     t.autocoach.demos = t.autocoach.demos || {};
-    if (t.autocoach.demos[id]) return; // already locked — do not overwrite
+    if (t.autocoach.demos[id]) return; // already locked, do not overwrite
     t.autocoach.demos[id] = {
       side: seat,
       analyzedAt: Date.now(),

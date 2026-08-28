@@ -59,7 +59,7 @@ function post(path, body, headers = {}) {
 }
 
 {
-  const res = await post('/api/billing/checkout', JSON.stringify({ planId: 'premium' }));
+  const res = await post('/api/billing/checkout', JSON.stringify({ planId: 'solo_premium' }));
   assert(res.status === 401, `checkout without a session is 401, got ${res.status}`);
   console.log('  checkout requires a session');
 }

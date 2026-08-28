@@ -17,6 +17,7 @@
 
 import {
   PLAN_NAMES,
+  SHARED_QUOTA_KEYS,
   UNLIMITED,
   capabilitiesForPlan,
   capabilityDef,
@@ -182,11 +183,26 @@ export class EntitlementManager {
     };
   }
 
-  /** For quotas: live counter state from /api/me. */
+  /**
+   * For quotas: live counter state from /api/me.
+   *
+   * `shared` says the allowance belongs to the subscription rather than to this
+   * account, so every seat on a team draws from the same pot. Copy has to say
+   * so: "1 left today" reads as one per person otherwise, and the second player
+   * to click discovers the truth by being refused.
+   *
+   * /api/me only lists a quota it can actually count, so unlimited tiers and
+   * capabilities the plan does not have at all come back with no entry. The
+   * catalogue answers for those: whether a quota is shared is a property of the
+   * capability, not of one account's counter.
+   */
   quota(key) {
     const limit = Number(this.value(key));
-    if (limit === UNLIMITED) return { limit: UNLIMITED, unlimited: true, remaining: Infinity, used: 0 };
     const live = this.state?.quotas?.[key];
+    const shared = live?.shared ?? SHARED_QUOTA_KEYS.includes(key);
+    if (limit === UNLIMITED) {
+      return { limit: UNLIMITED, unlimited: true, remaining: Infinity, used: 0, shared };
+    }
     const used = Number(live?.used || 0);
     return {
       limit,
@@ -194,7 +210,8 @@ export class EntitlementManager {
       used,
       remaining: Math.max(0, limit - used),
       resetsAt: live?.resetsAt || null,
-      spent: limit > 0 && used >= limit
+      spent: limit > 0 && used >= limit,
+      shared
     };
   }
 

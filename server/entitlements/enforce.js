@@ -23,6 +23,7 @@ import {
   isEnabled,
   requiredPlanFor
 } from '../../shared/entitlements/catalogue.js';
+import { quotaSubject } from '../../shared/entitlements/resolve.js';
 import { consume, peek } from './quota.js';
 
 export class UpgradeRequiredError extends Error {
@@ -83,8 +84,8 @@ function planLabel(planId) {
 
 /**
  * Message for a blocked action. Names the cheapest plan that unlocks it, not
- * the most expensive one, because pointing a Free user at Team Elite for
- * something Premium already covers reads as a shakedown.
+ * the most expensive one, because pointing a Free user at Team Tier 1 for
+ * something Solo Lite already covers reads as a shakedown.
  */
 function upgradeMessage(key, requiredTier) {
   const label = capabilityDef(key).label;
@@ -96,37 +97,74 @@ function upgradeMessage(key, requiredTier) {
  * Integer caps. Returns rather than throws, because most call sites want to
  * report "40 / 40 used" in the UI as well as refuse the 41st.
  *
- * @returns {{allowed: boolean, current: number, limit: number, remaining: number, tier: string}}
+ * `incoming` is how many the caller is about to add, and it defaults to 1
+ * because every call site that omits it is asking "may I add one more". It
+ * exists because the interesting failure is not the 41st single item, it is one
+ * request that adds fifty: a free account at 0 of 3 uploading an archive of a
+ * hundred demos passed `0 < 3` and then created a hundred records. A cap that
+ * only ever compares what is already there cannot refuse that.
+ *
+ * @param {object} user
+ * @param {string} key
+ * @param {number} [currentCount] how many they already hold
+ * @param {number} [incoming]     how many this operation would add
+ * @returns {{allowed: boolean, current: number, incoming: number, limit: number,
+ *            remaining: number, accepted: number, tier: string}}
  */
-export function checkLimit(user, key, currentCount = 0) {
+export function checkLimit(user, key, currentCount = 0, incoming = 1) {
   const limit = Number(capability(user, key));
-  const current = Number(currentCount) || 0;
+  const current = Math.max(0, Number(currentCount) || 0);
+  const wanted = Math.max(0, Number(incoming) || 0);
   const unlimited = limit === UNLIMITED;
+  const remaining = unlimited ? UNLIMITED : Math.max(0, limit - current);
   return {
-    allowed: unlimited || current < limit,
+    allowed: unlimited || current + wanted <= limit,
     current,
+    incoming: wanted,
     limit,
-    remaining: unlimited ? UNLIMITED : Math.max(0, limit - current),
+    remaining,
+    // How many of `incoming` would fit. Lets a batch land what it can and
+    // refuse the rest, rather than being all-or-nothing.
+    accepted: unlimited ? wanted : Math.min(wanted, remaining),
     tier: tierOf(user)
   };
 }
 
-/** checkLimit, but throws the 402 when the cap is reached. */
-export function requireLimit(user, key, currentCount = 0) {
-  const result = checkLimit(user, key, currentCount);
+/** checkLimit, but throws the 402 when the cap would be exceeded. */
+export function requireLimit(user, key, currentCount = 0, incoming = 1) {
+  const result = checkLimit(user, key, currentCount, incoming);
   if (result.allowed) return result;
 
-  // The cheapest plan that would allow one more than they currently hold.
-  const requiredTier = requiredPlanFor(key, result.current + 1);
+  // The cheapest plan that would hold everything they are trying to have.
+  const needed = result.current + result.incoming;
+  const requiredTier = requiredPlanFor(key, needed);
+  const label = capabilityDef(key).label;
+  const atCap = result.remaining === 0;
+  const detail = atCap
+    ? `you are at your limit of ${result.limit}`
+    : `that would take you to ${needed} of ${result.limit}`;
   throw new UpgradeRequiredError({
     capability: key,
     message: requiredTier
-      ? `${capabilityDef(key).label}: you are at your limit of ${result.limit}. More is available on ${planLabel(requiredTier)}.`
-      : `${capabilityDef(key).label}: you are at your limit of ${result.limit}.`,
+      ? `${label}: ${detail}. More is available on ${planLabel(requiredTier)}.`
+      : `${label}: ${detail}.`,
     currentTier: result.tier,
     requiredTier,
-    limit: { current: result.current, limit: result.limit }
+    limit: { current: result.current, incoming: result.incoming, limit: result.limit }
   });
+}
+
+/**
+ * Who a use of this capability is charged to.
+ *
+ * For the expensive capabilities the allowance belongs to the subscription, not
+ * to the person spending it, so seven seats on one Tier 3 team share one
+ * anti-strat a day rather than getting seven. resolve.js works out which
+ * subscription supplied the value; this just reads its answer, and falls back
+ * to the account for everything personal.
+ */
+export function quotaSubjectFor(user, key) {
+  return quotaSubject(user?.entitlements, key, user?.id);
 }
 
 /**
@@ -141,11 +179,12 @@ export function requireLimit(user, key, currentCount = 0) {
  */
 export async function consumeQuota(user, key) {
   const limit = Number(capability(user, key));
+  const subject = quotaSubjectFor(user, key);
 
   if (user?.impersonating) {
-    return await peek(user.id, key, limit);
+    return await peek(subject, key, limit);
   }
-  return await consume(user?.id, key, limit);
+  return await consume(subject, key, limit);
 }
 
 /** consumeQuota, but throws the 402 when the allowance is spent. */
@@ -159,7 +198,9 @@ export async function requireQuota(user, key) {
     message:
       Number(result.limit) <= 0
         ? upgradeMessage(key, requiredPlanFor(key))
-        : `${capabilityDef(key).label}: you have used your ${result.limit} for today. More is available on ${planLabel(requiredTier)}.`,
+        : `${capabilityDef(key).label}: ${
+            capabilityDef(key).shared ? 'this team has' : 'you have'
+          } used ${result.limit} for today. More is available on ${planLabel(requiredTier)}.`,
     currentTier: tierOf(user),
     requiredTier: Number(result.limit) <= 0 ? requiredPlanFor(key) : requiredTier,
     quota: { used: result.used, limit: result.limit, resetsAt: result.resetsAt }
@@ -172,7 +213,7 @@ export async function requireQuota(user, key) {
  *
  * @param {object} user
  * @param {string} key
- * @param {{current?: number, atLeast?: any, consume?: boolean}} [opts]
+ * @param {{current?: number, incoming?: number, atLeast?: any, consume?: boolean}} [opts]
  */
 export async function requireCapability(user, key, opts = {}) {
   const def = capabilityDef(key);
@@ -180,7 +221,7 @@ export async function requireCapability(user, key, opts = {}) {
 
   switch (def.shape) {
     case 'limit':
-      return requireLimit(user, key, opts.current || 0);
+      return requireLimit(user, key, opts.current || 0, opts.incoming ?? 1);
 
     case 'quota':
       // Callers that only want to know whether the feature exists on this tier

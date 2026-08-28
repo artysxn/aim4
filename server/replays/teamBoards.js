@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// teamBoards.js — Drawing boards + Utility Archive per team/map
+// teamBoards.js: drawing boards and the Utility Archive, per team and map.
 //
 //   {AIM4_REPLAY_DIR}/teamBoards/<teamId>/drawing/<MAP>/<boardId>.json
 //   Legacy single file (migrated on read): drawing/<MAP>.json
@@ -27,6 +27,9 @@ const MAX_UTILITY = 400;
 const MAX_THROWS = 24;
 const MAX_BOARDS_PER_MAP = 80;
 const BOARD_ID_RE = /^[A-Za-z0-9_-]{4,40}$/;
+
+/** The only grenade kinds a board or an archive may hold. */
+const NADE_TYPES = Object.freeze(['smokegrenade', 'molotov', 'hegrenade', 'flashbang']);
 
 function safeId(raw) {
   const s = String(raw || '').replace(/[^A-Za-z0-9_-]/g, '');
@@ -122,7 +125,7 @@ function sanitizeBoard(map, payload, id, name) {
   for (const n of (src.nades || []).slice(0, MAX_NADES_BOARD)) {
     if (!n || typeof n !== 'object') continue;
     const type = String(n.type || '');
-    if (!['smokegrenade', 'molotov', 'hegrenade', 'flashbang'].includes(type)) continue;
+    if (!NADE_TYPES.includes(type)) continue;
     nades.push({
       type,
       x: clampNum(n.x, -10000, 10000, 0),
@@ -335,7 +338,7 @@ function sanitizeUtility(map, payload) {
   for (const g of incoming) {
     if (!g || typeof g !== 'object') continue;
     const type = String(g.type || '');
-    if (!['smokegrenade', 'molotov', 'hegrenade', 'flashbang'].includes(type)) continue;
+    if (!NADE_TYPES.includes(type)) continue;
     const id = claim(g.id);
     const throws = [];
     for (const t of (g.throws || []).slice(0, MAX_THROWS)) {
@@ -354,6 +357,29 @@ function sanitizeUtility(map, payload) {
     });
   }
   return { map, updatedAt: Date.now(), grenades };
+}
+
+/**
+ * How many grenades a payload would actually leave in the archive.
+ *
+ * The per-map entitlement (`team.utility_archive`) has to be checked before the
+ * write, and it has to count the same things sanitizeUtility() keeps. Counting
+ * the raw array instead would refuse saves that were about to shrink the
+ * archive, because the client posts the whole archive on every edit and junk
+ * entries or unknown grenade kinds are dropped on the way in. Throws are not
+ * counted: the cap is on lineups, and one grenade may carry several ways of
+ * throwing it.
+ */
+export function countUtilityGrenades(payload) {
+  const src = payload && typeof payload === 'object' ? payload : {};
+  const list = Array.isArray(src.grenades) ? src.grenades.slice(0, MAX_UTILITY) : [];
+  let n = 0;
+  for (const g of list) {
+    if (!g || typeof g !== 'object') continue;
+    if (!NADE_TYPES.includes(String(g.type || ''))) continue;
+    n += 1;
+  }
+  return n;
 }
 
 export async function getUtilityArchive(actor, teamId, map) {

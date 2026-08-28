@@ -78,10 +78,14 @@ export function takeLinkCluster(tags, ti, text) {
 }
 
 /**
+ * Walk a note, handing every link cluster to `clusterHtml` and escaping the
+ * rest. The two renderers below differ only in what a cluster becomes.
+ *
  * @param {string} raw
  * @param {{ escapeHtml: (s: string) => string }} opts
+ * @param {(parts: {label: string, util: string, url: string}) => string} clusterHtml
  */
-export function renderStratNoteLinks(raw, { escapeHtml }) {
+function walkStratNote(raw, { escapeHtml }, clusterHtml) {
   const text = String(raw || '');
   const tags = [];
   TAG.lastIndex = 0;
@@ -92,22 +96,6 @@ export function renderStratNoteLinks(raw, { escapeHtml }) {
       end: m.index + m[0].length,
       ...classifyTag(m[1])
     });
-  }
-
-  function clusterHtml(parts) {
-    const href = parts.url ? safeHref(parts.url) : '';
-    const label = parts.label || parts.util || href || parts.url || '';
-    const copy = parts.util || '';
-    const copyAttr = copy ? ` data-ua-copy="${escapeHtml(copy)}"` : '';
-    if (href) {
-      return `<a class="ua-link" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer"${copyAttr}>${escapeHtml(
-        label
-      )}</a>`;
-    }
-    if (copy) {
-      return `<button type="button" class="ua-link"${copyAttr}>${escapeHtml(label)}</button>`;
-    }
-    return escapeHtml(label);
   }
 
   let out = '';
@@ -131,4 +119,51 @@ export function renderStratNoteLinks(raw, { escapeHtml }) {
     ti += cluster.consumed;
   }
   return out;
+}
+
+/**
+ * @param {string} raw
+ * @param {{ escapeHtml: (s: string) => string }} opts
+ */
+export function renderStratNoteLinks(raw, opts) {
+  const { escapeHtml } = opts;
+  return walkStratNote(raw, opts, (parts) => {
+    const href = parts.url ? safeHref(parts.url) : '';
+    const label = parts.label || parts.util || href || parts.url || '';
+    const copy = parts.util || '';
+    const copyAttr = copy ? ` data-ua-copy="${escapeHtml(copy)}"` : '';
+    if (href) {
+      return `<a class="ua-link" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer"${copyAttr}>${escapeHtml(
+        label
+      )}</a>`;
+    }
+    if (copy) {
+      return `<button type="button" class="ua-link"${copyAttr}>${escapeHtml(label)}</button>`;
+    }
+    return escapeHtml(label);
+  });
+}
+
+/**
+ * The same note inside a team document.
+ *
+ * A document has no stratbook around it, so a `<!id>` cannot copy a setpos on
+ * click. It becomes a link into the utility archive entry instead, which is
+ * where a reader goes to get the lineup. Anything the documents sanitizer
+ * would strip is not emitted: plain anchors and text, nothing else.
+ *
+ * @param {string} raw
+ * @param {{ escapeHtml: (s: string) => string, mapCode?: string }} opts
+ */
+export function stratNoteToDocHtml(raw, { escapeHtml, mapCode = '' }) {
+  return walkStratNote(raw, { escapeHtml }, (parts) => {
+    const href = parts.util
+      ? utilArchiveHref(parts.util, mapCode)
+      : parts.url
+        ? safeHref(parts.url)
+        : '';
+    const label = parts.label || parts.util || parts.url || '';
+    if (!href) return escapeHtml(label);
+    return `<a href="${escapeHtml(href)}">${escapeHtml(label)}</a>`;
+  });
 }

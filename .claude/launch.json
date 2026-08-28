@@ -31,6 +31,19 @@
       "env": {
         "AIM4_API_PORT": "3799"
       }
+    },
+    {
+      "name": "aim4-cols-host",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "host"
+      ],
+      "port": 3811,
+      "autoPort": false,
+      "env": {
+        "AIM4_API_PORT": "3811"
+      }
     }
   ]
 }

@@ -12,6 +12,28 @@
 //   limit  integer cap, -1 meaning unlimited, 0 meaning none
 //   quota  uses per rolling 24h, -1 unlimited, 0 unavailable
 //   enum   a named mode, ordered weakest to strongest in `order`
+//
+// ---------------------------------------------------------------------------
+// The shape of the ladder
+// ---------------------------------------------------------------------------
+// Two ladders, one product. A team plan is the solo plan of the same band plus
+// everything that only makes sense with a roster behind it. Four bands:
+//
+//   FREE    the trial of the product. Basics, no models.
+//   LOW     solo_lite / team_tier3.  Every basic paid feature without limits,
+//           and one use a day of the expensive ones.
+//   MIDDLE  solo_premium / team_tier2. Three times the daily allowance, or
+//           unlimited-but-capped where the feature is not metered.
+//   HIGH    solo_elite / team_tier1.  Everything, unrestricted.
+//
+// "One a day" is deliberately one a day *for the whole subscription*, not one
+// per seat: quota subjects resolve to the subscription that granted the
+// capability (see resolve.js quotaSubjects), so a seven-seat Tier 3 team gets
+// one anti-strat a day between them, not seven.
+//
+// Solo plans never carry the team keys (`team.*`, anti-strat, comms). That is
+// the whole of the difference between the two ladders, and it is why a Tier 1
+// team costs a multiple of a Solo Elite rather than the same money.
 // ---------------------------------------------------------------------------
 
 /** @typedef {'bool'|'limit'|'quota'|'enum'} Shape */
@@ -24,54 +46,226 @@ export const ENUM = 'enum';
 /** Unlimited, for limit and quota shapes. Reads better than a bare -1. */
 export const UNLIMITED = -1;
 
-export const PLAN_IDS = Object.freeze(['free', 'premium', 'team_premium', 'team_elite']);
+/**
+ * Ordered weakest to strongest, and that order is load-bearing:
+ * `requiredPlanFor` walks this array and returns the FIRST plan that satisfies
+ * a capability, so a 402 names the cheapest plan that unlocks the feature
+ * rather than the most expensive one. The array is therefore in ascending
+ * price order, which puts `team_tier1` last despite its name.
+ */
+export const PLAN_IDS = Object.freeze([
+  'free',
+  'solo_lite',
+  'solo_premium',
+  'solo_elite',
+  'team_tier3',
+  'team_tier2',
+  'team_tier1'
+]);
+
+/** The solo ladder. Everything else that is not `free` is a team plan. */
+export const SOLO_PLAN_IDS = Object.freeze(['solo_lite', 'solo_premium', 'solo_elite']);
+
+/** The team ladder, weakest first. A team plan is what unlocks `team.*`. */
+export const TEAM_PLAN_IDS = Object.freeze(['team_tier3', 'team_tier2', 'team_tier1']);
+
+/** True when this plan carries the team toolkit at all. */
+export function isTeamPlan(planId) {
+  return TEAM_PLAN_IDS.includes(planId);
+}
 
 /**
- * Rank drives every merge in resolve.js. Gaps of 10 leave room for a plan
- * between two existing ones without renumbering rows that are already in the
- * database.
+ * Rank drives every merge in resolve.js and decides which plan name an account
+ * is shown under. Gaps of 10 leave room for a plan between two existing ones
+ * without renumbering rows that are already in the database.
+ *
+ * Rank follows price, so `team_tier3` outranks `solo_elite` even though Solo
+ * Elite is stronger at several individual capabilities. That is safe because
+ * resolve.js merges per capability and keeps the STRONGER value, never the
+ * higher-ranked one; rank only breaks ties and picks the displayed name.
  */
 export const PLAN_RANKS = Object.freeze({
   free: 0,
-  premium: 10,
-  team_premium: 20,
-  team_elite: 30
+  solo_lite: 10,
+  solo_premium: 20,
+  solo_elite: 30,
+  team_tier3: 40,
+  team_tier2: 50,
+  team_tier1: 60
 });
 
 export const PLAN_NAMES = Object.freeze({
   free: 'Free',
-  premium: 'Premium',
-  team_premium: 'Team Premium',
-  team_elite: 'Team Elite'
+  solo_lite: 'Solo Lite',
+  solo_premium: 'Solo Premium',
+  solo_elite: 'Solo Elite',
+  team_tier3: 'Team Tier 3',
+  team_tier2: 'Team Tier 2',
+  team_tier1: 'Team Tier 1'
 });
 
 /**
- * Display prices, EUR per month. The one place prices are written down; the
- * pricing page and any upsell copy read from here. `yearlyMonthly` is the
- * effective monthly price on the annual term (two months free). Placeholder
- * numbers until billing goes live: change them here and every surface follows.
+ * Which band a plan sits in. Used by the pricing page to line the two ladders
+ * up next to each other, and by nothing that enforces anything.
  */
-export const PLAN_PRICES = Object.freeze({
-  free: { monthly: 0, yearlyMonthly: 0 },
-  premium: { monthly: 9.99, yearlyMonthly: 8.33 },
-  team_premium: { monthly: 29.99, yearlyMonthly: 24.99 },
-  team_elite: { monthly: 59.99, yearlyMonthly: 49.99 }
+export const PLAN_BANDS = Object.freeze({
+  free: 'free',
+  solo_lite: 'low',
+  team_tier3: 'low',
+  solo_premium: 'middle',
+  team_tier2: 'middle',
+  solo_elite: 'high',
+  team_tier1: 'high'
 });
+
+// ---------------------------------------------------------------------------
+// Prices
+// ---------------------------------------------------------------------------
+
+/**
+ * Headline price, EUR cents per month. Cents rather than euros because every
+ * discounted total is computed from this and floating point euros drift: at
+ * 699.99 * 12 * 0.72 the two spellings already disagree in the last cent.
+ */
+export const PLAN_PRICE_CENTS = Object.freeze({
+  free: 0,
+  solo_lite: 899,
+  solo_premium: 2499,
+  solo_elite: 6999,
+  team_tier3: 8999,
+  team_tier2: 24999,
+  team_tier1: 69999
+});
+
+/** Billing terms, and how many months each one covers. */
+export const TERM_MONTHS = Object.freeze({
+  month: 1,
+  quarter: 3,
+  halfyear: 6,
+  year: 12
+});
+
+export const TERM_IDS = Object.freeze(['month', 'quarter', 'halfyear', 'year']);
+
+export const TERM_NAMES = Object.freeze({
+  month: 'Monthly',
+  quarter: '3 months',
+  halfyear: '6 months',
+  year: '12 months'
+});
+
+/**
+ * The discount everyone gets for paying up front, by term.
+ */
+export const TERM_DISCOUNT = Object.freeze({
+  month: 0,
+  quarter: 0.08,
+  halfyear: 0.13,
+  year: 0.2
+});
+
+/**
+ * The second discount, applied to what is left after the first one. It is
+ * deliberately NOT additive: 20% and then 10% off €100 is €72, not €70.
+ *
+ * It scales with the tier because the point of it is to make the long term
+ * worth signing on the plans where the annual commitment is worth most.
+ * Solo Lite has no second discount: it is already the floor.
+ */
+export const PLAN_TERM_BONUS = Object.freeze({
+  free: { quarter: 0, halfyear: 0, year: 0 },
+  solo_lite: { quarter: 0, halfyear: 0, year: 0 },
+  solo_premium: { quarter: 0.03, halfyear: 0.04, year: 0.05 },
+  solo_elite: { quarter: 0.05, halfyear: 0.06, year: 0.07 },
+  team_tier3: { quarter: 0.03, halfyear: 0.04, year: 0.05 },
+  team_tier2: { quarter: 0.05, halfyear: 0.06, year: 0.07 },
+  team_tier1: { quarter: 0.08, halfyear: 0.09, year: 0.1 }
+});
+
+/**
+ * What one term of one plan costs.
+ *
+ * The two discounts compose multiplicatively, and the total is rounded once,
+ * at the end, in cents. `perMonthCents` is derived from the rounded total so
+ * that the monthly figure on a pricing card multiplied by the number of months
+ * is the number the customer is actually charged.
+ *
+ * @param {string} planId
+ * @param {string} term
+ * @returns {{
+ *   planId: string, term: string, months: number,
+ *   monthlyCents: number, totalCents: number, perMonthCents: number,
+ *   baseDiscount: number, bonusDiscount: number, savedPct: number, savedCents: number
+ * }}
+ */
+export function priceForTerm(planId, term = 'month') {
+  const monthlyCents = PLAN_PRICE_CENTS[planId] ?? 0;
+  const months = TERM_MONTHS[term];
+  if (!months) throw new Error(`Unknown term: ${term}`);
+
+  const baseDiscount = TERM_DISCOUNT[term] || 0;
+  const bonusDiscount = (PLAN_TERM_BONUS[planId] || {})[term] || 0;
+  const multiplier = (1 - baseDiscount) * (1 - bonusDiscount);
+
+  const undiscounted = monthlyCents * months;
+  const totalCents = Math.round(undiscounted * multiplier);
+
+  return {
+    planId,
+    term,
+    months,
+    monthlyCents,
+    totalCents,
+    perMonthCents: Math.round(totalCents / months),
+    baseDiscount,
+    bonusDiscount,
+    savedPct: Math.round((1 - multiplier) * 1000) / 10,
+    savedCents: undiscounted - totalCents
+  };
+}
+
+/** "€249.99". The one place cents become money on screen. */
+export function euros(cents) {
+  return `€${(Number(cents || 0) / 100).toFixed(2)}`;
+}
+
+/**
+ * Display prices in euros, kept for surfaces that only ever want the headline
+ * monthly number. Derived, so it cannot drift from PLAN_PRICE_CENTS.
+ */
+export const PLAN_PRICES = Object.freeze(
+  Object.fromEntries(
+    PLAN_IDS.map((id) => [
+      id,
+      Object.freeze({
+        monthly: PLAN_PRICE_CENTS[id] / 100,
+        monthlyCents: PLAN_PRICE_CENTS[id],
+        yearlyMonthly: priceForTerm(id, 'year').perMonthCents / 100
+      })
+    ])
+  )
+);
 
 /** One line under each plan name on the pricing page. */
 export const PLAN_TAGLINES = Object.freeze({
   free: 'Watch, browse, and try the tools.',
-  premium: 'Full personal stats and unlimited analytics.',
-  team_premium: 'One team, seven seats, the team toolkit.',
-  team_elite: 'Two teams, the models, and everything else.'
+  solo_lite: 'Every paid basic without limits, and one look a day at the models.',
+  solo_premium: 'Three times the daily model allowance, and the deeper metrics.',
+  solo_elite: 'Everything one player can use, unlimited.',
+  team_tier3: 'One team, seven seats, the whole team toolkit.',
+  team_tier2: 'Two teams, fourteen seats, three times the allowance.',
+  team_tier1: 'The whole product, unlimited, for the organisation.'
 });
 
 /** Seats a plan may lend out, and teams it may create. Mirrors plans table. */
 export const PLAN_CAPACITY = Object.freeze({
   free: { seat_capacity: 0, team_capacity: 0 },
-  premium: { seat_capacity: 1, team_capacity: 0 },
-  team_premium: { seat_capacity: 7, team_capacity: 1 },
-  team_elite: { seat_capacity: 14, team_capacity: 2 }
+  solo_lite: { seat_capacity: 0, team_capacity: 0 },
+  solo_premium: { seat_capacity: 0, team_capacity: 0 },
+  solo_elite: { seat_capacity: 0, team_capacity: 0 },
+  team_tier3: { seat_capacity: 7, team_capacity: 1 },
+  team_tier2: { seat_capacity: 14, team_capacity: 2 },
+  team_tier1: { seat_capacity: 20, team_capacity: 3 }
 });
 
 /**
@@ -82,6 +276,56 @@ const DRAWING_BOARD_MODES = Object.freeze(['none', 'nosave', 'limited', 'full'])
 const AIM_REPLAY_MODES = Object.freeze(['none', 'best_and_recent', 'best_plus_10', 'full']);
 const COSMETIC_MODES = Object.freeze(['none', 'presets', 'full']);
 
+// ---------------------------------------------------------------------------
+// Band helpers
+//
+// Every row below is written as a band, not as seven hand-typed values, so a
+// row cannot accidentally be non-monotonic and Tier 2 cannot quietly end up
+// weaker than Tier 3.
+// ---------------------------------------------------------------------------
+
+/** free / low / middle / high, applied to both ladders. */
+function byBand(free, low, middle, high) {
+  return {
+    free,
+    solo_lite: low,
+    solo_premium: middle,
+    solo_elite: high,
+    team_tier3: low,
+    team_tier2: middle,
+    team_tier1: high
+  };
+}
+
+/** A team-only row: every solo plan gets `none`, the team ladder gets a band. */
+function teamOnly(none, low, middle, high) {
+  return {
+    free: none,
+    solo_lite: none,
+    solo_premium: none,
+    solo_elite: none,
+    team_tier3: low,
+    team_tier2: middle,
+    team_tier1: high
+  };
+}
+
+/** Everyone. The free door: things that exist to get people in. */
+function everyone(value) {
+  return byBand(value, value, value, value);
+}
+
+/** Free is out, every paid plan is in. The "basic paid feature" row. */
+function paidOnly(no, yes) {
+  return byBand(no, yes, yes, yes);
+}
+
+/** 0 / 1 / 3 / unlimited. The cutting-edge daily allowance, per subscription. */
+const MODEL_QUOTA = Object.freeze(byBand(0, 1, 3, UNLIMITED));
+
+/** The same ladder, but only teams have the feature at all. */
+const TEAM_MODEL_QUOTA = Object.freeze(teamOnly(0, 1, 3, UNLIMITED));
+
 /**
  * The catalogue itself.
  *
@@ -89,211 +333,267 @@ const COSMETIC_MODES = Object.freeze(['none', 'presets', 'full']);
  * UI, so it follows the copy rules in CLAUDE.md (no em dashes, no filler).
  * `scope: 'per_map'` means the limit counts per map rather than per account,
  * which the enforcement layer needs in order to count the right rows.
+ *
+ * `shared: true` on a quota means the allowance belongs to the subscription
+ * rather than to the person spending it, so a team's seats draw from one pot.
+ * That is what "one anti-strat a day" means on a seven-man roster.
  */
 export const CAPABILITIES = Object.freeze({
   // --- Demos -------------------------------------------------------------
+  'demos.viewer': {
+    shape: BOOL,
+    label: 'Demo viewer',
+    values: everyone(true)
+  },
   'demos.ads_free': {
     shape: BOOL,
     label: 'Ad-free viewing',
-    values: { free: false, premium: true, team_premium: true, team_elite: true }
+    values: paidOnly(false, true)
   },
   'demos.full_recent_access': {
     shape: BOOL,
     label: 'Full access to recent demos',
     // Free accounts see only the first half of demos under a month old.
-    values: { free: false, premium: true, team_premium: true, team_elite: true }
-  },
-  'demos.viewer': {
-    shape: BOOL,
-    label: 'Demo viewer',
-    values: { free: true, premium: true, team_premium: true, team_elite: true }
+    values: paidOnly(false, true)
   },
   'demos.macro_viewer': {
     shape: QUOTA,
-    label: 'Macro viewer',
-    values: { free: 1, premium: UNLIMITED, team_premium: UNLIMITED, team_elite: UNLIMITED }
+    // Named for the button the user actually clicks, so the 402 names
+    // something findable.
+    label: 'Analyzer',
+    values: byBand(1, UNLIMITED, UNLIMITED, UNLIMITED)
   },
   'demos.upload_limit': {
     shape: LIMIT,
     label: 'Demo uploads',
-    values: { free: 3, premium: 50, team_premium: UNLIMITED, team_elite: UNLIMITED }
+    // Held at once, per account. Teams sit above the matching solo band
+    // because a roster feeds one shared library.
+    values: {
+      free: 3,
+      solo_lite: 25,
+      solo_premium: 75,
+      solo_elite: UNLIMITED,
+      team_tier3: 100,
+      team_tier2: 300,
+      team_tier1: UNLIMITED
+    }
   },
   'demos.map_control': {
     shape: QUOTA,
+    shared: true,
     label: 'Map control',
-    values: { free: 0, premium: 0, team_premium: 1, team_elite: UNLIMITED }
+    values: MODEL_QUOTA
   },
   'demos.round_win_prediction': {
     shape: QUOTA,
+    shared: true,
     label: 'Round win prediction',
-    values: { free: 0, premium: 0, team_premium: 1, team_elite: UNLIMITED }
+    values: MODEL_QUOTA
   },
   'demos.duel_win_prediction': {
     shape: QUOTA,
+    shared: true,
     label: 'Duel win prediction',
-    values: { free: 0, premium: 0, team_premium: 1, team_elite: UNLIMITED }
+    values: MODEL_QUOTA
   },
   'demos.auto_coach': {
     shape: QUOTA,
+    shared: true,
     label: 'Auto coach',
-    values: { free: 1, premium: 4, team_premium: UNLIMITED, team_elite: UNLIMITED }
+    values: MODEL_QUOTA
   },
   'demos.teamspeak_sync': {
     shape: BOOL,
     label: 'TeamSpeak sync',
-    values: { free: false, premium: false, team_premium: false, team_elite: true }
+    values: teamOnly(false, true, true, true)
   },
   'demos.comms_coach': {
-    shape: BOOL,
+    shape: QUOTA,
+    shared: true,
     label: 'Comms coach',
-    values: { free: false, premium: false, team_premium: false, team_elite: true }
+    values: TEAM_MODEL_QUOTA
   },
   drawing_board: {
     shape: ENUM,
     label: 'Drawing board',
     order: DRAWING_BOARD_MODES,
     // 'limited' is 5 saved drawings per map; the count lives in DRAWING_BOARD_CAP.
-    values: { free: 'none', premium: 'nosave', team_premium: 'limited', team_elite: 'full' }
+    // The board lives on a team page, so the team ladder starts one rung up: a
+    // solo player may draw over a frame, a team may keep what they drew.
+    values: {
+      free: 'none',
+      solo_lite: 'nosave',
+      solo_premium: 'limited',
+      solo_elite: 'full',
+      team_tier3: 'limited',
+      team_tier2: 'full',
+      team_tier1: 'full'
+    }
   },
 
   // --- Stats and analytics -----------------------------------------------
+  // Performance Overview is deliberately absent: it is public, for everyone,
+  // signed in or not. It is the shop window.
+  'stats.performance_chapters': {
+    shape: BOOL,
+    label: 'Maps and Guns',
+    values: paidOnly(false, true)
+  },
   'stats.single_game': {
     shape: BOOL,
     label: 'Single game stats',
-    values: { free: false, premium: false, team_premium: true, team_elite: true }
+    values: paidOnly(false, true)
   },
   'stats.team_statistics': {
     shape: BOOL,
     label: 'Team statistics',
-    values: { free: false, premium: false, team_premium: true, team_elite: true }
+    values: paidOnly(false, true)
   },
   'stats.metrics_player_full': {
     shape: BOOL,
     label: 'Full player metrics',
     // PSDT, DT, Accuracy.
-    values: { free: false, premium: true, team_premium: true, team_elite: true }
+    values: paidOnly(false, true)
   },
   'stats.metrics_team_full': {
     shape: BOOL,
     label: 'Full team metrics',
-    // PRW, Poss%.
-    values: { free: false, premium: false, team_premium: false, team_elite: true }
+    // PRW, Poss%. Model output, so it starts at the middle band.
+    values: byBand(false, false, true, true)
   },
   'stats.filters_full': {
     shape: BOOL,
     label: 'All filters',
-    values: { free: false, premium: true, team_premium: true, team_elite: true }
+    values: paidOnly(false, true)
   },
   'analytics.charts': {
     shape: QUOTA,
     label: 'Charts',
     // Free is also restricted to limited controls, gated by stats.filters_full.
-    values: { free: 3, premium: UNLIMITED, team_premium: UNLIMITED, team_elite: UNLIMITED }
+    values: byBand(3, UNLIMITED, UNLIMITED, UNLIMITED)
   },
   'analytics.pattern_finder': {
     shape: QUOTA,
     label: 'Pattern finder',
-    values: { free: 3, premium: UNLIMITED, team_premium: UNLIMITED, team_elite: UNLIMITED }
+    values: byBand(3, UNLIMITED, UNLIMITED, UNLIMITED)
   },
   'analytics.antistrat': {
-    shape: BOOL,
-    label: 'Teams antistrat',
-    values: { free: false, premium: false, team_premium: true, team_elite: true }
+    shape: QUOTA,
+    shared: true,
+    label: 'Anti-strat',
+    // The flagship team feature, and the clearest example of the band rule:
+    // one report a day for the whole of a Tier 3 roster, three for Tier 2.
+    values: TEAM_MODEL_QUOTA
   },
 
   // --- Teams --------------------------------------------------------------
   'team.create_limit': {
     shape: LIMIT,
     label: 'Teams',
-    values: { free: 0, premium: 0, team_premium: 1, team_elite: 2 }
+    values: teamOnly(0, 1, 2, 3)
   },
   'team.join': {
     shape: BOOL,
     label: 'Joining a team',
-    values: { free: false, premium: true, team_premium: true, team_elite: true }
+    // Solo plans join teams; they just cannot run one. This is how a Tier 1
+    // organisation seats players who also hold their own subscription.
+    values: paidOnly(false, true)
   },
   'team.seat_capacity': {
     shape: LIMIT,
     label: 'Seats',
-    // Per subscription, not per team. Elite's 14 is pooled across its 2 teams.
-    values: { free: 0, premium: 1, team_premium: 7, team_elite: 14 }
+    // Per subscription, not per team. Tier 1's 20 are pooled across its teams.
+    values: teamOnly(0, 7, 14, 20)
   },
   'team.documents': {
     shape: LIMIT,
     label: 'Documents',
-    values: { free: 0, premium: 10, team_premium: 10, team_elite: UNLIMITED }
+    values: teamOnly(0, 10, 30, UNLIMITED)
   },
   'team.roles_positions': {
     shape: BOOL,
     label: 'Roles and positions',
-    values: { free: false, premium: true, team_premium: true, team_elite: true }
+    values: teamOnly(false, true, true, true)
+  },
+  'team.playlists': {
+    shape: BOOL,
+    label: 'Team playlists',
+    values: teamOnly(false, true, true, true)
+  },
+  'team.comms': {
+    shape: BOOL,
+    label: 'Communication',
+    // The Communication page, the recorder and attaching voice to a demo.
+    // Any team tier, because a team is the only thing that has comms.
+    values: teamOnly(false, true, true, true)
   },
   'team.stratbook_access': {
     shape: BOOL,
     label: 'Stratbook',
-    values: { free: false, premium: true, team_premium: true, team_elite: true }
+    values: teamOnly(false, true, true, true)
   },
   'team.stratbook_limit': {
     shape: LIMIT,
     label: 'Strategies per map',
     scope: 'per_map',
-    values: { free: 0, premium: 40, team_premium: 40, team_elite: UNLIMITED }
+    values: teamOnly(0, 40, 120, UNLIMITED)
   },
   'team.utility_archive': {
     shape: LIMIT,
     label: 'Utility per map',
     scope: 'per_map',
-    values: { free: 0, premium: 50, team_premium: 50, team_elite: UNLIMITED }
+    values: teamOnly(0, 50, 150, UNLIMITED)
   },
   'team.strategy_creator_2d': {
     shape: LIMIT,
     label: '2D strategies per map',
     scope: 'per_map',
-    values: { free: 0, premium: 2, team_premium: 2, team_elite: UNLIMITED }
+    values: teamOnly(0, 3, 9, UNLIMITED)
   },
   'team.auto_round_winrates': {
     shape: BOOL,
     label: 'Automatic round winrates',
-    values: { free: false, premium: false, team_premium: false, team_elite: true }
+    // Model output over the team's own rounds, so it starts at Tier 2.
+    values: teamOnly(false, false, true, true)
   },
 
   // --- Aim trainer --------------------------------------------------------
   'aim.trainer': {
     shape: BOOL,
     label: 'Aim trainer',
-    values: { free: true, premium: true, team_premium: true, team_elite: true }
+    values: everyone(true)
   },
   'aim.routines': {
     shape: BOOL,
     label: 'Routines',
-    values: { free: true, premium: true, team_premium: true, team_elite: true }
+    values: everyone(true)
+  },
+  'aim.map_practice': {
+    shape: BOOL,
+    label: 'Map practice',
+    values: paidOnly(false, true)
   },
   'aim.advanced_analytics': {
     shape: BOOL,
     label: 'Advanced analytics',
-    values: { free: false, premium: true, team_premium: true, team_elite: true }
+    values: paidOnly(false, true)
   },
   'aim.replays': {
     shape: ENUM,
     label: 'Aim replays',
     order: AIM_REPLAY_MODES,
-    values: {
-      free: 'none',
-      premium: 'best_and_recent',
-      team_premium: 'best_plus_10',
-      team_elite: 'full'
-    }
+    values: byBand('none', 'best_and_recent', 'best_plus_10', 'full')
   },
   'aim.custom_routines': {
     shape: LIMIT,
     label: 'Custom routines',
-    values: { free: 0, premium: 3, team_premium: 10, team_elite: UNLIMITED }
+    values: byBand(0, 5, 15, UNLIMITED)
   },
   'aim.cosmetics': {
     shape: ENUM,
     label: 'Cosmetics',
     order: COSMETIC_MODES,
-    values: { free: 'none', premium: 'presets', team_premium: 'presets', team_elite: 'full' }
+    values: byBand('none', 'presets', 'presets', 'full')
   }
 });
 
@@ -301,6 +601,11 @@ export const CAPABILITIES = Object.freeze({
 export const DRAWING_BOARD_CAP = 5;
 
 export const CAPABILITY_KEYS = Object.freeze(Object.keys(CAPABILITIES));
+
+/** Quota keys whose allowance belongs to the subscription, not to the seat. */
+export const SHARED_QUOTA_KEYS = Object.freeze(
+  CAPABILITY_KEYS.filter((key) => CAPABILITIES[key].shared === true)
+);
 
 /**
  * True when a key exists. Typos are the main failure mode of a string-keyed
@@ -408,4 +713,69 @@ export function requiredPlanFor(key, value = undefined) {
     }
   }
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// Self-checks. A catalogue that contradicts itself is worth failing at import
+// for, in both runtimes, rather than discovering through a 402 that names the
+// wrong plan.
+// ---------------------------------------------------------------------------
+{
+  const problems = [];
+
+  for (const planId of PLAN_IDS) {
+    if (!(planId in PLAN_RANKS)) problems.push(`${planId} has no rank`);
+    if (!(planId in PLAN_NAMES)) problems.push(`${planId} has no name`);
+    if (!(planId in PLAN_TAGLINES)) problems.push(`${planId} has no tagline`);
+    if (!(planId in PLAN_CAPACITY)) problems.push(`${planId} has no capacity`);
+    if (!(planId in PLAN_PRICE_CENTS)) problems.push(`${planId} has no price`);
+    if (!(planId in PLAN_TERM_BONUS)) problems.push(`${planId} has no term bonus`);
+    if (!(planId in PLAN_BANDS)) problems.push(`${planId} has no band`);
+  }
+
+  // PLAN_IDS must stay in ascending price and ascending rank order, because
+  // requiredPlanFor walks it and every "cheapest plan that unlocks this"
+  // message depends on that.
+  for (let i = 1; i < PLAN_IDS.length; i += 1) {
+    const prev = PLAN_IDS[i - 1];
+    const cur = PLAN_IDS[i];
+    if (PLAN_PRICE_CENTS[cur] <= PLAN_PRICE_CENTS[prev]) {
+      problems.push(`PLAN_IDS is not in ascending price order at ${cur}`);
+    }
+    if (PLAN_RANKS[cur] <= PLAN_RANKS[prev]) {
+      problems.push(`PLAN_IDS is not in ascending rank order at ${cur}`);
+    }
+  }
+
+  for (const [key, def] of Object.entries(CAPABILITIES)) {
+    for (const planId of PLAN_IDS) {
+      if (!(planId in def.values)) problems.push(`${key} has no value for ${planId}`);
+    }
+    if (def.shape === ENUM) {
+      for (const planId of PLAN_IDS) {
+        if (!def.order.includes(def.values[planId])) {
+          problems.push(`${key}.${planId} is not one of its enum modes`);
+        }
+      }
+    }
+    if (def.shared && def.shape !== QUOTA) {
+      problems.push(`${key} is marked shared but is not a quota`);
+    }
+    // Each ladder must be monotonic within itself. A middle plan that is
+    // weaker than the low plan below it is always a typo.
+    for (const ladder of [SOLO_PLAN_IDS, TEAM_PLAN_IDS]) {
+      for (let i = 1; i < ladder.length; i += 1) {
+        if (compareValues(key, def.values[ladder[i]], def.values[ladder[i - 1]]) < 0) {
+          problems.push(`${key} goes backwards from ${ladder[i - 1]} to ${ladder[i]}`);
+        }
+      }
+    }
+    if (compareValues(key, def.values[SOLO_PLAN_IDS[0]], def.values.free) < 0) {
+      problems.push(`${key} is weaker on solo_lite than on free`);
+    }
+  }
+
+  if (problems.length) {
+    throw new Error(`catalogue.js is inconsistent:\n  ${problems.join('\n  ')}`);
+  }
 }

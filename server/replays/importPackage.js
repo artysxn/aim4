@@ -16,6 +16,7 @@ import { TICKZ_EXT } from './tickCodec.js';
 import { applyStandingsToRecord } from './teamStandingsDb.js';
 import { applyLibraryTeamNamesToRecord } from './lineupNames.js';
 import { scheduleImportIndex } from './autoIndex.js';
+import { discardDuplicateUpload } from './dupeScan.js';
 
 /**
  * @param {string} user
@@ -107,8 +108,14 @@ export async function importReplayPackage(user, buf, meta = {}) {
     error: null,
     roundCount: rounds.length,
     rounds,
-    uploaderId: meta.uploaderId || record.uploaderId || '',
-    uploaderName: meta.uploaderName || record.uploaderName || '',
+    // Ownership comes from the caller, never from the package. The manifest is
+    // a file the uploader controls: falling back to `record.uploaderId` meant a
+    // package could name any account as its owner, and the demo landed on that
+    // account, counted against that account's cap, and answered to that
+    // account's Delete button. Every package is imported as whoever uploaded
+    // it, and an anonymous import owns nothing.
+    uploaderId: meta.uploaderId || '',
+    uploaderName: meta.uploaderName || '',
     // Packages land private until the uploader picks in the client prompt.
     visibility: meta.visibility || record.visibility || 'private'
   };
@@ -122,6 +129,16 @@ export async function importReplayPackage(user, buf, meta = {}) {
   await applyLibraryTeamNamesToRecord(user, ready, files);
 
   await writeMaterialized(user, ready, files);
+
+  // Packages skip the parse worker, so this is the first moment identity exists.
+  const dup = await discardDuplicateUpload(user, ready, { filename: ready.filename });
+  if (dup) {
+    const err = new Error(dup.message);
+    err.status = 409;
+    err.duplicate = true;
+    throw err;
+  }
+
   // The demo counts toward the database from now, not from whenever a visitor
   // next makes the stats page pay for every pending index at once.
   scheduleImportIndex(user, ready);

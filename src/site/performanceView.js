@@ -69,6 +69,10 @@ import {
 } from '../replays/stats/statsTables.js';
 import { iconImgHtml } from '../replays/viewer/equipmentIcons.js';
 import { setSpinnerLabel, spinnerHtml, statsProgressLabel } from '../lib/spinner.js';
+import { getEntitlements } from '../lib/entitlements.js';
+import { upgradePrompt } from './upgradeGate.js';
+import { CAP } from '../../shared/entitlements/keys.js';
+import { PLAN_NAMES } from '../../shared/entitlements/catalogue.js';
 import calendarIcon from '../icons/icon_calendar.svg?url';
 import { mbWrap } from '../icons/menubuttons.js';
 import { placeRankMenu, rankFilterHtml, syncRankSummary } from '../replays/shared/vrsRanks.js';
@@ -82,6 +86,29 @@ const CHAPTERS = [
 
 /** A team has no held-gun table: Guns is a question about one pair of hands. */
 const TEAM_CHAPTERS = CHAPTERS.filter((c) => c.key !== 'guns');
+
+/**
+ * The chapters a subscription pays for. Summary is not one of them.
+ *
+ * /performance is the one stats page that stays open to everyone, signed out
+ * included: it is what a shared link lands on and what a prospective customer
+ * is shown. So the page has no route gate, and the two paid chapters carry the
+ * gate themselves.
+ */
+const GATED_CHAPTERS = new Set(['guns', 'maps']);
+
+/**
+ * Is this chapter locked for the current account?
+ *
+ * No manager means the answer is unknown, and an unknown answer is treated as
+ * locked, the same way the trainer's gates read it: opening a paid chapter on
+ * a missing answer is the one failure worth avoiding, and the paint below
+ * repeats once /api/me lands.
+ */
+function chapterLocked(key) {
+  if (!GATED_CHAPTERS.has(key)) return false;
+  return !getEntitlements()?.can(CAP.STATS_PERFORMANCE_CHAPTERS);
+}
 
 function fmtMetric(fmt, n) {
   if (fmt === 'pct') return pct(n);
@@ -188,6 +215,15 @@ export function initPerformanceView({ auth, escapeHtml }) {
   let playerName = '';
   let teamKey = '';
   let chapter = 'summary';
+  /**
+   * What the chapter gate said at the last paint.
+   *
+   * On a cold load the page can render before /api/me has answered, and the
+   * manager reports the free tier's value until it does. Remembering the answer
+   * that was painted is what lets the arriving one repaint exactly once,
+   * instead of every visit repainting on the off chance it changed.
+   */
+  let paintedLock = null;
   let calendarOpen = false;
   let searchOpen = false;
   let searchQuery = '';
@@ -875,6 +911,11 @@ export function initPerformanceView({ auth, escapeHtml }) {
   }
 
   function bodyHtml() {
+    // A locked chapter keeps its tab and loses its tables. The prompt takes the
+    // place of the body, not of the page: the filters above a table nobody may
+    // read are noise, and the tab has to stay clickable for the lock to be the
+    // thing that sells the plan.
+    if ((playerId || teamKey) && chapterLocked(chapter)) return '<div data-pf-gate></div>';
     if (!playerId && teamKey) {
       return chapter === 'maps' ? teamMapsBodyHtml() : teamSummaryHtml();
     }
@@ -884,6 +925,29 @@ export function initPerformanceView({ auth, escapeHtml }) {
     if (chapter === 'maps') return mapsBodyHtml();
     if (chapter === 'guns') return gunsBodyHtml();
     return summaryHtml();
+  }
+
+  /**
+   * Fill the slot `bodyHtml` left with the shared upgrade prompt.
+   *
+   * Built as a node rather than as markup because upgradeGate.js owns both the
+   * copy and the button, and there is one of each in the app.
+   */
+  function mountChapterGate() {
+    const slot = host.querySelector('[data-pf-gate]');
+    if (!slot) return;
+    const ents = getEntitlements();
+    const key = CAP.STATS_PERFORMANCE_CHAPTERS;
+    const tier = ents?.requiredPlan(key) || null;
+    const label = ents?.label(key) || 'Maps and Guns';
+    slot.appendChild(
+      upgradePrompt({
+        message: tier
+          ? `${label} is available on ${PLAN_NAMES[tier] || tier}.`
+          : `${label} is not available.`,
+        requiredTier: tier
+      })
+    );
   }
 
   function bindChrome() {
@@ -949,6 +1013,8 @@ export function initPerformanceView({ auth, escapeHtml }) {
     if (!host) return;
     mountHead();
     host.innerHTML = bodyHtml();
+    paintedLock = chapterLocked(chapter);
+    mountChapterGate();
     bindChrome();
     paintSuggest();
     writeUrl();
@@ -1194,6 +1260,12 @@ export function initPerformanceView({ auth, escapeHtml }) {
     chapter = chapters.some((c) => c.key === ch) ? ch : 'summary';
     resolveDefault();
     await renderScoped();
+    // The gate may have been painted against the pre-/api/me answer.
+    void getEntitlements()
+      ?.ready()
+      .then(() => {
+        if (visible && chapterLocked(chapter) !== paintedLock) render();
+      });
   }
 
   auth?.onChange?.(() => {

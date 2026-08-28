@@ -258,7 +258,7 @@ export async function saveStrategyFromRound({
  * back by position (the one thing sanitizing never changes) keeps the note and
  * the throw in agreement.
  */
-function relinkAgainst(saved, folded, links) {
+export function relinkAgainst(saved, folded, links) {
   const byId = new Map();
   for (const g of saved.grenades || []) {
     for (const t of g.throws || []) byId.set(t.id, t);

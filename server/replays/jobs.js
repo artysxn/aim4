@@ -45,6 +45,9 @@ import { getZones } from '../zonesStore.js';
 import { getCoachSmokes } from '../coachSmokesStore.js';
 import { deriveBatchTicks } from './hostMemory.js';
 import { scheduleStatsIndex } from './statsIndex.js';
+import { CAP } from '../../shared/entitlements/keys.js';
+import { checkLimit } from '../entitlements/enforce.js';
+import { discardDuplicateUpload } from './dupeScan.js';
 
 const statsIo = {
   userDir,
@@ -168,10 +171,11 @@ function setPhase(entry, phase) {
   if (PHASES.indexOf(phase) > PHASES.indexOf(entry.phase)) entry.phase = phase;
 }
 
-function failEntry(entry, message) {
+function failEntry(entry, message, extra = {}) {
   if (!entry) return;
   entry.failed = true;
   entry.error = message || 'Parsing failed.';
+  if (extra.duplicate) entry.duplicate = true;
 }
 
 function sweepBatches() {
@@ -306,6 +310,7 @@ export function batchStatus(batch) {
         demoId: f.demoId,
         phase: f.phase,
         failed: f.failed,
+        duplicate: Boolean(f.duplicate),
         round: job?.round ?? f.round,
         total: job?.total ?? f.total,
         error: f.error
@@ -349,14 +354,74 @@ function settleBatch(batch) {
   sweepBatches();
 }
 
+// ---- upload reservations ----------------------------------------------------
+// Demos that a cap check has admitted but that do not exist on disk yet.
+//
+// The demo cap counts records, and a record is only written once the upload has
+// been received and unpacked, which is seconds to minutes after the check that
+// let it in. Every upload arriving inside that window reads the same count and
+// every one of them passes: five requests fired together all see "0 of 3" and
+// all five are admitted. Counting the admitted-but-not-yet-written work closes
+// that window, because the second check sees the first upload.
+//
+// This is per process, on purpose. The parse queue and the batch registry are
+// already process-local memory, and this server runs as a single process; a
+// second instance would have to keep the reservation in the store instead,
+// which is a different change than this one.
+
+/** @type {Map<string, number>} uploaderId -> demos admitted but not yet written */
+const uploadReservations = new Map();
+
+/** Take `count` places in the queue for this uploader. */
+export function reserveUploads(uploaderId, count = 1) {
+  const id = String(uploaderId || '');
+  const n = Math.max(0, Number(count) || 0);
+  if (!id || !n) return 0;
+  uploadReservations.set(id, (uploadReservations.get(id) || 0) + n);
+  return n;
+}
+
+/** Give them back, once the records exist or the upload has failed. */
+export function releaseUploads(uploaderId, count = 1) {
+  const id = String(uploaderId || '');
+  const n = Math.max(0, Number(count) || 0);
+  if (!id || !n) return;
+  const left = (uploadReservations.get(id) || 0) - n;
+  if (left > 0) uploadReservations.set(id, left);
+  else uploadReservations.delete(id);
+}
+
+/** How many places this uploader is currently holding. */
+export function reservedUploads(uploaderId) {
+  return uploadReservations.get(String(uploaderId || '')) || 0;
+}
+
 /**
  * Take one upload from arrival to parsed rounds.
  *
  * Returns as soon as the batch exists: unpacking a 450 MB zip takes long enough
  * that holding the HTTP response open for it is how uploads die behind a proxy.
  * The client gets a batch id immediately and polls.
+ *
+ * `owner.account` is the resolved user the route already looked up, carried in
+ * rather than resolved again per demo: the cap has to be re-checked here, once
+ * per extracted .dem, and re-resolving entitlements a hundred times for one zip
+ * would be a hundred round trips to answer a question that cannot change
+ * mid-archive.
+ *
+ * `reserved` is how many places the route took in the reservation registry
+ * before it admitted this upload. Ownership of them passes to this function,
+ * which gives them back once the records exist or the unpack has failed.
  */
-export function startIngest({ user, filename, source, sizeBytes, allowedBytes, owner = null }) {
+export function startIngest({
+  user,
+  filename,
+  source,
+  sizeBytes,
+  allowedBytes,
+  owner = null,
+  reserved = 0
+}) {
   const batch = {
     id: crypto.randomBytes(8).toString('hex'),
     user,
@@ -391,9 +456,28 @@ export function startIngest({ user, filename, source, sizeBytes, allowedBytes, o
         }
       });
 
+      // One archive, one check, N demos. The route's pre-flight check saw a
+      // single upload, because how many demos are inside an archive is not
+      // knowable until it has been opened, which is here. Without a second
+      // check a free account at 0 of 3 could drop a zip of a hundred demos,
+      // pass `0 + 1 <= 3` once, and end up holding a hundred records.
+      //
+      // The count is seeded from what the account holds right now, after the
+      // unpack, and then carried forward as records are written. A fresh
+      // listing per demo would re-read every record in the library once per
+      // entry in the archive, which on a hundred-demo zip is a hundred full
+      // library scans to answer a question this loop already knows the answer
+      // to.
+      const account = owner?.account || null;
+      const uploaderId = owner?.uploaderId || '';
+      let held = account
+        ? (await listDemos(user)).filter((r) => r.uploaderId === uploaderId).length
+        : 0;
+      let refused = 0;
+
       for (const file of extracted) {
         const demoId = idByPath.get(file.path);
-        batch.files.push({
+        const entry = {
           name: file.name,
           demoId,
           sizeBytes: file.sizeBytes,
@@ -402,7 +486,29 @@ export function startIngest({ user, filename, source, sizeBytes, allowedBytes, o
           round: 0,
           total: 0,
           error: null
-        });
+        };
+        batch.files.push(entry);
+
+        // Refused entries are reported on the batch rather than dropped: a zip
+        // that landed three of its ten demos has to say so, or the library
+        // silently disagrees with the archive the user picked. Everything
+        // written before the cap was reached stays written.
+        if (account) {
+          const cap = checkLimit(account, CAP.DEMOS_UPLOAD_LIMIT, held, 1);
+          if (!cap.allowed) {
+            refused += 1;
+            failEntry(
+              entry,
+              `Not stored: that would take you past your limit of ${cap.limit} demos.`
+            );
+            // Nothing will ever parse it, so the extracted .dem is not worth
+            // the volume space it is sitting on.
+            await discardSourceFile(user, demoId).catch(() => {});
+            continue;
+          }
+          held += 1;
+        }
+
         await writeRecord(user, {
           id: demoId,
           status: 'parsing',
@@ -411,7 +517,7 @@ export function startIngest({ user, filename, source, sizeBytes, allowedBytes, o
           uploadedAt: Date.now(),
           // Stamped at ingest, not at parse: a demo that fails to parse still
           // belongs to whoever uploaded it, and still counts against their cap.
-          uploaderId: owner?.uploaderId || '',
+          uploaderId,
           uploaderName: owner?.uploaderName || '',
           visibility: owner?.visibility || 'private',
           rounds: []
@@ -420,20 +526,36 @@ export function startIngest({ user, filename, source, sizeBytes, allowedBytes, o
 
       batch.stage = 'parsing';
       for (const file of batch.files) {
+        // A refused entry has no record and no .dem behind it. Queueing it
+        // would fail the parse and report the wrong reason for it.
+        if (file.failed) continue;
         enqueueParse({
           user,
           demoId: file.demoId,
           filename: file.name,
           sizeBytes: file.sizeBytes,
-          batchId: batch.id
+          batchId: batch.id,
+          uploaderId
         });
       }
       if (!batch.files.length) {
         batch.stage = 'error';
         batch.error = 'No .dem files were found in that upload.';
         batch.finishedAt = Date.now();
+      } else if (refused) {
+        // Said on the batch as well as on each entry: the client's summary
+        // line reads the batch error, and "3 demos failed" without a reason
+        // reads as a parser problem rather than as a cap.
+        batch.error =
+          refused === 1
+            ? '1 demo from this upload went over your demo limit and was not stored.'
+            : `${refused} demos from this upload went over your demo limit and were not stored.`;
       }
       snapshot(batch, { force: true });
+      // Every entry can already be terminal, which is what an upload refused in
+      // full looks like. Nothing else would settle that batch, so the client
+      // would poll a finished upload forever.
+      settleBatch(batch);
     } catch (err) {
       batch.stage = 'error';
       batch.error = err?.message || 'Could not unpack that upload.';
@@ -444,6 +566,10 @@ export function startIngest({ user, filename, source, sizeBytes, allowedBytes, o
       // The archive has given up everything it is going to. Whether that went
       // well or not, keeping it costs the same as the demos it contained.
       if (!KEEP_SOURCE) await rm(source, { force: true }).catch(() => {});
+      // Either the records now exist and count themselves, or the unpack failed
+      // and there is nothing to count. Held any longer, a failed upload would
+      // keep a place in the cap until the process restarted.
+      releaseUploads(owner?.uploaderId, reserved);
     }
   })();
 
@@ -454,7 +580,14 @@ export function startIngest({ user, filename, source, sizeBytes, allowedBytes, o
  * Queue a demo for parsing. Returns the job immediately; poll
  * GET /api/replays/demos/:id for progress.
  */
-export function enqueueParse({ user, demoId, filename, sizeBytes, batchId = null }) {
+export function enqueueParse({
+  user,
+  demoId,
+  filename,
+  sizeBytes,
+  batchId = null,
+  uploaderId = ''
+}) {
   const key = jobKey(user, demoId);
   const existing = jobs.get(key);
   if (existing && (existing.state === 'queued' || existing.state === 'running')) return existing;
@@ -464,6 +597,10 @@ export function enqueueParse({ user, demoId, filename, sizeBytes, batchId = null
     demoId,
     filename,
     sizeBytes,
+    // Who the demo counts against. The library folder is shared, so `user` says
+    // nothing about whose cap this job belongs to, and the demo cap has to be
+    // able to count work that is queued but whose record has gone.
+    uploaderId: String(uploaderId || ''),
     state: 'queued',
     stage: 'queued',
     round: 0,
@@ -576,11 +713,30 @@ function pump() {
     if (msg.type === 'done') {
       const batch = batches.get(job.batchId);
       const entry = batchEntry(batch, job.demoId);
+      const ready = msg.record || (await readRecord(job.user, job.demoId).catch(() => null));
+      // Same identity check as the admin duplicate tool. Identity only exists
+      // once the parse has written rounds, which is now. Cancel this file
+      // alone so a zip of three demos can keep the two that are new.
+      try {
+        const dup = await discardDuplicateUpload(job.user, ready, {
+          filename: job.filename || entry?.name
+        });
+        if (dup) {
+          failEntry(entry, dup.message, { duplicate: true });
+          settleBatch(batch);
+          await finish({ state: 'error', stage: 'error', error: dup.message });
+          return;
+        }
+      } catch (err) {
+        console.warn(
+          `[replays] duplicate check failed for ${job.filename}:`,
+          err?.message || err
+        );
+      }
       setPhase(entry, 'parsed');
       snapshot(batch, { force: true });
       // Build stats (+ zone positions when the map network is ready) from the
       // freshly written round files. Never needs a second parse.
-      const ready = msg.record || (await readRecord(job.user, job.demoId).catch(() => null));
       // "analyzed" is the last phase the bar shows, so the batch is not settled
       // until the index lands rather than when the parse does.
       scheduleStatsIndex(statsIo, job.user, ready, () => {
@@ -724,7 +880,8 @@ export async function resumeInterruptedParses() {
           demoId: record.id,
           filename: record.filename,
           sizeBytes: record.sizeBytes,
-          batchId: batchOfDemo.get(record.id) || null
+          batchId: batchOfDemo.get(record.id) || null,
+          uploaderId: record.uploaderId || ''
         });
         resumed++;
       } else {

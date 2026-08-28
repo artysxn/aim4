@@ -170,7 +170,7 @@ function bump(map, key, by = 1) {
 // Per-round feature extraction
 // ---------------------------------------------------------------------------
 
-function roundFeatures({ meta, track, row, teamIdx, opponent, context, network, utilDb, mapCode }) {
+export function roundFeatures({ meta, track, row, teamIdx, opponent, context, network, utilDb, mapCode }) {
   const timing = timingFor(meta);
   const tickRate = timing.tickRate || 64;
   const t0 = timing.freezeEndTick;
@@ -2251,6 +2251,67 @@ function roundLibraryReadiness(mapCode, network, utilDb, rounds) {
   };
 }
 
+/**
+ * Load the map's geometry and utility database, then reduce every job to its
+ * features.
+ *
+ * Shared by the team report and the player report: both walk a list of rounds
+ * on one map and want the same per-round facts out of them. Only the way the
+ * job list is built differs (a scouted team's rounds, or one player's).
+ *
+ * @param {object} args
+ * @param {Array<{row: object, teamIdx: number, opponent: string, context: object}>} args.jobs
+ * @param {string} args.mapCode
+ * @param {(done: number, total: number) => void} [args.onProgress]
+ * @returns {Promise<{ rounds: object[], network: object|null, utilDb: object, laneSets: object }>}
+ */
+export async function extractRounds({ jobs, mapCode, onProgress }) {
+  let network = null;
+  try {
+    network = await fetchZones(mapCode);
+    ensureRegionHierarchy(network);
+    ensureKeyZones(network);
+    ensureBombSites(network);
+  } catch {
+    network = null;
+  }
+  const utilDb = await loadCoachSmokes(mapCode);
+  const laneSets = resolveLaneSets(mapCode, network);
+
+  const rounds = [];
+  let done = 0;
+  await eachLimit(jobs, 3, async (job) => {
+    let feats = null;
+    try {
+      const meta = await fetchRoundMeta(job.row.f);
+      let track = null;
+      try {
+        track = new TickTrack(await fetchRoundTicks(job.row.f, 16));
+      } catch {
+        track = null;
+      }
+      feats = roundFeatures({
+        meta,
+        track,
+        row: job.row,
+        teamIdx: job.teamIdx,
+        opponent: job.opponent,
+        context: job.context,
+        network,
+        utilDb,
+        mapCode
+      });
+    } catch {
+      feats = null;
+    }
+    if (feats) rounds.push(feats);
+    done++;
+    onProgress?.(done, jobs.length);
+  });
+  rounds.sort((a, b) => a.demoId.localeCompare(b.demoId) || a.round - b.round);
+  return { rounds, network, utilDb, laneSets };
+}
+
 async function eachLimit(items, limit, fn) {
   let next = 0;
   const worker = async () => {
@@ -2353,50 +2414,8 @@ export async function runAntistratScan({
     return topCounts(votes, 1)[0]?.name || '';
   };
 
-  let network = null;
-  try {
-    network = await fetchZones(mapCode);
-    ensureRegionHierarchy(network);
-    ensureKeyZones(network);
-    ensureBombSites(network);
-  } catch {
-    network = null;
-  }
-  const utilDb = await loadCoachSmokes(mapCode);
-  const laneSets = resolveLaneSets(mapCode, network);
-
-  const rounds = [];
-  let done = 0;
-  await eachLimit(jobs, 3, async (job) => {
-    let feats = null;
-    try {
-      const meta = await fetchRoundMeta(job.row.f);
-      let track = null;
-      try {
-        track = new TickTrack(await fetchRoundTicks(job.row.f, 16));
-      } catch {
-        track = null;
-      }
-      feats = roundFeatures({
-        meta,
-        track,
-        row: job.row,
-        teamIdx: job.teamIdx,
-        opponent: job.opponent,
-        context: job.context,
-        network,
-        utilDb,
-        mapCode
-      });
-    } catch {
-      feats = null;
-    }
-    if (feats) rounds.push(feats);
-    done++;
-    onProgress?.(done, jobs.length);
-  });
+  const { rounds, network, utilDb, laneSets } = await extractRounds({ jobs, mapCode, onProgress });
   if (!rounds.length) throw new Error('None of the selected rounds could be read.');
-  rounds.sort((a, b) => a.demoId.localeCompare(b.demoId) || a.round - b.round);
 
   return {
     mapCode,

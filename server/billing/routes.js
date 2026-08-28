@@ -13,6 +13,7 @@
 // module reads the body itself, as bytes, before any of that can happen.
 // ---------------------------------------------------------------------------
 
+import { PLAN_IDS, TERM_IDS } from '../../shared/entitlements/catalogue.js';
 import { BillingNotConfiguredError, billingConfigured, provider } from './provider.js';
 import { whoami } from '../replays/identity.js';
 import { writeAudit } from '../entitlements/audit.js';
@@ -185,14 +186,28 @@ export async function handleBillingRequest(req, res, url) {
     try {
       const body = await readRawBody(req, 16 * 1024);
       const parsed = body.length ? JSON.parse(body.toString('utf8')) : {};
-      const session =
-        p === '/api/billing/checkout'
-          ? await provider.createCheckoutSession({
-              userId: me.id,
-              planId: parsed.planId,
-              term: parsed.term
-            })
-          : await provider.createPortalSession({ userId: me.id });
+      let session;
+      if (p === '/api/billing/checkout') {
+        // Validated here rather than inside the provider. Whatever provider
+        // lands will map (planId, term) to one of its own price ids, and a
+        // typo that reaches that lookup fails as "no such price" at the point
+        // where a customer is trying to pay. Refusing it at the door instead
+        // keeps the failure legible, and it is the only check that exists
+        // while the provider is still a stub.
+        const planId = String(parsed.planId || '');
+        const term = String(parsed.term || 'month');
+        if (!PLAN_IDS.includes(planId) || planId === 'free') {
+          json(res, 400, { error: `Unknown plan: ${parsed.planId}` });
+          return true;
+        }
+        if (!TERM_IDS.includes(term)) {
+          json(res, 400, { error: `Unknown term: ${parsed.term}` });
+          return true;
+        }
+        session = await provider.createCheckoutSession({ userId: me.id, planId, term });
+      } else {
+        session = await provider.createPortalSession({ userId: me.id });
+      }
       json(res, 200, session);
     } catch (err) {
       const status = err instanceof BillingNotConfiguredError ? 501 : 400;

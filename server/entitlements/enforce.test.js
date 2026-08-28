@@ -106,6 +106,7 @@ function userOn(planId, extra = {}) {
     planId === 'free'
       ? null
       : {
+          id: extra.subscriptionId || `sub-${planId}`,
           plan_id: planId,
           status: 'active',
           term: 'month',
@@ -116,17 +117,42 @@ function userOn(planId, extra = {}) {
     username: planId,
     signedIn: true,
     admin: Boolean(extra.isAdmin),
-    entitlements: resolveEntitlements({ subscription, isAdmin: extra.isAdmin, now: Date.now() }),
+    entitlements: resolveEntitlements({
+      subscription,
+      seat: extra.seat,
+      isAdmin: extra.isAdmin,
+      now: Date.now()
+    }),
     impersonating: extra.impersonating || null
   };
+}
+
+/** Two seats on one team subscription, for the shared-allowance cases. */
+function teamSeatUser(userId, subId = 'team-sub-shared') {
+  return userOn('free', {
+    id: userId,
+    seat: {
+      id: `seat-${userId}`,
+      subscription_id: subId,
+      team_id: 'team-1',
+      released_at: null,
+      subscription: {
+        id: subId,
+        plan_id: 'team_tier3',
+        status: 'active',
+        term: 'month',
+        current_period_end: new Date(Date.now() + 30 * 86400_000).toISOString()
+      }
+    }
+  });
 }
 
 // ---- reading capabilities ---------------------------------------------------
 
 {
   assert(capability(userOn('free'), CAP.DEMOS_UPLOAD_LIMIT) === 3, 'free uploads 3');
-  assert(capability(userOn('premium'), CAP.DEMOS_UPLOAD_LIMIT) === 50, 'premium uploads 50');
-  assert(capability(userOn('team_elite'), CAP.DEMOS_UPLOAD_LIMIT) === -1, 'elite is unlimited');
+  assert(capability(userOn('solo_premium'), CAP.DEMOS_UPLOAD_LIMIT) === 75, 'solo premium uploads 75');
+  assert(capability(userOn('team_tier1'), CAP.DEMOS_UPLOAD_LIMIT) === -1, 'tier 1 is unlimited');
 
   // A route that forgot to await whoami() passes something with no entitlements.
   // That must read as the free tier, never as undefined-and-therefore-allowed.
@@ -153,7 +179,7 @@ function userOn(planId, extra = {}) {
   assert(!checkLimit(free, CAP.DEMOS_UPLOAD_LIMIT, 3).allowed, 'exactly at the limit is refused');
   assert(!checkLimit(free, CAP.DEMOS_UPLOAD_LIMIT, 99).allowed, 'over the limit is refused');
 
-  const elite = userOn('team_elite');
+  const elite = userOn('team_tier1');
   assert(checkLimit(elite, CAP.DEMOS_UPLOAD_LIMIT, 100_000).allowed, 'unlimited never refuses');
   assert(checkLimit(elite, CAP.DEMOS_UPLOAD_LIMIT, 5).remaining === -1, 'unlimited remaining is -1');
   console.log('  limits refuse exactly at the cap, and unlimited never refuses');
@@ -185,47 +211,47 @@ function userOn(planId, extra = {}) {
   assert(body.error === 'upgrade_required', `error key, got ${body.error}`);
   assert(body.capability === CAP.DEMOS_UPLOAD_LIMIT, 'names the capability');
   assert(body.currentTier === 'free', `currentTier, got ${body.currentTier}`);
-  assert(body.requiredTier === 'premium', `cheapest sufficient tier, got ${body.requiredTier}`);
+  assert(body.requiredTier === 'solo_lite', `cheapest sufficient tier, got ${body.requiredTier}`);
   assert(body.limit.current === 3 && body.limit.limit === 3, 'reports the counts');
   assert(!/—/.test(body.message), 'no em dashes in user-facing copy');
   console.log('  a blocked limit produces the documented 402 body');
 }
 
 {
-  // Pointing a Free user at Elite for something Premium already covers is the
-  // failure mode this guards against.
+  // Pointing a Free user at Team Tier 1 for something Solo Lite already covers
+  // is the failure mode this guards against.
   let err = null;
   try {
     await requireCapability(userOn('free'), CAP.STATS_METRICS_PLAYER_FULL);
   } catch (e) {
     err = e;
   }
-  assert(err.toJSON().requiredTier === 'premium', 'names Premium, not Team Elite');
+  assert(err.toJSON().requiredTier === 'solo_lite', 'names Solo Lite, not Team Tier 1');
 
-  let eliteErr = null;
+  let middleErr = null;
   try {
-    await requireCapability(userOn('premium'), CAP.STATS_METRICS_TEAM_FULL);
+    await requireCapability(userOn('solo_lite'), CAP.STATS_METRICS_TEAM_FULL);
   } catch (e) {
-    eliteErr = e;
+    middleErr = e;
   }
-  assert(eliteErr.toJSON().requiredTier === 'team_elite', 'Elite-only really does name Elite');
+  assert(middleErr.toJSON().requiredTier === 'solo_premium', 'middle-band really does name Solo Premium');
   console.log('  refusals name the cheapest plan that would unlock the feature');
 }
 
 {
   // Enum capabilities.
-  const premium = userOn('premium');
-  const ok = await requireCapability(premium, CAP.AIM_REPLAYS, { atLeast: 'best_and_recent' });
-  assert(ok.allowed, 'premium meets best_and_recent');
+  const lite = userOn('solo_lite');
+  const ok = await requireCapability(lite, CAP.AIM_REPLAYS, { atLeast: 'best_and_recent' });
+  assert(ok.allowed, 'solo lite meets best_and_recent');
 
   let err = null;
   try {
-    await requireCapability(premium, CAP.AIM_REPLAYS, { atLeast: 'full' });
+    await requireCapability(lite, CAP.AIM_REPLAYS, { atLeast: 'full' });
   } catch (e) {
     err = e;
   }
-  assert(err?.status === 402, 'premium does not meet full');
-  assert(err.toJSON().requiredTier === 'team_elite', 'full replays are Elite');
+  assert(err?.status === 402, 'solo lite does not meet full');
+  assert(err.toJSON().requiredTier === 'solo_elite', 'full replays start at Solo Elite');
   console.log('  enum capabilities compare against a required level');
 }
 
@@ -257,7 +283,7 @@ function userOn(planId, extra = {}) {
   assert(body.error === 'upgrade_required', 'a spent quota is an upgrade prompt');
   assert(body.quota.limit === 3 && body.quota.used === 3, 'reports used and limit');
   assert(body.quota.resetsAt, 'and when it resets');
-  assert(body.requiredTier === 'premium', 'unlimited charts start at Premium');
+  assert(body.requiredTier === 'solo_lite', 'unlimited charts start at Solo Lite');
   console.log('  a spent quota produces a 402 carrying used, limit and reset time');
 }
 
@@ -277,7 +303,7 @@ function userOn(planId, extra = {}) {
 {
   // Unlimited tiers must not write counter rows at all.
   const before = consumeCalls;
-  const elite = userOn('team_elite', { id: 'quota-elite' });
+  const elite = userOn('solo_elite', { id: 'quota-elite' });
   const r = await consumeQuota(elite, CAP.ANALYTICS_CHARTS);
   assert(r.allowed && r.limit === -1, 'unlimited always passes');
   assert(consumeCalls === before, 'and never touches the counter table');
@@ -305,6 +331,23 @@ function userOn(planId, extra = {}) {
   assert(consumeCalls === before, 'impersonation did not call consume_quota');
   assert(r.used === 3, 'it read the real usage');
   console.log('  impersonation reads a quota without spending it');
+}
+
+{
+  // One anti-strat a day for the whole roster, not one each. Two seats on the
+  // same Tier 3 subscription must share the counter; two seats on different
+  // subscriptions must not.
+  const a = teamSeatUser('seat-a');
+  const b = teamSeatUser('seat-b');
+  const first = await consumeQuota(a, CAP.ANALYTICS_ANTISTRAT);
+  const second = await consumeQuota(b, CAP.ANALYTICS_ANTISTRAT);
+  assert(first.allowed && first.used === 1, `first seat spends the shared pot: ${JSON.stringify(first)}`);
+  assert(!second.allowed, 'the second seat on the same subscription is refused');
+
+  const otherTeam = teamSeatUser('seat-c', 'team-sub-other');
+  const other = await consumeQuota(otherTeam, CAP.ANALYTICS_ANTISTRAT);
+  assert(other.allowed, 'a different subscription has its own pot');
+  console.log('  a shared quota is one pot per subscription, not per seat');
 }
 
 // ---- opening a page must not spend a use ------------------------------------

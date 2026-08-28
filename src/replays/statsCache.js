@@ -17,20 +17,40 @@ export const PAGE_PIPELINE = 3;
 import { payloadCovers, resolveColumns } from './shared/statsColumns.js';
 
 /**
- * @type {{
+ * @typedef {{
  *   key: string, scope: string, columns: string[]|null, payload: any,
- *   at: number, generation: number, complete: boolean, nextOffset: number
- * }}
+ *   at: number, complete: boolean, nextOffset: number
+ * }} CacheSlot
  */
-let cache = {
+const emptySlot = () => ({
   key: '',
   scope: '',
   columns: null,
   payload: null,
   at: 0,
-  generation: 0,
   complete: false,
   nextOffset: 0
+});
+
+/**
+ * TWO slots, not one: the full-library payload (the Database's ~GB download)
+ * and the latest scoped pull. With a single slot, any scoped fetch anywhere —
+ * the Demo Manager's round-tag lookup on every filter change, a team page
+ * warming its rounds — overwrote the slot and threw the entire library away,
+ * so Charts or Pattern Finder opened next had to download it all again.
+ * @type {CacheSlot}
+ */
+let librarySlot = emptySlot();
+/** @type {CacheSlot} */
+let scopedSlot = emptySlot();
+/** Bumped whenever the payloads are cleared so panels drop stale local copies. */
+let cacheGeneration = 0;
+
+const getSlot = (scope) => (scope === 'library' ? librarySlot : scopedSlot);
+const setSlot = (scope, slot) => {
+  if (scope === 'library') librarySlot = slot;
+  else scopedSlot = slot;
+  return slot;
 };
 
 /** @type {Map<string, Promise<any>>} */
@@ -55,7 +75,7 @@ export function statsCacheKey(demoIds = null, columns = null) {
 
 /** Bumps whenever the shared payload is cleared so panels drop stale local copies. */
 export function statsCacheGeneration() {
-  return cache.generation;
+  return cacheGeneration;
 }
 
 /**
@@ -64,29 +84,23 @@ export function statsCacheGeneration() {
  * Database → Performance reuses what is already in memory instead of refetching.
  */
 export function peekStatsCache(demoIds = null, columns = null) {
-  if (!cache.payload || !cache.complete) return null;
   const scope = !demoIds?.length
     ? 'library'
     : `demos:${[...demoIds].map(String).sort().join(',')}`;
-  if (cache.scope !== scope) return null;
+  const slot = getSlot(scope);
+  if (!slot.payload || !slot.complete) return null;
+  if (slot.scope !== scope) return null;
   const needed = resolveColumns(columns ?? null).groups;
-  if (!payloadCovers(cache.payload, cache.columns, needed)) return null;
-  return cache.payload;
+  if (!payloadCovers(slot.payload, slot.columns, needed)) return null;
+  return slot.payload;
 }
 
 export function invalidateStatsCache() {
-  // Drop the stored payload so the next idle fetch is fresh. Leave an in-flight
-  // pull and its batch listeners alone so later pages still paint.
-  cache = {
-    key: '',
-    scope: '',
-    columns: null,
-    payload: null,
-    at: 0,
-    generation: (cache.generation || 0) + 1,
-    complete: false,
-    nextOffset: 0
-  };
+  // Drop the stored payloads so the next idle fetch is fresh. Leave an
+  // in-flight pull and its batch listeners alone so later pages still paint.
+  librarySlot = emptySlot();
+  scopedSlot = emptySlot();
+  cacheGeneration += 1;
 }
 
 function emitBatch(key, info) {
@@ -233,12 +247,13 @@ export async function getStatsPayload(demoIds = null, opts = {}) {
     : `demos:${[...demoIds].map(String).sort().join(',')}`;
   const wantGroups = resolveColumns(columns).groups;
   const unlisten = listenBatch(key, opts.onBatch);
+  const held = getSlot(scope);
   const reusable =
     !opts.force &&
-    cache.payload &&
-    cache.complete &&
-    cache.scope === scope &&
-    payloadCovers(cache.payload, cache.columns, wantGroups);
+    held.payload &&
+    held.complete &&
+    held.scope === scope &&
+    payloadCovers(held.payload, held.columns, wantGroups);
   if (reusable) {
     opts.onProgress?.({
       type: 'progress',
@@ -247,23 +262,24 @@ export async function getStatsPayload(demoIds = null, opts = {}) {
       total: 1
     });
     emitBatch(key, {
-      payload: cache.payload,
+      payload: held.payload,
       offset: 0,
-      loaded: cache.payload.demos?.length || 0,
-      total: cache.payload.demos?.length || 0,
+      loaded: held.payload.demos?.length || 0,
+      total: held.payload.demos?.length || 0,
       hasMore: false,
       complete: true
     });
     unlisten();
-    return cache.payload;
+    return held.payload;
   }
   let pending = inflight.get(key);
   if (!pending) {
     pending = (async () => {
+      const slot = getSlot(scope);
       const resume =
-        !opts.force && cache.key === key && cache.payload && !cache.complete;
-      const heldColumns = resume ? cache.columns : wantGroups;
-      const merged = resume && cache.payload ? cache.payload : { demos: [] };
+        !opts.force && slot.key === key && slot.payload && !slot.complete;
+      const heldColumns = resume ? slot.columns : wantGroups;
+      const merged = resume && slot.payload ? slot.payload : { demos: [] };
       if (!merged.demos) merged.demos = [];
       const scoped = demoIds?.length ? [...demoIds] : null;
       // A SCOPED request — the Pattern Finder handing us one map's demos —
@@ -276,7 +292,7 @@ export async function getStatsPayload(demoIds = null, opts = {}) {
       // A library-wide pull keeps paging: it has no scope to bound it, and the
       // Database's table paints from the first page while the rest arrives.
       const page = scoped ? Math.max(1, scoped.length) : STATS_LIBRARY_PAGE;
-      let offset = resume ? Math.max(0, Number(cache.nextOffset) || 0) : 0;
+      let offset = resume ? Math.max(0, Number(slot.nextOffset) || 0) : 0;
       let hasMore = true;
       /**
        * Library-wide progress, tracked across every page of this request.
@@ -372,16 +388,15 @@ export async function getStatsPayload(demoIds = null, opts = {}) {
           chunk,
           incomingLen
         });
-        cache = {
+        setSlot(scope, {
           key,
           scope,
           columns: Array.isArray(chunk?.columns) ? chunk.columns : heldColumns,
           payload: merged,
           at: Date.now(),
-          generation: cache.generation || 0,
           complete: false,
           nextOffset: pageStart + (scoped ? incomingLen || page : page)
-        };
+        });
         emitBatch(key, {
           payload: merged,
           offset: pageStart,
@@ -464,7 +479,7 @@ export async function getStatsPayload(demoIds = null, opts = {}) {
           if (!hasMore) break;
         }
       }
-      offset = Number(cache.nextOffset) || merged.demos.length;
+      offset = Number(getSlot(scope).nextOffset) || merged.demos.length;
       hasMore = false;
       emitBatch(key, {
         payload: merged,
@@ -474,15 +489,15 @@ export async function getStatsPayload(demoIds = null, opts = {}) {
         hasMore: false,
         complete: true
       });
-      cache = {
-        ...cache,
+      setSlot(scope, {
+        ...getSlot(scope),
         key,
         scope,
         payload: merged,
         at: Date.now(),
         complete: !hasMore,
         nextOffset: hasMore ? offset : merged.demos.length
-      };
+      });
       return merged;
     })().finally(() => {
       if (inflight.get(key) === pending) inflight.delete(key);

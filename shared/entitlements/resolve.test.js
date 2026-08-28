@@ -6,6 +6,8 @@
 
 import {
   CAPABILITY_KEYS,
+  PLAN_IDS,
+  SHARED_QUOTA_KEYS,
   UNLIMITED,
   capabilitiesForPlan,
   compareValues,
@@ -13,7 +15,7 @@ import {
   requiredPlanFor
 } from './catalogue.js';
 import { CAP } from './keys.js';
-import { resolveEntitlements } from './resolve.js';
+import { quotaSubject, resolveEntitlements } from './resolve.js';
 
 function assert(cond, msg) {
   if (!cond) throw new Error(msg || 'assert failed');
@@ -65,18 +67,21 @@ function grant(extra = {}) {
   // The whole design rests on rank order matching capability strength. If a
   // future plan breaks monotonicity the "never worse off holding both" promise
   // silently stops being true, so assert it rather than trust it.
-  const order = ['free', 'premium', 'team_premium', 'team_elite'];
+  // Rank and price walk the same array, but capability strength does not:
+  // Solo Elite is unlimited on the models that Team Tier 3 meters, and Tier 3
+  // has the whole team toolkit that no solo plan has. The check that still
+  // holds for every key is "never weaker than Free", plus the per-ladder
+  // monotonicity the catalogue already self-checks on import.
   for (const key of CAPABILITY_KEYS) {
-    for (let i = 1; i < order.length; i++) {
-      const lower = capabilitiesForPlan(order[i - 1])[key];
-      const higher = capabilitiesForPlan(order[i])[key];
+    const freeVal = capabilitiesForPlan('free')[key];
+    for (const planId of PLAN_IDS) {
       assert(
-        compareValues(key, higher, lower) >= 0,
-        `${key}: ${order[i]} (${higher}) is weaker than ${order[i - 1]} (${lower})`
+        compareValues(key, capabilitiesForPlan(planId)[key], freeVal) >= 0,
+        `${key}: ${planId} is weaker than free`
       );
     }
   }
-  console.log('  capability values never decrease as plan rank rises');
+  console.log('  no plan is weaker than free on any capability');
 }
 
 {
@@ -91,12 +96,29 @@ function grant(extra = {}) {
 
 {
   assert(
-    requiredPlanFor(CAP.STATS_METRICS_TEAM_FULL) === 'team_elite',
-    'full team metrics are Elite only'
+    requiredPlanFor(CAP.STATS_METRICS_PLAYER_FULL) === 'solo_lite',
+    'a 402 should name the cheapest plan that unlocks it, not the priciest'
   );
   assert(
-    requiredPlanFor(CAP.STATS_METRICS_PLAYER_FULL) === 'premium',
-    'a 402 should name the cheapest plan that unlocks it, not the priciest'
+    requiredPlanFor(CAP.STATS_METRICS_TEAM_FULL) === 'solo_premium',
+    'full team metrics start at the middle band'
+  );
+  assert(
+    requiredPlanFor(CAP.AIM_REPLAYS, 'full') === 'solo_elite',
+    'full aim replays start at the high solo band, not at Team Tier 1'
+  );
+  assert(
+    requiredPlanFor(CAP.TEAM_CREATE_LIMIT) === 'team_tier3',
+    'creating a team is the thing that names the team ladder'
+  );
+  assert(
+    requiredPlanFor(CAP.ANALYTICS_ANTISTRAT) === 'team_tier3',
+    'anti-strat is the same door'
+  );
+  assert(
+    SHARED_QUOTA_KEYS.includes(CAP.ANALYTICS_ANTISTRAT) &&
+      SHARED_QUOTA_KEYS.includes(CAP.DEMOS_MAP_CONTROL),
+    'the expensive tools are the shared ones'
   );
   console.log('  requiredPlanFor names the cheapest sufficient plan');
 }
@@ -117,55 +139,101 @@ function grant(extra = {}) {
 // ---- own subscription -------------------------------------------------------
 
 {
-  const r = resolveEntitlements({ subscription: sub('premium'), now: NOW });
-  assert(r.tier === 'premium' && r.source === 'subscription', `got ${r.tier}/${r.source}`);
-  assert(r.capabilities[CAP.DEMOS_UPLOAD_LIMIT] === 50, 'premium uploads 50');
+  const r = resolveEntitlements({ subscription: sub('solo_premium'), now: NOW });
+  assert(r.tier === 'solo_premium' && r.source === 'subscription', `got ${r.tier}/${r.source}`);
+  assert(r.capabilities[CAP.DEMOS_UPLOAD_LIMIT] === 75, 'solo premium uploads 75');
   assert(r.expiresAt === iso(NOW + 30 * DAY), 'expiry comes from the period end');
   console.log('  an own subscription sets the tier and its expiry');
 }
 
-// ---- the FAQ #6 case: own Premium plus an Elite seat ------------------------
+// ---- holding both ladders: own Solo Premium plus a Team Tier 1 seat ---------
 
 {
   const r = resolveEntitlements({
-    subscription: sub('premium'),
-    seat: seatOn('team_elite'),
+    subscription: sub('solo_premium'),
+    seat: seatOn('team_tier1'),
     now: NOW
   });
-  assert(r.tier === 'team_elite', `holding both should resolve to Elite, got ${r.tier}`);
-  assert(r.source === 'seat', `Elite came from the seat, got ${r.source}`);
-  assert(r.capabilities[CAP.DEMOS_TEAMSPEAK_SYNC] === true, 'Elite-only capability is present');
-  assert(r.capabilities[CAP.DEMOS_UPLOAD_LIMIT] === UNLIMITED, 'Elite uploads are unlimited');
-  assert(r.seat?.planId === 'team_elite', 'the seat is reported for the account page');
-  // The whole point of merging by rank: no capability is worse than Premium alone.
-  const premiumOnly = resolveEntitlements({ subscription: sub('premium'), now: NOW });
+  assert(r.tier === 'team_tier1', `holding both should resolve to Tier 1, got ${r.tier}`);
+  assert(r.source === 'seat', `Tier 1 came from the seat, got ${r.source}`);
+  assert(r.capabilities[CAP.DEMOS_TEAMSPEAK_SYNC] === true, 'team-only capability is present');
+  assert(r.capabilities[CAP.DEMOS_UPLOAD_LIMIT] === UNLIMITED, 'Tier 1 uploads are unlimited');
+  assert(r.seat?.planId === 'team_tier1', 'the seat is reported for the account page');
+  const soloOnly = resolveEntitlements({ subscription: sub('solo_premium'), now: NOW });
   for (const key of CAPABILITY_KEYS) {
     assert(
-      compareValues(key, r.capabilities[key], premiumOnly.capabilities[key]) >= 0,
+      compareValues(key, r.capabilities[key], soloOnly.capabilities[key]) >= 0,
       `${key} got worse by also holding a seat`
     );
   }
-  console.log('  own Premium plus an Elite seat resolves to Elite, never worse off');
+  console.log('  own Solo Premium plus a Tier 1 seat resolves to Tier 1, never worse off');
 }
 
 {
-  // The reverse: a personal plan stronger than the seat still wins.
+  // The load-bearing 3-3 case: Solo Elite is stronger than Team Tier 3 on the
+  // models, weaker on the team toolkit, and lower ranked. Merging by rank
+  // wholesale would silently meter an Elite subscriber at one map-control a
+  // day the moment they sat on a Tier 3 roster.
   const r = resolveEntitlements({
-    subscription: sub('team_elite'),
-    seat: seatOn('premium'),
+    subscription: sub('solo_elite'),
+    seat: seatOn('team_tier3'),
     now: NOW
   });
-  assert(r.tier === 'team_elite' && r.source === 'subscription', `got ${r.tier}/${r.source}`);
+  assert(r.tier === 'team_tier3', `displayed tier follows rank, got ${r.tier}`);
+  assert(r.source === 'seat', `Tier 3 outranks Solo Elite, got ${r.source}`);
+  assert(r.capabilities[CAP.DEMOS_MAP_CONTROL] === UNLIMITED, 'Elite model runs survive the seat');
+  assert(r.capabilities[CAP.ANALYTICS_ANTISTRAT] === 1, 'the seat still grants anti-strat');
+  assert(r.capabilities[CAP.TEAM_STRATBOOK_ACCESS] === true, 'and the rest of the team toolkit');
+  assert(
+    r.quotaSubjects[CAP.DEMOS_MAP_CONTROL] === 'sub-solo_elite',
+    'unlimited model runs still belong to the Elite subscription'
+  );
+  assert(
+    r.quotaSubjects[CAP.ANALYTICS_ANTISTRAT] === 'sub-team_tier3',
+    'anti-strat is metered against the team subscription'
+  );
+  assert(
+    quotaSubject(r, CAP.DEMOS_MAP_CONTROL, 'user-1') === 'sub-solo_elite',
+    'quotaSubject follows the subscription that granted the value'
+  );
+  assert(
+    quotaSubject(r, CAP.ANALYTICS_CHARTS, 'user-1') === 'user-1',
+    'a personal quota still charges the account'
+  );
+
+  const eliteOnly = resolveEntitlements({ subscription: sub('solo_elite'), now: NOW });
+  const seatOnly = resolveEntitlements({ seat: seatOn('team_tier3'), now: NOW });
+  for (const key of CAPABILITY_KEYS) {
+    assert(
+      compareValues(key, r.capabilities[key], eliteOnly.capabilities[key]) >= 0,
+      `${key} got worse than Solo Elite alone`
+    );
+    assert(
+      compareValues(key, r.capabilities[key], seatOnly.capabilities[key]) >= 0,
+      `${key} got worse than the Tier 3 seat alone`
+    );
+  }
+  console.log('  Solo Elite plus a Tier 3 seat keeps both toolkits, never worse off');
+}
+
+{
+  // The reverse: a personal plan stronger than the seat still wins the name.
+  const r = resolveEntitlements({
+    subscription: sub('team_tier1'),
+    seat: seatOn('team_tier3'),
+    now: NOW
+  });
+  assert(r.tier === 'team_tier1' && r.source === 'subscription', `got ${r.tier}/${r.source}`);
   console.log('  a stronger own plan outranks a weaker seat');
 }
 
 {
   // Seats on two plans: the better seat is the one that counts.
   const r = resolveEntitlements({
-    seat: [seatOn('premium'), seatOn('team_premium')],
+    seat: [seatOn('solo_lite'), seatOn('team_tier3')],
     now: NOW
   });
-  assert(r.tier === 'team_premium', `best seat should win, got ${r.tier}`);
+  assert(r.tier === 'team_tier3', `best seat should win, got ${r.tier}`);
   console.log('  the strongest of several seats is the one that applies');
 }
 
@@ -173,14 +241,14 @@ function grant(extra = {}) {
 
 {
   const released = resolveEntitlements({
-    seat: seatOn('team_elite', { released_at: iso(NOW - HOUR) }),
+    seat: seatOn('team_tier1', { released_at: iso(NOW - HOUR) }),
     now: NOW
   });
   assert(released.tier === 'free', `a released seat entitles nothing, got ${released.tier}`);
 
   const lapsed = resolveEntitlements({
-    seat: seatOn('team_elite', {
-      subscription: sub('team_elite', { status: 'cancelled' })
+    seat: seatOn('team_tier1', {
+      subscription: sub('team_tier1', { status: 'cancelled' })
     }),
     now: NOW
   });
@@ -191,7 +259,7 @@ function grant(extra = {}) {
 // ---- past_due is not access -------------------------------------------------
 
 {
-  const r = resolveEntitlements({ subscription: sub('premium', { status: 'past_due' }), now: NOW });
+  const r = resolveEntitlements({ subscription: sub('solo_premium', { status: 'past_due' }), now: NOW });
   assert(r.tier === 'free', `past_due should not entitle, got ${r.tier}`);
   console.log('  a past_due subscription does not entitle');
 }
@@ -200,22 +268,22 @@ function grant(extra = {}) {
 
 {
   const r = resolveEntitlements({
-    subscription: sub('premium', { current_period_end: iso(NOW - 1) }),
+    subscription: sub('solo_premium', { current_period_end: iso(NOW - 1) }),
     now: NOW
   });
   assert(r.tier === 'free', `a lapsed period must not entitle, got ${r.tier}`);
 
   const stillLive = resolveEntitlements({
-    subscription: sub('premium', { current_period_end: iso(NOW + 1) }),
+    subscription: sub('solo_premium', { current_period_end: iso(NOW + 1) }),
     now: NOW
   });
-  assert(stillLive.tier === 'premium', 'one millisecond before the end is still access');
+  assert(stillLive.tier === 'solo_premium', 'one millisecond before the end is still access');
 
   const forever = resolveEntitlements({
-    subscription: sub('team_elite', { current_period_end: null }),
+    subscription: sub('team_tier1', { current_period_end: null }),
     now: NOW
   });
-  assert(forever.tier === 'team_elite', 'a null period end never expires');
+  assert(forever.tier === 'team_tier1', 'a null period end never expires');
   assert(forever.expiresAt === null, 'and reports no expiry');
   console.log('  subscription expiry is time-aware at read, null means forever');
 }
@@ -223,7 +291,7 @@ function grant(extra = {}) {
 // ---- trials -----------------------------------------------------------------
 
 {
-  const trialing = sub('premium', {
+  const trialing = sub('solo_premium', {
     status: 'trialing',
     source: 'trial',
     trial_started_at: iso(NOW - 3 * DAY),
@@ -231,7 +299,7 @@ function grant(extra = {}) {
     current_period_end: iso(NOW + 4 * DAY)
   });
   const r = resolveEntitlements({ subscription: trialing, now: NOW });
-  assert(r.tier === 'premium', `a live trial grants its plan, got ${r.tier}`);
+  assert(r.tier === 'solo_premium', `a live trial grants its plan, got ${r.tier}`);
   assert(r.trial?.daysLeft === 4, `expected 4 days left, got ${r.trial?.daysLeft}`);
   assert(r.trial?.cancelAtPeriodEnd === false, 'not cancelled');
 
@@ -247,7 +315,7 @@ function grant(extra = {}) {
   // Cancelling keeps access until the end date. Revoking at the moment of
   // cancellation is the antipattern this asserts against.
   const r = resolveEntitlements({
-    subscription: sub('premium', {
+    subscription: sub('solo_premium', {
       status: 'trialing',
       trial_ends_at: iso(NOW + 2 * DAY),
       current_period_end: iso(NOW + 2 * DAY),
@@ -255,7 +323,7 @@ function grant(extra = {}) {
     }),
     now: NOW
   });
-  assert(r.tier === 'premium', 'a cancelled trial keeps access until it ends');
+  assert(r.tier === 'solo_premium', 'a cancelled trial keeps access until it ends');
   assert(r.trial?.cancelAtPeriodEnd === true, 'and reports that it is cancelled');
   console.log('  a cancelled trial keeps access until the end date');
 }
@@ -264,17 +332,17 @@ function grant(extra = {}) {
 
 {
   const r = resolveEntitlements({
-    subscription: sub('team_elite'),
+    subscription: sub('team_tier1'),
     grants: [grant({ plan_id: 'free', mode: 'upgrade' })],
     now: NOW
   });
-  assert(r.tier === 'team_elite', `an upgrade grant below the current tier is ignored`);
+  assert(r.tier === 'team_tier1', `an upgrade grant below the current tier is ignored`);
   console.log('  a mode:upgrade grant below the current tier is ignored');
 }
 
 {
   const r = resolveEntitlements({
-    subscription: sub('team_elite'),
+    subscription: sub('team_tier1'),
     grants: [grant({ plan_id: 'free', mode: 'override' })],
     now: NOW
   });
@@ -286,10 +354,10 @@ function grant(extra = {}) {
 
 {
   const r = resolveEntitlements({
-    grants: [grant({ plan_id: 'team_elite', mode: 'upgrade' })],
+    grants: [grant({ plan_id: 'team_tier1', mode: 'upgrade' })],
     now: NOW
   });
-  assert(r.tier === 'team_elite' && r.source === 'grant', `got ${r.tier}/${r.source}`);
+  assert(r.tier === 'team_tier1' && r.source === 'grant', `got ${r.tier}/${r.source}`);
   assert(r.appliedGrants.includes('grant-1'), 'the applied grant is reported');
   console.log('  a plan grant lifts a free account');
 }
@@ -304,14 +372,14 @@ function grant(extra = {}) {
   assert(up.tier === 'free', 'without a plan_id the tier is unchanged');
 
   const ignored = resolveEntitlements({
-    subscription: sub('premium'),
+    subscription: sub('solo_premium'),
     grants: [grant({ capability: CAP.DEMOS_UPLOAD_LIMIT, value: 1, mode: 'upgrade' })],
     now: NOW
   });
-  assert(ignored.capabilities[CAP.DEMOS_UPLOAD_LIMIT] === 50, 'a weaker upgrade grant is ignored');
+  assert(ignored.capabilities[CAP.DEMOS_UPLOAD_LIMIT] === 75, 'a weaker upgrade grant is ignored');
 
   const forced = resolveEntitlements({
-    subscription: sub('premium'),
+    subscription: sub('solo_premium'),
     grants: [grant({ capability: CAP.DEMOS_UPLOAD_LIMIT, value: 1, mode: 'override' })],
     now: NOW
   });
@@ -321,19 +389,19 @@ function grant(extra = {}) {
 
 {
   const expired = resolveEntitlements({
-    grants: [grant({ plan_id: 'team_elite', expires_at: iso(NOW - 1) })],
+    grants: [grant({ plan_id: 'team_tier1', expires_at: iso(NOW - 1) })],
     now: NOW
   });
   assert(expired.tier === 'free', 'an expired grant stops applying with no sweep run');
 
   const notYet = resolveEntitlements({
-    grants: [grant({ plan_id: 'team_elite', starts_at: iso(NOW + HOUR) })],
+    grants: [grant({ plan_id: 'team_tier1', starts_at: iso(NOW + HOUR) })],
     now: NOW
   });
   assert(notYet.tier === 'free', 'a future grant does not apply yet');
 
   const revoked = resolveEntitlements({
-    grants: [grant({ plan_id: 'team_elite', revoked_at: iso(NOW - HOUR) })],
+    grants: [grant({ plan_id: 'team_tier1', revoked_at: iso(NOW - HOUR) })],
     now: NOW
   });
   assert(revoked.tier === 'free', 'a revoked grant does not apply');
@@ -345,12 +413,12 @@ function grant(extra = {}) {
   // by accident of object key order.
   const r = resolveEntitlements({
     grants: [
-      grant({ id: 'a', plan_id: 'premium', created_at: iso(NOW - 2 * DAY) }),
-      grant({ id: 'b', plan_id: 'team_elite', created_at: iso(NOW - DAY) })
+      grant({ id: 'a', plan_id: 'solo_premium', created_at: iso(NOW - 2 * DAY) }),
+      grant({ id: 'b', plan_id: 'team_tier1', created_at: iso(NOW - DAY) })
     ],
     now: NOW
   });
-  assert(r.tier === 'team_elite', `the stronger grant wins, got ${r.tier}`);
+  assert(r.tier === 'team_tier1', `the stronger grant wins, got ${r.tier}`);
   console.log('  several grants merge by rank');
 }
 

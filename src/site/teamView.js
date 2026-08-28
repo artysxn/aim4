@@ -60,6 +60,7 @@ import {
 import { DELTA_BANDS, deltaLevel, deltaMarkHtml } from '../replays/performance/deltaMark.js';
 import { createDocsEditor } from './docsEditor.js';
 import { mountDrawingBoard } from './drawingBoard.js';
+import { mountTeamComms } from './teamComms/commsPage.js';
 import { mountUtilityArchive } from './utilityArchive.js';
 import { spinnerHtml } from '../lib/spinner.js';
 import { renderStratNoteLinks, safeHref } from './stratNoteLinks.js';
@@ -78,7 +79,8 @@ const PAGES = [
   'team-strategies',
   'team-drawing-board',
   'team-utility-archive',
-  'team-autocoach'
+  'team-autocoach',
+  'team-comms'
 ];
 
 /** Lists that other shells write to. Refetch the roster when these pages show. */
@@ -184,6 +186,9 @@ export function initTeamView({ auth, escapeHtml }) {
   /** @type {{ destroy: () => void }|null} */
   let boardMount = null;
   let boardMountKey = '';
+  /** @type {{ destroy: () => void }|null} */
+  let commsMount = null;
+  let commsMountKey = '';
   /** `{ map, throwId }` from `/team/utility-archive?map=&u=`. */
   let pendingUtilityFocus = { map: '', throwId: '' };
   /** @type {ReturnType<typeof createStatsPanel>|null} */
@@ -574,6 +579,22 @@ export function initTeamView({ auth, escapeHtml }) {
     }
   }
 
+  /**
+   * "Creating a team is available on Team Tier 3."
+   *
+   * The plan name comes from the catalogue, through the cheapest plan that
+   * unlocks the key, so renaming the ladder cannot leave this page offering a
+   * tier that no longer exists. There is no typed-in fallback for the same
+   * reason: if nothing on the ladder offers the capability, say that instead of
+   * naming a plan nobody can buy.
+   */
+  function planGateMessage(what, key) {
+    const plan = ents.requiredPlan(key);
+    return plan
+      ? `${what} is available on ${PLAN_NAMES[plan] || plan}.`
+      : `${what} is not available on your plan.`;
+  }
+
   function headerHtml(title = '', actions = '') {
     const picker =
       teams.length > 1
@@ -622,8 +643,6 @@ export function initTeamView({ auth, escapeHtml }) {
   function noTeamHtml() {
     const canCreate = ents.can(CAP.TEAM_CREATE_LIMIT);
     const canJoin = ents.can(CAP.TEAM_JOIN);
-    const createTier = PLAN_NAMES[ents.requiredPlan(CAP.TEAM_CREATE_LIMIT)] || 'Team Premium';
-    const joinTier = PLAN_NAMES[ents.requiredPlan(CAP.TEAM_JOIN)] || 'Premium';
     return `
       ${headerHtml('Team')}
       <div class="tm-setup">
@@ -632,7 +651,7 @@ export function initTeamView({ auth, escapeHtml }) {
           <p class="tm-note">${
             canCreate
               ? `You can own a team. Invite members with a link.`
-              : `Creating a team is available on ${escapeHtml(createTier)}.`
+              : escapeHtml(planGateMessage('Creating a team', CAP.TEAM_CREATE_LIMIT))
           }</p>
           <div class="tm-row">
             <input class="site-input" id="tm-new-name" type="text" maxlength="40" placeholder="Team name"${
@@ -646,7 +665,7 @@ export function initTeamView({ auth, escapeHtml }) {
           <p class="tm-note">${
             canJoin
               ? `Paste the code or the whole aim4.io/i/ link.`
-              : `Joining a team is available on ${escapeHtml(joinTier)}.`
+              : escapeHtml(planGateMessage('Joining a team', CAP.TEAM_JOIN))
           }</p>
           <div class="tm-row">
             <input class="site-input" id="tm-join-code" type="text" maxlength="80" placeholder="dNfrkEs"${
@@ -2767,6 +2786,12 @@ export function initTeamView({ auth, escapeHtml }) {
     if (sideLabel) sideLabel.textContent = team?.name || 'Team';
   }
 
+  function destroyCommsMount() {
+    commsMount?.destroy();
+    commsMount = null;
+    commsMountKey = '';
+  }
+
   function render() {
     syncTeamChrome();
     if (page !== 'team-docs' || shareView || !team) clearDocsHeadActions();
@@ -2774,6 +2799,7 @@ export function initTeamView({ auth, escapeHtml }) {
     const onOverview = page === 'team-overview';
     if (!onBoard) destroyBoardMount();
     if (!onOverview) destroyOverviewStats();
+    if (page !== 'team-comms') destroyCommsMount();
     if (page !== 'team-docs' && editor) {
       void editor.flush();
       editor.destroy();
@@ -2910,6 +2936,26 @@ export function initTeamView({ auth, escapeHtml }) {
       }
       return;
     }
+    if (page === 'team-comms') {
+      // The mount owns its own fetching and state; re-renders from chrome
+      // updates must not restart it mid-load.
+      const key = `comms:${team.id}`;
+      if (commsMount && commsMountKey === key && shellEl.querySelector('#tm-comms-host')) {
+        return;
+      }
+      destroyCommsMount();
+      shellEl.innerHTML = `${headerHtml('Communication')}<div id="tm-comms-host"></div>`;
+      commsMount = mountTeamComms({
+        host: shellEl.querySelector('#tm-comms-host'),
+        team,
+        getTeamDemos: async () => {
+          await ensureDemos();
+          return demosForTeam();
+        }
+      });
+      commsMountKey = key;
+      return;
+    }
     shellEl.innerHTML = overviewHtml();
     mountOverviewExtras();
   }
@@ -2924,7 +2970,8 @@ export function initTeamView({ auth, escapeHtml }) {
         'team-strategies': 'My Strategies',
         'team-drawing-board': 'Drawing Board',
         'team-utility-archive': 'Utility Archive',
-        'team-autocoach': 'Matches'
+        'team-autocoach': 'Matches',
+        'team-comms': 'Communication'
       }[name] || 'Team'
     );
   }
@@ -3025,10 +3072,7 @@ export function initTeamView({ auth, escapeHtml }) {
 
     if (t.closest('[data-create]')) {
       if (!ents.can(CAP.TEAM_CREATE_LIMIT)) {
-        setStatus(
-          `Creating a team is available on ${PLAN_NAMES[ents.requiredPlan(CAP.TEAM_CREATE_LIMIT)] || 'Team Premium'}.`,
-          true
-        );
+        setStatus(planGateMessage('Creating a team', CAP.TEAM_CREATE_LIMIT), true);
         return;
       }
       const name = shellEl.querySelector('#tm-new-name')?.value || '';
@@ -3042,10 +3086,7 @@ export function initTeamView({ auth, escapeHtml }) {
     }
     if (t.closest('[data-join]')) {
       if (!ents.can(CAP.TEAM_JOIN)) {
-        setStatus(
-          `Joining a team is available on ${PLAN_NAMES[ents.requiredPlan(CAP.TEAM_JOIN)] || 'Premium'}.`,
-          true
-        );
+        setStatus(planGateMessage('Joining a team', CAP.TEAM_JOIN), true);
         return;
       }
       const raw = shellEl.querySelector('#tm-join-code')?.value || '';
@@ -3794,6 +3835,7 @@ export function initTeamView({ auth, escapeHtml }) {
       editor = null;
       mountedDocId = '';
       destroyBoardMount();
+      destroyCommsMount();
     },
     /** Called by the router for /i/<code> landings. */
     setInvite(code) {

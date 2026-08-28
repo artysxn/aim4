@@ -78,6 +78,9 @@ import { bindImportRound, gameLabel } from './practiceImport.js';
 import { nextCamMode, cycleLive, spectateTargetId, parseSpectateTarget } from './practiceCam.js';
 import { fetchDemos, fetchDemoPackage, fetchDemo, fetchRoundMeta, fetchRoundTicks } from '../replays/api.js';
 import { createXrayPass, xrayIconList } from './xray.js';
+import { EntitlementManager } from '../lib/entitlements.js';
+import { CAP } from '../../shared/entitlements/keys.js';
+import { PLAN_NAMES } from '../../shared/entitlements/catalogue.js';
 
 const params = new URLSearchParams(location.search);
 const map = cs3dMapForPath(location.pathname) || cs3dMap(params.get('map')) || null;
@@ -89,6 +92,62 @@ if (!map) {
   throw new Error('cs3d: no map in URL');
 }
 document.title = `${map.name} - AIM4.io`;
+
+// ---- may this account open a map? ------------------------------------------
+// The explorer is its own document (cs3d.html), so the site's route gate cannot
+// reach it: /dust2 is a navigation away from the SPA, not a view inside it.
+// This is the same question the Map Practice cards ask, asked again at the URL
+// the cards point at, because a locked card is not a gate on a link anyone can
+// type or bookmark.
+//
+// It is a PRODUCT gate and not a security boundary, and it is worth being plain
+// about that: the map packs are served straight off a public CDN bucket with no
+// token on them, so the geometry is fetchable by anyone who knows a pack URL
+// whatever this says. What the check buys is that a free account is told what
+// unlocks map practice instead of being dropped into a feature it has not paid
+// for. If the packs ever have to be private, that has to happen at the bucket.
+//
+// There is no AuthManager in this document and no way to sign in from it, so
+// the manager is built without one: the session token comes from the same
+// Supabase client `../replays/api.js` reads, and one answer at boot is the
+// whole of what a gate on a page load needs.
+const entitlements = new EntitlementManager(null);
+
+/**
+ * The locked screen, in place of the explorer.
+ *
+ * The controls go with it. They are bound to the canvas at module scope, and
+ * left alone a click anywhere outside the box would take pointer lock over a
+ * black screen and hide the cursor the reader needs to reach the link.
+ */
+function showMapPracticeLock() {
+  controls.setEnabled(false);
+  const tier = entitlements.requiredPlan(CAP.AIM_MAP_PRACTICE);
+  const label = entitlements.label(CAP.AIM_MAP_PRACTICE);
+  const message = tier
+    ? `${label} is available on ${PLAN_NAMES[tier] || tier}.`
+    : `${label} is not available.`;
+  uiRoot.innerHTML = `<div class="c3-err" style="pointer-events:auto">
+    <p>${message}</p>
+    <p><a href="/account/subscription">Upgrade</a></p>
+    <p><a href="/map-practice">Back to Map Practice</a></p>
+  </div>`;
+}
+
+/**
+ * True when the explorer may boot.
+ *
+ * A missing answer is not a refusal. /api/me returns 200 for a signed-out
+ * visitor, so the only way to get nothing back is the backend being down or
+ * unreachable, and that is not an entitlement decision (the same reasoning
+ * src/lib/meteredFeature.js applies to a failed consume call). Locking a
+ * paying customer out of the whole page over a network blip costs more than
+ * one unmetered visit to assets that are public anyway.
+ */
+async function mapPracticeAllowed() {
+  const state = await entitlements.refresh();
+  return !state || entitlements.can(CAP.AIM_MAP_PRACTICE);
+}
 
 const importUis = [];
 let camMode = 'T';
@@ -2134,8 +2193,17 @@ function frame(now) {
 
 window.addEventListener('resize', () => applyPracticeDisplay());
 
-boot();
-requestAnimationFrame(frame);
+// Nothing streams and nothing renders until the entitlement answer is in: the
+// map pack is tens of megabytes and there is no reason to spend them on an
+// account that is about to be shown a lock instead of a map.
+void mapPracticeAllowed().then((allowed) => {
+  if (!allowed) {
+    showMapPracticeLock();
+    return;
+  }
+  boot();
+  requestAnimationFrame(frame);
+});
 
 if (import.meta.env.DEV) {
   // `frame` too: a hidden tab gets no rAF, so driving it by hand is the only

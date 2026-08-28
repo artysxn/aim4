@@ -567,4 +567,73 @@ assert.deepEqual(hotStoreStatus().stores, [], 'invalidate clears');
   await fsp.rm(tmp, { recursive: true, force: true });
 }
 
-console.log('statsHotService.test.js: appends, growth, trimming, requireWarm, snapshots, renames, name patching, heals and stale-serving all pass');
+// --- content identity: a re-materialize that changed nothing is a no-op ------
+// The ingest pipeline rewrites existing records with a fresh parsedAt even
+// when the parse output is byte-identical (parser upgrades re-visiting current
+// demos, re-imports). With `rounds` on the manifest the key is built from the
+// round-id list + parser revision, so a timestamp-only rewrite must neither
+// heal nor rebuild — and a real change (round list, revision, names) must.
+{
+  process.env.AIM4_HOT_SNAPSHOT = 'off';
+  const fsp = await import('node:fs/promises');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'aim4-hotcontent-'));
+  await fsp.mkdir(path.join(tmp, 'stats'), { recursive: true });
+  const four = ids.slice(0, 4);
+  for (const id of four) {
+    await fsp.writeFile(path.join(tmp, 'stats', `${id}.json`), JSON.stringify(ENTRIES.get(id)));
+  }
+  const io8 = { userDir: () => tmp };
+  const manifestFor = (id, parsedAt) => ({
+    ...recordFor(id),
+    parsedAt,
+    parser: { name: 'laihoe/demoparser2', version: '0.41.3', revision: 4 },
+    team1: { name: 'Alpha' },
+    team2: { name: 'Beta' },
+    rounds: ENTRIES.get(id).rounds.map((r, k) => ({ id: `${id}-round-${k}`, round: k + 1 }))
+  });
+  const records = four.map((id) => manifestFor(id, 1));
+  const built = await getHotStore(io8, 'local', records);
+
+  // Same content, new parsedAt on every record: the very same store, no jobs.
+  const restamped = four.map((id) => manifestFor(id, 999_999));
+  const same = await getHotStore(io8, 'local', restamped, { requireWarm: true });
+  assert.equal(same, built, 'a timestamp-only rewrite serves the same store object');
+  assert.equal(hotRefreshing('local'), null, 'and starts no heal or rebuild');
+
+  // A changed round list on one demo IS a change: served stale, healed behind.
+  const changed = restamped.map((r, i) =>
+    i === 0
+      ? { ...r, rounds: r.rounds.map((x, k) => (k === 0 ? { ...x, id: `${r.id}-renumbered` } : x)) }
+      : r
+  );
+  const served = await getHotStore(io8, 'local', changed, { requireWarm: true });
+  assert.equal(served, built, 'a real change still serves stale first');
+  let healed = null;
+  for (let i = 0; i < 400; i++) {
+    await new Promise((r) => setTimeout(r, 25));
+    healed = await getHotStore(io8, 'local', changed, { requireWarm: true });
+    if (healed && hotStoreStatus().stores[0]?.dead === 1) break;
+  }
+  assert.equal(hotStoreStatus().stores[0]?.dead, 1, 'the superseded copy went dead');
+
+  // A parser revision bump with the same round list is a change too.
+  const upgraded = changed.map((r, i) =>
+    i === 1 ? { ...r, parser: { ...r.parser, revision: 5 } } : r
+  );
+  await getHotStore(io8, 'local', upgraded, { requireWarm: true });
+  let reHealed = false;
+  for (let i = 0; i < 400 && !reHealed; i++) {
+    await new Promise((r) => setTimeout(r, 25));
+    await getHotStore(io8, 'local', upgraded, { requireWarm: true });
+    reHealed = hotStoreStatus().stores[0]?.dead === 2 && hotRefreshing('local') === null;
+  }
+  assert.ok(reHealed, 'a revision bump dead-marks and re-appends that demo');
+
+  invalidateHotStore();
+  delete process.env.AIM4_HOT_SNAPSHOT;
+  await fsp.rm(tmp, { recursive: true, force: true });
+}
+
+console.log('statsHotService.test.js: appends, growth, trimming, requireWarm, snapshots, renames, name patching, heals, stale-serving and content identity all pass');

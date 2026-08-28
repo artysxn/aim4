@@ -3,6 +3,7 @@ import {
   classifyTag,
   renderStratNoteLinks,
   safeHref,
+  stratNoteToDocHtml,
   takeLinkCluster,
   utilArchiveHref
 } from './stratNoteLinks.js';
@@ -75,6 +76,27 @@ assert.match(standalone, /data-ua-copy="abcd"/);
 const escaped = html('<b>plain');
 assert.equal(escaped.includes('<b>'), false);
 assert.ok(escaped.includes('&lt;b&gt;'));
+
+// ---- the same note inside a team document ----------------------------------
+// No buttons and no data attributes: a document has no stratbook around it to
+// copy a setpos, so a throw id becomes a link into the archive entry instead.
+const doc = (raw) => stratNoteToDocHtml(raw, { escapeHtml, mapCode: 'MIR' });
+
+const docSmoke = doc('Smoke <Smoke top car><!iDiD> at 1:47');
+assert.match(docSmoke, /<a href="\/team\/utility-archive\?map=MIR&amp;u=iDiD">Smoke top car<\/a>/);
+assert.match(docSmoke, /^Smoke /);
+assert.match(docSmoke, / at 1:47$/);
+assert.equal(docSmoke.includes('data-ua-copy'), false);
+assert.equal(docSmoke.includes('<button'), false);
+
+// A label with nothing to link is left as the text it was written as, the same
+// as the stratbook leaves it. An unsafe URL loses the link and keeps the label.
+assert.equal(doc('<smoke>'), '&lt;smoke&gt;');
+const docBad = doc('<Smoke><URL=javascript:alert(1)>');
+assert.equal(docBad, 'Smoke');
+assert.equal(docBad.includes('javascript:'), false);
+assert.equal(docBad.includes('<a '), false);
+assert.equal(doc('<b>plain').includes('<b>'), false);
 
 const tags = [
   { start: 0, end: 16, ...classifyTag('Smoke top car') },

@@ -39,10 +39,12 @@ import sideTeamStrategies from '../icons/sideicons/sideicon_my_strategies.svg?ra
 import sideTeamDrawingBoard from '../icons/sideicons/sideicon_drawing_board.svg?raw';
 import sideTeamUtilityArchive from '../icons/sideicons/sideicon_utility_archive.svg?raw';
 import sideTeamCoach from '../icons/sideicons/sideicon_teamreplays.svg?raw';
+import sideTeamComms from '../icons/sideicons/sideicon_comms.svg?raw';
 import sideTeamCreator from '../icons/sideicons/sideicon_2d_creator.svg?raw';
 import logoFullUrl from '../icons/aim4logos/logocolor.png';
 import logoMarkUrl from '../icons/aim4logos/logo1x1.png';
 import { SettingsManager } from '../core/SettingsManager.js';
+import { bindColumnPrefs } from '../replays/stats/columnPrefs.js';
 import { AuthManager } from '../core/AuthManager.js';
 import { initTrainingView } from './trainingView.js';
 import { initMapPracticeView } from './mapPracticeView.js';
@@ -181,6 +183,7 @@ const ICONS = {
   'team-drawing-board': sideTeamDrawingBoard,
   'team-utility-archive': sideTeamUtilityArchive,
   'team-autocoach': sideTeamCoach,
+  'team-comms': sideTeamComms,
   'team-creator': sideTeamCreator
 };
 
@@ -270,6 +273,9 @@ if (IS_MOBILE) {
 // instead of offering their own login forms.
 const settings = new SettingsManager();
 const auth = new AuthManager(settings);
+// Database column choices ride the same per-account settings blob AuthManager
+// already syncs, so a signed-in account keeps its columns across devices.
+bindColumnPrefs(settings);
 
 const authModal = document.getElementById('auth-modal');
 const sideAccountBtn = document.getElementById('side-account-btn');
@@ -554,24 +560,32 @@ const ROUTES = {
   },
   performance: { title: 'Performance', path: '/performance', shell: 'performance' },
   uploads: { title: 'My Uploads', path: '/uploads', shell: 'replays', page: 'upload' },
+  // The team pages carry `requires` so the shared upgrade banner appears on
+  // the ones a plan does not include. Two of them deliberately do not:
+  // /team is where an account without a team is told how to get one, so
+  // gating it would hide the only route out of that state, and /team/replays
+  // is metered per auto coach run rather than gated per visit.
   team: { title: 'Team', path: '/team', shell: 'team', page: 'team-overview' },
   'team-documents': {
     title: 'Documents',
     path: '/team/documents',
     shell: 'team',
-    page: 'team-docs'
+    page: 'team-docs',
+    requires: 'team.documents'
   },
   'team-roles': {
     title: 'Roles & Positions',
     path: '/team/roles',
     shell: 'team',
-    page: 'team-roles'
+    page: 'team-roles',
+    requires: 'team.roles_positions'
   },
   'team-stratbook': {
     title: 'Stratbook Editor',
     path: '/team/stratbook',
     shell: 'team',
-    page: 'team-stratbook'
+    page: 'team-stratbook',
+    requires: 'team.stratbook_access'
   },
   'team-strategies': {
     title: 'My Strategies',
@@ -583,13 +597,15 @@ const ROUTES = {
     title: 'Drawing Board',
     path: '/team/drawing-board',
     shell: 'team',
-    page: 'team-drawing-board'
+    page: 'team-drawing-board',
+    requires: 'drawing_board'
   },
   'team-utility-archive': {
     title: 'Utility Archive',
     path: '/team/utility-archive',
     shell: 'team',
-    page: 'team-utility-archive'
+    page: 'team-utility-archive',
+    requires: 'team.utility_archive'
   },
   'team-autocoach': {
     title: 'Matches',
@@ -597,10 +613,18 @@ const ROUTES = {
     shell: 'team',
     page: 'team-autocoach'
   },
+  'team-comms': {
+    title: 'Communication',
+    path: '/team/communication',
+    shell: 'team',
+    page: 'team-comms',
+    requires: 'team.comms'
+  },
   'team-creator': {
     title: '2D Strategy Creator',
     path: '/team/creator',
-    shell: 'strategy-creator'
+    shell: 'strategy-creator',
+    requires: 'team.strategy_creator_2d'
   },
   training: { title: 'Play', path: '/training', shell: 'training' },
   leaderboards: { title: 'Leaderboards', path: '/leaderboards', shell: 'leaderboards' },
@@ -849,6 +873,11 @@ function applyRouteGate(route, shell) {
   const host = document.querySelector(`.view[data-view="${shell}"]`);
   if (!host) return;
   host.querySelector(':scope > .upgrade-gate')?.remove();
+  // `requires` is a capability key of any shape, not a boolean flag. The read
+  // below goes through EntitlementManager.can, which is isEnabled() from the
+  // catalogue, so a limit of 0 and an enum sitting on its weakest mode gate
+  // exactly like a false. That is what lets a team page name a limit key
+  // (`team.documents`) instead of needing a parallel boolean for every one.
   let requires = route.requires;
   if (
     route.path === '/patterns' &&

@@ -38,6 +38,7 @@ import {
 } from '../replays/shared/roundId.js';
 import { collectRounds, compileQuery, splitStoredName } from '../replays/shared/roundFilter.js';
 import { clusterTeams } from '../replays/shared/teamClusters.js';
+import { formatMatchScore, orientMatchSides } from '../replays/shared/matchSides.js';
 import {
   demoPassesRank,
   hasRankFilter,
@@ -59,8 +60,19 @@ import bookmarkIcon from '../icons/demos_bookmarks_added.svg?raw';
 import { mbWrap } from '../icons/menubuttons.js';
 import { spinnerHtml, watchSlowLoad } from '../lib/spinner.js';
 import { yieldToPaint } from '../lib/frameBudget.js';
+import { capabilityDef } from '../../shared/entitlements/catalogue.js';
+import { CAP } from '../../shared/entitlements/keys.js';
 
 const POLL_MS = 1500;
+
+/**
+ * What an account holds before it has told us anything. The catalogue is the
+ * one place the number lives, so a change to the Free tier moves this with it.
+ * It used to be a hard-coded 5, which is not the free cap and never was: a
+ * signed-in user whose /status had not landed yet was shown "0 / 5" and a
+ * limit nobody has.
+ */
+const FREE_DEMO_CAP = capabilityDef(CAP.DEMOS_UPLOAD_LIMIT).values.free;
 
 function svgIcon(raw) {
   return raw.replace('<svg', '<svg class="rp-mark-svg" aria-hidden="true"');
@@ -110,6 +122,14 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
   /** Total stored demos on the server (from the last library fetch). */
   let demoTotal = 0;
   let demoHasMore = false;
+  /**
+   * The last listing fetch was unpaginated because filters were on.
+   * Filter-clear restores a first page; Load more is hidden while this is true.
+   */
+  let libraryFull = false;
+  /** A listing has landed at least once (empty library still counts). */
+  let libraryReady = false;
+  let listingToken = 0;
   /**
    * A Load more page is in flight.
    *
@@ -270,12 +290,40 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
   /**
    * How many demos this account may hold. `/status` sends 0 for unlimited
    * (catalogue -1). `maxDemos || 5` used to treat that 0 as missing and cap
-   * Team Elite at five.
+   * an unlimited plan at five.
    */
   function uploadDemoCap() {
     if (account.admin) return 0;
     const n = Number(account.maxDemos);
-    return Number.isFinite(n) ? n : 5;
+    return Number.isFinite(n) ? n : FREE_DEMO_CAP;
+  }
+
+  /**
+   * How many more demos this account can take, or Infinity when it has no cap.
+   *
+   * Counted from the server's own owned count where we have it, because the
+   * paged library list only knows about the page it fetched.
+   */
+  function uploadsLeft() {
+    const cap = uploadDemoCap();
+    if (cap <= 0) return Infinity;
+    return Math.max(0, cap - (mineOwnedCount ?? myDemos().length));
+  }
+
+  /**
+   * Was an upload refused because of the plan rather than because of the file?
+   *
+   * Every entitlement refusal on this backend is a 402 whose body carries
+   * `error: 'upgrade_required'`, and the upload helper rejects with that field
+   * as the message. Matching the string is what there is to work with until the
+   * helper carries the rest of the body through.
+   */
+  function isCapRefusal(err) {
+    return String(err?.message || '') === 'upgrade_required';
+  }
+
+  function isDuplicateRefusal(err) {
+    return err?.status === 409 || err?.duplicate === true;
   }
 
   function renderQuota(usage) {
@@ -473,13 +521,6 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       </div>`;
   }
 
-  function demoScoreText(d) {
-    const status = d?.status || 'ready';
-    if (d?.score && status === 'ready') return `${d.score.team1} - ${d.score.team2}`;
-    if (status === 'ready') return '0 - 0';
-    return '…';
-  }
-
   function deleteIconHtml() {
     return `<svg viewBox="0 -960 960 960" width="16" height="16" fill="currentColor"><path d="M280-120q-33 0-56.5-23.5T200-200v-520h-40v-80h200v-40h240v40h200v80h-40v520q0 33-23.5 56.5T680-120H280Zm400-600H280v520h400v-520ZM360-280h80v-360h-80v360Zm160 0h80v-360h-80v360ZM280-720v520-520Z"/></svg>`;
   }
@@ -511,31 +552,11 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     </button>`;
   }
 
-  /**
-   * Uploader line under the date. The colour is the visibility: gray public,
-   * green unlisted, red private, which is the fastest way to read a library
-   * where most rows are someone else's.
-   */
-  function byLineHtml(owner) {
-    const visibility = owner?.visibility || 'public';
-    const name = owner?.username || 'artysan';
-    const title =
-      visibility === 'private'
-        ? 'Private: only the uploader can open this'
-        : visibility === 'unlisted'
-          ? 'Unlisted: the uploader, their team, and anyone with the link'
-          : 'Public: anyone on the site';
-    return `<span class="rp-by ${visibility}" title="${escapeHtml(title)}">by @${escapeHtml(
-      name
-    )}</span>`;
-  }
-
-  function rowMetaHtml(when, mapCode, mapName, owner = null) {
+  function rowMetaHtml(when, mapCode, mapName) {
     return `
       <div class="rp-row-meta">
         <span class="rp-row-when-block">
           <span class="rp-row-when">${escapeHtml(when)}</span>
-          ${byLineHtml(owner)}
         </span>
         ${mapIconHtml(mapCode, mapName)}
       </div>`;
@@ -873,8 +894,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
 
   function demoRow(d) {
     const status = d.status || 'ready';
-    const t1 = d.team1?.name || 'Team 1';
-    const t2 = d.team2?.name || 'Team 2';
+    const { t1, t2, id1, id2, score } = demoMatchSides(d);
     const mapName = d.mapName || (d.map ? MAPS[d.map]?.name : '') || '';
 
     let state = '';
@@ -897,10 +917,10 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
 
     return `
       <div class="rp-row ${status}" data-id="${escapeHtml(d.id)}">
-        ${rowMetaHtml(formatWhen(d.uploadedAt || d.parsedAt), d.map, mapName, d.owner)}
-        ${matchBlockHtml(t1, t2, demoScoreText(d), {
-          id1: d.team1?.id,
-          id2: d.team2?.id
+        ${rowMetaHtml(formatWhen(d.uploadedAt || d.parsedAt), d.map, mapName)}
+        ${matchBlockHtml(t1, t2, score, {
+          id1,
+          id2
         })}
         ${demoActionsHtml(d)}
         ${
@@ -1468,14 +1488,6 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       );
       return;
     }
-    const cap0 = uploadDemoCap();
-    if (cap0 > 0 && myDemos().length >= cap0) {
-      setStatus(
-        `You already have ${myDemos().length} demos uploaded. Delete one first (limit ${cap0}).`,
-        true
-      );
-      return;
-    }
     const { ok, skipped, tooBig } = pickUploadFiles(fileList);
     const cap = `${Math.round(maxUploadBytes / 1024 ** 3)} GB`;
     if (!ok.length) {
@@ -1483,6 +1495,29 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
         tooBig.length
           ? `One upload can be up to ${cap}, however many demos it holds. Split the archive and try again.`
           : `Upload .dem files, .zip / .rar / .tar.gz / .gz / .zst archives, or ${PACKAGE_EXT} packages.`,
+        true
+      );
+      return;
+    }
+
+    // The cap is checked against the whole selection, and the selection is
+    // known only after picking. The old check ran once, before a loop that
+    // uploaded every picked file, so ten files at 0 of 3 refused none of them.
+    //
+    // Refused as a set rather than partially: what lands should be what the
+    // user chose. `allowance` then rides the loop below so a batch stops on the
+    // file that would go over instead of pushing the rest at a server that will
+    // refuse them one 402 at a time.
+    const demoCap = uploadDemoCap();
+    let allowance = uploadsLeft();
+    if (allowance <= 0) {
+      setStatus(`You are at your limit of ${demoCap} demos. Delete one first.`, true);
+      return;
+    }
+    if (ok.length > allowance) {
+      setStatus(
+        `You picked ${ok.length} files and can upload ${allowance} more of a limit of ${demoCap}. ` +
+          'Pick fewer, or delete some of what you have.',
         true
       );
       return;
@@ -1515,6 +1550,8 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     const visibilityQueue = [];
     /** @type {{id: string, name: string, label: string}[]} */
     const queued = [];
+    /** @type {string[]} */
+    const alreadyExists = [];
     try {
       // Pass one: get every file onto the server. Nothing here waits on a parse,
       // so dropping ten demos and walking away leaves all ten queued rather than
@@ -1528,6 +1565,20 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
         const isPackage = name.toLowerCase().endsWith(PACKAGE_EXT);
         const label = ok.length > 1 ? `(${i + 1}/${ok.length}) ` : '';
 
+        // Re-checked per file, not once for the batch: an archive earlier in
+        // the selection can have carried more demos than the one it was
+        // counted as, and the allowance is the count the server will hold us
+        // to. Stopping here is cleaner than sending the rest to be refused.
+        if (allowance <= 0) {
+          const rest = ok.length - i;
+          batchErrors.push(
+            `Stopped at your limit of ${demoCap} demos. ${rest} ${
+              rest === 1 ? 'file was' : 'files were'
+            } not uploaded.`
+          );
+          break;
+        }
+
         setStatus(`Uploading ${label}${name}…`);
         renderProgress(0, null);
         const onProgress = (pct) => {
@@ -1535,22 +1586,41 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
           renderProgress(pct, null);
         };
 
-        if (isPackage) {
-          // A package is already parsed, so it lands ready and skips the queue.
-          const res = await uploadImport(file, onProgress);
-          renderQuota(res.usage);
-          imported++;
-          if (res.demo) {
-            namingQueue.push(res.demo);
-            if (res.demo.id) visibilityQueue.push(res.demo.id);
+        try {
+          if (isPackage) {
+            // A package is already parsed, so it lands ready and skips the queue.
+            const res = await uploadImport(file, onProgress);
+            renderQuota(res.usage);
+            imported++;
+            if (res.demo) {
+              namingQueue.push(res.demo);
+              if (res.demo.id) visibilityQueue.push(res.demo.id);
+            }
+          } else {
+            const res = await uploadDemo(file, onProgress, 'private');
+            renderQuota(res.usage);
+            rememberBatch(res.batch.id, name);
+            queued.push({ id: res.batch.id, name, label });
           }
-          continue;
+        } catch (err) {
+          // A duplicate is this file only. Keep sending the rest of the drop.
+          if (isDuplicateRefusal(err)) {
+            alreadyExists.push(err.message || `${name} already exists.`);
+            continue;
+          }
+          // The server refusing on the cap ends the batch rather than the
+          // request: the files after this one would be refused too, and each
+          // one would cost its whole body on the wire to find that out.
+          if (!isCapRefusal(err)) throw err;
+          const rest = ok.length - i;
+          batchErrors.push(
+            `Stopped at your limit of ${demoCap} demos. ${rest} ${
+              rest === 1 ? 'file was' : 'files were'
+            } not uploaded.`
+          );
+          break;
         }
-
-        const res = await uploadDemo(file, onProgress, 'private');
-        renderQuota(res.usage);
-        rememberBatch(res.batch.id, name);
-        queued.push({ id: res.batch.id, name, label });
+        allowance -= 1;
       }
       transferring = false;
 
@@ -1562,12 +1632,22 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
         forgetBatch(item.id);
         if (batch) {
           parsed += batch.totals.parsed;
-          failed += batch.totals.failed;
+          for (const f of batch.files || []) {
+            if (f.duplicate) {
+              alreadyExists.push(f.error || `${f.name} already exists.`);
+            } else if (f.failed) {
+              failed += 1;
+            }
+            if (!f.failed && f.demoId) visibilityQueue.push(f.demoId);
+          }
           if (batch.stage === 'error' && !batch.totals.files) {
             batchErrors.push(batch.error || `Could not unpack ${item.name}.`);
-          }
-          for (const f of batch.files || []) {
-            if (!f.failed && f.demoId) visibilityQueue.push(f.demoId);
+          } else if (batch.error) {
+            // A batch can carry an error and still have landed demos, which is
+            // what an archive refused partway through the cap looks like.
+            // Reporting only the whole-upload case turned that into a bare
+            // "3 demos failed." with no reason attached.
+            batchErrors.push(batch.error);
           }
         } else {
           // The batch is dropped once it settles, so losing track of it is not
@@ -1580,12 +1660,13 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       if (imported) parts.push(imported === 1 ? '1 package imported.' : `${imported} packages imported.`);
       if (parsed) parts.push(parsed === 1 ? '1 demo parsed.' : `${parsed} demos parsed.`);
       if (failed) parts.push(failed === 1 ? '1 demo failed.' : `${failed} demos failed.`);
+      parts.push(...alreadyExists);
       parts.push(...batchErrors);
 
       const nothingLanded = !imported && !parsed;
       setStatus(
         parts.join(' ') || 'Upload complete.',
-        nothingLanded && (failed > 0 || batchErrors.length > 0)
+        nothingLanded && (failed > 0 || alreadyExists.length > 0 || batchErrors.length > 0)
       );
       await refresh();
 
@@ -1609,7 +1690,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       uploadOwnsStatus = false;
       dropEl?.classList.remove('busy');
       if (uploadInput) uploadInput.value = '';
-      if (!failed && !batchErrors.length) clearProgress();
+      if (!failed && !alreadyExists.length && !batchErrors.length) clearProgress();
     }
   }
 
@@ -2692,22 +2773,27 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     const token = ++queryToken;
     if (hasRankFilter(filters)) await fetchVrsRanks().catch(() => {});
     const query = currentQuery();
+    const switchingWindow = hasActiveFilters() !== libraryFull;
     // Spinner first so the sidebar can take a click while the library scan runs.
     // Load more is the exception: it only appends, so the rows already on
     // screen stay correct and are worth more than a spinner.
+    // A filter that still needs the full library (or a clear that needs the
+    // first page back) must not paint the incomplete window.
     if (resultEl) {
       resultEl.setAttribute('aria-busy', 'true');
       if (!loadingMoreDemos) resultEl.innerHTML = spinnerHtml('Updating…');
     }
     await yieldToPaint();
     if (token !== queryToken) return;
-    // Filter against the demo index immediately so an empty filter always
-    // shows every round, even if the rounds API is slow or empty.
-    rounds = filterLibraryRounds(query);
-    if (needsMetaFilters()) setQueryStatus('Applying advanced filters…');
-    else setQueryStatus('');
-    renderResults();
-    resultEl?.removeAttribute('aria-busy');
+    if (!switchingWindow) {
+      // Filter against the demo index immediately so an empty filter always
+      // shows every round, even if the rounds API is slow or empty.
+      rounds = filterLibraryRounds(query);
+      if (needsMetaFilters()) setQueryStatus('Applying advanced filters…');
+      else setQueryStatus('');
+      renderResults();
+      resultEl?.removeAttribute('aria-busy');
+    }
 
     // Coalesce filter bursts. The paint above already reflects the new filter
     // against the loaded page; the server phase below is the expensive half
@@ -2718,6 +2804,21 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     if (token !== queryToken) return;
 
     try {
+      if (hasActiveFilters() !== libraryFull) {
+        setQueryStatus('Loading demos…');
+        await loadLibraryWindow();
+        if (token !== queryToken) return;
+        if (hasActiveFilters() !== libraryFull) return;
+        setQueryStatus('');
+      }
+      rounds = filterLibraryRounds(query);
+      if (switchingWindow) {
+        if (needsMetaFilters()) setQueryStatus('Applying advanced filters…');
+        else setQueryStatus('');
+        renderResults();
+        resultEl?.removeAttribute('aria-busy');
+      }
+
       const [res, playlists] = await Promise.all([
         findRounds(query).catch(() => null),
         fetchPlaylists().catch(() => [])
@@ -2775,7 +2876,14 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       selectedFiles = new Set([...selectedFiles].filter((f) => visibleFiles.has(f)));
       renderResults();
     } catch (err) {
-      setStatus(err.message, true);
+      const msg = formatApiError(err).message || err.message || 'Could not load demos.';
+      setStatus(msg, true);
+      if (resultEl && resultEl.getAttribute('aria-busy') === 'true') {
+        resultEl.innerHTML = `<p class="view-empty">Could not load demos. ${escapeHtml(msg)}</p>
+          <button type="button" class="btn btn-sm" data-rp-retry-load>Retry</button>`;
+        resultEl.querySelector('[data-rp-retry-load]')?.addEventListener('click', () => refresh());
+        resultEl.removeAttribute('aria-busy');
+      }
     }
   }
 
@@ -2833,6 +2941,47 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
   function teamName(demo, team, shortId) {
     if (team === 1) return demo?.team1?.name || shortId || 'Team 1';
     return demo?.team2?.name || shortId || 'Team 2';
+  }
+
+  /**
+   * Names + score for a demo row. One team in the filter pins that team to
+   * the left and flips the score with it; otherwise home/away stays as stored.
+   */
+  function demoMatchSides(d, sample) {
+    const left = {
+      id: d?.team1?.id || sample?.team1,
+      name: teamName(d, 1, sample?.team1)
+    };
+    const right = {
+      id: d?.team2?.id || sample?.team2,
+      name: teamName(d, 2, sample?.team2)
+    };
+    const ready = Boolean(d) && (d.status || 'ready') === 'ready';
+    const scoreLeft = ready ? Number(d?.score?.team1) || 0 : NaN;
+    const scoreRight = ready ? Number(d?.score?.team2) || 0 : NaN;
+    let focusIds = [];
+    let focusName = '';
+    if (filters.teams.size === 1) {
+      const key = [...filters.teams][0];
+      const cluster = teamClustersByKey.get(key);
+      focusIds = cluster?.shortIds || [key];
+      focusName = cluster?.name || '';
+    }
+    const oriented = orientMatchSides({
+      left,
+      right,
+      scoreLeft,
+      scoreRight,
+      focusIds,
+      focusName
+    });
+    return {
+      t1: oriented.left.name || 'Team 1',
+      t2: oriented.right.name || 'Team 2',
+      id1: oriented.left.id,
+      id2: oriented.right.id,
+      score: ready ? formatMatchScore(oriented.scoreLeft, oriented.scoreRight, '0 - 0') : '…'
+    };
   }
 
   function groupRoundsByDemo(list) {
@@ -2896,23 +3045,18 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     const d = g.demo;
     const sample = g.rounds[0];
     const open = expandedDemos.has(g.demoId);
-    const t1 = teamName(d, 1, sample?.team1);
-    const t2 = teamName(d, 2, sample?.team2);
+    const { t1, t2, id1, id2, score } = demoMatchSides(d, sample);
     const when = formatWhen(d?.uploadedAt || d?.parsedAt);
     const mapCode = d?.map || sample?.map || '';
     const mapName =
       d?.mapName || (mapCode ? MAPS[mapCode]?.name : '') || mapCode || '';
-    const score = d ? demoScoreText(d) : '…';
     const id = escapeHtml(g.demoId);
 
     return `
       <div class="rp-row rp-demo-head" data-toggle-demo="${id}" role="button" tabindex="0"
         aria-expanded="${open ? 'true' : 'false'}">
-        ${rowMetaHtml(when, mapCode, mapName, d?.owner)}
-        ${matchBlockHtml(t1, t2, score, {
-          id1: d?.team1?.id || sample?.team1,
-          id2: d?.team2?.id || sample?.team2
-        })}
+        ${rowMetaHtml(when, mapCode, mapName)}
+        ${matchBlockHtml(t1, t2, score, { id1, id2 })}
         ${demoFactsHtml(d)}
         <div class="rp-row-actions">
           <button type="button" class="rp-btn-icon" data-demo-stats="${id}" title="Database for this match">${statsIconHtml()}</button>
@@ -3014,6 +3158,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       </div>`
         : '';
 
+    const filtered = hasActiveFilters();
     const wide = libraryWideFilters();
     const demoBlocks = wide
       ? groupRoundsByDemo(rounds)
@@ -3023,7 +3168,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       : sortedDemos
           .map((d) => {
             const status = d.status || 'ready';
-            if (status !== 'ready') return demoRow(d);
+            if (status !== 'ready') return filtered ? '' : demoRow(d);
             const demoRounds = roundsForDemo(d);
             if (!demoRounds.length) return '';
             return demoGroupBlock({ demoId: d.id, demo: d, rounds: demoRounds });
@@ -3032,24 +3177,21 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
           .join('');
 
     const shownStored = Math.min(libraryLimit, demoTotal);
-    const loadMoreBtn = demoHasMore
-      ? `<button type="button" class="btn btn-sm" data-load-more-demos${
-          loadingMoreDemos ? ' disabled' : ''
-        }>${loadingMoreDemos ? 'Loading…' : 'Load more'}</button>`
-      : '';
+    const loadMoreBtn =
+      !filtered && demoHasMore
+        ? `<button type="button" class="btn btn-sm" data-load-more-demos${
+            loadingMoreDemos ? ' disabled' : ''
+          }>${loadingMoreDemos ? 'Loading…' : 'Load more'}</button>`
+        : '';
     const pageNote =
-      demoTotal > 0 && !wide
+      !filtered && demoTotal > 0
         ? `<div class="rp-library-page">
         <span class="rp-library-page-count">Showing ${shownStored} of ${demoTotal} demo${
           demoTotal === 1 ? '' : 's'
         }</span>
         ${loadMoreBtn}
       </div>`
-        : wide && rounds.length
-          ? `<div class="rp-library-page">
-        <span class="rp-library-page-count">Filtered across the whole library</span>
-      </div>`
-          : '';
+        : '';
 
     resultEl.innerHTML = `
       ${head}
@@ -3064,7 +3206,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
           }</p>`
         }
       </div>
-      ${demoHasMore && demoBlocks ? pageNote : ''}`;
+      ${!filtered && demoHasMore && demoBlocks ? pageNote : ''}`;
 
     resultEl.querySelectorAll('[data-load-more-demos]').forEach((btn) => {
       btn.addEventListener('click', () => loadMoreDemos());
@@ -3778,7 +3920,9 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     // below — it must NOT force another full-library download. With ~450 demos
     // that re-fetch left the UI stuck on the post-index stream for a long time.
     const key = libraryKeyOf(merged);
-    const havePayload = Boolean(statsPanel.getPayload?.());
+    // hasData covers the server-aggregate path, which never sets a payload;
+    // getPayload alone made every re-entry to /database a full reload.
+    const havePayload = Boolean(statsPanel.hasData?.() ?? statsPanel.getPayload?.());
     const sameLibrary = !created && havePayload && loadedStatsKey === key;
     if (sameLibrary) {
       if (scope.__fresh) {
@@ -3960,6 +4104,78 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
    */
   let refreshInFlight = null;
   let refreshAgain = false;
+  /** Last listing `usage` payload, so a filter-driven refetch still feeds the quota meter. */
+  let lastLibraryUsage = null;
+
+  function listingStatsSig(list) {
+    return (list || [])
+      .map((d) => `${d.id}:${d.status || ''}:${d.updatedAt || d.uploadedAt || ''}`)
+      .join('|');
+  }
+
+  /**
+   * Apply a /demos listing. `page` is the unfiltered browser window, `full`
+   * is every record (filters on), `append` is Load more.
+   */
+  function absorbDemoListing(list, mode) {
+    const nextDemos = list.demos || [];
+    const prevSig = listingStatsSig(demos);
+    demoTotal = Number(list.total) || list.usage?.demos || demoTotal || 0;
+    if (Number.isFinite(list.owned)) mineOwnedCount = Number(list.owned);
+    if (list.usage) lastLibraryUsage = list.usage;
+    if (mode === 'full') {
+      libraryFull = true;
+      demoHasMore = false;
+      demos = nextDemos;
+      const stored = Math.max(0, Number(list.total) || nextDemos.length);
+      libraryOffset = stored;
+      libraryLimit = Math.max(LIBRARY_PAGE, stored);
+    } else if (mode === 'append') {
+      demoHasMore = Boolean(list.hasMore);
+      const seen = new Set(demos.map((d) => d.id));
+      const fresh = nextDemos.filter((d) => d.id && !seen.has(d.id));
+      for (const d of fresh) extraDemos.delete(d.id);
+      demos = [...demos, ...fresh];
+      libraryOffset += nextDemos.length;
+      libraryLimit = Math.max(libraryLimit, libraryOffset);
+    } else {
+      libraryFull = false;
+      demoHasMore = Boolean(list.hasMore);
+      demos = nextDemos;
+      const pending = Number(list.pending) || 0;
+      const stored = Math.max(0, nextDemos.length - pending);
+      libraryOffset = stored;
+      libraryLimit = Math.max(libraryLimit, stored);
+    }
+    for (const d of demos) extraDemos.delete(d.id);
+    if (Array.isArray(list.teams)) libraryTeamClusters = list.teams;
+    rebuildTeamClusters();
+    libraryReady = true;
+    if (listingStatsSig(demos) !== prevSig) {
+      invalidateStatsCache();
+      if (!inflightStatsKey) loadedStatsKey = '';
+    }
+  }
+
+  /**
+   * Keep the listing window in sync with filter state: first page when
+   * unfiltered, the whole library when any filter is on.
+   */
+  async function loadLibraryWindow({ force = false } = {}) {
+    const wantFull = hasActiveFilters();
+    if (!force && libraryReady && wantFull === libraryFull) return;
+    if (!wantFull && libraryFull) {
+      libraryLimit = LIBRARY_PAGE;
+      libraryOffset = 0;
+    }
+    const token = ++listingToken;
+    const list = wantFull
+      ? await fetchDemos()
+      : await fetchDemos({ limit: libraryLimit, offset: 0 });
+    if (token !== listingToken) return;
+    absorbDemoListing(list, wantFull ? 'full' : 'page');
+    return list;
+  }
 
   async function refresh() {
     if (refreshInFlight) {
@@ -3995,41 +4211,15 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
           })()
         : () => {};
     try {
-      const [status, list] = await Promise.all([
+      const [status] = await Promise.all([
         fetchStatus(),
-        fetchDemos({ limit: libraryLimit, offset: 0 })
+        loadLibraryWindow({ force: true })
       ]);
       cancelSlow();
       setLocked(false);
       if (status.limits?.maxUploadBytes) maxUploadBytes = status.limits.maxUploadBytes;
       renderCapabilities(status);
-      demoTotal = Number(list.total) || list.usage?.demos || 0;
-      demoHasMore = Boolean(list.hasMore);
-      // Server-counted, so the meter is right on the first paint rather than
-      // reading the library page and claiming the cap is already full.
-      if (Number.isFinite(list.owned)) mineOwnedCount = Number(list.owned);
-      renderQuota(list.usage || status.usage);
-      const nextDemos = list.demos || [];
-      // Only drop the shared stats cache when membership or readiness changes.
-      // The 1.5s parse poll would otherwise thrash Database/Charts every tick.
-      const statsSig = nextDemos
-        .map((d) => `${d.id}:${d.status || ''}:${d.updatedAt || d.uploadedAt || ''}`)
-        .join('|');
-      const prevSig = demos
-        .map((d) => `${d.id}:${d.status || ''}:${d.updatedAt || d.uploadedAt || ''}`)
-        .join('|');
-      demos = nextDemos;
-      // Drop extras that are now on the page; keep the rest for active filters.
-      for (const d of demos) extraDemos.delete(d.id);
-      libraryTeamClusters = Array.isArray(list.teams) ? list.teams : [];
-      rebuildTeamClusters();
-      if (statsSig !== prevSig) {
-        invalidateStatsCache();
-        // A listing change must not restart Database mid-page. Clearing this
-        // key while a load is running made the next click refetch and left
-        // the first page's totals on screen.
-        if (!inflightStatsKey) loadedStatsKey = '';
-      }
+      renderQuota(lastLibraryUsage || status.usage);
       renderDemos();
       renderFilters();
       void fetchVrsRanks().catch(() => {});
@@ -4071,7 +4261,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
    * refreshAgain rather than being ignored.
    */
   async function loadMoreDemos() {
-    if (!demoHasMore || loadingMoreDemos) return;
+    if (!demoHasMore || loadingMoreDemos || hasActiveFilters() || libraryFull) return;
     loadingMoreDemos = true;
     paintLoadMoreState();
     try {
@@ -4079,16 +4269,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       // re-running the whole refresh re-downloaded every page already on
       // screen — page ten re-fetched pages one through nine.
       const list = await fetchDemos({ limit: LIBRARY_PAGE, offset: libraryOffset });
-      demoTotal = Number(list.total) || demoTotal;
-      demoHasMore = Boolean(list.hasMore);
-      libraryOffset += list.demos?.length || 0;
-      const seen = new Set(demos.map((d) => d.id));
-      const fresh = (list.demos || []).filter((d) => d.id && !seen.has(d.id));
-      for (const d of fresh) extraDemos.delete(d.id);
-      // Replaced, never pushed: demoById keys its index on array identity.
-      demos = [...demos, ...fresh];
-      // Keep the poll's full refresh sized to what is on screen.
-      libraryLimit = Math.max(libraryLimit, libraryOffset);
+      absorbDemoListing(list, 'append');
       renderDemos();
       renderFilters();
       await runQuery();
@@ -4142,7 +4323,18 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
   // Signing in (or out) changes what the library contains, whether uploading is
   // allowed, and which rows carry a rename button. Re-read rather than leaving
   // the page showing the previous session's answer.
+  //
+  // Only when the IDENTITY changed. Supabase re-emits SIGNED_IN from its own
+  // visibilitychange handler every time the tab is refocused, and each of those
+  // used to run a full refresh: with the ingest pipeline having grown the
+  // listing in the meantime, that invalidated the shared stats cache and an
+  // open Database/Charts page re-downloaded a library it already had, just for
+  // switching back to the tab.
+  let lastAuthIdentity = null;
   auth?.onChange?.(() => {
+    const identity = `${auth.user?.id || ''}:${auth.isLoggedIn ? 1 : 0}`;
+    if (identity === lastAuthIdentity) return;
+    lastAuthIdentity = identity;
     if (visible) refresh();
   });
 

@@ -20,9 +20,13 @@
 // Ids are prefixed `t-` so both decks can share one override store.
 // ---------------------------------------------------------------------------
 
-import { PLAN_PRICES } from '../../shared/entitlements/catalogue.js';
+import { PLAN_NAMES, TERM_NAMES, priceForTerm } from '../../shared/entitlements/catalogue.js';
+import { PITCH_MONEY } from './pitchContent.js';
 
-const price = (id) => `€${PLAN_PRICES[id].monthly.toFixed(2)}`;
+// The money slide is the one place the two decks could contradict each other, so
+// the mix, the totals and the spellings all come from the full deck rather than
+// being written down a second time here.
+const { money, price, pct } = PITCH_MONEY;
 
 /** @type {import('./pitchContent.js').Slide[]} */
 export const TALK_SLIDES = [
@@ -270,36 +274,43 @@ export const TALK_SLIDES = [
   {
     id: 't-money',
     kicker: 'Money',
-    title: 'Two models, one ceiling',
+    title: 'The ladder, and what it is worth',
     columns: [
       {
-        tag: 'Model A',
-        title: 'Per seat',
-        bars: [
-          { label: 'Solo Premium', value: `${price('premium')} × 500`, n: 5000 },
-          { label: 'Team Premium', value: `${price('team_premium')} × 700`, n: 21000 },
-          { label: 'Team Elite', value: `${price('team_elite')} × 80`, n: 4800 }
-        ],
-        foot: '€30,800 / mo · 1,280 subscriptions'
+        tag: 'Per month',
+        title: 'Two sides, one ladder',
+        lists: PITCH_MONEY.ladder.map((planId) => `${PLAN_NAMES[planId]} ${price(planId)}`)
       },
       {
-        tag: 'Model B',
-        title: 'Per organisation',
-        bars: [
-          { label: 'Team Tier 1', value: '€699 × 19', n: 13281 },
-          { label: 'Team Tier 2', value: '€199 × 15', n: 2985 },
-          { label: 'Team Tier 3', value: '€89 × 57', n: 5073 },
-          { label: 'Solo Premium', value: '€19 × 230', n: 4370 },
-          { label: 'Solo Lite', value: '€9 × 550', n: 4950 }
-        ],
-        foot: '€30,659 / mo · 91 orgs + 780 solo'
+        tag: 'Up front',
+        title: 'Longer terms',
+        lists: [
+          ...['quarter', 'halfyear', 'year'].map((term) => {
+            const top = priceForTerm('team_tier1', term);
+            return `${TERM_NAMES[term]}: ${pct(top.baseDiscount)} + up to ${pct(top.bonusDiscount)}`;
+          }),
+          'The two multiply, never add',
+          `Tier 1 on a year: ${money(priceForTerm('team_tier1', 'year').perMonthCents)} / mo`
+        ]
+      },
+      {
+        tag: 'Ceiling',
+        title: 'At market-leading share',
+        bars: PITCH_MONEY.lines.map((line) => ({
+          label: PLAN_NAMES[line.planId],
+          value: `${price(line.planId)} × ${line.customers}`,
+          n: line.monthlyCents
+        })),
+        foot: `${money(PITCH_MONEY.totalCents)} / mo · ${PITCH_MONEY.teamCustomers} orgs + ${
+          PITCH_MONEY.soloCustomers
+        } solo`
       }
     ],
     script: [
-      'Two ways to price it. Both land in the same place: about thirty-three thousand dollars a month at market-leading share. That is a modelled ceiling, not a forecast — today the number is zero, because billing is built but not switched on.',
-      'Model A is what the site charges now, per seat. Five hundred solo subscriptions, seven hundred team premium, eighty elite.',
-      'Model B sells to the organisation instead. Tier one at six ninety-nine gets everything, unlimited, with exclusive access to the newest models. Tier two at one ninety-nine gets bounded access to that cutting edge plus everything below it. Tier three at eighty-nine gets every basic paid feature unlimited and a taste of the rest. Solo mirrors the same ladder at nine and nineteen euro.',
-      'Same ceiling, ninety-one organisations instead of seven hundred and eighty subscriptions. Slower to close, far cheaper to service. I lean towards B, and I would like your read on it.'
+      'The ladder, and it is one ladder written twice. Three team plans and three solo plans across the same three paid bands. A team plan is the solo plan of its band plus everything that only works with a roster behind it: seats, the stratbook, anti-strat, comms.',
+      'Team Tier 1 is six hundred and ninety-nine ninety-nine a month, Tier 2 two hundred and forty-nine ninety-nine, Tier 3 eighty-nine ninety-nine. The solo side mirrors it at sixty-nine ninety-nine, twenty-four ninety-nine and eight ninety-nine. Everything is priced per subscription rather than per seat, and the daily allowances work the same way: a seven-man Tier 3 roster shares one anti-strat a day between them.',
+      'Paying up front costs less. Three, six or twelve months takes eight, thirteen or twenty percent off for everybody, and then each plan takes a second cut off what is left, up to another ten percent at Tier 1. The two multiply rather than add: twenty percent and then ten percent off a hundred is seventy-two, not seventy. A year of Tier 1 works out a little over five hundred a month.',
+      'The last column is one plausible mix at market-leading share. A hundred organisations and nine hundred and ten solo subscriptions, thirty-eight thousand euro a month, about forty-one thousand dollars. That is a modelled ceiling, not a forecast. Today the figure is zero, because billing is built but not switched on. On twelve-month terms the same mix bills a quarter less each month, and collects the year on the day it is signed.'
     ]
   },
 

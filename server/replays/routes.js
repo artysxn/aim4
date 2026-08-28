@@ -88,7 +88,18 @@ import {
   patchHotStoreTeamNames
 } from './statsHotService.js';
 import { isAcceptedUpload, rarSupport } from './archive.js';
-import { allJobs, batchStatus, enqueueParse, forgetJob, getBatch, jobStatus, startIngest } from './jobs.js';
+import {
+  allJobs,
+  batchStatus,
+  enqueueParse,
+  forgetJob,
+  getBatch,
+  jobStatus,
+  releaseUploads,
+  reservedUploads,
+  reserveUploads,
+  startIngest
+} from './jobs.js';
 import { SHARED_LIBRARY, authStatus, identify } from './auth.js';
 import { LEGACY_UPLOADER, demoUploadIdentity, isConfigured, whoami } from './identity.js';
 import { UNLIMITED } from '../../shared/entitlements/catalogue.js';
@@ -97,6 +108,7 @@ import {
   can,
   capability,
   checkLimit,
+  requireCapability,
   requireLimit,
   requireQuota,
   upgradeResponse
@@ -394,16 +406,21 @@ const METERED = new Set([
   CAP.DEMOS_DUEL_WIN_PREDICTION,
   CAP.DEMOS_AUTO_COACH,
   CAP.ANALYTICS_CHARTS,
-  CAP.ANALYTICS_PATTERN_FINDER
+  CAP.ANALYTICS_PATTERN_FINDER,
+  // Both were booleans and are quotas now: one anti-strat a day for a whole
+  // Tier 3 roster, three for Tier 2. A quota nobody spends is a quota that
+  // does not exist, so they belong here.
+  CAP.ANALYTICS_ANTISTRAT,
+  CAP.DEMOS_COMMS_COACH
 ]);
 
 /**
  * Trim the stats aggregate to what the caller's tier includes.
  *
- * Free sees the basic table. Premium adds the full player metrics (PSDT, DT,
- * accuracy), Team Premium adds single-game and team statistics, and only Elite
- * gets the full team metrics (PRW, possession). Fields are deleted rather than
- * zeroed so a client cannot tell a withheld metric from a real zero.
+ * Free sees the basic table. Any paid plan adds the full player metrics (PSDT,
+ * DT, accuracy) plus single-game and team statistics. Full team metrics (PRW,
+ * possession) start at the middle band. Fields are deleted rather than zeroed
+ * so a client cannot tell a withheld metric from a real zero.
  */
 function gateStatsPayload(me, payload) {
   if (!payload || typeof payload !== 'object') return payload;
@@ -439,17 +456,45 @@ function gateStatsPayload(me, payload) {
 }
 
 /**
- * How many demos this caller may hold at once.
+ * How many demos this caller may hold at once, and whether `incoming` more fit.
  *
  * Was a single global constant with an admin bypass. It is now the
  * `demos.upload_limit` capability, so the answer differs per tier and the admin
  * bypass falls out of entitlement resolution rather than being a branch here.
  *
- * @returns {Promise<{allowed: boolean, current: number, limit: number, remaining: number, tier: string}>}
+ * Three things count against the cap, not one:
+ *   records      what is on disk under this uploader's id
+ *   in-flight    queued or running parses whose record is not there to be
+ *                counted, e.g. one deleted while its parse was still queued
+ *   reservations uploads admitted a moment ago whose records do not exist yet
+ *
+ * `reserve: true` takes those places in the same breath as the check that
+ * granted them. Everything from the last `await` to the reservation is
+ * synchronous on purpose: that is what makes the check and the reservation one
+ * step, so two requests that arrive together cannot both read the same count
+ * and both be admitted. The caller owns what it reserved and must give it back.
+ *
+ * @param {string} library
+ * @param {object} me
+ * @param {{incoming?: number, reserve?: boolean}} [opts]
+ * @returns {Promise<{allowed: boolean, current: number, incoming: number, limit: number,
+ *                    remaining: number, accepted: number, tier: string, reserved: number}>}
  */
-async function uploadCap(library, me) {
-  const mine = (await listDemos(library)).filter((r) => r.uploaderId === me.id);
-  return checkLimit(me, CAP.DEMOS_UPLOAD_LIMIT, mine.length);
+async function uploadCap(library, me, { incoming = 1, reserve = false } = {}) {
+  const records = await listDemos(library);
+  const mine = records.filter((r) => r.uploaderId === me.id);
+  const counted = new Set(mine.map((r) => r.id));
+  const inFlight = allJobs(library).filter(
+    (j) =>
+      j.uploaderId === me.id &&
+      (j.state === 'queued' || j.state === 'running') &&
+      !counted.has(j.demoId)
+  ).length;
+
+  const held = mine.length + inFlight + reservedUploads(me.id);
+  const result = checkLimit(me, CAP.DEMOS_UPLOAD_LIMIT, held, incoming);
+  const reserved = reserve && result.allowed ? reserveUploads(me.id, incoming) : 0;
+  return { ...result, reserved };
 }
 
 function withJob(user, record) {
@@ -676,6 +721,26 @@ export async function handleReplayRequest(req, res, url) {
     return false;
   };
 
+  /**
+   * 402 unless the caller's plan carries this capability, in the one refusal
+   * shape the client already renders. `consume: false` because these are the
+   * boolean gates: opening the feature is not a use of anything.
+   *
+   * @param {string} key
+   * @returns {Promise<boolean>} true when the request may continue.
+   */
+  const requireCap = async (key) => {
+    try {
+      await requireCapability(me, key, { consume: false });
+      return true;
+    } catch (err) {
+      const refusal = upgradeResponse(err);
+      if (!refusal) throw err;
+      json(res, refusal.status, refusal.body);
+      return false;
+    }
+  };
+
   // ---- status -------------------------------------------------------------
   if (req.method === 'GET' && p === '/api/replays/status') {
     json(res, 200, {
@@ -823,74 +888,94 @@ export async function handleReplayRequest(req, res, url) {
       json(res, 403, { error: anchored.error, reason: 'link_required' });
       return true;
     }
-    const cap = await uploadCap(user, me);
-    if (!cap.allowed) {
-      // 402, not 403: this is "not on your plan", and the client shows an
-      // upgrade prompt rather than a permission error.
-      try {
-        requireLimit(me, CAP.DEMOS_UPLOAD_LIMIT, cap.current);
-      } catch (err) {
-        const refusal = upgradeResponse(err);
-        json(res, refusal.status, refusal.body);
+    // Admitted for one demo. An archive can hold any number, and how many is
+    // not knowable until it has been opened, so the check that actually bounds
+    // an archive is the one in the ingest loop. This one refuses an account
+    // that is already full, and takes the place that stops a second request
+    // arriving in the same moment from being admitted against the same count.
+    let reserved = 0;
+    try {
+      const cap = await uploadCap(user, me, { incoming: 1, reserve: true });
+      reserved = cap.reserved;
+      if (!cap.allowed) {
+        // 402, not 403: this is "not on your plan", and the client shows an
+        // upgrade prompt rather than a permission error.
+        try {
+          requireLimit(me, CAP.DEMOS_UPLOAD_LIMIT, cap.current, cap.incoming);
+        } catch (err) {
+          const refusal = upgradeResponse(err);
+          json(res, refusal.status, refusal.body);
+          return true;
+        }
+      }
+      const filename = String(req.headers['x-aim4-filename'] || 'match.dem').slice(0, 160);
+      if (!isAcceptedUpload(filename)) {
+        json(res, 400, {
+          error: 'Upload a .dem file, or a .zip, .rar, .tar.gz, .gz or .zst containing one.'
+        });
         return true;
       }
-    }
-    const filename = String(req.headers['x-aim4-filename'] || 'match.dem').slice(0, 160);
-    if (!isAcceptedUpload(filename)) {
-      json(res, 400, {
-        error: 'Upload a .dem file, or a .zip, .rar, .tar.gz, .gz or .zst containing one.'
-      });
-      return true;
-    }
-    const declared = Number(req.headers['content-length'] || 0);
-    const gate = await checkQuota(user, declared);
-    if (!gate.ok) {
-      json(res, 413, { error: gate.error, usage: gate.usage });
-      return true;
-    }
-
-    // Always land on a temp file first, even for a bare .dem. Unpacking decides
-    // where the demo finally lives (a .zip produces several), and the ingest
-    // pipeline adopts a lone .dem by renaming it rather than copying it.
-    //
-    // gate.allowed, not bytesLeft: a request with no Content-Length, or a lying
-    // one, skips the check above entirely, so the per-upload cap has to be the
-    // ceiling the stream is actually held to.
-    let saved;
-    try {
-      saved = await saveTempUpload(req, gate.allowed, 'upload');
-    } catch (err) {
-      json(res, 413, { error: err.message || 'Upload failed.' });
-      return true;
-    }
-    if (!saved.sizeBytes) {
-      await rm(saved.path, { force: true }).catch(() => {});
-      json(res, 400, { error: 'Empty upload.' });
-      return true;
-    }
-
-    // Respond as soon as the bytes are on disk. Inflating a multi-gigabyte
-    // archive takes long enough that holding the response open for it is
-    // exactly how an upload dies behind a proxy that is done waiting.
-    //
-    // What comes OUT of an archive is bounded by the library quota rather than
-    // the per-upload cap: 5 GB of demos can legitimately expand well past 5 GB,
-    // and the quota is the limit that actually protects the disk. The archive's
-    // own size is subtracted because it is still on disk at this point.
-    const batch = startIngest({
-      user,
-      filename,
-      source: saved.path,
-      sizeBytes: saved.sizeBytes,
-      allowedBytes: Math.max(0, gate.usage.bytesLeft - saved.sizeBytes),
-      owner: {
-        uploaderId: me.id,
-        uploaderName: me.username,
-        visibility: normalizeVisibility(req.headers['x-aim4-visibility'] || 'private')
+      const declared = Number(req.headers['content-length'] || 0);
+      const gate = await checkQuota(user, declared);
+      if (!gate.ok) {
+        json(res, 413, { error: gate.error, usage: gate.usage });
+        return true;
       }
-    });
-    json(res, 202, { batch: batchStatus(batch), usage: await usage(user) });
-    return true;
+
+      // Always land on a temp file first, even for a bare .dem. Unpacking
+      // decides where the demo finally lives (a .zip produces several), and the
+      // ingest pipeline adopts a lone .dem by renaming it rather than copying
+      // it.
+      //
+      // gate.allowed, not bytesLeft: a request with no Content-Length, or a
+      // lying one, skips the check above entirely, so the per-upload cap has to
+      // be the ceiling the stream is actually held to.
+      let saved;
+      try {
+        saved = await saveTempUpload(req, gate.allowed, 'upload');
+      } catch (err) {
+        json(res, 413, { error: err.message || 'Upload failed.' });
+        return true;
+      }
+      if (!saved.sizeBytes) {
+        await rm(saved.path, { force: true }).catch(() => {});
+        json(res, 400, { error: 'Empty upload.' });
+        return true;
+      }
+
+      // Respond as soon as the bytes are on disk. Inflating a multi-gigabyte
+      // archive takes long enough that holding the response open for it is
+      // exactly how an upload dies behind a proxy that is done waiting.
+      //
+      // What comes OUT of an archive is bounded by the library quota rather
+      // than the per-upload cap: 5 GB of demos can legitimately expand well
+      // past 5 GB, and the quota is the limit that actually protects the disk.
+      // The archive's own size is subtracted because it is still on disk here.
+      const batch = startIngest({
+        user,
+        filename,
+        source: saved.path,
+        sizeBytes: saved.sizeBytes,
+        allowedBytes: Math.max(0, gate.usage.bytesLeft - saved.sizeBytes),
+        owner: {
+          uploaderId: me.id,
+          uploaderName: me.username,
+          visibility: normalizeVisibility(req.headers['x-aim4-visibility'] || 'private'),
+          // The resolved caller, for the per-demo cap check inside the unpack.
+          account: me
+        },
+        reserved
+      });
+      // The ingest pipeline owns the reservation from here and releases it once
+      // the records it wrote can count themselves.
+      reserved = 0;
+      json(res, 202, { batch: batchStatus(batch), usage: await usage(user) });
+      return true;
+    } finally {
+      // Every path that answered without starting an ingest gives its place
+      // back, or a refused upload would hold it until the process restarted.
+      if (reserved) releaseUploads(me.id, reserved);
+    }
   }
 
   const batchMatch = p.match(/^\/api\/replays\/uploads\/([A-Za-z0-9_-]+)$/);
@@ -907,56 +992,81 @@ export async function handleReplayRequest(req, res, url) {
   // Prefer this path in production: parse on the user's PC, upload only the
   // already-named rounds. No demoparser process runs on the server.
   if (req.method === 'POST' && p === '/api/replays/import') {
-    // Same identity rule as the raw upload path. Only for signed-in callers:
-    // anonymous imports into the shared library predate accounts and keep
-    // their existing behaviour.
-    if (me.signedIn) {
-      const anchored = demoUploadIdentity(me);
-      if (!anchored.ok) {
-        json(res, 403, { error: anchored.error, reason: 'link_required' });
-        return true;
-      }
-    }
-    const filename = String(req.headers['x-aim4-filename'] || `match${PACKAGE_EXT}`).slice(0, 160);
-    if (!filename.toLowerCase().endsWith(PACKAGE_EXT)) {
-      json(res, 400, { error: `Only ${PACKAGE_EXT} packages can be imported.` });
+    // Signed in, like every other way of putting a demo in the library. This
+    // route used to accept anonymous callers, and since a package is one
+    // request per demo and GET /demos/:id/package hands out a valid package for
+    // any visible demo, that made it an unlimited uploader anybody could point
+    // at the volume.
+    if (!requireUser()) return true;
+    // Same identity rule as the raw upload path.
+    const anchored = demoUploadIdentity(me);
+    if (!anchored.ok) {
+      json(res, 403, { error: anchored.error, reason: 'link_required' });
       return true;
     }
-    const declared = Number(req.headers['content-length'] || 0);
-    const gate = await checkQuota(user, declared);
-    if (!gate.ok) {
-      json(res, 413, { error: gate.error, usage: gate.usage });
-      return true;
-    }
-
-    let tmp = null;
+    // One package is one demo, so this cap check is the whole of it: there is
+    // no second check further down the way the archive path has one. Reserved
+    // for the same reason, because the body still has to stream before the
+    // record is written.
+    let reserved = 0;
     try {
-      const saved = await saveTempUpload(req, gate.allowed, 'import');
-      tmp = saved.path;
-      if (!saved.sizeBytes) {
-        json(res, 400, { error: 'Empty upload.' });
+      const cap = await uploadCap(user, me, { incoming: 1, reserve: true });
+      reserved = cap.reserved;
+      if (!cap.allowed) {
+        try {
+          requireLimit(me, CAP.DEMOS_UPLOAD_LIMIT, cap.current, cap.incoming);
+        } catch (err) {
+          const refusal = upgradeResponse(err);
+          json(res, refusal.status, refusal.body);
+          return true;
+        }
+      }
+      const filename = String(req.headers['x-aim4-filename'] || `match${PACKAGE_EXT}`).slice(0, 160);
+      if (!filename.toLowerCase().endsWith(PACKAGE_EXT)) {
+        json(res, 400, { error: `Only ${PACKAGE_EXT} packages can be imported.` });
         return true;
       }
-      const buf = await readFile(tmp);
-      const record = await importReplayPackage(user, buf, {
-        filename,
-        uploadedAt: Date.now(),
-        uploaderId: me.id,
-        uploaderName: me.username,
-        visibility: 'private'
-      });
-      scheduleStatsIndex(statsIo, user, record);
-      json(res, 201, {
-        demo: { ...withJob(user, record), owner: ownerOf(record) },
-        usage: await usage(user)
-      });
-    } catch (err) {
-      const status = err.status || 400;
-      json(res, status, { error: err.message || 'Import failed.', usage: err.usage });
+      const declared = Number(req.headers['content-length'] || 0);
+      const gate = await checkQuota(user, declared);
+      if (!gate.ok) {
+        json(res, 413, { error: gate.error, usage: gate.usage });
+        return true;
+      }
+
+      let tmp = null;
+      try {
+        const saved = await saveTempUpload(req, gate.allowed, 'import');
+        tmp = saved.path;
+        if (!saved.sizeBytes) {
+          json(res, 400, { error: 'Empty upload.' });
+          return true;
+        }
+        const buf = await readFile(tmp);
+        const record = await importReplayPackage(user, buf, {
+          filename,
+          uploadedAt: Date.now(),
+          uploaderId: me.id,
+          uploaderName: me.username,
+          visibility: 'private'
+        });
+        scheduleStatsIndex(statsIo, user, record);
+        json(res, 201, {
+          demo: { ...withJob(user, record), owner: ownerOf(record) },
+          usage: await usage(user)
+        });
+      } catch (err) {
+        const status = err.status || 400;
+        json(res, status, { error: err.message || 'Import failed.', usage: err.usage });
+      } finally {
+        if (tmp) await rm(tmp, { force: true }).catch(() => {});
+      }
+      return true;
     } finally {
-      if (tmp) await rm(tmp, { force: true }).catch(() => {});
+      // Held only until the record exists, win or lose. Unlike the archive
+      // path there is nothing to hand the reservation on to: by the time this
+      // runs the demo is either in the library or it never will be.
+      if (reserved) releaseUploads(me.id, reserved);
     }
-    return true;
   }
 
   const demoMatch = p.match(/^\/api\/replays\/demos\/([A-Za-z0-9_-]+)$/);
@@ -1074,8 +1184,52 @@ export async function handleReplayRequest(req, res, url) {
   // finished from the desktop recorder: the server validates it, stores it,
   // and serves it back. No transcription, no audio work, nothing on the
   // request path — see shared/comms/format.js for what is in the file.
+  //
+  // Voice is a team feature on every team tier, so the writes are gated on
+  // `team.comms` and the reads are not. The split is deliberate: a demo's
+  // comms are read while a round is playing, and a 402 landing in the middle
+  // of playback is worse than the sale it might make. What is gated is
+  // everything that changes the library: uploading a container, attaching or
+  // detaching one, and editing the identity map.
+  //
+  // Library-wide TeamSpeak identity memory, editable from the team
+  // Communication page: uid -> roster player, applying to every session.
+  if (p === '/api/replays/comms/identities') {
+    const { readIdentities, setIdentity } = await import('./commsStore.js');
+    if (req.method === 'GET') {
+      json(res, 200, { identities: await readIdentities(user) });
+      return true;
+    }
+    if (req.method === 'POST') {
+      if (!me.signedIn) {
+        json(res, 401, { error: 'Sign in to link TeamSpeak identities.' });
+        return true;
+      }
+      // The identity map is library-wide, so one seat's edit changes what every
+      // other seat sees. That is a team action whatever page it is made from.
+      if (!(await requireCap(CAP.TEAM_COMMS))) return true;
+      let body = {};
+      try {
+        body = await readJson(req, 16 * 1024);
+      } catch (err) {
+        json(res, 400, { error: err?.message || 'Invalid JSON body.' });
+        return true;
+      }
+      try {
+        const identities = await setIdentity(user, body.uid, {
+          playerId: body.playerId,
+          nickname: body.nickname
+        });
+        json(res, 200, { identities });
+      } catch (err) {
+        json(res, 400, { error: err?.message || 'Could not save the link.' });
+      }
+      return true;
+    }
+  }
+
   const commsMatch = p.match(
-    /^\/api\/replays\/demos\/([A-Za-z0-9_-]+)\/comms(?:\/(file|attach))?$/
+    /^\/api\/replays\/demos\/([A-Za-z0-9_-]+)\/comms(?:\/(file|attach|manifest))?$/
   );
   if (commsMatch) {
     const id = commsMatch[1];
@@ -1099,6 +1253,25 @@ export async function handleReplayRequest(req, res, url) {
       const meta = await readComms(user, id);
       if (!meta) {
         json(res, sub === 'file' ? 404 : 200, sub === 'file' ? { error: 'No comms attached.' } : { comms: null });
+        return true;
+      }
+      if (sub === 'manifest') {
+        // The transcript without the voice: the Communication page reads
+        // utterance timing for a whole library of sessions, and pulling the
+        // ~2 MB container per demo to get at ~200 KB of gzipped JSON would
+        // make that page cost megabytes it never plays.
+        const bytes = await readCommsFile(user, id);
+        if (!bytes) {
+          json(res, 404, { error: 'No comms attached.' });
+          return true;
+        }
+        const { decodeComms } = await import('../../shared/comms/format.js');
+        try {
+          const { manifest } = await decodeComms(new Uint8Array(bytes));
+          await jsonBig(res, 200, { manifest }, req, { 'Cache-Control': 'private, max-age=300' });
+        } catch (err) {
+          json(res, 422, { error: err?.message || 'Comms file is unreadable.' });
+        }
         return true;
       }
       if (sub === 'file') {
@@ -1133,6 +1306,10 @@ export async function handleReplayRequest(req, res, url) {
         json(res, 403, { error: 'Only the uploader can change that demo’s comms.' });
         return true;
       }
+      // Attaching, replacing, re-mapping and detaching all land here. 403 for
+      // "not your demo" first, then 402 for "not on your plan": being told to
+      // upgrade for something you could not do anyway reads as a shakedown.
+      if (!(await requireCap(CAP.TEAM_COMMS))) return true;
     }
 
     if (req.method === 'DELETE') {
@@ -2090,6 +2267,19 @@ export async function handleReplayRequest(req, res, url) {
         return true;
       }
       if (!requireUser()) return true;
+      // A team-scoped playlist is shared with everyone on the roster, so it is
+      // a team feature. Which scope this write ends in is not always in the
+      // body: leaving `scope` out of an edit keeps whatever the stored playlist
+      // has, so a rename of a team playlist has to be gated too, and gating on
+      // `body.scope === 'team'` alone would miss it.
+      const asked =
+        body?.scope === 'team' ? 'team' : body?.scope === 'private' ? 'private' : null;
+      const playlistId = String(body?.id || '').replace(/[^A-Za-z0-9_-]/g, '');
+      const stored = playlistId
+        ? (await readPlaylists(user)).find((pl) => pl.id === playlistId)
+        : null;
+      const resulting = asked || (stored?.scope === 'team' ? 'team' : 'private');
+      if (resulting === 'team' && !(await requireCap(CAP.TEAM_PLAYLISTS))) return true;
       try {
         await upsertPlaylist(user, body, {
           id: me.id,
@@ -2107,6 +2297,10 @@ export async function handleReplayRequest(req, res, url) {
 
   const playlistMatch = p.match(/^\/api\/replays\/playlists\/([A-Za-z0-9_-]+)$/);
   if (req.method === 'DELETE' && playlistMatch) {
+    // Not gated on team.playlists, unlike creating and editing one. removePlaylist
+    // already refuses someone else's playlist, and an account that has dropped
+    // off a team plan still has to be able to clear out what it made while it
+    // was on one. A gate here would leave those playlists undeletable.
     if (!requireUser()) return true;
     let list;
     try {

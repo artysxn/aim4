@@ -199,3 +199,29 @@ async function rememberIdentities(user, speakers, mapping) {
 export async function readIdentities(user) {
   return (await readJson(identitiesPath(user))) || {};
 }
+
+/**
+ * Set (or clear, with an empty playerId) one UID -> player link directly.
+ *
+ * The attach dialog writes identities as a side effect of mapping one demo;
+ * the team Communication page edits the library-wide memory itself, so a
+ * link made there applies to every past and future session at once.
+ */
+export async function setIdentity(user, uid, { playerId = '', nickname = '' } = {}) {
+  const key = String(uid ?? '').slice(0, 80);
+  if (!key) throw new Error('Missing TeamSpeak uid.');
+  const store = (await readJson(identitiesPath(user))) || {};
+  const pid = String(playerId || '').slice(0, 64);
+  if (!pid) {
+    delete store[key];
+  } else {
+    store[key] = {
+      playerId: pid,
+      nickname: String(nickname || store[key]?.nickname || '').slice(0, 80),
+      lastSeen: Date.now()
+    };
+  }
+  await fsp.mkdir(commsDir(user), { recursive: true });
+  await fsp.writeFile(identitiesPath(user), JSON.stringify(store, null, 2));
+  return store;
+}

@@ -25,7 +25,8 @@ import {
   PLAN_IDS,
   PLAN_NAMES,
   PLAN_RANKS,
-  capabilitiesForPlan
+  capabilitiesForPlan,
+  priceForTerm
 } from '../shared/entitlements/catalogue.js';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -43,6 +44,13 @@ function planRows() {
     rank: PLAN_RANKS[id],
     seat_capacity: PLAN_CAPACITY[id].seat_capacity,
     team_capacity: PLAN_CAPACITY[id].team_capacity,
+    // The total charged for one term, in cents, discounts already applied.
+    // Copied here so SQL reporting and any provider-side price sync read the
+    // same numbers the pricing page renders.
+    price_month_cents: priceForTerm(id, 'month').totalCents,
+    price_quarter_cents: priceForTerm(id, 'quarter').totalCents,
+    price_halfyear_cents: priceForTerm(id, 'halfyear').totalCents,
+    price_year_cents: priceForTerm(id, 'year').totalCents,
     capabilities: capabilitiesForPlan(id)
   }));
 }
@@ -57,6 +65,8 @@ function render() {
       return [
         `  (${sqlString(row.id)}, ${sqlString(row.name)}, ${row.rank},`,
         `   ${row.seat_capacity}, ${row.team_capacity},`,
+        `   ${row.price_month_cents}, ${row.price_quarter_cents},`,
+        `   ${row.price_halfyear_cents}, ${row.price_year_cents},`,
         `   ${sqlString(caps)}::jsonb)`
       ].join('\n');
     })
@@ -69,20 +79,33 @@ function render() {
 -- Source: shared/entitlements/catalogue.js
 -- Regenerate: node scripts/sync-plan-capabilities.mjs
 --
--- Prices stay null until a billing provider is wired up. The pricing page reads
--- them from here, so a null price renders as "not for sale yet" rather than as
--- a broken checkout button.
+-- Prices are the TOTAL charged for one term, in cents, with both the term
+-- discount and the per-plan long-term bonus already applied. Enforcement never
+-- reads them; they are here so SQL reporting and a future provider price sync
+-- share one source with the pricing page.
 -- ===========================================================================
 
-insert into public.plans (id, name, rank, seat_capacity, team_capacity, capabilities)
+-- The six-month term postdates 0002, and this file runs before the migration
+-- that adds it on a fresh project. Idempotent, so re-running is free.
+alter table public.plans add column if not exists price_halfyear_cents int;
+
+insert into public.plans (
+  id, name, rank, seat_capacity, team_capacity,
+  price_month_cents, price_quarter_cents, price_halfyear_cents, price_year_cents,
+  capabilities
+)
 values
 ${rows}
 on conflict (id) do update set
-  name          = excluded.name,
-  rank          = excluded.rank,
-  seat_capacity = excluded.seat_capacity,
-  team_capacity = excluded.team_capacity,
-  capabilities  = excluded.capabilities;
+  name                 = excluded.name,
+  rank                 = excluded.rank,
+  seat_capacity        = excluded.seat_capacity,
+  team_capacity        = excluded.team_capacity,
+  price_month_cents    = excluded.price_month_cents,
+  price_quarter_cents  = excluded.price_quarter_cents,
+  price_halfyear_cents = excluded.price_halfyear_cents,
+  price_year_cents     = excluded.price_year_cents,
+  capabilities         = excluded.capabilities;
 `;
 }
 

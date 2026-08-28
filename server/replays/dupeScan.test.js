@@ -15,6 +15,8 @@ import {
 } from '../../src/replays/shared/tickFormat.js';
 import {
   chooseLoser,
+  duplicateUploadMessage,
+  findIdenticalMatch,
   matchPlayers,
   roundIdentityFraction,
   screenPair,
@@ -246,6 +248,56 @@ const original = buildMatch({ id: 'demo-a', seed: 1, revision: 4, parsedAt: 2000
   const t2 = chooseLoser({ id: 'b', parsedAt: 5 }, { id: 'a', parsedAt: 5 });
   assert(t1.remove.id === t2.remove.id, 'ties resolve the same in either order');
   console.log('  loser choice: revision first, then age, deterministic ties');
+}
+
+// ---- upload-time: incoming copy always loses --------------------------------
+
+{
+  const dupe = buildMatch({ id: 'upload-dupe', seed: 1, filename: 'dust2.dem' });
+  dupe.record.filename = 'dust2.dem';
+  const rematch = buildMatch({ id: 'upload-new', seed: 9, filename: 'mirage.dem' });
+  rematch.record.filename = 'other.dem';
+  const io = ioFor(original, dupe, rematch);
+
+  const hit = await findIdenticalMatch(io, 'local', dupe.record, [original.record]);
+  assert(hit && hit.id === original.record.id, 'identical upload matches the stored copy');
+  const msg = duplicateUploadMessage(dupe.record.filename, hit);
+  assert(msg.includes('dust2.dem'), `message names the file, got ${msg}`);
+  assert(msg.includes('already exists'), `message says it exists, got ${msg}`);
+  assert(!msg.includes('—'), 'no em dash in the notice');
+
+  const spared = await findIdenticalMatch(io, 'local', rematch.record, [original.record]);
+  assert(spared === null, 'a different game is not cancelled');
+
+  // Mixed batch, independent per file: one duplicate does not abort siblings.
+  // Mirrors parse order (one demo at a time, library grows as unique files land).
+  const uniqueA = buildMatch({ id: 'batch-a', seed: 3 });
+  uniqueA.record.filename = 'a.dem';
+  const uniqueB = buildMatch({ id: 'batch-b', seed: 5 });
+  uniqueB.record.filename = 'b.dem';
+  const batchIo = ioFor(original, uniqueA, dupe, uniqueB);
+  const library = [original.record];
+  const incoming = [uniqueA.record, dupe.record, uniqueB.record];
+  const cancelled = [];
+  const kept = [];
+  for (const demo of incoming) {
+    const existing = await findIdenticalMatch(batchIo, 'local', demo, library);
+    if (existing) cancelled.push(demo.id);
+    else {
+      kept.push(demo.id);
+      library.push(demo);
+    }
+  }
+  assert(cancelled.length === 1 && cancelled[0] === dupe.record.id, `only the duplicate cancelled, got ${cancelled}`);
+  assert(kept.join(',') === `${uniqueA.record.id},${uniqueB.record.id}`, `siblings kept, got ${kept}`);
+
+  // Parsing records have no identity yet and must not cancel an upload.
+  const parsing = { ...original.record, id: 'still-parsing', status: 'parsing' };
+  assert(
+    (await findIdenticalMatch(io, 'local', dupe.record, [parsing])) === null,
+    'unready library rows are not identity'
+  );
+  console.log('  upload: identical cancelled, mixed batch keeps non-dupes');
 }
 
 console.log('dupeScan: all assertions passed');

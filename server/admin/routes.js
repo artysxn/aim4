@@ -395,19 +395,21 @@ async function route(req, res, url, me) {
 
   /**
    * One click, because during development this is used constantly: an
-   * unexpiring Team Elite subscription with no billing attached.
+   * unexpiring top-tier subscription with no billing attached.
    */
   if (req.method === 'POST' && p === '/api/admin/grant-elite') {
     const body = await readJson(req);
     if (!body.userId) throw new ValidationError('userId is required.');
     const row = await createSubscription({
       userId: body.userId,
-      planId: 'team_elite',
+      // The strongest plan there is, read off the ladder rather than typed in,
+      // so renaming the top tier again cannot silently break this button.
+      planId: PLAN_IDS[PLAN_IDS.length - 1],
       term: 'lifetime',
       periodEnd: null,
       source: 'admin',
       actorId: me.id,
-      notes: body.reason || 'Infinite Elite, granted from the admin panel.',
+      notes: body.reason || 'Infinite top tier, granted from the admin panel.',
       req
     });
     json(res, req, 201, { subscription: row });

@@ -237,10 +237,16 @@ async function runJob(job, deps = {}) {
     // Rule 1: the id is inherited, never minted. Everything the user attached
     // to this demo — notes, tags, visibility, view counts, and every link
     // anyone has shared — hangs off it.
+    // `uploadedAt` on a stored record is a NUMBER (epoch ms); Date.parse of a
+    // number is NaN, so the old expression re-dated every reparsed demo to
+    // "just now" and jumped it to the top of the library.
+    const keptUploadedAt = Number.isFinite(previous.uploadedAt)
+      ? previous.uploadedAt
+      : Date.parse(previous.uploadedAt || '') || Date.now();
     const { record: fresh, files: plain } = materializeDemo(demo, job.demoId, {
       filename: previous.filename,
       sizeBytes: previous.sizeBytes,
-      uploadedAt: previous.uploadedAt ? Date.parse(previous.uploadedAt) || Date.now() : Date.now(),
+      uploadedAt: keptUploadedAt,
       source: previous.source || 'hltv'
     });
     // Carry over everything the parse cannot know, so an upgrade is invisible

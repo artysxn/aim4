@@ -3091,8 +3091,10 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
       if (fields) fields.hidden = !on;
     });
     $('#set-custom-skybox')?.addEventListener('change', (e) => {
-      // Custom skybox and texture work is the `aim.cosmetics` capability:
-      // presets from Premium, full control on Elite, nothing on Free.
+      // Custom skybox and texture work is the `aim.cosmetics` capability, an
+      // enum: nothing on Free, the presets from the first paid band, full
+      // control at the top of the ladder. Which plan that is comes from the
+      // catalogue, never from a tier name written down here.
       if (e.target.checked && !this._aimCan(CAP.AIM_COSMETICS, 'presets')) {
         e.target.checked = false;
         this._showAimUpgrade(CAP.AIM_COSMETICS, 'presets');
@@ -5145,7 +5147,9 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
   //
   // The trainer reads the same capability catalogue the site does. Access and
   // the built-in routines are free forever; analytics, saved replays and
-  // cosmetics are not.
+  // cosmetics are not. No tier is named in this file: every gate asks for a
+  // capability key, and the plan in the upgrade copy is whichever one the
+  // catalogue says is cheapest for that key.
 
   /**
    * True when this account holds a capability. Falls back to the free tier's
@@ -5205,8 +5209,9 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
       body.innerHTML = '<p class="center lb-hint">Replays are not configured.</p>';
       return;
     }
-    // Saved replays are Premium and up. Shown locked rather than hidden: an
-    // empty Replays panel reads as "this does not work", not as "this is paid".
+    // Saved replays start at the first paid band, and the catalogue says which
+    // plan that is. Shown locked rather than hidden: an empty Replays panel
+    // reads as "this does not work", not as "this is paid".
     if (!this._aimCan(CAP.AIM_REPLAYS, 'best_and_recent')) {
       body.innerHTML = this._lockedHtml(CAP.AIM_REPLAYS, 'best_and_recent');
       return;
@@ -7075,7 +7080,8 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
       e.stopPropagation();
       if (!pop) return;
       // Replay analysis overlays (optimal path, flick breakdown, tension) are
-      // the advanced analytics the pricing matrix puts behind Premium.
+      // the `aim.advanced_analytics` capability, which every paid plan carries
+      // and Free does not. _lockedHtml names the plan from the catalogue.
       if (!this._aimCan(CAP.AIM_ADVANCED_ANALYTICS)) {
         pop.innerHTML = this._lockedHtml(CAP.AIM_ADVANCED_ANALYTICS);
         pop.hidden = false;

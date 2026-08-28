@@ -10,16 +10,19 @@
 //   5. Admin override is_admin, everything unlimited
 //
 // Steps 2 and 3 merge by plan *rank*, not by recency, so a user holding both a
-// personal Premium and a Team Elite seat is never worse off than holding either
-// alone. Steps 3 and 4 are time-aware at read: an expired trial or grant stops
-// applying the moment it lapses, whether or not the sweep job has run. That
-// property is what stops "the cron was down for a day" from becoming "forty
-// people had Premium for free".
+// personal Solo Premium and a Team Tier 1 seat is never worse off than holding
+// either alone. Per-capability merge keeps the stronger value, so a Solo Elite
+// subscriber taking a Tier 3 seat keeps unlimited model runs and gains the
+// team toolkit. Steps 3 and 4 are time-aware at read: an expired trial or grant
+// stops applying the moment it lapses, whether or not the sweep job has run.
+// That property is what stops "the cron was down for a day" from becoming
+// "forty people had Solo Premium for free".
 // ---------------------------------------------------------------------------
 
 import {
   CAPABILITY_KEYS,
   PLAN_RANKS,
+  SHARED_QUOTA_KEYS,
   capabilitiesForPlan,
   compareValues,
   isCapability,
@@ -90,21 +93,45 @@ function asArray(value) {
 
 /**
  * Merge a plan's capabilities over an accumulator, per capability, keeping
- * whichever value the higher-ranked plan supplies.
+ * whichever value is STRONGER.
  *
- * Written per-capability rather than "just take the highest plan wholesale"
- * because the two only agree while the matrix is monotonic in rank. If a future
- * plan is ever better at one thing and worse at another, this keeps the stated
- * guarantee that holding two plans cannot make a user worse off.
+ * Not "whichever the higher-ranked plan supplies". The two ladders are not one
+ * ordered list: Solo Elite is unlimited on the model features that Team Tier 3
+ * meters at one a day, while Team Tier 3 has the entire team toolkit that no
+ * solo plan has. Taking the higher-ranked plan's value wholesale would drop a
+ * Solo Elite subscriber down to one map-control run a day the moment they took
+ * a seat on a Tier 3 team, which is exactly the "holding two plans made me
+ * worse off" failure this function exists to prevent.
+ *
+ * `sourceByKey` records which subscription supplied each winning value, so a
+ * shared quota can be metered against the subscription that granted it rather
+ * than against the person spending it.
+ *
+ * @param {Record<string, any>} acc
+ * @param {Record<string, string|null>} sourceByKey
+ * @param {string} planId
+ * @param {string|null} subscriptionId
  */
-function mergePlan(acc, accRankByKey, planId) {
+function mergePlan(acc, sourceByKey, planId, subscriptionId = null) {
   const values = capabilitiesForPlan(planId);
-  const rank = rankOf(planId);
   for (const key of CAPABILITY_KEYS) {
-    if (rank >= (accRankByKey[key] ?? -1)) {
+    if (compareValues(key, values[key], acc[key]) > 0) {
       acc[key] = values[key];
-      accRankByKey[key] = rank;
+      sourceByKey[key] = subscriptionId;
     }
+  }
+}
+
+/**
+ * Force a plan's values on, weaker ones included. Only an override grant does
+ * this: it is how an admin reproduces a Free user's experience on a paid
+ * account.
+ */
+function forcePlan(acc, sourceByKey, planId) {
+  const values = capabilitiesForPlan(planId);
+  for (const key of CAPABILITY_KEYS) {
+    acc[key] = values[key];
+    sourceByKey[key] = null;
   }
 }
 
@@ -119,7 +146,8 @@ function mergePlan(acc, accRankByKey, planId) {
  *   tier: string, source: string, capabilities: Record<string, any>,
  *   expiresAt: string|null, trial: object|null, isAdmin: boolean,
  *   seat: {subscriptionId: string|null, teamId: string|null, planId: string}|null,
- *   appliedGrants: string[]
+ *   appliedGrants: string[],
+ *   quotaSubjects: Record<string, string>
  * }}
  */
 export function resolveEntitlements({
@@ -133,9 +161,12 @@ export function resolveEntitlements({
 
   // 1. Base.
   const capabilities = capabilitiesForPlan('free');
-  /** @type {Record<string, number>} */
-  const rankByKey = {};
-  for (const key of CAPABILITY_KEYS) rankByKey[key] = 0;
+  // Which subscription supplied the winning value for each capability, so a
+  // shared quota can be metered against that subscription. Null means "nobody
+  // in particular", i.e. meter it against the account itself.
+  /** @type {Record<string, string|null>} */
+  const sourceByKey = {};
+  for (const key of CAPABILITY_KEYS) sourceByKey[key] = null;
 
   let tier = 'free';
   let source = 'free';
@@ -153,7 +184,12 @@ export function resolveEntitlements({
   }
   if (bestSeat) {
     const planId = bestSeat.subscription.plan_id;
-    mergePlan(capabilities, rankByKey, planId);
+    mergePlan(
+      capabilities,
+      sourceByKey,
+      planId,
+      bestSeat.subscription_id ?? bestSeat.subscription?.id ?? null
+    );
     tier = planId;
     source = 'seat';
     expiresAt = toIso(bestSeat.subscription.current_period_end);
@@ -164,7 +200,7 @@ export function resolveEntitlements({
   if (subscriptionIsActive(subscription, nowMs)) {
     const planId = subscription.plan_id;
     if (planId in PLAN_RANKS) {
-      mergePlan(capabilities, rankByKey, planId);
+      mergePlan(capabilities, sourceByKey, planId, subscription.id ?? null);
       // On a tie, their own plan is the more useful thing to name in the UI.
       if (rankOf(planId) >= rankOf(tier)) {
         tier = planId;
@@ -199,17 +235,15 @@ export function resolveEntitlements({
       if (override) {
         // An override may move a user *down*, which is the point: it is how you
         // reproduce a Free user's experience while holding a paid plan.
-        const values = capabilitiesForPlan(grant.plan_id);
-        for (const key of CAPABILITY_KEYS) {
-          capabilities[key] = values[key];
-          rankByKey[key] = rankOf(grant.plan_id);
-        }
+        forcePlan(capabilities, sourceByKey, grant.plan_id);
         tier = grant.plan_id;
         source = 'grant';
         expiresAt = toIso(grant.expires_at);
         applied = true;
       } else if (rankOf(grant.plan_id) > rankOf(tier)) {
-        mergePlan(capabilities, rankByKey, grant.plan_id);
+        // A granted plan is a gift from the site, not from a subscription, so
+        // its quotas meter against the account rather than a shared pot.
+        mergePlan(capabilities, sourceByKey, grant.plan_id, null);
         tier = grant.plan_id;
         source = 'grant';
         expiresAt = toIso(grant.expires_at);
@@ -222,6 +256,7 @@ export function resolveEntitlements({
       const current = capabilities[grant.capability];
       if (override || compareValues(grant.capability, value, current) > 0) {
         capabilities[grant.capability] = value;
+        sourceByKey[grant.capability] = null;
         applied = true;
       }
     }
@@ -233,8 +268,18 @@ export function resolveEntitlements({
   // show what this account would have without the badge.
   if (isAdmin) {
     Object.assign(capabilities, unlimitedCapabilities());
+    for (const key of CAPABILITY_KEYS) sourceByKey[key] = null;
     source = 'admin';
     expiresAt = null;
+  }
+
+  // Only the shared quotas need a subject, and only when a subscription
+  // actually supplied the value. Everything else meters per account, which the
+  // enforcement layer expresses by leaving the key out.
+  /** @type {Record<string, string>} */
+  const quotaSubjects = {};
+  for (const key of SHARED_QUOTA_KEYS) {
+    if (sourceByKey[key]) quotaSubjects[key] = sourceByKey[key];
   }
 
   return {
@@ -251,8 +296,20 @@ export function resolveEntitlements({
           planId: bestSeat.subscription.plan_id
         }
       : null,
-    appliedGrants
+    appliedGrants,
+    quotaSubjects
   };
+}
+
+/**
+ * Who a quota use is charged to.
+ *
+ * A shared quota belongs to the subscription that granted it, so every seat on
+ * a Tier 3 team draws from the same one-a-day allowance. Everything else is
+ * charged to the account.
+ */
+export function quotaSubject(resolved, key, userId) {
+  return resolved?.quotaSubjects?.[key] || userId || null;
 }
 
 /** Non-throwing read of one capability out of a resolved map. */

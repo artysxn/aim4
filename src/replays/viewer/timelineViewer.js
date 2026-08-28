@@ -69,7 +69,7 @@ import chartIcon from '../../icons/demos_chart.svg?raw';
 import zonesIcon from '../../icons/demos_zones.svg?raw';
 import duelsIcon from '../../icons/demos_duels.svg?raw';
 import povIcon from '../../icons/demo_pov.svg?raw';
-import commsIcon from '../../icons/demos_comms.svg?raw';
+import commsIcon from '../../icons/sideicons/sideicon_comms.svg?raw';
 import { commsSidebarHtml, commsSidebarKey, createCommsController } from './commsOverlay.js';
 import { createPovVision, povDuelOverlay, povZonePaint } from './teamPov.js';
 import { rememberRound } from '../../site/homeView.js';
@@ -95,6 +95,7 @@ import backIcon from '../../icons/icon_back.svg?raw';
 import menuIcon from '../../icons/icon_menu.svg?raw';
 import addTacticIcon from '../../icons/demo_addtactic.svg?raw';
 import settingsIcon from '../../icons/icon_settings.svg?raw';
+import swapIcon from '../../icons/timeline_swap.svg?raw';
 import headshotIcon from '../../icons/headshot.png';
 
 const SPEEDS = [0.25, 0.5, 1, 2, 4];
@@ -1153,11 +1154,11 @@ export function createTimelineViewer({
         const sideClass = side === 'T' ? 'wt' : 'wct';
         const noted = coachOn && coachNotedFiles.has(r.file);
         const coachClass = noted ? ' has-coach' : '';
-        // A side swap sits inside the first square of the new half, so the
-        // 1:1 row stays a continuous bar.
+        // Sits on the left edge of this chip, which is the divider after the
+        // last round of the previous half.
         const swap =
           i > 0 && gapAfterRound(rounds[i - 1].round) > 1
-            ? '<span class="rv-round-swap" aria-hidden="true">⇄</span>'
+            ? `<span class="rv-round-swap" aria-hidden="true">${swapIcon}</span>`
             : '';
         const coachHint = noted ? ' · coach notes' : '';
         return `<button type="button" class="rv-round ${sideClass}${coachClass}" data-index="${i}" title="${escapeHtml(
@@ -4975,9 +4976,9 @@ export function createTimelineViewer({
 
   /**
    * Turn the win chart on without spending anything for tiers that hold the
-   * capability outright (Elite). A metered tier is left to ask for it, so a
-   * Team Premium account does not silently burn its one daily use by opening
-   * a demo.
+   * capability outright (unlimited). A metered tier is left to ask for it, so a
+   * Solo Lite or Team Tier 3 account does not silently burn its one daily use
+   * by opening a demo.
    */
   void (async () => {
     const ents = getEntitlements();
@@ -5008,8 +5009,8 @@ export function createTimelineViewer({
   })();
 
   zonesBtn?.addEventListener('click', async () => {
-    // Map control is Team Premium and up, metered at one a day there and
-    // unlimited on Elite. Only charged on the way on, never on the way off.
+    // Map control is metered at one a day on the low band and unlimited on the
+    // high band. Only charged on the way on, never on the way off.
     if (!zonesOn && !spentMapControl) {
       if (!(await useMeteredFeature(CAP.DEMOS_MAP_CONTROL, { host: el }))) return;
       spentMapControl = true;

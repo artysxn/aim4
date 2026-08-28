@@ -28,6 +28,13 @@ const send = (msg) => {
   }
 };
 
+/** Epoch ms from a stored timestamp, which may be a number or an ISO string. */
+const epochMillis = (v) => {
+  if (Number.isFinite(v)) return v;
+  const parsed = Date.parse(v || '');
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
 async function run() {
   const {
     file,
@@ -102,8 +109,11 @@ async function run() {
       // demo is dated now. Same for who owns it and who may see it —
       // ingestDemo carries uploader and visibility off the existing record,
       // and these are the rest of what a viewer would notice going missing.
+      // `uploadedAt` on a stored record is a NUMBER (epoch ms): Date.parse of
+      // a number is NaN, so the old expression silently re-dated every
+      // upgraded demo to the crawl time.
       uploadedAt: upgrading
-        ? Date.parse(dup.uploadedAt) || Date.parse(row.playedAt) || Date.now()
+        ? epochMillis(dup.uploadedAt) || Date.parse(row.playedAt) || Date.now()
         : Date.parse(row.playedAt) || Date.now(),
       uploaderId: upgrading ? dup.uploaderId || INGEST_UPLOADER.id : INGEST_UPLOADER.id,
       uploaderName: upgrading ? dup.uploaderName || INGEST_UPLOADER.username : INGEST_UPLOADER.username,

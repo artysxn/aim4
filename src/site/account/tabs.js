@@ -11,12 +11,21 @@
 
 import {
   CAPABILITIES,
+  PLAN_BANDS,
+  PLAN_CAPACITY,
   PLAN_IDS,
   PLAN_NAMES,
-  PLAN_PRICES,
   PLAN_RANKS,
   PLAN_TAGLINES,
-  UNLIMITED
+  SOLO_PLAN_IDS,
+  TEAM_PLAN_IDS,
+  TERM_IDS,
+  TERM_NAMES,
+  UNLIMITED,
+  compareValues,
+  euros,
+  isTeamPlan,
+  priceForTerm
 } from '../../../shared/entitlements/catalogue.js';
 import { CAP } from '../../../shared/entitlements/keys.js';
 import { bytes, button, date, el, field, input, notice, table } from '../admin/dom.js';
@@ -323,6 +332,42 @@ function steamReturnNotice() {
 
 // ---------------------------------------------------------------------------
 
+/**
+ * The bands the two paid ladders share, weakest first.
+ *
+ * Read out of PLAN_BANDS rather than typed, so a band added to the catalogue
+ * appears on the pricing page without an edit here, and a ladder that carries a
+ * band the other one does not still gets its row.
+ */
+const LADDER_BANDS = Object.freeze(
+  [...SOLO_PLAN_IDS, ...TEAM_PLAN_IDS].reduce(
+    (out, id) => (out.includes(PLAN_BANDS[id]) ? out : [...out, PLAN_BANDS[id]]),
+    []
+  )
+);
+
+/** Every plan that costs money, in the order the grid draws them. */
+const PAID_PLAN_IDS = Object.freeze([...SOLO_PLAN_IDS, ...TEAM_PLAN_IDS]);
+
+/**
+ * What a term saves across the whole grid, as a range.
+ *
+ * The discount is not one number any more. It is the term discount compounded
+ * with a per-plan bonus, so a year saves 20% on Solo Lite and 28% on Team Tier
+ * 1. A single "save 20%" on the button would be wrong on five of the six paid
+ * plans and "save 28%" would be wrong on the other five, so the button carries
+ * the range and each card carries its own exact figure in euros.
+ *
+ * Null for the monthly term, which by definition saves nothing.
+ */
+function termSavingRange(term) {
+  if (term === 'month') return null;
+  const pcts = PAID_PLAN_IDS.map((planId) => Math.round(priceForTerm(planId, term).savedPct));
+  const low = Math.min(...pcts);
+  const high = Math.max(...pcts);
+  return low === high ? `Save ${low}%` : `Save ${low}% to ${high}%`;
+}
+
 export function subscriptionTab(state, { reload, billing }) {
   const root = el('div', 'account-panel');
   const currentTier = state.entitlements?.tier || 'free';
@@ -343,7 +388,10 @@ export function subscriptionTab(state, { reload, billing }) {
   if (sub) {
     const bits = [];
     if (sub.status) bits.push(sub.status);
-    if (sub.term) bits.push(sub.term);
+    // Subscription rows carry the database spelling of the term ('month',
+    // 'halfyear', 'lifetime'). Name it the way the buttons below name it, and
+    // fall back to the raw value for a term with no button, such as lifetime.
+    if (sub.term) bits.push(TERM_NAMES[sub.term] || sub.term);
     if (sub.currentPeriodEnd) bits.push(`renews ${date(sub.currentPeriodEnd)}`);
     head.appendChild(el('p', 'account-muted', bits.join(' · ')));
     if (sub.cancelAtPeriodEnd) {
@@ -371,20 +419,23 @@ export function subscriptionTab(state, { reload, billing }) {
   root.appendChild(head);
 
   // ---- term, then the tier cards ------------------------------------------
-  // One term for the whole grid rather than a switch per card: the question
-  // "monthly or yearly" is asked once, and every price on screen answers it.
-  let term = sub?.term === 'yearly' ? 'yearly' : 'monthly';
+  // One term for the whole grid rather than a switch per card: the question is
+  // asked once and every price on screen answers it. The starting term is the
+  // one the account is actually billed on, so a subscriber does not land on a
+  // page quoting prices they are not paying. A term the buttons do not offer,
+  // 'lifetime', falls back to monthly rather than selecting nothing.
+  let term = TERM_IDS.includes(sub?.term) ? sub.term : 'month';
   const termRow = el('div', 'plan-term');
-  const grid = el('div', 'plan-grid');
+  const grid = el('div', 'plan-ladders');
 
   const renderTerm = () => {
     termRow.replaceChildren();
-    for (const [id, label] of [
-      ['monthly', 'Monthly'],
-      ['yearly', 'Yearly · 2 months free']
-    ]) {
-      const btn = el('button', `plan-term-btn${term === id ? ' is-on' : ''}`, label);
+    for (const id of TERM_IDS) {
+      const btn = el('button', `plan-term-btn${term === id ? ' is-on' : ''}`);
       btn.type = 'button';
+      btn.appendChild(el('span', 'plan-term-name', TERM_NAMES[id]));
+      const saving = termSavingRange(id);
+      if (saving) btn.appendChild(el('span', 'plan-term-save', saving));
       btn.addEventListener('click', () => {
         if (term === id) return;
         term = id;
@@ -394,12 +445,31 @@ export function subscriptionTab(state, { reload, billing }) {
       termRow.appendChild(btn);
     }
   };
+
   const renderCards = () => {
     grid.replaceChildren();
-    for (const planId of PLAN_IDS) {
-      grid.appendChild(planCard(planId, currentTier, billing, term, root));
+
+    // Free belongs to neither ladder, so it gets its own row above them rather
+    // than a column of its own next to six paid cards.
+    const freeRow = el('div', 'plan-free-row');
+    freeRow.appendChild(planCard('free', currentTier, billing, term, root));
+    grid.appendChild(freeRow);
+
+    grid.appendChild(el('div', 'plan-ladder-head is-solo', 'Solo'));
+    grid.appendChild(el('div', 'plan-ladder-head is-team', 'Team'));
+
+    // Written band by band, not ladder by ladder. The grid is two columns
+    // wide, so appending the solo plan and then the team plan of the same band
+    // puts Solo Lite next to Team Tier 3 and keeps matching bands on one row.
+    // The narrow-screen rules reorder them back into two blocks.
+    for (const band of LADDER_BANDS) {
+      for (const ladder of [SOLO_PLAN_IDS, TEAM_PLAN_IDS]) {
+        const planId = ladder.find((id) => PLAN_BANDS[id] === band);
+        if (planId) grid.appendChild(planCard(planId, currentTier, billing, term, root));
+      }
     }
   };
+
   renderTerm();
   renderCards();
   root.appendChild(termRow);
@@ -425,7 +495,7 @@ export function subscriptionTab(state, { reload, billing }) {
  * Cancel / resume / manage billing for the subscription the account owns.
  *
  * Trials keep their own controls on the overview tab; this row handles the
- * real thing, and it works before payments do — an admin-granted subscription
+ * real thing, and it works before payments do: an admin-granted subscription
  * winds down the same way a paid one will.
  */
 function manageRow(sub, { reload, billing }) {
@@ -561,7 +631,11 @@ function featureMatrix(currentTier) {
   const tbody = el('tbody');
   for (const group of MATRIX_GROUPS) {
     const gr = el('tr', 'plan-matrix-group');
-    const gcell = el('td', null, group.title);
+    const gcell = el('td');
+    // The title lives in its own span so it can be pinned while the table
+    // scrolls sideways. Pinning the cell would achieve nothing: it spans every
+    // column, so it already begins at the left edge.
+    gcell.appendChild(el('span', 'plan-matrix-group-label', group.title));
     gcell.colSpan = 1 + PLAN_IDS.length;
     gr.appendChild(gcell);
     tbody.appendChild(gr);
@@ -589,41 +663,61 @@ function featureMatrix(currentTier) {
   return wrap;
 }
 
-function planCard(planId, currentTier, billing, term = 'monthly', noticeHost = null) {
-  const price = PLAN_PRICES[planId] || { monthly: 0, yearlyMonthly: 0 };
+/**
+ * One plan, priced for the chosen term.
+ *
+ * Three money lines, in the order the questions get asked: what it works out to
+ * a month, what actually leaves the account and how many months that covers,
+ * and what the term saves against paying month to month. A card that shows only
+ * the first of those is how pricing pages earn distrust, which is why the total
+ * is not hidden behind the per-month figure.
+ *
+ * `band-` and the ladder class are on the card because the narrow-screen rules
+ * use them to regroup the interleaved grid into two blocks.
+ */
+function planCard(planId, currentTier, billing, term = 'month', noticeHost = null) {
+  const price = priceForTerm(planId, term);
   const isCurrent = planId === currentTier;
-  const popular = planId === 'team_premium';
-  const card = el('div', `plan-card${isCurrent ? ' is-current' : ''}${popular ? ' is-popular' : ''}`);
+  const ladder = planId === 'free' ? 'is-free' : isTeamPlan(planId) ? 'is-team' : 'is-solo';
+  const card = el(
+    'div',
+    `plan-card ${ladder} band-${PLAN_BANDS[planId]}${isCurrent ? ' is-current' : ''}`
+  );
 
-  if (popular) card.appendChild(el('span', 'plan-flag', 'Most popular'));
   card.appendChild(el('h4', 'plan-name', PLAN_NAMES[planId]));
 
-  // The shown price is the effective monthly price on the chosen term. On
-  // yearly the honest total appears underneath: "€8.33/mo" with no yearly sum
-  // is how pricing pages earn distrust.
-  const shown = term === 'yearly' ? price.yearlyMonthly : price.monthly;
   const priceRow = el('div', 'plan-price');
-  if (price.monthly === 0) {
-    priceRow.appendChild(el('span', 'plan-price-value', '€0'));
-  } else {
-    priceRow.appendChild(el('span', 'plan-price-value', `€${shown.toFixed(2)}`));
+  priceRow.appendChild(el('span', 'plan-price-value', euros(price.perMonthCents)));
+  if (price.monthlyCents > 0) {
     priceRow.appendChild(el('span', 'plan-price-unit', '/month'));
   }
   card.appendChild(priceRow);
-  if (price.monthly > 0) {
+
+  if (price.monthlyCents > 0) {
     card.appendChild(
       el(
         'p',
-        'plan-price-yearly',
-        term === 'yearly'
-          ? `€${(price.yearlyMonthly * 12).toFixed(2)} billed once a year`
-          : `€${price.yearlyMonthly.toFixed(2)}/mo on the yearly term`
+        'plan-price-total',
+        price.months === 1
+          ? `${euros(price.totalCents)} charged every month`
+          : `${euros(price.totalCents)} charged once, covering ${price.months} months`
       )
     );
+    // Nothing on the monthly term, where the saving is zero and a line saying
+    // so would be noise.
+    if (price.savedCents > 0) {
+      card.appendChild(
+        el(
+          'p',
+          'plan-price-save',
+          `${euros(price.savedCents)} less than paying monthly, ${price.savedPct}% off`
+        )
+      );
+    }
   }
   card.appendChild(el('p', 'plan-tagline', PLAN_TAGLINES[planId] || ''));
 
-  // Three or four load-bearing bullets per plan, read straight off the
+  // Three to five load-bearing bullets per plan, read straight off the
   // catalogue so a capability change cannot leave the card lying.
   const points = el('ul', 'plan-points');
   for (const text of planHighlights(planId)) {
@@ -664,38 +758,96 @@ function planCard(planId, currentTier, billing, term = 'monthly', noticeHost = n
   return card;
 }
 
-/** The card bullets, derived from the catalogue rather than hand-copied. */
+/** "Unlimited", "3 a day", or "None" for a quota value. */
+function quotaText(value) {
+  if (Number(value) === UNLIMITED) return 'Unlimited';
+  if (Number(value) === 0) return 'None';
+  return `${value} a day`;
+}
+
+/**
+ * The four cutting-edge model tools. They ride one ladder in the catalogue, so
+ * one bullet can honestly speak for all four instead of spending four lines on
+ * the same number.
+ */
+const MODEL_KEYS = [
+  CAP.DEMOS_MAP_CONTROL,
+  CAP.DEMOS_ROUND_WIN_PREDICTION,
+  CAP.DEMOS_DUEL_WIN_PREDICTION,
+  CAP.DEMOS_AUTO_COACH
+];
+
+/** The two model tools no solo plan carries, on their own ladder. */
+const TEAM_MODEL_KEYS = [CAP.ANALYTICS_ANTISTRAT, CAP.DEMOS_COMMS_COACH];
+
+/** The two free-tier allowances that are metered rather than locked. */
+const EXPLORE_KEYS = [CAP.ANALYTICS_CHARTS, CAP.ANALYTICS_PATTERN_FINDER];
+
+/**
+ * The weakest value a plan has across a set of capability keys.
+ *
+ * A bullet that covers several keys at once must quote the smallest of them,
+ * never the first: taking the first would silently start lying the day someone
+ * moves one of those keys onto a different ladder, and the bullet would promise
+ * an allowance the plan does not have.
+ */
+function weakestValue(planId, keys) {
+  let out = CAPABILITIES[keys[0]].values[planId];
+  for (const key of keys) {
+    const value = CAPABILITIES[key].values[planId];
+    if (compareValues(key, value, out) < 0) out = value;
+  }
+  return out;
+}
+
+/**
+ * The card bullets, read off the catalogue for all seven plans.
+ *
+ * No number here is typed. Every one of them is a capability value or a plan
+ * capacity, so a catalogue edit cannot leave a card claiming an allowance the
+ * plan no longer has, and the seven plans need no seven branches.
+ *
+ * Team cards lead with the two things only a team plan buys, teams and seats,
+ * and say out loud that the daily allowances are one pot for the whole roster
+ * rather than one each. Solo cards lead with the upload cap and the daily model
+ * allowance, which are the two numbers a solo player chooses a band on.
+ */
 function planHighlights(planId) {
   const v = (key) => CAPABILITIES[key].values[planId];
-  const n = (key) => (Number(v(key)) === UNLIMITED ? 'Unlimited' : String(v(key)));
-  if (planId === 'free') {
+  const uploads = `${limitText(v(CAP.DEMOS_UPLOAD_LIMIT))} demo uploads`;
+  const models = quotaText(weakestValue(planId, MODEL_KEYS));
+
+  if (isTeamPlan(planId)) {
+    const capacity = PLAN_CAPACITY[planId];
+    const teams = capacity.team_capacity;
     return [
-      `${n('demos.upload_limit')} demo uploads`,
-      `${v('analytics.charts')} charts and ${v('analytics.pattern_finder')} searches a day`,
+      `${teams} ${teams === 1 ? 'team' : 'teams'}, ${capacity.seat_capacity} seats`,
+      uploads,
+      `Anti-strat and comms coach: ${quotaText(
+        weakestValue(planId, TEAM_MODEL_KEYS)
+      )}, shared across the roster`,
+      `Map control, win models and auto coach: ${models} each, shared across the roster`,
+      `${limitText(v(CAP.TEAM_STRATBOOK_LIMIT))} strategies per map, ${limitText(
+        v(CAP.TEAM_DOCUMENTS)
+      )} documents`
+    ];
+  }
+
+  if (Number(weakestValue(planId, MODEL_KEYS)) === 0) {
+    // Free. Quoting an allowance of none reads as a taunt, so the card names
+    // the two allowances free accounts do have instead.
+    return [
+      uploads,
+      `Charts and pattern finder: ${quotaText(weakestValue(planId, EXPLORE_KEYS))} each`,
       'Demo viewer and aim trainer'
     ];
   }
-  if (planId === 'premium') {
-    return [
-      `${n('demos.upload_limit')} demo uploads`,
-      'Unlimited charts and pattern finder',
-      'Full player metrics and filters',
-      'Join a team'
-    ];
-  }
-  if (planId === 'team_premium') {
-    return [
-      `${n('team.create_limit')} team, ${n('team.seat_capacity')} seats`,
-      'Stratbook, documents, utility archive',
-      'Team stats and antistrat',
-      'Unlimited demo uploads'
-    ];
-  }
+
   return [
-    `${n('team.create_limit')} teams, ${n('team.seat_capacity')} seats pooled`,
-    'Round and duel win models, auto coach',
-    'Full team metrics and comms coach',
-    'Everything unlimited'
+    uploads,
+    `Map control, win models and auto coach: ${models} each`,
+    `${limitText(v(CAP.AIM_CUSTOM_ROUTINES))} custom routines`,
+    `Aim replays: ${capValueText(CAPABILITIES[CAP.AIM_REPLAYS], v(CAP.AIM_REPLAYS))}`
   ];
 }
 

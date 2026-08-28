@@ -13,12 +13,149 @@
 // wording onto the wrong slide.
 //
 // Prices come from the entitlements catalogue rather than being copied, so the
-// deck can never contradict the pricing page.
+// deck can never contradict the pricing page. The revenue arithmetic is derived
+// the same way, from a subscriber mix written down as data, so a total on a
+// slide is always the sum of the rows printed above it.
 // ---------------------------------------------------------------------------
 
-import { PLAN_PRICES } from '../../shared/entitlements/catalogue.js';
+import {
+  PLAN_CAPACITY,
+  PLAN_NAMES,
+  PLAN_PRICE_CENTS,
+  PLAN_TAGLINES,
+  PLAN_TERM_BONUS,
+  TERM_IDS,
+  TERM_NAMES,
+  isTeamPlan,
+  priceForTerm
+} from '../../shared/entitlements/catalogue.js';
 
-const price = (id) => `€${PLAN_PRICES[id].monthly.toFixed(2)}`;
+/** 1234567 to "1,234,567". These numbers get read from the back of a room. */
+const group = (n) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+
+/**
+ * Cents to money. The catalogue's own `euros()` is the right spelling for one
+ * price, but this deck adds prices up into five figures and "€37989.90" cannot
+ * be read at a glance, so the thousands are separated here.
+ */
+const money = (cents) => {
+  const [whole, fraction] = (Math.round(Number(cents) || 0) / 100).toFixed(2).split('.');
+  return `€${group(whole)}.${fraction}`;
+};
+
+/** The headline monthly price of a plan, straight out of the catalogue. */
+const price = (id) => money(PLAN_PRICE_CENTS[id]);
+
+/** A discount fraction as a whole percentage: 0.08 to "8%". */
+const pct = (fraction) => `${Math.round(fraction * 100)}%`;
+
+/**
+ * The rate the dollar figures on the revenue slide are converted at. Written
+ * down on the slide as well as here, because a deck that quotes dollars without
+ * its rate is quoting a number the reader cannot reproduce.
+ */
+const USD_PER_EUR = 1.08;
+const usd = (cents) => `$${group(Math.round((cents / 100) * USD_PER_EUR))}`;
+
+/** The six paid plans, strongest first: the order a pricing table is read in. */
+const LADDER = Object.freeze([
+  'team_tier1',
+  'team_tier2',
+  'team_tier3',
+  'solo_elite',
+  'solo_premium',
+  'solo_lite'
+]);
+
+/** The three longer terms, in the order the pricing table lists them. */
+const LONG_TERMS = Object.freeze(TERM_IDS.filter((term) => term !== 'month'));
+
+/**
+ * The bonus discount ladder, grouped by the plans that happen to share a run.
+ *
+ * Grouping rather than typing "Tier 2 and Solo Elite" keeps the sentence under
+ * the table honest: if somebody moves one of those two in the catalogue, the
+ * deck splits them into separate sentences instead of quietly claiming they
+ * still discount alike.
+ */
+const BONUS_GROUPS = (() => {
+  /** @type {Map<string, {run: number[], plans: string[]}>} */
+  const byRun = new Map();
+  for (const planId of LADDER) {
+    const run = LONG_TERMS.map((term) => PLAN_TERM_BONUS[planId][term]);
+    const key = run.join('/');
+    if (!byRun.has(key)) byRun.set(key, { run, plans: [] });
+    byRun.get(key).plans.push(planId);
+  }
+  return [...byRun.values()];
+})();
+
+/** "Team Tier 2 and Solo Elite: 5%, 6%, 7%." One group, one sentence. */
+const bonusSentence = ({ run, plans }) => {
+  const who = plans.map((id) => PLAN_NAMES[id]).join(' and ');
+  return run.some((value) => value > 0) ? `${who}: ${run.map(pct).join(', ')}.` : `${who}: none.`;
+};
+
+/**
+ * The subscriber mix the revenue slide does its arithmetic over, as plain data.
+ *
+ * Every figure on that slide, in euros and in dollars, is derived from this
+ * array, because the one thing a revenue slide must never do is state a total
+ * its own rows do not add up to. Change a count here and the table, the split
+ * between the two ladders and the twelve-month comparison all move with it.
+ */
+const REVENUE_MIX = Object.freeze([
+  ['team_tier1', 15],
+  ['team_tier2', 25],
+  ['team_tier3', 60],
+  ['solo_elite', 60],
+  ['solo_premium', 250],
+  ['solo_lite', 600]
+]);
+
+const revenueLines = REVENUE_MIX.map(([planId, customers]) => ({
+  planId,
+  customers,
+  monthlyCents: PLAN_PRICE_CENTS[planId] * customers,
+  // What those same customers bill per month having bought twelve months up front.
+  yearlyCents: priceForTerm(planId, 'year').perMonthCents * customers
+}));
+
+const teamLines = revenueLines.filter((line) => isTeamPlan(line.planId));
+const soloLines = revenueLines.filter((line) => !isTeamPlan(line.planId));
+const totalOf = (lines, pick) => lines.reduce((n, line) => n + pick(line), 0);
+
+const REVENUE_TOTAL = totalOf(revenueLines, (l) => l.monthlyCents);
+const REVENUE_TEAM = totalOf(teamLines, (l) => l.monthlyCents);
+const REVENUE_SOLO = totalOf(soloLines, (l) => l.monthlyCents);
+const REVENUE_ON_YEAR = totalOf(revenueLines, (l) => l.yearlyCents);
+const REVENUE_CUSTOMERS = totalOf(revenueLines, (l) => l.customers);
+const TEAM_CUSTOMERS = totalOf(teamLines, (l) => l.customers);
+const SOLO_CUSTOMERS = totalOf(soloLines, (l) => l.customers);
+const YEAR_SAVING_PCT = Math.round((1 - REVENUE_ON_YEAR / REVENUE_TOTAL) * 100);
+
+/**
+ * The pricing arithmetic and its spellings, shared with the talking deck.
+ *
+ * The two decks are shown to the same people, often a week apart, so they must
+ * not be able to quote different totals off the same mix. pitchTalk.js imports
+ * this instead of keeping a second copy of the numbers.
+ */
+export const PITCH_MONEY = Object.freeze({
+  ladder: LADDER,
+  lines: Object.freeze(revenueLines.map((line) => Object.freeze({ ...line }))),
+  customers: REVENUE_CUSTOMERS,
+  teamCustomers: TEAM_CUSTOMERS,
+  soloCustomers: SOLO_CUSTOMERS,
+  totalCents: REVENUE_TOTAL,
+  onYearCents: REVENUE_ON_YEAR,
+  yearSavingPct: YEAR_SAVING_PCT,
+  group,
+  money,
+  price,
+  pct,
+  usd
+});
 
 /**
  * @typedef {{
@@ -337,7 +474,7 @@ export const PITCH_SLIDES = [
         ]
       ]
     },
-    tableNote: 'Same data, same account, different depth. Nobody has to leave to grow, and nobody pays for depth they cannot use yet.'
+    tableNote: 'Same data, same account, different depth. Nobody has to leave to grow, and nobody pays for depth they cannot use yet. These five are player tiers, counted up from the entry level. The plan names further on run the other way: Team Tier 1 is the top plan, not the cheapest one.'
   },
   {
     id: 'coverage',
@@ -377,64 +514,76 @@ export const PITCH_SLIDES = [
     ]
   },
   {
-    id: 'model-a',
-    kicker: 'Revenue model A',
-    title: 'Priced per seat, as built today',
-    lead: 'What the site currently charges. The composition that reaches roughly $33,000 a month, if aim4 becomes the tool teams default to.',
+    id: 'pricing-ladder',
+    kicker: 'Pricing',
+    title: 'One ladder, read twice',
+    lead: 'Four bands, free to high, and each paid band exists on both sides. A team plan is the solo plan of the same band plus everything that only works with a roster behind it: seats, stratbook, anti-strat, comms. That is the entire difference between the two sides, and it is why an organisation pays a multiple of what a player pays.',
     table: {
-      head: ['Tier', 'Price', 'Subscribers', 'Monthly'],
-      rows: [
-        ['Premium (solo)', `${price('premium')}`, '500', '€5,000'],
-        ['Team Premium', `${price('team_premium')}`, '700', '€21,000'],
-        ['Team Elite', `${price('team_elite')}`, '80', '€4,800'],
-        ['Total', '', '', '€30,800 / ~$33,000']
-      ],
-      highlight: 3
+      // Prose in the last column, so this one wraps rather than scrolling.
+      wrap: true,
+      head: ['Plan', 'Per month', 'On 12 months', 'What it is'],
+      rows: LADDER.map((planId) => [
+        PLAN_NAMES[planId],
+        price(planId),
+        `${money(priceForTerm(planId, 'year').perMonthCents)} / mo`,
+        PLAN_TAGLINES[planId]
+      ])
     },
-    tableNote: 'A modelled ceiling at market-leading share, not a forecast. Today the figure is zero.'
+    tableNote: `Priced per subscription, not per seat: the ${PLAN_CAPACITY.team_tier3.seat_capacity} seats on a Team Tier 3 pay ${price(
+      'team_tier3'
+    )} between them. The daily allowances work the same way, so those ${PLAN_CAPACITY.team_tier3.seat_capacity} share one anti-strat report a day instead of getting ${PLAN_CAPACITY.team_tier3.seat_capacity}.`,
+    note: 'Free is not a trial with an end date: the demo viewer, the aim trainer, the public performance overview and three demos held at a time, for as long as anyone wants them.'
   },
   {
-    id: 'model-b',
-    kicker: 'Revenue model B',
-    title: 'Priced per organisation',
-    lead: 'The alternative. Sell to the org rather than the seat, and let the tier decide how much of the cutting edge it gets.',
-    columns: [
-      {
-        tag: 'Tier 1',
-        title: '699 / month',
-        lead: 'Everything, limitless. Exclusive access to the newest models and tools, plus all of Tier 2.'
-      },
-      {
-        tag: 'Tier 2',
-        title: '199 / month',
-        lead: 'Good but bounded access to the cutting-edge features, plus all of Tier 3.'
-      },
-      {
-        tag: 'Tier 3',
-        title: '89 / month',
-        lead: 'Very limited cutting edge, bounded access to some Tier 2 tools, and every basic paid feature without limits.'
-      }
-    ],
-    note: 'Solo mirrors the same ladder: Lite at 9 is a Tier 3 for one player without the team management, Premium at 19 is a Tier 2 for one player.'
+    id: 'pricing-terms',
+    kicker: 'Pricing',
+    title: 'Paying up front costs less',
+    lead: 'Three longer terms sit under every plan. Everyone gets the same discount for the term, and each plan adds a second one on top of it, larger the higher the plan, because that is where a long commitment is worth most.',
+    table: {
+      head: ['Term', 'Base discount', 'Team Tier 1 bonus', 'Team Tier 1', 'Solo Premium'],
+      rows: TERM_IDS.map((term) => {
+        const top = priceForTerm('team_tier1', term);
+        const middle = priceForTerm('solo_premium', term);
+        return [
+          TERM_NAMES[term],
+          pct(top.baseDiscount),
+          pct(top.bonusDiscount),
+          `${money(top.perMonthCents)} / mo`,
+          `${money(middle.perMonthCents)} / mo`
+        ];
+      })
+    },
+    tableNote: `The two do not add. The second comes off what the first left: 20% and then 10% off €100 is €72, not €70. A year of Team Tier 1 bought up front is ${money(
+      priceForTerm('team_tier1', 'year').totalCents
+    )} against ${money(PLAN_PRICE_CENTS.team_tier1 * 12)} paid month by month.`,
+    note: `The second discount, plan by plan, over 3, 6 and 12 months. ${BONUS_GROUPS.map(
+      bonusSentence
+    ).join(' ')}`
   },
   {
-    id: 'model-b-math',
-    kicker: 'Revenue model B',
-    title: 'The same ceiling, a ninth of the customers',
-    lead: 'The reason to prefer it: 91 organisations instead of 780 team subscriptions, for the same money.',
+    id: 'pricing-revenue',
+    kicker: 'Revenue',
+    title: 'The ceiling, and the arithmetic under it',
+    lead: `One plausible mix at market-leading share: ${TEAM_CUSTOMERS} organisations and ${SOLO_CUSTOMERS} solo subscriptions. The rows are the whole calculation, price times customers, added up.`,
     table: {
-      head: ['Product', 'Price', 'Customers', 'Monthly'],
+      head: ['Plan', 'Per month', 'Customers', 'Monthly'],
       rows: [
-        ['Team Tier 1', '€699', '19', '€13,281'],
-        ['Team Tier 2', '€199', '15', '€2,985'],
-        ['Team Tier 3', '€89', '57', '€5,073'],
-        ['Solo Premium', '€19', '230', '€4,370'],
-        ['Solo Lite', '€9', '550', '€4,950'],
-        ['Total', '', '871', '€30,659 / ~$33,100']
+        ...revenueLines.map((line) => [
+          PLAN_NAMES[line.planId],
+          price(line.planId),
+          group(line.customers),
+          money(line.monthlyCents)
+        ]),
+        ['Total', '', group(REVENUE_CUSTOMERS), `${money(REVENUE_TOTAL)} / ${usd(REVENUE_TOTAL)}`]
       ],
-      highlight: 5
+      highlight: revenueLines.length
     },
-    tableNote: 'Team side ~$23,000, solo side ~$10,000, at 1.08 USD per EUR. Fewer, larger contracts: slower to close, far cheaper to service.'
+    tableNote: `A modelled ceiling at market-leading share, not a forecast. Today the figure is zero. Team side ${usd(
+      REVENUE_TEAM
+    )}, solo side ${usd(REVENUE_SOLO)}, at ${USD_PER_EUR} USD per EUR.`,
+    note: `Every row above is the monthly price. The same mix on twelve-month terms bills ${money(
+      REVENUE_ON_YEAR
+    )} a month, ${YEAR_SAVING_PCT}% less, with a year of it collected the day it is signed. Margin traded for cash and for a customer who cannot leave mid-season: that trade is what the long terms are for.`
   },
 
   // ---- roadmap -----------------------------------------------------------
@@ -478,7 +627,7 @@ export const PITCH_SLIDES = [
       'Runs in perpetuity, and is transferable.',
       'Capital goes to marketing, infrastructure and buying development time.'
     ],
-    note: 'Amount and percentage to be set together. The revenue model two slides back is the basis for both.'
+    note: 'Amount and percentage to be set together. The pricing and revenue slides earlier in the deck are the basis for both.'
   },
   {
     id: 'ask-partner',

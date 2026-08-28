@@ -632,6 +632,37 @@ export async function fetchDemoCommsFile(id, version = '') {
   return new Uint8Array(await res.arrayBuffer());
 }
 
+/**
+ * The transcript of an attached session, without downloading the voice.
+ * Utterance timing for the Communication page's talk-time analytics.
+ */
+export async function fetchDemoCommsManifest(id) {
+  return asJson(
+    await safeFetch(
+      `${API_BASE}/api/replays/demos/${encodeURIComponent(id)}/comms/manifest`,
+      { headers: await headers() }
+    )
+  );
+}
+
+/** Library-wide TeamSpeak UID -> roster player links. */
+export async function fetchCommsIdentities() {
+  return asJson(
+    await safeFetch(`${API_BASE}/api/replays/comms/identities`, { headers: await headers() })
+  );
+}
+
+/** Link (or with an empty playerId, unlink) one TeamSpeak UID to a player. */
+export async function setCommsIdentity(uid, playerId, nickname = '') {
+  return asJson(
+    await safeFetch(`${API_BASE}/api/replays/comms/identities`, {
+      method: 'POST',
+      headers: await headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ uid, playerId, nickname })
+    })
+  );
+}
+
 /** Upload a recorded session against a demo. `file` is a File or Blob. */
 export async function uploadDemoComms(id, file) {
   const body = await file.arrayBuffer();

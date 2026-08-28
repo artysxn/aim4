@@ -46,13 +46,16 @@ strategy creator, and a full aim trainer with cloud leaderboards.
 
 ## Plans
 
-Four tiers: **Free**, **Premium**, **Team Premium**, **Team Elite**. Team
-Premium creates 1 team with 7 seats; Team Elite creates 2 teams with 14 seats.
+Seven tiers on two ladders: **Free**, then **Solo Lite / Solo Premium / Solo Elite**
+and **Team Tier 3 / Team Tier 2 / Team Tier 1**. A team plan is the solo plan of
+the same band plus the team toolkit. Team Tier 3 creates 1 team with 7 seats;
+Tier 2 creates 2 teams with 14 seats; Tier 1 creates 3 teams with 20 seats.
 
 Locked features are never hidden. You land on the page and it tells you which
 plan unlocks it, so a shared link always goes somewhere sensible. Some features
 are metered rather than tiered: the Pattern Finder spends one use when you run
-a search, not when you open the page.
+a search, not when you open the page. On a team plan the daily allowance for
+the expensive tools belongs to the subscription, not to each seat.
 
 Capabilities are grouped as `demos.*`, `stats.*`, `analytics.*`, `team.*` and
 `aim.*`. The full list with per-plan values lives in

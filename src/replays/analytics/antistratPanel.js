@@ -6,6 +6,11 @@
 // included matches → categories → generate. Generate runs the scan engine
 // over the selected demos (antistratScan.js) and saves the rendered report
 // into the destination team's Documents tab.
+//
+// Anti-strat is a daily allowance rather than a switch, and the allowance
+// belongs to the subscription: every seat on a team draws from the same pot.
+// Generate therefore spends a use with the server before it scans anything,
+// the same way the viewer spends one for auto coach.
 // ---------------------------------------------------------------------------
 
 import { fetchRoster, fetchTeams, saveTeamDocument, formatApiError } from '../api.js';
@@ -13,6 +18,8 @@ import { getStatsPayload } from '../statsCache.js';
 import { CAP } from '../../../shared/entitlements/keys.js';
 import { PLAN_NAMES } from '../../../shared/entitlements/catalogue.js';
 import { getEntitlements } from '../../lib/entitlements.js';
+import { useMeteredFeature } from '../../lib/meteredFeature.js';
+import { quotaBadge } from '../../site/upgradeGate.js';
 import { MAPS } from '../shared/roundId.js';
 import { teamNameKey } from '../shared/statsMath.js';
 import { listTeams } from './analyticsMath.js';
@@ -67,15 +74,40 @@ export function createAntistratPanel({ escapeHtml }) {
     return getEntitlements();
   }
 
+  /**
+   * No allowance at all on this plan. A tier that has one but has spent it is
+   * NOT locked: the button stays live and the server's 402 explains itself,
+   * which is also the only way a seat finds out a teammate spent today's run.
+   */
   function locked() {
     const e = ent();
     return e ? !e.can(CAP.ANALYTICS_ANTISTRAT) : false;
   }
 
+  /** The cheapest plan that includes anti-strat, read off the catalogue. */
   function requiredPlanName() {
     const e = ent();
     const plan = e?.requiredPlan?.(CAP.ANALYTICS_ANTISTRAT);
-    return (plan && PLAN_NAMES[plan]) || PLAN_NAMES.team_premium;
+    return (plan && PLAN_NAMES[plan]) || '';
+  }
+
+  /**
+   * Runs left today, next to the button that spends one.
+   *
+   * The allowance is metered against the subscription, so on a team the number
+   * is the roster's, not the reader's: the first player to click spends it for
+   * everybody. /api/me marks which quotas work that way, so the wording follows
+   * the server rather than a list of keys kept here.
+   */
+  function allowanceHtml() {
+    const e = ent();
+    if (!e || locked()) return '';
+    const badge = quotaBadge(e, CAP.ANALYTICS_ANTISTRAT);
+    if (!badge) return '';
+    const text = e.quota(CAP.ANALYTICS_ANTISTRAT).shared
+      ? `${badge}, shared across the team`
+      : badge;
+    return `<span class="an-muted as-allowance">${escapeHtml(text)}</span>`;
   }
 
   function selectedTeam() {
@@ -138,9 +170,12 @@ export function createAntistratPanel({ escapeHtml }) {
 
   function lockedHtml() {
     if (!locked()) return '';
-    return `<div class="an-warn as-locked">Teams antistrat needs ${escapeHtml(
-      requiredPlanName()
-    )}.</div>`;
+    const plan = requiredPlanName();
+    return `<div class="an-warn as-locked">${
+      plan
+        ? `Teams antistrat is available on ${escapeHtml(plan)}.`
+        : 'Teams antistrat is not available on your plan.'
+    }</div>`;
   }
 
   function teamSuggestions() {
@@ -299,6 +334,7 @@ export function createAntistratPanel({ escapeHtml }) {
           <button type="button" class="btn primary btn-sm" data-as-generate ${
             canGenerate() ? '' : 'disabled'
           }>${state.busy ? 'Analyzing…' : 'Analyze and save'}</button>
+          ${allowanceHtml()}
         </div>
         ${status}
       </div>
@@ -346,10 +382,27 @@ export function createAntistratPanel({ escapeHtml }) {
     if (!team || !dest) return;
 
     state.busy = true;
-    state.progress = 'Preparing scan…';
+    state.progress = 'Checking the allowance…';
     state.outcome = '';
     state.outcomeMsg = '';
     render();
+
+    // Spend the use here, not when the panel opens: picking a team and reading
+    // the match list is free, running the report is what costs. A refusal puts
+    // the shared upgrade dialog up and nothing is scanned. Re-read /api/me
+    // either way, so the badge above shows what is actually left, including
+    // what a teammate spent while this page was open.
+    const granted = await useMeteredFeature(CAP.ANALYTICS_ANTISTRAT);
+    await ent()?.refresh?.();
+    if (!granted) {
+      state.busy = false;
+      state.progress = '';
+      render();
+      return;
+    }
+
+    state.progress = 'Preparing scan…';
+    renderProgress();
 
     const included = includedMatches();
     const title = `Antistrat: ${team.name} on ${MAPS[state.mapCode]?.name || state.mapCode}`;

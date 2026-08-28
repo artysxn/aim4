@@ -301,8 +301,74 @@ export function dupeScanStatus() {
   return { ...state, progress: { ...state.progress } };
 }
 
-const label = (r) =>
+export const matchLabel = (r) =>
   `${r.team1?.name || '?'} vs ${r.team2?.name || '?'} (${r.mapName || r.map}, ${r.score?.team1 ?? '?'}:${r.score?.team2 ?? '?'})`;
+
+/** Map + unordered team names: the same bucket the library scan compares inside. */
+export function groupKey(r) {
+  return `${r?.map || ''}|${[norm(r?.team1?.name), norm(r?.team2?.name)].sort().join('~')}`;
+}
+
+/**
+ * Find an already-stored demo that is the same GAME as `candidate`.
+ *
+ * Same screens and position verify as the admin duplicate tool. The incoming
+ * copy always loses: this returns the existing record, never the candidate.
+ */
+export async function findIdenticalMatch(io, user, candidate, records) {
+  if (!candidate?.id || !Array.isArray(candidate.rounds) || !candidate.rounds.length) {
+    return null;
+  }
+  const key = groupKey(candidate);
+  const others = (records || []).filter(
+    (r) =>
+      r &&
+      r.id &&
+      r.id !== candidate.id &&
+      r.status === 'ready' &&
+      Array.isArray(r.rounds) &&
+      r.rounds.length &&
+      groupKey(r) === key
+  );
+  for (const other of others) {
+    const screen = screenPair(candidate, other);
+    if (!screen) continue;
+    try {
+      const verdict = await verifyPair(io, user, candidate, other, screen);
+      if (verdict.duplicate) return other;
+    } catch (err) {
+      console.warn(`[dupeScan] ${candidate.id} vs ${other.id}: ${err?.message || err}`);
+    }
+  }
+  return null;
+}
+
+/** Status line for a cancelled upload. Names the file and the copy already in the library. */
+export function duplicateUploadMessage(filename, existing) {
+  const name = String(filename || '').trim() || 'That demo';
+  return existing ? `${name} already exists (${matchLabel(existing)}).` : `${name} already exists.`;
+}
+
+/**
+ * If `record` is the same game as something already in this library, delete
+ * the incoming copy and return why. No-op when it is unique.
+ */
+export async function discardDuplicateUpload(user, record, { filename, io } = {}) {
+  if (!record?.id) return null;
+  const existing = await findIdenticalMatch(
+    io || { readRoundMeta, readRoundTicks },
+    user,
+    record,
+    await listDemos(user)
+  );
+  if (!existing) return null;
+  await deleteDemo(user, record.id);
+  await forgetDemoIndex(libraryStatsIo, user, record.id).catch(() => {});
+  return {
+    existing,
+    message: duplicateUploadMessage(filename || record.filename, existing)
+  };
+}
 
 /**
  * Start a scan. `del: false` marks duplicates and reports them without
@@ -339,7 +405,7 @@ export function startDupeScan({ del = true } = {}) {
       // compares plausible rematches, not the whole library squared.
       const groups = new Map();
       for (const r of records) {
-        const key = `${r.map}|${[norm(r.team1?.name), norm(r.team2?.name)].sort().join('~')}`;
+        const key = groupKey(r);
         if (!groups.has(key)) groups.set(key, []);
         groups.get(key).push(r);
       }
@@ -371,8 +437,8 @@ export function startDupeScan({ del = true } = {}) {
             const { keep, remove, reason } = chooseLoser(a, b);
             result.duplicates++;
             result.pairs.push({
-              kept: label(keep),
-              removed: label(remove),
+              kept: matchLabel(keep),
+              removed: matchLabel(remove),
               removedId: remove.id,
               reason
             });

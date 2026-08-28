@@ -1,6 +1,6 @@
 // ---------------------------------------------------------------------------
 // replays/teamRoutes.js
-// /api/teams/* — roster, invites, roles, positions, documents and stratbook.
+// /api/teams/*: roster, invites, roles, positions, documents and stratbook.
 //
 // Every route here needs a verified account: teams are the thing demo privacy
 // hangs off, so an anonymous caller has nothing to do in this file.
@@ -8,13 +8,18 @@
 
 import { whoami } from './identity.js';
 import { guardImpersonation } from '../admin/guard.js';
-import { DRAWING_BOARD_CAP } from '../../shared/entitlements/catalogue.js';
+import {
+  DRAWING_BOARD_CAP,
+  PLAN_NAMES,
+  requiredPlanFor
+} from '../../shared/entitlements/catalogue.js';
 import { CAP } from '../../shared/entitlements/keys.js';
 import {
   UpgradeRequiredError,
   capability,
   requireCapability,
   requireLimit,
+  tierOf,
   upgradeResponse
 } from '../entitlements/enforce.js';
 import {
@@ -56,6 +61,7 @@ import {
   upsertStrategy
 } from './teamsStore.js';
 import {
+  countUtilityGrenades,
   deleteDrawingBoard,
   getDrawingBoard,
   getUtilityArchive,
@@ -155,8 +161,8 @@ export async function handleTeamRequest(req, res, url) {
     return true;
   }
 
-  // A shared 2D round opens for anyone holding the link, signed in or not —
-  // that is the whole point of the share id. It exposes one round and says
+  // A shared 2D round opens for anyone holding the link, signed in or not.
+  // That is the whole point of the share id: it exposes one round and says
   // nothing about the team's other work.
   const shareMatch = p.match(/^\/api\/teams\/shared2d\/([A-Za-z0-9_-]{6,32})$/);
   if (req.method === 'GET' && shareMatch) {
@@ -212,8 +218,10 @@ export async function handleTeamRequest(req, res, url) {
     if (req.method === 'POST') {
       try {
         const body = await readJson(req);
-        // Free and Premium may not create teams at all; Team Premium may create
-        // one and Elite two, counted against teams already owned.
+        // The only place the number of teams an account may own is decided.
+        // No solo plan may own one at all; the team ladder allows 1, 2 and 3,
+        // counted against teams already owned. The store deliberately holds no
+        // opinion here beyond a runaway guard, so this check is the product.
         const owned = (await teamsOf(me.id)).filter((t) => t.ownerId === me.id).length;
         requireLimit(me, CAP.TEAM_CREATE_LIMIT, owned);
         await createTeam(me, body.name);
@@ -413,6 +421,10 @@ export async function handleTeamRequest(req, res, url) {
 
     const stratMatch = p.match(/^\/api\/teams\/[A-Za-z0-9_]+\/stratbook\/([A-Za-z0-9_-]+)$/);
     if (stratMatch && req.method === 'DELETE') {
+      // stratbook_access is "may you touch the stratbook at all", so it gates
+      // the delete exactly as it gates the save. The per-map limit deliberately
+      // does not: removing a strategy can never take a team over its cap.
+      await requireCapability(me, CAP.TEAM_STRATBOOK_ACCESS);
       await deleteStrategy(me, teamId, stratMatch[1]);
       json(res, 200, { ok: true, team: publicTeam(await teamById(teamId), me.id) });
       return true;
@@ -445,18 +457,26 @@ export async function handleTeamRequest(req, res, url) {
       }
       if (req.method === 'POST') {
         const body = await readJson(req, 2 * 1024 * 1024);
-        // Access to the board is nearly free; persistence is the gate. Premium
-        // resolves to 'nosave', which is exactly this refusal.
+        // Access to the board is nearly free; persistence is the gate. Solo
+        // Lite resolves to 'nosave', which is exactly this refusal.
         await requireCapability(me, CAP.DRAWING_BOARD, { atLeast: 'limited' });
         const boards = await listDrawingBoards(me, teamId, map);
         if (capability(me, CAP.DRAWING_BOARD) === 'limited') {
           const existing = boards.find((b) => b.id === body.id);
           if (!existing && boards.length >= DRAWING_BOARD_CAP) {
+            // 'limited' is a counted mode, so the way past this cap is the next
+            // mode up rather than a bigger number. The plan that sells it is
+            // read from the catalogue: naming one here is how this refusal came
+            // to point at a plan that no longer exists.
+            const requiredTier = requiredPlanFor(CAP.DRAWING_BOARD, 'full');
+            const named = requiredTier ? PLAN_NAMES[requiredTier] || requiredTier : '';
             throw new UpgradeRequiredError({
               capability: CAP.DRAWING_BOARD,
-              message: `Drawing board: you are at your limit of ${DRAWING_BOARD_CAP} on this map. More is available on Team Elite.`,
-              currentTier: me.entitlements?.tier || 'free',
-              requiredTier: 'team_elite',
+              message: `Drawing board: you are at your limit of ${DRAWING_BOARD_CAP} on this map.${
+                named ? ` More is available on ${named}.` : ''
+              }`,
+              currentTier: tierOf(me),
+              requiredTier,
               limit: { current: boards.length, limit: DRAWING_BOARD_CAP }
             });
           }
@@ -551,11 +571,20 @@ export async function handleTeamRequest(req, res, url) {
       if (req.method === 'POST') {
         const body = await readJson(req, 2 * 1024 * 1024);
         const current = await getUtilityArchive(me, teamId, map);
-        const held = Array.isArray(current?.entries) ? current.entries.length : 0;
-        const incoming = Array.isArray(body?.entries) ? body.entries.length : held;
-        // The archive is saved whole, so the cap is checked against what the
-        // save would leave behind rather than against a single new entry.
-        if (incoming > held) requireLimit(me, CAP.TEAM_UTILITY_ARCHIVE, incoming - 1);
+        // The archive is one document per map: the client posts the whole thing
+        // on every edit, so the cap is on the grenades the save would leave
+        // behind rather than on a single new entry. Both sides are counted the
+        // way the store counts them, so a save that only renames a lineup is
+        // not read as adding one.
+        const held = countUtilityGrenades(current);
+        const wanted = countUtilityGrenades(body);
+        // Only growth is charged. A save that shrinks the archive or leaves it
+        // the same size has to keep working even when the team is already over
+        // its cap, which is what a downgrade leaves behind: the alternative is
+        // an archive nobody can delete anything from.
+        if (wanted > held) {
+          requireLimit(me, CAP.TEAM_UTILITY_ARCHIVE, held, wanted - held);
+        }
         json(res, 200, { archive: await saveUtilityArchive(me, teamId, map, body) });
         return true;
       }

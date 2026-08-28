@@ -3050,6 +3050,7 @@ body.rv-open:has(.side-collapsed) .rv-side-show {
   font: 600 13px var(--font-body);
   font-variant-numeric: tabular-nums;
   cursor: pointer;
+  overflow: visible;
 }
 
 .rv-round:last-child {
@@ -3113,16 +3114,36 @@ body.rv-open:has(.side-collapsed) .rv-side-show {
   transform: translateX(-50%) rotate(45deg);
 }
 
-/* Half-time / overtime side swap, parked in the square it belongs to. */
+/* Half-time / overtime side swap, centred on the divider before this chip. */
 .rv-round-swap {
   position: absolute;
-  top: 1px;
-  right: 2px;
-  color: rgba(181, 181, 181, 0.55);
-  font-size: 9px;
-  line-height: 1;
-  user-select: none;
+  left: 0;
+  top: 50%;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--rv-stage);
+  transform: translate(-50%, -50%);
   pointer-events: none;
+  user-select: none;
+}
+
+.rv-round-swap svg {
+  display: block;
+  width: 12px;
+  height: 12px;
+}
+
+.rv-round-swap-ct {
+  fill: var(--rv-ct);
+}
+
+.rv-round-swap-t {
+  fill: var(--rv-t);
 }
 
 /* ---- Transport ---------------------------------------------------------- */
@@ -4283,6 +4304,80 @@ body.rv-open:has(.side-collapsed) .rv-side-show {
 
 .st-filters[hidden] {
   display: none;
+}
+
+/* ---- Columns picker ------------------------------------------------------- */
+/* Shares the .st-filters shell, but stacks: sections of labelled checkboxes. */
+.st-columns {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  max-height: min(60vh, 560px);
+  overflow-y: auto;
+}
+
+.st-columns-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.st-columns-note {
+  color: var(--st-ctrl-text);
+  font-size: 12px;
+}
+
+.st-columns-section {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  gap: 4px 18px;
+}
+
+.st-columns-title {
+  grid-column: 1 / -1;
+  margin: 6px 0 2px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--st-ctrl-text);
+}
+
+.st-columns-row {
+  display: grid;
+  grid-template-columns: auto minmax(64px, max-content) 1fr;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: var(--st-ctrl-radius);
+  cursor: pointer;
+}
+
+.st-columns-row:hover {
+  background: var(--st-ctrl-bg-on);
+}
+
+.st-columns-row input[type='checkbox'] {
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.st-columns-name {
+  font-weight: 600;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.st-columns-about {
+  color: #8a8a90;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.st-columns-row.is-off .st-columns-name,
+.st-columns-row.is-off .st-columns-about {
+  color: #47474c;
 }
 
 /* One shared control height across selects, segs, clocks, AWP, calendar. */
@@ -6511,6 +6606,30 @@ body.rv-open:has(.side-collapsed) .rv-side-show {
   cursor: default;
 }
 
+/* The picked player, as text. No pill, no border: selections on this site are
+   words, and the whole word is the button that clears it. */
+.as-picked {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 7px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: 600 14px var(--font-body);
+  cursor: pointer;
+}
+
+.as-picked span {
+  color: var(--muted);
+  font-weight: 400;
+  font-size: 12px;
+}
+
+.as-picked:hover span {
+  color: var(--text);
+}
+
 .as-team-box {
   position: relative;
   min-width: 220px;
@@ -8481,6 +8600,181 @@ table.rp-mine-table tbody tr {
 .tm-overview-stats .st-head-actions {
   order: 1;
   margin-left: 0;
+}
+
+/* ---- Team > Communication ------------------------------------------------ */
+
+.tm-comms {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-top: 14px;
+}
+
+.tm-comms-top {
+  display: grid;
+  grid-template-columns: minmax(260px, 340px) 1fr;
+  gap: 16px;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .tm-comms-top {
+    grid-template-columns: 1fr;
+  }
+}
+
+.tm-comms-card {
+  padding: 14px 16px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.tm-comms-card h3 {
+  margin: 0 0 6px;
+  font: 600 15px var(--font-body);
+  color: var(--text);
+}
+
+.tm-comms-muted {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font: 400 13px/1.45 var(--font-body);
+}
+
+.tm-comms-dl-size {
+  margin-left: 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.tm-comms-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.tm-comms-table th {
+  padding: 4px 10px 6px 0;
+  text-align: left;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--border);
+}
+
+.tm-comms-table td {
+  padding: 6px 10px 6px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  color: var(--text);
+}
+
+.tm-comms-uid {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.tm-comms-steam {
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+.tm-comms-seen {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.tm-comms-link {
+  min-width: 140px;
+}
+
+.tm-comms-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  margin: 4px 0 12px;
+}
+
+.tm-comms-filter {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.tm-comms-graph {
+  position: relative;
+}
+
+.tm-comms-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.tm-comms-axis {
+  fill: var(--muted);
+  font: 400 11px var(--font-body);
+}
+
+.tm-comms-axis-title {
+  fill: var(--muted);
+  font: 400 11px var(--font-body);
+  letter-spacing: 0.03em;
+}
+
+/* Curve labels wear their series color on purpose: they ARE the legend the
+   eye follows, mirrored by neutral text in the totals table below. */
+.tm-comms-series-label {
+  font: 600 12px var(--font-body);
+  paint-order: stroke;
+  stroke: var(--surface);
+  stroke-width: 3px;
+}
+
+.tm-comms-tip {
+  position: absolute;
+  top: 16px;
+  z-index: 5;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: #17171a;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.1),
+    0 8px 20px rgba(0, 0, 0, 0.6);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.6;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.tm-comms-tip-t {
+  color: var(--muted);
+  margin-bottom: 2px;
+}
+
+.tm-comms-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 7px;
+  border-radius: 2px;
+  vertical-align: baseline;
+}
+
+.tm-comms-swatch-off {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.tm-comms-totals {
+  margin-top: 12px;
+  max-width: 560px;
 }
 
 .tm-overview-stats .st-scope,

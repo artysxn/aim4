@@ -7,9 +7,9 @@
 // deleted: trial eligibility is "has this account ever had a row with
 // trial_started_at set", and deleting history would hand out infinite trials.
 //
-// Seat capacity is per subscription, not per team. Team Elite lends 14 seats
-// across the 2 teams it may create, so the check counts unreleased seats on the
-// subscription rather than members of a roster.
+// Seat capacity is per subscription, not per team. Team Tier 3 lends 7 seats
+// across 1 team, Tier 2 lends 14 across 2, Tier 1 lends 20 across 3. The check
+// counts unreleased seats on the subscription rather than members of a roster.
 // ---------------------------------------------------------------------------
 
 import { PLAN_IDS } from '../../shared/entitlements/catalogue.js';
@@ -18,7 +18,7 @@ import { ValidationError } from './grants.js';
 import { recomputeUser } from './recompute.js';
 import { db } from './service.js';
 
-const TERMS = new Set(['month', 'quarter', 'year', 'lifetime']);
+const TERMS = new Set(['month', 'quarter', 'halfyear', 'year', 'lifetime']);
 const LIVE_STATUSES = ['trialing', 'active', 'past_due'];
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -27,12 +27,24 @@ export function trialDays() {
   return Math.max(1, Number(process.env.AIM4_TRIAL_DAYS || 7));
 }
 
+/** The plan a trial hands out. Never returns something the plans table lacks. */
+const DEFAULT_TRIAL_PLAN = 'team_tier3';
+
 export function trialPlan() {
-  // Team Premium is the useful trial for the team suite (create team, Autocoach /
-  // Team Replays). Premium cannot create a team, so a gifted Premium trial left
-  // those pages looking "locked".
-  const plan = process.env.AIM4_TRIAL_PLAN || 'team_premium';
-  return PLAN_IDS.includes(plan) ? plan : 'team_premium';
+  // The entry team tier is the useful trial, because it is the cheapest plan
+  // that can create a team: a solo trial leaves the whole team suite looking
+  // locked, which is the half of the product a trial is meant to sell.
+  //
+  // The fallback is validated as well as the env value. It used to return the
+  // literal id unchecked, so a stale AIM4_TRIAL_PLAN in the deployed
+  // environment would insert a plan_id the plans table does not have and every
+  // trial start would fail on the foreign key.
+  const plan = process.env.AIM4_TRIAL_PLAN;
+  if (plan && PLAN_IDS.includes(plan)) return plan;
+  if (plan) {
+    console.warn(`[entitlements] AIM4_TRIAL_PLAN=${plan} is not a known plan, using ${DEFAULT_TRIAL_PLAN}`);
+  }
+  return PLAN_IDS.includes(DEFAULT_TRIAL_PLAN) ? DEFAULT_TRIAL_PLAN : 'free';
 }
 
 export function trialsEnabled() {

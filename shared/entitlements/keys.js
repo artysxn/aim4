@@ -10,9 +10,9 @@
 import { CAPABILITY_KEYS } from './catalogue.js';
 
 export const CAP = Object.freeze({
+  DEMOS_VIEWER: 'demos.viewer',
   DEMOS_ADS_FREE: 'demos.ads_free',
   DEMOS_FULL_RECENT_ACCESS: 'demos.full_recent_access',
-  DEMOS_VIEWER: 'demos.viewer',
   DEMOS_MACRO_VIEWER: 'demos.macro_viewer',
   DEMOS_UPLOAD_LIMIT: 'demos.upload_limit',
   DEMOS_MAP_CONTROL: 'demos.map_control',
@@ -23,6 +23,7 @@ export const CAP = Object.freeze({
   DEMOS_COMMS_COACH: 'demos.comms_coach',
   DRAWING_BOARD: 'drawing_board',
 
+  STATS_PERFORMANCE_CHAPTERS: 'stats.performance_chapters',
   STATS_SINGLE_GAME: 'stats.single_game',
   STATS_TEAM_STATISTICS: 'stats.team_statistics',
   STATS_METRICS_PLAYER_FULL: 'stats.metrics_player_full',
@@ -37,6 +38,8 @@ export const CAP = Object.freeze({
   TEAM_SEAT_CAPACITY: 'team.seat_capacity',
   TEAM_DOCUMENTS: 'team.documents',
   TEAM_ROLES_POSITIONS: 'team.roles_positions',
+  TEAM_PLAYLISTS: 'team.playlists',
+  TEAM_COMMS: 'team.comms',
   TEAM_STRATBOOK_ACCESS: 'team.stratbook_access',
   TEAM_STRATBOOK_LIMIT: 'team.stratbook_limit',
   TEAM_UTILITY_ARCHIVE: 'team.utility_archive',
@@ -45,6 +48,7 @@ export const CAP = Object.freeze({
 
   AIM_TRAINER: 'aim.trainer',
   AIM_ROUTINES: 'aim.routines',
+  AIM_MAP_PRACTICE: 'aim.map_practice',
   AIM_ADVANCED_ANALYTICS: 'aim.advanced_analytics',
   AIM_REPLAYS: 'aim.replays',
   AIM_CUSTOM_ROUTINES: 'aim.custom_routines',

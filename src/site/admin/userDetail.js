@@ -48,8 +48,9 @@ export function userDetail({ userId, canImpersonate, onBack }) {
       )
     );
 
-    // Resolved tier and, crucially, where it came from. "Why does this user
-    // have Elite" is the single most common question this panel answers.
+    // Resolved tier and, crucially, where it came from. "Why does this account
+    // have the tier it has" is the single most common question this panel
+    // answers, and the answer is usually a seat rather than a purchase.
     const sourceLabel = {
       free: 'no plan',
       seat: 'a seat on someone else’s plan',

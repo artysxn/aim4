@@ -7,6 +7,8 @@
 //            links and saved views keep resolving.
 //   Teams    scout a library team, write a team document (antistratPanel).
 //            Chapter key stays `antistrat` for the same reason.
+//   Players  the same, for one body: what he repeats and what he does
+//            instead (playerScoutPanel).
 //   Charts   scatter builder over the stats index (chartsPanel).
 // ---------------------------------------------------------------------------
 
@@ -63,6 +65,7 @@ import {
 import { renderUpgradeError } from '../../site/upgradeGate.js';
 import { createSavedViews } from '../savedViews.js';
 import { createAntistratPanel } from './antistratPanel.js';
+import { createPlayerScoutPanel } from './playerScoutPanel.js';
 import { createChartsPanel } from '../charts/chartsPanel.js';
 import { placeRankMenu, rankFilterHtml, syncRankSummary } from '../shared/vrsRanks.js';
 import sideCharts from '../../icons/sideicons/sideicon_charts.svg?raw';
@@ -92,6 +95,7 @@ function defaultTimeWindow() {
 const CHAPTERS = [
   { key: 'players', label: 'Search' },
   { key: 'antistrat', label: 'Teams' },
+  { key: 'scout', label: 'Players' },
   { key: 'charts', label: 'Charts', icon: sideCharts }
 ];
 
@@ -129,6 +133,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       </div>
     </div>
     <div class="an-chapter" data-chapter="antistrat" hidden></div>
+    <div class="an-chapter" data-chapter="scout" hidden></div>
     <div class="an-chapter" data-chapter="charts" hidden></div>`;
 
   const sidebarEl = el.querySelector('#an-sidebar');
@@ -146,6 +151,8 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
   let chapter = 'players';
   /** @type {ReturnType<typeof createAntistratPanel> | null} */
   let antistrat = null;
+  /** @type {ReturnType<typeof createPlayerScoutPanel> | null} */
+  let scout = null;
   /** @type {ReturnType<typeof createChartsPanel> | null} */
   let charts = null;
 
@@ -210,6 +217,14 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     }
   }
 
+  function ensureScout() {
+    const host = chapterEl('scout');
+    if (!scout && host) {
+      scout = createPlayerScoutPanel({ escapeHtml });
+      host.appendChild(scout.el);
+    }
+  }
+
   function loadCharts() {
     ensureCharts();
     charts?.load({ params: shareParams() });
@@ -233,6 +248,12 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       // Prefer the shared payload; if it is not ready yet, antistrat self-fetches
       // so a failed / skipped Players spend cannot leave "Loading teams…" forever.
       antistrat?.load();
+      return;
+    }
+    if (chapter === 'scout') {
+      // Same reasoning: its player list spans the library, not one map.
+      ensureScout();
+      scout?.load();
       return;
     }
     if (payload) {
@@ -1864,24 +1885,32 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       return;
     }
 
-    // Antistrat needs the stats library, not a pattern-finder spend. Fetch the
-    // shared payload without consuming, and hand it to the chapter.
+    // The document chapters need the stats library, not a pattern-finder spend.
+    // Fetch the shared payload without consuming, and hand it to the chapter.
     const cacheFresh = () => payloadGeneration === statsCacheGeneration();
 
-    if (chapter === 'antistrat') {
-      ensureAntistrat();
-      if (payload && cacheFresh()) {
-        antistrat?.load();
-        return;
-      }
-      const cached = peekStatsCache(null, ANTISTRAT_COLUMNS);
-      if (cached) {
-        payload = cached;
+    if (chapter === 'antistrat' || chapter === 'scout') {
+      // Both write a document off the library and pick their subject from the
+      // roster catalogue, so they boot the same way.
+      if (chapter === 'antistrat') ensureAntistrat();
+      else ensureScout();
+      const loadChapter = () =>
+        chapter === 'antistrat' ? antistrat?.load() : scout?.load();
+      const adopt = (data) => {
+        payload = data;
         payloadGeneration = statsCacheGeneration();
         players = listPlayers(payload);
         teams = listTeams(payload);
         maps = listMaps(payload);
-        antistrat?.load();
+      };
+      if (payload && cacheFresh()) {
+        loadChapter();
+        return;
+      }
+      const cached = peekStatsCache(null, ANTISTRAT_COLUMNS);
+      if (cached) {
+        adopt(cached);
+        loadChapter();
         return;
       }
       mainEl.innerHTML = spinnerHtml('Loading stats…');
@@ -1894,18 +1923,14 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
           }
         });
         if (token !== loadToken) return;
-        payload = data;
-        payloadGeneration = statsCacheGeneration();
-        players = listPlayers(payload);
-        teams = listTeams(payload);
-        maps = listMaps(payload);
-        antistrat?.load();
+        adopt(data);
+        loadChapter();
       } catch (err) {
         if (token !== loadToken) return;
-        // Self-fetch path in antistrat surfaces the same error (or succeeds if
+        // The chapter's own self-fetch surfaces the same error (or succeeds if
         // this was a transient failure). Calling load() without a payload keeps
         // the chapter off an orphan spinner when the parent fetch failed.
-        antistrat?.load();
+        loadChapter();
       }
       return;
     }

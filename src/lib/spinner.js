@@ -172,6 +172,23 @@ export function statsProgressLabel(p) {
   return withEta(statsProgressBase(p));
 }
 
+const countFmt = new Intl.NumberFormat();
+
+/**
+ * Library-wide position for the page-shipping phases, or ''. Those phases'
+ * own `done`/`total` describe the PAGE in flight (300 demos), and painting
+ * that read as "the server is recomputing 300 demos" when it was one page of
+ * a normal download. The paging pipeline stamps `libraryLoaded`/`libraryTotal`
+ * onto every event it relays; when they are present, they are the numbers a
+ * person can actually act on.
+ */
+function libraryShown(p) {
+  const total = Number(p?.libraryTotal) || 0;
+  if (!total) return '';
+  const loaded = Math.max(0, Math.min(Number(p?.libraryLoaded) || 0, total));
+  return `${countFmt.format(loaded)} of ${countFmt.format(total)}`;
+}
+
 function statsProgressBase(p) {
   if (!p || !Number(p.total)) {
     if (p?.phase === 'packing') return 'Packing database…';
@@ -187,6 +204,7 @@ function statsProgressBase(p) {
       ? `${done}/${total}`
       : `${Math.min(done + 1, total)}/${total}`;
   const name = p.current ? ` · ${String(p.current)}` : '';
+  const lib = libraryShown(p);
   switch (p.phase) {
     case 'building':
       return `Building stats ${shown}${name}`;
@@ -199,11 +217,13 @@ function statsProgressBase(p) {
     case 'ready':
       return done < total ? `Loading stats ${shown}${name}` : `Indexed ${total} demos`;
     case 'packing':
+      if (lib) return `Packing database · ${lib}`;
       return total ? `Packing database · ${total} demos` : 'Packing database…';
     case 'receiving':
+      if (lib) return `Receiving database · ${lib}`;
       return total ? `Receiving database · ${total} demos` : 'Receiving database…';
     case 'building-table':
-      return 'Building table…';
+      return lib ? `Building table · ${lib}` : 'Building table…';
     default:
       return `Loading stats ${shown}${name}`;
   }

@@ -14,6 +14,23 @@
 
 export const CHANGELOG = Object.freeze([
   {
+    date: '2026-08-28',
+    title: 'Six plans, player scout, and team comms',
+    tag: 'new',
+    points: [
+      'Plans are now two matching ladders. Solo Lite, Solo Premium and Solo Elite are for one player. Team Tier 3, Tier 2 and Tier 1 are the same three steps plus the team toolkit: stratbook, documents, roles, utility archive, team playlists, communication and anti-strat.',
+      'The expensive tools are metered by the day instead of being switched off. The entry tiers get one anti-strat, one auto coach and one win-model run a day, the middle tiers three, and the top tiers as many as you want. On a team plan that allowance belongs to the roster, not to each seat.',
+      'Pay for 3, 6 or 12 months and the price drops, by more on the higher tiers. Twelve months is 20% off for everyone and up to 28% off on Team Tier 1.',
+      'Performance Overview is now open to everyone, signed in or not. Maps and Guns need any paid plan, as does Map Practice.',
+      'Pattern Finder has a Players chapter. You can now pick one player on one map, choose the sections, and save a T and CT report into the team Documents tab, with the option to add grenades to the utility archive. Opening Teams or Players is free. Analyze is what spends a daily anti-strat use.',
+      'Team Communication is its own page. You can download the TeamSpeak recorder, link each voice to a roster player, and see who talks when across freeze time and the round, filtered by map, side, result and buy.',
+      'The Database now shows expected rating (xRtg), overperformance (xRtg%) and true rating (True) after Rating. A Columns button lets you hide metrics you do not need. The choice saves to your account, and hidden columns are not downloaded.',
+      'Demo Manager still opens on a first page with Load more when nothing is filtered. Any filter loads the full matching set instead, with no Load more. List rows no longer show who uploaded the demo. With one team selected, that team always sits on the left and the score flips with it.',
+      'If you upload a demo that is already in the library, that file is cancelled after it parses. The status line names the file and the match already stored. Other files in the same drop keep uploading. Archives and multi-file drops can no longer take an account past its upload cap.',
+      'On the timeline, a CT/T colored swap icon sits on the divider between halves, including overtime side switches.'
+    ]
+  },
+  {
     date: '2026-08-27',
     title: 'Accounts, tips, and the road to subscriptions',
     tag: 'new',

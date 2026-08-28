@@ -15,6 +15,7 @@
 import { CAPABILITIES, UNLIMITED } from '../../shared/entitlements/catalogue.js';
 import { guardImpersonation } from '../admin/guard.js';
 import { peek } from '../entitlements/quota.js';
+import { quotaSubjectFor } from '../entitlements/enforce.js';
 import { ensureEffectiveEntitlements } from '../entitlements/load.js';
 import { whoami } from '../replays/identity.js';
 import {
@@ -88,10 +89,13 @@ async function quotaState(me) {
   if (!me.signedIn) return out;
   const entries = Object.entries(CAPABILITIES).filter(([, def]) => def.shape === 'quota');
   await Promise.all(
-    entries.map(async ([key]) => {
+    entries.map(async ([key, def]) => {
       const limit = Number(me.entitlements?.capabilities?.[key]);
       if (!Number.isFinite(limit) || limit === UNLIMITED || limit <= 0) return;
-      out[key] = await peek(me.id, key, limit);
+      // Shared quotas are counted against the subscription, so the meter has to
+      // read the same row consumeQuota writes. Reading it per user would show a
+      // Tier 3 seat "1 left today" while a teammate had already spent it.
+      out[key] = { ...(await peek(quotaSubjectFor(me, key), key, limit)), shared: Boolean(def.shared) };
     })
   );
   return out;

@@ -50,6 +50,24 @@ function stampOf(stat) {
  * @returns {Promise<object|null>} the projected entry, or null when the
  *   sidecar is absent or stale and the caller should use the JSON path
  */
+/** Decode an open sidecar's header, growing the read if it outsizes the probe. */
+async function decodeOpenHeader(fh) {
+  const probe = new Uint8Array(HEADER_PROBE);
+  const { bytesRead } = await fh.read(probe, 0, HEADER_PROBE, 0);
+  let decoded = decodeHeader(probe.subarray(0, bytesRead));
+  if (!decoded && bytesRead >= 8) {
+    // Header longer than the probe: read exactly what it declared.
+    const view = new DataView(probe.buffer, 0, 8);
+    const hLen = view.getUint32(4);
+    if (hLen > 0 && hLen < 64 * 1024 * 1024) {
+      const full = new Uint8Array(8 + hLen);
+      await fh.read(full, 0, full.length, 0);
+      decoded = decodeHeader(full);
+    }
+  }
+  return decoded;
+}
+
 export async function readColumnar(io, user, demoId, groups, opts = {}) {
   let jsonStat;
   try {
@@ -66,19 +84,7 @@ export async function readColumnar(io, user, demoId, groups, opts = {}) {
     return null;
   }
   try {
-    const probe = new Uint8Array(HEADER_PROBE);
-    const { bytesRead } = await fh.read(probe, 0, HEADER_PROBE, 0);
-    let decoded = decodeHeader(probe.subarray(0, bytesRead));
-    if (!decoded && bytesRead >= 8) {
-      // Header longer than the probe: read exactly what it declared.
-      const view = new DataView(probe.buffer, 0, 8);
-      const hLen = view.getUint32(4);
-      if (hLen > 0 && hLen < 64 * 1024 * 1024) {
-        const full = new Uint8Array(8 + hLen);
-        await fh.read(full, 0, full.length, 0);
-        decoded = decodeHeader(full);
-      }
-    }
+    const decoded = await decodeOpenHeader(fh);
     if (!decoded) return null;
     const { header, blockBase } = decoded;
     // The sidecar describes a JSON that has since changed. Fall through.
@@ -114,8 +120,22 @@ export async function readColumnar(io, user, demoId, groups, opts = {}) {
 export async function writeColumnar(io, user, demoId, entry) {
   try {
     const stat = await fsp.stat(jsonPath(io, user, demoId));
-    const bytes = encodeColumnar(entry, { stamp: stampOf(stat) });
+    // Already current: skip the encode and the write. The full-contract path
+    // (the Database's raw-library fallback) refreshes sidecars it never reads,
+    // and without this check every 300-demo page rewrote 300 sidecars — tens
+    // of MB of disk writes per page for files that had not changed.
     const target = colPath(io, user, demoId);
+    let fh = null;
+    try {
+      fh = await fsp.open(target, 'r');
+      const decoded = await decodeOpenHeader(fh);
+      if (decoded?.header?.stamp === stampOf(stat)) return true;
+    } catch {
+      /* absent or torn sidecar: write it below */
+    } finally {
+      await fh?.close().catch(() => {});
+    }
+    const bytes = encodeColumnar(entry, { stamp: stampOf(stat) });
     // Write via a temp file so a reader never sees a half-written sidecar.
     const tmp = `${target}.${process.pid}.tmp`;
     await fsp.writeFile(tmp, bytes);
