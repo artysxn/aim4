@@ -123,6 +123,19 @@ export function createStatsPanel({
   /** Mirror filters into `/database?…`. Off when this panel is embedded elsewhere. */
   syncUrl = true
 }) {
+  // The search pill IS the input: picked teams/players sit inside it as
+  // chips and the typeahead menu hangs off it, so searching never opens a
+  // separate panel under the head.
+  const searchPillHtml = `
+    <div class="head-search-pill st-search-pill" data-st-search>
+      <img src="${MENU_BTN.search}" alt="" width="14" height="14" draggable="false" />
+      <span class="st-pill-chips" data-st-pill-chips></span>
+      <input type="search" id="st-entity-search" class="st-pill-input" placeholder="Search…"
+        spellcheck="false" autocomplete="off" aria-label="Search teams or players" />
+      <button type="button" class="st-pill-clear" data-st-search-clear hidden aria-label="Clear search" title="Clear">&times;</button>
+      <div class="rp-typeahead-menu an-subject-menu" id="st-entity-menu" hidden></div>
+    </div>`;
+
   const el = document.createElement('div');
   el.className = 'st-panel';
   el.innerHTML = `
@@ -136,10 +149,7 @@ export function createStatsPanel({
             <span class="spinner spinner-sm" aria-hidden="true"></span>
           </span>
           <button type="button" class="btn btn-sm" data-st-library-retry hidden>Retry</button>
-          <button type="button" class="head-search-pill" data-st-search-toggle aria-expanded="false" aria-controls="st-search">
-            <img src="${MENU_BTN.search}" alt="" width="14" height="14" draggable="false" />
-            <span>Search…</span>
-          </button>
+          ${searchPillHtml}
           <button type="button" class="head-icon-btn" data-st-filters-toggle aria-expanded="false" aria-controls="st-filters" title="Filters" aria-label="Filters">
             <img src="${filtersIcon}" alt="" width="16" height="16" draggable="false" />
           </button>
@@ -157,7 +167,6 @@ export function createStatsPanel({
       </div>
     </div>
     <div class="st-filters" id="st-filters" hidden></div>
-    <div class="st-search" id="st-search" hidden></div>
     <div class="st-body" id="st-body"><div class="is-loading" role="status" aria-live="polite"><span class="spinner" aria-hidden="true"></span><span class="sr-only">Loading</span></div></div>`;
 
   /** @type {HTMLElement | null} */
@@ -170,10 +179,7 @@ export function createStatsPanel({
         <span class="spinner spinner-sm" aria-hidden="true"></span>
       </span>
       <button type="button" class="btn btn-sm" data-st-library-retry hidden>Retry</button>
-      <button type="button" class="head-search-pill" data-st-search-toggle aria-expanded="false" aria-controls="st-search">
-        <img src="${MENU_BTN.search}" alt="" width="14" height="14" draggable="false" />
-        <span>Search…</span>
-      </button>
+      ${searchPillHtml}
       <button type="button" class="head-icon-btn" data-st-filters-toggle aria-expanded="false" aria-controls="st-filters" title="Filters" aria-label="Filters">
         <img src="${filtersIcon}" alt="" width="16" height="16" draggable="false" />
       </button>
@@ -184,13 +190,12 @@ export function createStatsPanel({
   }
 
   const filtersEl = el.querySelector('#st-filters');
-  const searchEl = el.querySelector('#st-search');
   const filtersToggleEl =
     pageHeadEl?.querySelector('[data-st-filters-toggle]') ||
     el.querySelector('[data-st-filters-toggle]');
-  const searchToggleEl =
-    pageHeadEl?.querySelector('[data-st-search-toggle]') ||
-    el.querySelector('[data-st-search-toggle]');
+  const searchWrapEl =
+    pageHeadEl?.querySelector('[data-st-search]') || el.querySelector('[data-st-search]');
+  const searchInputEl = searchWrapEl?.querySelector('#st-entity-search');
   const bodyEl = el.querySelector('#st-body');
   const scopeEl = el.querySelector('#st-scope');
   const tabsEl = pageHeadEl?.querySelector('.st-tabs') || el.querySelector('.st-tabs');
@@ -375,8 +380,7 @@ export function createStatsPanel({
 
   /** Filters bar is closed by default so the table owns the viewport. */
   let filtersOpen = false;
-  /** Search bar is closed by default; selections still filter when closed. */
-  let searchOpen = false;
+  /** Search lives inline in the head pill; only its suggestion menu opens. */
   let searchQuery = '';
   let searchMenuOpen = false;
   /** @type {{ players: { id: string, name: string }[], teams: { key: string, name: string }[] }} */
@@ -651,26 +655,19 @@ export function createStatsPanel({
   }
 
   function syncSearchToggle() {
-    const on = searchOpen || hasEntityPick();
-    searchToggleEl?.classList.toggle('active', on);
-    searchToggleEl?.setAttribute('aria-expanded', searchOpen ? 'true' : 'false');
+    searchWrapEl?.classList.toggle('active', searchMenuOpen || hasEntityPick());
   }
 
-  function setSearchOpen(open) {
-    searchOpen = Boolean(open);
-    searchEl.hidden = !searchOpen;
-    if (searchOpen) {
-      renderSearch();
+  function setSearchMenuOpen(open) {
+    searchMenuOpen = Boolean(open);
+    if (searchMenuOpen) {
       // Suggestions come from the catalogue; fetch it on the way in rather
       // than on the first keystroke so the menu is populated when it opens.
       void ensureRoster().then(() => {
-        if (searchOpen) refreshSearchMenu();
+        if (searchMenuOpen) refreshSearchMenu();
       });
-      searchEl.querySelector('#st-entity-search')?.focus?.();
-    } else {
-      searchMenuOpen = false;
-      searchQuery = '';
     }
+    refreshSearchMenu();
     syncSearchToggle();
   }
 
@@ -785,7 +782,7 @@ export function createStatsPanel({
   }
 
   function refreshSearchMenu() {
-    const menu = searchEl.querySelector('#st-entity-menu');
+    const menu = searchWrapEl?.querySelector('#st-entity-menu');
     if (!menu) return;
     const q = searchQuery;
     const opts = entitySuggestions(q);
@@ -798,34 +795,32 @@ export function createStatsPanel({
   }
 
   function renderSearch() {
-    const chips = [
+    if (!searchWrapEl) return;
+    // Picks render as plain text, never chips. Each name is still clickable
+    // to remove just that pick; the pill's × clears them all.
+    const picks = [
       ...entityPick.teams.map(
-        (t) => `<button type="button" class="an-sel-chip" data-st-entity-remove="team|${escapeHtml(
+        (t) => `<button type="button" class="st-pill-pick" data-st-entity-remove="team|${escapeHtml(
           t.key
-        )}" title="Remove">${escapeHtml(t.name)} <span aria-hidden="true">×</span></button>`
+        )}" title="Remove ${escapeHtml(t.name)}">${escapeHtml(t.name)}</button>`
       ),
       ...entityPick.players.map(
-        (p) => `<button type="button" class="an-sel-chip" data-st-entity-remove="player|${escapeHtml(
+        (p) => `<button type="button" class="st-pill-pick" data-st-entity-remove="player|${escapeHtml(
           p.id
-        )}" title="Remove">${escapeHtml(p.name)} <span aria-hidden="true">×</span></button>`
+        )}" title="Remove ${escapeHtml(p.name)}">${escapeHtml(p.name)}</button>`
       )
     ].join('');
-
-    searchEl.innerHTML = `
-      <div class="st-search-typeahead rp-typeahead" id="st-search-typeahead">
-        ${chips ? `<div class="an-sel-chips">${chips}</div>` : ''}
-        ${mbWrap(
-          'search',
-          `<input type="search" class="site-input" id="st-entity-search"
-          placeholder="Search teams or players…" spellcheck="false" autocomplete="off"
-          value="${escapeHtml(searchQuery)}" aria-label="Search teams or players" />`
-        )}
-        <div class="rp-typeahead-menu an-subject-menu" id="st-entity-menu" hidden></div>
-      </div>
-      <button type="button" class="btn btn-sm st-filter-clear" data-st-search-clear${
-        hasEntityPick() ? '' : ' disabled'
-      }>Clear</button>`;
-    searchEl.hidden = !searchOpen;
+    const chipsEl = searchWrapEl.querySelector('[data-st-pill-chips]');
+    if (chipsEl) chipsEl.innerHTML = picks;
+    const clearBtn = searchWrapEl.querySelector('[data-st-search-clear]');
+    if (clearBtn) clearBtn.hidden = !hasEntityPick();
+    // Keep the live input out of innerHTML: replacing it mid-typing would
+    // drop focus. Only reconcile its value when state changed underneath it.
+    if (searchInputEl && searchInputEl.value !== searchQuery) {
+      searchInputEl.value = searchQuery;
+    }
+    // "fnatic Search…" is not a sentence; the hint retires once a pick shows.
+    if (searchInputEl) searchInputEl.placeholder = picks ? '' : 'Search…';
     syncSearchToggle();
     refreshSearchMenu();
   }
@@ -868,6 +863,9 @@ export function createStatsPanel({
     searchMenuOpen = false;
     resetListPage();
     renderSearch();
+    // The click landed on a menu button that just vanished; give the caret
+    // back to the pill so another name can follow immediately.
+    searchInputEl?.focus?.();
     scheduleRender({ rebuildFilters: false });
   }
 
@@ -1125,24 +1123,20 @@ export function createStatsPanel({
     setFiltersOpen(!filtersOpen);
   });
 
-  searchToggleEl?.addEventListener('click', () => {
-    setSearchOpen(!searchOpen);
-  });
-
-  searchEl.addEventListener('input', (e) => {
-    if (e.target?.id !== 'st-entity-search') return;
+  searchWrapEl?.addEventListener('input', (e) => {
+    if (e.target !== searchInputEl) return;
     searchQuery = e.target.value || '';
     searchMenuOpen = true;
     refreshSearchMenu();
+    syncSearchToggle();
   });
 
-  searchEl.addEventListener('focusin', (e) => {
-    if (e.target?.id !== 'st-entity-search') return;
-    searchMenuOpen = true;
-    refreshSearchMenu();
+  searchWrapEl?.addEventListener('focusin', (e) => {
+    if (e.target !== searchInputEl) return;
+    setSearchMenuOpen(true);
   });
 
-  searchEl.addEventListener('click', (e) => {
+  searchWrapEl?.addEventListener('click', (e) => {
     const clear = e.target.closest('[data-st-search-clear]');
     if (clear) {
       e.preventDefault();
@@ -1161,17 +1155,20 @@ export function createStatsPanel({
       e.preventDefault();
       const [kind, ...rest] = String(pick.dataset.stEntityPick || '').split('|');
       pickEntity(kind, rest.join('|'));
-    }
-  });
-
-  searchEl.addEventListener('keydown', (e) => {
-    if (e.key !== 'Escape') return;
-    if (searchMenuOpen) {
-      searchMenuOpen = false;
-      refreshSearchMenu();
       return;
     }
-    setSearchOpen(false);
+    // The pill's padding and icon are part of the "search box"; a click
+    // anywhere on them belongs to the input.
+    if (e.target !== searchInputEl) searchInputEl?.focus?.();
+  });
+
+  searchWrapEl?.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    if (searchMenuOpen) {
+      setSearchMenuOpen(false);
+      return;
+    }
+    searchInputEl?.blur?.();
   });
 
   // `toggle` does not bubble; capture so we can pin the fixed menu under the control.
@@ -1401,9 +1398,8 @@ export function createStatsPanel({
     const inRoundMenu = e.target.closest?.('details.st-round-multi, details.st-rank-dd');
     if (!inRoundMenu) closeRoundMenus();
 
-    if (searchMenuOpen && !e.target.closest?.('#st-search-typeahead')) {
-      searchMenuOpen = false;
-      refreshSearchMenu();
+    if (searchMenuOpen && !e.target.closest?.('[data-st-search]')) {
+      setSearchMenuOpen(false);
     }
 
     if (!calendarOpen) return;
@@ -2014,8 +2010,7 @@ export function createStatsPanel({
           }))
           .filter((t) => t.key)
       };
-      if (searchOpen) renderSearch();
-      else syncSearchToggle();
+      renderSearch();
     }
 
     syncTabButtons();
@@ -3605,8 +3600,7 @@ export function createStatsPanel({
     detailPage = 1;
     detailSort = { key: 'date', dir: 'desc' };
     applyViewState(next, { notify: false });
-    syncSearchToggle();
-    if (searchOpen) renderSearch();
+    renderSearch();
 
     // One clock for the WHOLE load, not per phase.
     //
@@ -3807,8 +3801,7 @@ export function createStatsPanel({
       }
       if (!painted) {
         setSpinnerLabel(bodyEl, statsProgressLabel({ phase: 'building-table' }));
-        if (searchOpen) renderSearch();
-        else syncSearchToggle();
+        renderSearch();
       }
       await scheduleUiJob({
         tokenRef: renderTokenRef,

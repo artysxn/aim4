@@ -38,6 +38,7 @@ import { deleteIngestDisk, listIngestDisk } from '../ingest/hltv/disk.js';
 import * as gdriveQueue from '../ingest/gdrive/queue.js';
 import { countOpenTickets, listTickets, replyToTicket, setTicketStatus } from '../support/store.js';
 import { pistolFixStatus, startPistolFixRun } from '../replays/pistolFixRunner.js';
+import { dupeScanStatus, startDupeScan } from '../replays/dupeScan.js';
 import {
   assignSeat,
   cancelSubscription,
@@ -882,6 +883,30 @@ async function route(req, res, url, me) {
       req
     });
     json(res, req, result.busy ? 409 : 200, { ...result, ...pistolFixStatus() });
+    return true;
+  }
+
+  // ---- duplicate matches ---------------------------------------------------
+  // The same game imported twice (HLTV + Drive, a re-upload). Screened by
+  // metadata, confirmed by identical round positions, then the copy with the
+  // lower parser revision — or the older parse — is deleted.
+  if (req.method === 'GET' && p === '/api/admin/replays/dupe-scan') {
+    json(res, req, 200, dupeScanStatus());
+    return true;
+  }
+
+  if (req.method === 'POST' && p === '/api/admin/replays/dupe-scan') {
+    const body = await readJson(req).catch(() => ({}));
+    // del defaults ON: the button's whole point is removing the copies.
+    const del = body.del !== false;
+    const result = startDupeScan({ del });
+    await writeAudit({
+      actorId: me.id,
+      action: 'replays.dupeScan',
+      payload: { del, ...result },
+      req
+    });
+    json(res, req, result.busy ? 409 : 200, { ...result, ...dupeScanStatus() });
     return true;
   }
 

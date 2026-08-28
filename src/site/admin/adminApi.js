@@ -77,6 +77,8 @@ export const adminApi = {
   // Pistol-round repair over the stored library.
   pistolFixStatus: () => get('/api/admin/replays/pistol-fix'),
   pistolFixStart: (force = false) => send('POST', '/api/admin/replays/pistol-fix', { force }),
+  dupeScanStatus: () => get('/api/admin/replays/dupe-scan'),
+  dupeScanStart: (del = true) => send('POST', '/api/admin/replays/dupe-scan', { del }),
 
   // Support inbox: the admin half of /contact.
   supportTickets: (status = '') =>

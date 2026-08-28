@@ -1092,30 +1092,116 @@ a {
 }
 
 /* The rounded search box, and its round icon-only sibling (pic-3 style):
-   used in the page head of Database and Performance. */
+   used in the page head of Database and Performance. Not a toggle: the pill
+   holds a live input, picked-entity chips, and the typeahead menu hangs off
+   its bottom edge — searching happens INSIDE the box. */
 .head-search-pill {
+  position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 9px;
+  gap: 8px;
   height: 34px;
-  padding: 0 18px 0 14px;
+  padding: 0 14px;
   min-width: 170px;
+  max-width: 380px;
   border: 0;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.07);
   color: var(--muted);
   font-family: var(--font-body);
   font-size: 13px;
-  cursor: pointer;
+  cursor: text;
   transition: background 0.15s ease, color 0.15s ease;
 }
 .head-search-pill:hover,
-.head-search-pill.active {
+.head-search-pill.active,
+.head-search-pill:focus-within {
   background: rgba(255, 255, 255, 0.11);
   color: var(--text);
 }
 .head-search-pill img {
+  flex: none;
   opacity: 0.75;
+}
+.head-search-pill .st-pill-input {
+  flex: 1 1 60px;
+  width: 100%;
+  min-width: 50px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: 400 13px var(--font-body);
+  outline: none;
+  appearance: none;
+  -webkit-appearance: none;
+}
+.head-search-pill .st-pill-input::placeholder {
+  color: var(--muted);
+}
+.head-search-pill .st-pill-input::-webkit-search-decoration,
+.head-search-pill .st-pill-input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+}
+.head-search-pill .st-pill-chips {
+  display: inline-flex;
+  align-items: center;
+  max-width: 240px;
+  overflow: hidden;
+  flex: none;
+}
+.head-search-pill .st-pill-chips:empty {
+  display: none;
+}
+/* A pick is plain text, not a chip: no border, no background. Clicking the
+   name removes that one pick; hover hints it. Commas separate multiples. */
+.head-search-pill .st-pill-pick {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: 500 13px var(--font-body);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.head-search-pill .st-pill-pick:hover {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+.head-search-pill .st-pill-pick + .st-pill-pick::before {
+  content: ', ';
+  color: var(--muted);
+  text-decoration: none;
+}
+.head-search-pill .st-pill-clear {
+  flex: none;
+  margin: 0;
+  padding: 0 2px;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+.head-search-pill .st-pill-clear:hover {
+  color: var(--text);
+}
+.head-search-pill .st-pill-clear[hidden] {
+  display: none;
+}
+/* The suggestion menu drops from the pill itself, not a panel below the
+   head. Wider than the pill so team subtitles fit on one line. */
+.head-search-pill .rp-typeahead-menu {
+  top: calc(100% + 6px);
+  right: auto;
+  left: 0;
+  width: 320px;
+  max-height: 320px;
+  text-align: left;
+  cursor: default;
 }
 .head-icon-btn {
   width: 34px;

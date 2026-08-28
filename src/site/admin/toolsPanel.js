@@ -279,6 +279,99 @@ function pistolFixCard() {
   return card;
 }
 
+/**
+ * Duplicate matches: the same game imported twice. Marked only when map,
+ * teams and all ten players are identical, the score is within ±2, 80%+ of
+ * rounds were won by the same team, and at least two rounds have 90%+
+ * identical player positions. The lower parser revision (or the older
+ * parse) is the copy that gets deleted.
+ */
+function dupeScanCard() {
+  const card = el('div', 'admin-tool-card');
+  card.appendChild(el('h3', 'admin-tool-title', 'Duplicate matches'));
+  card.appendChild(
+    el(
+      'p',
+      'admin-muted',
+      'Finds the same game imported twice — identical teams, players, map, score within ±2, matching round winners, and rounds with the same player positions — and deletes the copy with the lower parsed version (or the older one).'
+    )
+  );
+  const status = el('div', 'admin-tool-status');
+  const report = el('div', 'admin-tool-status');
+  const runBtn = button('Scan & delete duplicates', () => start(true), 'btn btn-primary btn-sm');
+  const dryBtn = button('Scan only', () => start(false), 'btn btn-sm');
+  const row = el('div', 'admin-inline');
+  row.append(runBtn, dryBtn);
+  card.append(row, status, report);
+
+  let timer = 0;
+
+  function paint(st) {
+    if (!st) return;
+    runBtn.disabled = st.running;
+    dryBtn.disabled = st.running;
+    if (st.running && st.phase === 'screening') {
+      status.textContent = 'Screening library metadata…';
+    } else if (st.running) {
+      const p = st.progress;
+      const eta = p.etaSeconds != null && p.total > p.done ? ` · ~${p.etaSeconds}s left` : '';
+      const del = p.deleted ? ` · ${p.deleted} deleted` : '';
+      status.textContent = `Verifying candidate pair ${p.done} / ${p.total}${eta}${del}`;
+    } else if (st.result) {
+      const r = st.result;
+      status.textContent =
+        `Scanned ${r.scanned} demos, ${r.candidates} candidate pair${r.candidates === 1 ? '' : 's'}. ` +
+        `Duplicates: ${r.duplicates}. ` +
+        (r.dryRun ? 'Nothing deleted (scan only).' : `Deleted: ${r.deleted}.`) +
+        (r.failed ? ` Failed: ${r.failed}.` : '');
+      report.replaceChildren();
+      for (const pair of r.pairs || []) {
+        report.appendChild(
+          el(
+            'p',
+            'admin-muted',
+            `${r.dryRun ? 'Would delete' : 'Deleted'} ${pair.removed} — kept ${pair.kept} (${pair.reason}).`
+          )
+        );
+      }
+    } else if (st.error) {
+      status.textContent = `Failed: ${st.error}`;
+    } else {
+      status.textContent = '';
+    }
+  }
+
+  async function poll() {
+    try {
+      const st = await adminApi.dupeScanStatus();
+      paint(st);
+      if (st.running) {
+        timer = window.setTimeout(poll, 1500);
+      }
+    } catch {
+      /* quiet */
+    }
+  }
+
+  async function start(del) {
+    runBtn.disabled = true;
+    dryBtn.disabled = true;
+    report.replaceChildren();
+    try {
+      paint(await adminApi.dupeScanStart(del));
+      timer = window.setTimeout(poll, 1200);
+    } catch (err) {
+      status.textContent = err.message;
+      runBtn.disabled = false;
+      dryBtn.disabled = false;
+    }
+  }
+
+  void poll();
+  card.addEventListener('admin:panel-hidden', () => window.clearTimeout(timer));
+  return card;
+}
+
 export function toolsPanel() {
   const root = el('div', 'admin-panel');
   const status = el('p', 'admin-note', '');
@@ -549,7 +642,7 @@ export function toolsPanel() {
   card.appendChild(status);
 
   const wrap = el('div');
-  wrap.append(card, pistolFixCard());
+  wrap.append(card, pistolFixCard(), dupeScanCard());
   render(root, wrap);
 
   // If a rebuild is already running (other tab, prior click, deploy), show it
