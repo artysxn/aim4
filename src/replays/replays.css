@@ -3136,14 +3136,13 @@ body.rv-open:has(.side-collapsed) .rv-side-show {
   display: block;
   width: 12px;
   height: 12px;
+  transform: rotate(90deg);
+  /* Dividers are --border (#181818). One step brighter so the mark reads. */
+  color: #3a3a3a;
 }
 
-.rv-round-swap-ct {
-  fill: var(--rv-ct);
-}
-
-.rv-round-swap-t {
-  fill: var(--rv-t);
+.rv-round-swap path {
+  fill: currentColor;
 }
 
 /* ---- Transport ---------------------------------------------------------- */

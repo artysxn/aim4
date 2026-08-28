@@ -3,19 +3,13 @@
 //
 // The scan says which round is the clearest example of each thing the player
 // does. This turns each of those into the text an Add strategy row would carry
-// for it, for him and for the four bodies around him, with every grenade linked
-// to the entry it folds into in the team's utility archive.
+// for it, for him and for the four bodies around him. Grenade names stay
+// plain text unless a caller asks to fold them into the team's utility
+// archive (`linkUtility`). Analyze does not.
 //
-// The order is the one addStrategy.js is built on and cannot be changed: a note
-// links a throw by its archive id, so the archive is written FIRST and the
-// notes are written around the ids that came back. Here it runs once for the
-// whole report rather than once per round, so a report covering twenty rounds
-// still costs the archive one save.
-//
-// Linking is optional and failure is not fatal. Without an archive (no team
-// picked, a save that failed, the toggle off) the same notes are written with
-// the grenade labels as plain text. A report with unlinked utility is worth
-// having; a half-written archive is not.
+// When linking is on, the archive is written first so notes can cite archive
+// ids, the same order addStrategy.js uses. Failure to save the archive is not
+// fatal: the notes still go in with unlinked labels.
 // ---------------------------------------------------------------------------
 
 import {
@@ -63,7 +57,7 @@ export async function writeScoutNotes({
   playerId,
   playerName = '',
   teamId = '',
-  linkUtility = true,
+  linkUtility = false,
   picks,
   onProgress = () => {}
 }) {

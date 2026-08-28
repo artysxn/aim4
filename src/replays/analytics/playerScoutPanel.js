@@ -63,7 +63,6 @@ export function createPlayerScoutPanel({ escapeHtml }) {
     /** @type {Set<string>} selected category keys */
     cats: new Set(PLAYER_CATEGORIES.map((c) => c.key)),
     destTeamId: '',
-    linkUtility: true,
     busy: false,
     progress: '',
     /** '' | 'ok' | 'error' */
@@ -337,10 +336,6 @@ export function createPlayerScoutPanel({ escapeHtml }) {
           }>${state.busy ? 'Analyzing…' : 'Analyze and save'}</button>
           ${allowanceHtml()}
         </div>
-        <label class="as-cat-main">
-          <input type="checkbox" data-ps-linkutil ${state.linkUtility ? 'checked' : ''} />
-          <span>Add the grenades to this team's utility archive and link them</span>
-        </label>
         ${status}
       </div>
     </section>`;
@@ -451,7 +446,6 @@ export function createPlayerScoutPanel({ escapeHtml }) {
           playerId: state.playerId,
           playerName: results.playerName,
           teamId: dest.id,
-          linkUtility: state.linkUtility,
           picks,
           onProgress: setProgress
         }).catch((err) => ({
@@ -544,10 +538,6 @@ export function createPlayerScoutPanel({ escapeHtml }) {
       if (cat.checked) state.cats.add(key);
       else state.cats.delete(key);
       render();
-      return;
-    }
-    if (t.matches('[data-ps-linkutil]')) {
-      state.linkUtility = Boolean(t.checked);
       return;
     }
     if (t.matches('[data-ps-dest]')) {
