@@ -18,10 +18,11 @@ export function userDetail({ userId, canImpersonate, onBack }) {
   const root = el('div', 'admin-panel');
   const head = el('div', 'admin-detail-head');
   const body = el('div');
+  const integrityBox = el('div', 'admin-subpanel');
   const contentBox = el('div', 'admin-subpanel');
 
   head.appendChild(button('Back', onBack, 'link-btn'));
-  root.append(head, body, contentBox);
+  root.append(head, body, integrityBox, contentBox);
 
   async function load() {
     render(body, spinnerNode());
@@ -31,7 +32,80 @@ export function userDetail({ userId, canImpersonate, onBack }) {
     } catch (err) {
       render(body, el('p', 'admin-error', err.message));
     }
+    loadIntegrity();
     loadContent();
+  }
+
+  // ---- sharing flags -------------------------------------------------------
+  // Separate load like the content box: the panel must not depend on the
+  // integrity tables existing (the 0013 migration may not have run yet).
+  async function loadIntegrity() {
+    try {
+      const { state, flags, events } = await adminApi.userIntegrity(userId);
+      const wrap = el('div');
+      wrap.appendChild(el('h3', null, 'Account integrity'));
+
+      if (!state || (!state.offenses && !state.probation)) {
+        wrap.appendChild(el('p', 'admin-empty', 'No sharing flags.'));
+      } else {
+        const line = state.probation
+          ? `ON PROBATION since ${date(state.probation.at)} · ${state.offenses} offense(s) · restricted to Free`
+          : `${state.offenses} offense(s)${state.warning ? ` · warning pending since ${date(state.warning.at)}` : ''}`;
+        wrap.appendChild(el('p', state.probation ? 'admin-probation' : 'admin-muted', line));
+
+        if (state.probation) {
+          wrap.appendChild(
+            button(
+              'Lift probation',
+              async () => {
+                if (!window.confirm('Lift probation and reset offenses? Do this once the user has provided verification via a ticket.')) return;
+                try {
+                  await adminApi.integrityLift(userId);
+                  notice(wrap, 'Probation lifted.');
+                  load();
+                } catch (err) {
+                  notice(wrap, err.message, 'error');
+                }
+              },
+              'btn'
+            )
+          );
+        }
+      }
+
+      if ((flags || []).length) {
+        wrap.appendChild(
+          table(
+            ['When', '#', 'From', 'To'],
+            flags.map((f) => [
+              date(f.created_at),
+              f.offense_no,
+              `${f.payload?.prev?.country || '?'} · ${f.payload?.prev?.deviceType || '?'} · ${f.payload?.prev?.ip || ''}`,
+              `${f.payload?.next?.country || '?'} · ${f.payload?.next?.deviceType || '?'} · ${f.payload?.next?.ip || ''}`
+            ])
+          )
+        );
+      }
+
+      if ((events || []).length) {
+        wrap.appendChild(el('p', 'admin-muted', 'Recent sessions'));
+        wrap.appendChild(
+          table(
+            ['Last seen', 'Country', 'Device', 'IP'],
+            events.map((e) => [
+              date(e.last_seen_at),
+              e.country || '',
+              e.device_type || '',
+              e.ip || ''
+            ])
+          )
+        );
+      }
+
+      render(integrityBox, wrap);
+    } catch (err) {
+      render(integrityBox, el('p', 'admin-error', `Integrity: ${err.message}`));
+    }
   }
 
   function renderDetail(detail) {
@@ -56,7 +130,8 @@ export function userDetail({ userId, canImpersonate, onBack }) {
       seat: 'a seat on someone else’s plan',
       subscription: 'their own subscription',
       grant: 'an admin grant',
-      admin: 'site admin'
+      admin: 'site admin',
+      probation: 'probation (sharing flag) — subscription suspended, not cancelled'
     }[ents.source] || ents.source;
 
     wrap.appendChild(

@@ -422,6 +422,33 @@ function grant(extra = {}) {
   console.log('  several grants merge by rank');
 }
 
+// ---- probation ----------------------------------------------------------------
+
+{
+  // Sharing probation forces Free over everything a user can hold themselves:
+  // subscription, seat and grant together must not leave a way around it.
+  const r = resolveEntitlements({
+    subscription: sub('solo_elite'),
+    seat: seatOn('team_tier1'),
+    grants: [grant({ plan_id: 'team_tier1', mode: 'upgrade' })],
+    probation: true,
+    now: NOW
+  });
+  assert(r.tier === 'free', `probation must serve free, got ${r.tier}`);
+  assert(r.source === 'probation', `source should say why, got ${r.source}`);
+  assert(r.capabilities[CAP.DEMOS_UPLOAD_LIMIT] === 3, 'capabilities really are free-tier');
+  assert(r.expiresAt === null, 'probation has no expiry: an admin lifts it');
+
+  const clean = resolveEntitlements({ subscription: sub('solo_elite'), now: NOW });
+  assert(clean.tier === 'solo_elite', 'without probation the same inputs entitle normally');
+
+  // Admin still wins: a flagged site admin must keep the panel that lifts flags.
+  const admin = resolveEntitlements({ isAdmin: true, probation: true, now: NOW });
+  assert(admin.source === 'admin', `admin outranks probation, got ${admin.source}`);
+  assert(admin.capabilities[CAP.DEMOS_UPLOAD_LIMIT] === UNLIMITED, 'admin capabilities survive');
+  console.log('  probation forces free past plan, seat and grant; admin still wins');
+}
+
 // ---- admin ------------------------------------------------------------------
 
 {

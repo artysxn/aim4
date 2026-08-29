@@ -45,7 +45,15 @@ export function usersPanel({ onOpenUser }) {
 
   function renderUsers(data) {
     const rows = (data.users || []).map((u) => {
-      const open = button(u.username || '(no username)', () => onOpenUser(u.id), 'link-btn');
+      // A red name is the probation marker: visible from the list without
+      // opening the account. The detail pane carries the evidence and the
+      // lift button.
+      const open = button(
+        u.username || '(no username)',
+        () => onOpenUser(u.id),
+        `link-btn${u.probation_at ? ' admin-probation' : ''}`
+      );
+      if (u.probation_at) open.title = 'On probation: potential account sharing';
       // An account with no row yet reads as the base tier, under its catalogue
       // name: the column is a list of plan names, and one lowercase id in the
       // middle of it looks like a bug rather than like Free.

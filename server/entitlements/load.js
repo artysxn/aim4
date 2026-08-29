@@ -27,7 +27,7 @@ export function freeEntitlements({ isAdmin = false } = {}) {
  * case, not an error.
  */
 async function fetchSources(userId) {
-  const [subscription, seats, grants] = await Promise.all([
+  const [subscription, seats, grants, profile] = await Promise.all([
     db.selectOne('subscriptions', {
       select: '*',
       user_id: `eq.${userId}`,
@@ -44,9 +44,16 @@ async function fetchSources(userId) {
       user_id: `eq.${userId}`,
       revoked_at: 'is.null',
       order: 'created_at.asc'
-    })
+    }),
+    // Sharing probation (0013). Caught individually: on a database that has
+    // not run that migration yet this select 400s, and letting it reject the
+    // Promise.all would resolve EVERY account to free until the migration
+    // lands — the exact outage the outer catch exists to prevent.
+    db
+      .selectOne('profiles', { select: 'probation_at', id: `eq.${userId}` })
+      .catch(() => null)
   ]);
-  return { subscription, seats, grants };
+  return { subscription, seats, grants, probation: Boolean(profile?.probation_at) };
 }
 
 /**
@@ -70,7 +77,7 @@ export async function loadEntitlements(userId, { fresh = false } = {}) {
     resolved = freeEntitlements();
   } else {
     try {
-      const [{ subscription, seats, grants }, isAdmin] = await Promise.all([
+      const [{ subscription, seats, grants, probation }, isAdmin] = await Promise.all([
         fetchSources(userId),
         isSiteAdmin(userId)
       ]);
@@ -79,6 +86,7 @@ export async function loadEntitlements(userId, { fresh = false } = {}) {
         seat: seats,
         grants,
         isAdmin,
+        probation,
         now: Date.now()
       });
     } catch (err) {

@@ -51,6 +51,7 @@ import { flushImpersonationAudit } from '../entitlements/audit.js';
 import { mintTicket, revokeTicket, verifyTicket } from './impersonation.js';
 import { applyContentOp, contentOps } from './content.js';
 import { findByUsername, listUsers, userContent, userDetail } from './users.js';
+import { adminIntegrityDetail, liftProbation } from '../account/integrity.js';
 import {
   listDemos,
   readRoundMeta,
@@ -349,6 +350,23 @@ async function route(req, res, url, me) {
     const row = await findByUsername(String(q.get('username') || '').replace(/^@/, ''));
     json(res, req, row ? 200 : 404, row || { error: 'No such account.' });
     return true;
+  }
+
+  // ---- account integrity (sharing flags) -----------------------------------
+  const integrityMatch = p.match(/^\/api\/admin\/users\/([0-9a-fA-F-]{36})\/integrity(\/lift)?$/);
+  if (integrityMatch) {
+    const userId = integrityMatch[1];
+    if (req.method === 'GET' && !integrityMatch[2]) {
+      json(res, req, 200, await adminIntegrityDetail(userId));
+      return true;
+    }
+    // Lifting is the "evidence was provided" path: the user opened a ticket,
+    // an admin believed them, the account starts clean.
+    if (req.method === 'POST' && integrityMatch[2]) {
+      const state = await liftProbation({ userId, actorId: me.id, req });
+      json(res, req, 200, { ok: true, state });
+      return true;
+    }
   }
 
   const userMatch = p.match(/^\/api\/admin\/users\/([0-9a-fA-F-]{36})(\/content)?$/);

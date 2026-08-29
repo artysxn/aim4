@@ -120,6 +120,10 @@ export const adminApi = {
 
   user: (id) => get(`/api/admin/users/${id}`),
   userContent: (id) => get(`/api/admin/users/${id}/content`),
+  /** Sharing flags: state, flag history, recent login events. */
+  userIntegrity: (id) => get(`/api/admin/users/${id}/integrity`),
+  /** Lift probation after the user proved themselves via a ticket. */
+  integrityLift: (id) => send('POST', `/api/admin/users/${id}/integrity/lift`),
   lookup: (username) => get(`/api/admin/lookup?username=${encodeURIComponent(username)}`),
 
   createGrant: (payload) => send('POST', '/api/admin/grants', payload),

@@ -33,6 +33,8 @@ import {
 import { billingConfigured, provider } from '../billing/provider.js';
 import { ValidationError } from '../entitlements/grants.js';
 import { db } from '../entitlements/service.js';
+import { clientIp } from '../entitlements/audit.js';
+import { ackWarning, integrityState, recordSession } from './integrity.js';
 import { passwordLogin } from './login.js';
 import { registerAccount } from './register.js';
 import { completeLink, safeNext, siteUrl, startUrl } from './steam.js';
@@ -271,17 +273,37 @@ async function route(req, res, url, me) {
     return true;
   }
 
+  // ---- forget what you think you know about me -----------------------------
+  // Supabase brokers its own OAuth links, so linking Google, Discord or X
+  // never touches this server -- and linkIdentity does not rotate the access
+  // token, so the whoami cache is keyed by a token whose identity changed
+  // underneath it. For up to a minute after linking, /api/me says the provider
+  // is not connected and the upload gate says Google is not linked. The client
+  // calls this when it can see more identities than we just reported.
+  if (req.method === 'POST' && p === '/api/account/identity/refresh') {
+    // Inline rather than requireUser(): that is a const declared further down
+    // this function, so calling it from up here is a temporal dead zone.
+    if (!me.signedIn) {
+      json(res, 401, { error: 'Sign in first.' });
+      return true;
+    }
+    invalidateUserIdentity(me.id);
+    json(res, 200, { ok: true });
+    return true;
+  }
+
   // ---- who am I, and what may I do ----------------------------------------
   if (req.method === 'GET' && p === '/api/me') {
     if (me.signedIn) {
       // Best-effort: keep profiles.effective_* filled for RLS readers.
       await ensureEffectiveEntitlements(me.id).catch(() => null);
     }
-    const [quotas, subscription, seats, eligibility] = await Promise.all([
+    const [quotas, subscription, seats, eligibility, integrity] = await Promise.all([
       quotaState(me),
       me.signedIn ? activeSubscription(me.id) : null,
       me.signedIn ? seatsHeldBy(me.id) : [],
-      me.signedIn ? trialEligibility(me.id, me.entitlements) : { eligible: false, reason: null }
+      me.signedIn ? trialEligibility(me.id, me.entitlements) : { eligible: false, reason: null },
+      me.signedIn ? integrityState(me.id) : null
     ]);
 
     // The tag and display name live on the profile, so they are read here
@@ -329,6 +351,9 @@ async function route(req, res, url, me) {
       },
       entitlements: me.entitlements,
       impersonating: me.impersonating,
+      // Sharing warning / probation, so the shell can render the cooldown or
+      // the probation notice. Null while the feature is dormant.
+      integrity,
       quotas,
       subscription: subscription
         ? {
@@ -363,6 +388,33 @@ async function route(req, res, url, me) {
     json(res, 401, { error: 'Sign in first.' });
     return false;
   };
+
+  // ---- session ping: account-sharing detection -----------------------------
+  // The shell posts this on load and refocus with its localStorage device id.
+  // Impersonated requests are a no-op inside recordSession: an admin viewing
+  // as a user must not write the admin's IP into the user's login history.
+  if (req.method === 'POST' && p === '/api/account/session') {
+    if (!requireUser()) return true;
+    const body = await readJson(req, 4 * 1024);
+    const integrity = await recordSession({
+      me,
+      req,
+      deviceId: body?.deviceId,
+      ip: clientIp(req)
+    });
+    json(res, 200, { ok: true, integrity });
+    return true;
+  }
+
+  // The user sat through the 60 second warning and clicked Continue. The
+  // cooldown itself is client-rendered per page load (a refresh restarts it);
+  // this just clears the pending flag so the overlay stops coming back.
+  if (req.method === 'POST' && p === '/api/account/integrity/ack') {
+    if (!requireUser()) return true;
+    await ackWarning(me.id);
+    json(res, 200, { ok: true });
+    return true;
+  }
 
   // ---- trials --------------------------------------------------------------
   if (req.method === 'POST' && p === '/api/trials/start') {

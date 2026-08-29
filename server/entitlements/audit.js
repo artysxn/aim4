@@ -10,10 +10,22 @@
 
 import { db, isConfigured } from './service.js';
 
-/** Trust the socket, not the header, unless a proxy is explicitly configured. */
-function clientIp(req) {
+/**
+ * Trust the socket, not the header, unless a proxy is explicitly configured.
+ * Exported because sharing detection (account/integrity.js) must read the SAME
+ * address as the audit trail: two IP readers that disagree about the proxy is
+ * how a spoofed X-Forwarded-For gets believed by exactly one of them.
+ */
+export function clientIp(req) {
   if (!req) return null;
   if (process.env.AIM4_TRUST_PROXY === '1') {
+    // Behind Cloudflare there are TWO proxies (CF then Traefik), and
+    // X-Forwarded-For's first entry is whatever the client typed before CF
+    // appended the truth. CF-Connecting-IP carries exactly the address that
+    // connected to Cloudflare's edge and passes through Traefik untouched, so
+    // it wins whenever present.
+    const cf = String(req.headers?.['cf-connecting-ip'] || '').trim();
+    if (cf) return cf;
     const forwarded = String(req.headers?.['x-forwarded-for'] || '').split(',')[0].trim();
     if (forwarded) return forwarded;
   }

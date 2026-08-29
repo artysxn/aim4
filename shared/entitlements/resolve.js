@@ -141,6 +141,7 @@ function forcePlan(acc, sourceByKey, planId) {
  * @param {object|object[]|null} [input.seat]  seat row(s), each with `.subscription`
  * @param {object[]} [input.grants]            entitlement_grants rows
  * @param {boolean} [input.isAdmin]            row present in site_admins
+ * @param {boolean} [input.probation]          profiles.probation_at is set
  * @param {Date|number|string} [input.now]
  * @returns {{
  *   tier: string, source: string, capabilities: Record<string, any>,
@@ -155,6 +156,7 @@ export function resolveEntitlements({
   seat = null,
   grants = [],
   isAdmin = false,
+  probation = false,
   now = Date.now()
 } = {}) {
   const nowMs = toMs(now) ?? Date.now();
@@ -262,6 +264,18 @@ export function resolveEntitlements({
     }
 
     if (applied) appliedGrants.push(grant.id);
+  }
+
+  // 4½. Probation. An account flagged for sharing (server/account/integrity.js)
+  // keeps its subscription — billing is untouched — but is SERVED as Free
+  // until an admin lifts the flag. Forced like an override grant, so seats
+  // and grants cannot route around it. Before the admin step on purpose:
+  // a flagged site admin must never lose the panel needed to lift flags.
+  if (probation) {
+    forcePlan(capabilities, sourceByKey, 'free');
+    tier = 'free';
+    source = 'probation';
+    expiresAt = null;
   }
 
   // 5. Admin. Not a tier: the resolved tier is left alone so the panel can still

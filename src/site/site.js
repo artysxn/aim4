@@ -60,6 +60,7 @@ import { initChangelogView } from './changelogView.js';
 import { initDocsView } from './docsView.js';
 import { initContactView } from './contactView.js';
 import { initNotifications } from './notify.js';
+import { initIntegrity } from './integrity.js';
 import { initAccountView } from './account/accountView.js';
 import { getEntitlements } from '../lib/entitlements.js';
 import { upgradePrompt } from './upgradeGate.js';
@@ -1038,6 +1039,9 @@ initIngestReminder(auth, entitlements);
 // Server-side notifications (ticket replies, admin news) surface as the same
 // toasts the ingest reminder uses.
 initNotifications(auth);
+// Account-sharing detection: session ping on load/refocus, plus the warning
+// cooldown and probation overlays it can come back with.
+initIntegrity(auth, entitlements);
 
 viewControllers.account = initAccountView(
   document.querySelector('.view[data-view="account"]'),
