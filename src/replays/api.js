@@ -79,6 +79,17 @@ async function headers(extra = {}) {
 }
 
 /**
+ * A filename made safe to carry in an HTTP header. Header values must be
+ * Latin-1: setRequestHeader throws outright on a Cyrillic or CJK demo name
+ * ("навими-vs-фаза.dem"), and 0x80-0xFF slips through as raw bytes a proxy may
+ * refuse -- either way the upload dies instantly for just those users. Percent
+ * encoding keeps it pure ASCII; the server decodes it back.
+ */
+function headerFilename(name) {
+  return encodeURIComponent(String(name || ''));
+}
+
+/**
  * Turn opaque browser network failures into something a person can act on.
  * "Failed to fetch" usually means the API host is down, blocked, or CORS-broken.
  */
@@ -671,7 +682,7 @@ export async function uploadDemoComms(id, file) {
       method: 'POST',
       headers: await headers({
         'Content-Type': 'application/octet-stream',
-        'X-Aim4-Filename': file.name || ''
+        'X-Aim4-Filename': headerFilename(file.name)
       }),
       body
     })
@@ -764,7 +775,7 @@ function uploadBinary(url, file, onProgress, extraHeaders = {}) {
         const xhr = new XMLHttpRequest();
         xhr.open('POST', url);
         xhr.setRequestHeader('Content-Type', 'application/octet-stream');
-        xhr.setRequestHeader('X-Aim4-Filename', file.name);
+        xhr.setRequestHeader('X-Aim4-Filename', headerFilename(file.name));
         for (const [k, v] of Object.entries(extraHeaders)) xhr.setRequestHeader(k, v);
         for (const [k, v] of Object.entries(auth)) xhr.setRequestHeader(k, v);
 

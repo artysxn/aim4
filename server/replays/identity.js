@@ -127,20 +127,37 @@ async function resolveActor(req) {
   if (hit && hit.expires > Date.now()) return hit.user;
 
   let user = ANONYMOUS;
+  // Only a definite answer is worth remembering. A verdict reached because
+  // Supabase or the profile read failed is a guess, and caching a guess turns
+  // one blip into a minute of it: the signed-in owner of a linked, paid account
+  // resolves as anonymous or as unlinked, and every upload in that window is
+  // refused while reads carry on working. Not caching costs one lookup on the
+  // next request, which is what a retry is.
+  let definite = true;
   try {
     const res = await fetch(`${url}/auth/v1/user`, {
       headers: { Authorization: `Bearer ${token}`, apikey: key }
     });
+    // 401/403 is Supabase saying the token is bad, which is an answer. 5xx and
+    // 429 are Supabase saying nothing at all.
+    if (res.status >= 500 || res.status === 429) definite = false;
     if (res.ok) {
       const body = await res.json();
       if (body?.id) {
         const id = String(body.id);
+        let profileRead = true;
         const [admin, entitlements, profile] = await Promise.all([
           isSiteAdmin(id),
           loadEntitlements(id),
           // The linked Steam identity lives on the profile, not in auth.
-          db.selectOne('profiles', { select: 'steam_id', id: `eq.${id}` }).catch(() => null)
+          db.selectOne('profiles', { select: 'steam_id', id: `eq.${id}` }).catch(() => {
+            profileRead = false;
+            return null;
+          })
         ]);
+        // A failed read here is indistinguishable from "no Steam linked", and
+        // the upload gate reads exactly this field.
+        if (!profileRead) definite = false;
         user = Object.freeze({
           id,
           username: usernameOf(body),
@@ -166,7 +183,10 @@ async function resolveActor(req) {
     }
   } catch {
     /* Supabase unreachable: treat as signed out rather than failing the read */
+    definite = false;
   }
+
+  if (!definite) return user;
 
   cache.set(token, { user, expires: Date.now() + CACHE_MS });
   if (cache.size > 500) {

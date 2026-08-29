@@ -28,6 +28,18 @@ import { clampElo, DEFAULT_ELO } from '../multiplayer/elo.js';
 /** Same resolution the rest of the client uses; empty means same origin. */
 const API_BASE = (import.meta.env?.VITE_API_URL || '').replace(/\/$/, '');
 
+/**
+ * Display names for the providers, for error copy. The keys are Supabase's own
+ * provider ids, which is why X is 'twitter': the OAuth 2.0 provider kept the
+ * old id through the rename.
+ */
+export const PROVIDER_LABELS = {
+  google: 'Google',
+  twitter: 'X',
+  discord: 'Discord',
+  steam: 'Steam'
+};
+
 export class AuthManager {
   constructor(settings) {
     this.settings = settings;
@@ -59,12 +71,26 @@ export class AuthManager {
     return this.displayName;
   }
 
-  /** Username for UI / leaderboards; falls back to auth metadata if profile row is missing. */
+  /**
+   * The @ tag, for UI and leaderboards. Falls back to auth metadata if the
+   * profile row is missing.
+   *
+   * Named displayName for history: call sites render it as `@${displayName}`,
+   * so it is the TAG, not the free-form name. Use profileName for that.
+   */
   get displayName() {
     if (this.profile?.username) return this.profile.username;
     const meta = this.user?.user_metadata?.username;
     if (meta) return String(meta).trim().toLowerCase();
     return null;
+  }
+
+  /**
+   * What this person calls themselves, falling back to the tag. Never
+   * prefixed with @ by callers: it may contain spaces.
+   */
+  get profileName() {
+    return this.profile?.display_name || this.displayName;
   }
 
   get elo() {
@@ -151,7 +177,7 @@ export class AuthManager {
     const sb = getSupabase();
     const { data, error } = await sb
       .from('profiles')
-      .select('id, username, elo, country_code, created_at, username_chosen')
+      .select('id, username, display_name, elo, country_code, created_at, username_chosen')
       .eq('id', user.id)
       .maybeSingle();
     if (error) throw new Error(error.message);
@@ -177,7 +203,7 @@ export class AuthManager {
 
     const { data: refreshed, error: reloadErr } = await sb
       .from('profiles')
-      .select('id, username, elo, country_code, created_at, username_chosen')
+      .select('id, username, display_name, elo, country_code, created_at, username_chosen')
       .eq('id', user.id)
       .maybeSingle();
     if (reloadErr) throw new Error(reloadErr.message);
@@ -364,27 +390,47 @@ export class AuthManager {
   }
 
   /**
-   * Sign in or sign up with Google (OAuth). Redirects away from the page; on
-   * return the session is restored via detectSessionInUrl in the Supabase client.
+   * Sign in or sign up with an OAuth provider Supabase brokers for us.
+   *
+   * Google, X and Discord all take this path: Supabase runs the OAuth dance
+   * and the callback lands on Supabase's own /auth/v1/callback, so there is
+   * nothing on our backend to route. Steam is the exception — it speaks
+   * OpenID 2.0, which Supabase does not broker, so it has its own flow in
+   * signInWithSteam() and server/account/steamAuth.js.
+   *
+   * Redirects away from the page; on return the session is restored via
+   * detectSessionInUrl in the Supabase client.
+   *
+   * @param {'google' | 'twitter' | 'discord'} provider
    */
-  async signInWithGoogle() {
+  async signInWithProvider(provider) {
     if (!this.isConfigured) throw new Error('Accounts are not configured on this deployment.');
     const sb = getSupabase();
     const { error } = await sb.auth.signInWithOAuth({
-      provider: 'google',
+      provider,
       options: { redirectTo: authRedirectUrl() }
     });
-    if (error) throw new Error(error.message || 'Google sign-in failed.');
+    if (error) throw new Error(error.message || `${PROVIDER_LABELS[provider] || provider} sign-in failed.`);
   }
 
-  /** Link Google to the current account (redirects away like sign-in). */
-  async linkGoogle() {
+  /** @deprecated call signInWithProvider('google'); kept for existing callers. */
+  async signInWithGoogle() {
+    return this.signInWithProvider('google');
+  }
+
+  /**
+   * Attach another identity to the account already signed in.
+   *
+   * @param {'google' | 'twitter' | 'discord'} provider
+   */
+  async linkProvider(provider) {
     if (!this.isConfigured) throw new Error('Accounts are not configured on this deployment.');
     if (!this.user) throw new Error('Sign in first.');
-    if (this.hasGoogleLinked) return;
+    if (this.hasProviderLinked(provider)) return;
+    const label = PROVIDER_LABELS[provider] || provider;
     const sb = getSupabase();
     const { error } = await sb.auth.linkIdentity({
-      provider: 'google',
+      provider,
       options: { redirectTo: authRedirectUrl() }
     });
     if (error) {
@@ -393,8 +439,116 @@ export class AuthManager {
           'Manual linking is off in Supabase. Enable it under Authentication → Settings → “Enable manual linking”, then try again.'
         );
       }
-      throw new Error(error.message || 'Could not link Google.');
+      throw new Error(error.message || `Could not link ${label}.`);
     }
+  }
+
+  /**
+   * Detach an identity. Supabase refuses to remove the last one, which is the
+   * behaviour we want: an account with no identity left cannot be signed into.
+   *
+   * @param {'google' | 'twitter' | 'discord'} provider
+   */
+  async unlinkProvider(provider) {
+    if (!this.isConfigured) throw new Error('Accounts are not configured on this deployment.');
+    if (!this.user) throw new Error('Sign in first.');
+    const label = PROVIDER_LABELS[provider] || provider;
+    const sb = getSupabase();
+    const { data, error: readError } = await sb.auth.getUserIdentities();
+    if (readError) throw new Error(readError.message || `Could not unlink ${label}.`);
+    const identity = (data?.identities || []).find((i) => i.provider === provider);
+    if (!identity) return;
+    const { error } = await sb.auth.unlinkIdentity(identity);
+    if (error) throw new Error(error.message || `Could not unlink ${label}.`);
+    await this._refreshLinkedProviders();
+  }
+
+  /** @param {string} provider */
+  hasProviderLinked(provider) {
+    return (this._linkedProviders || []).includes(provider);
+  }
+
+  /**
+   * Sign in or sign up with Steam. Leaves the page, like Google.
+   *
+   * A navigation rather than a fetch: Steam's OpenID flow redirects the
+   * top-level browser and will not run in an iframe or an XHR. The backend
+   * answers /api/auth/steam with a 302 into Steam, so pointing the location at
+   * it is the whole call.
+   *
+   * @param {string} [next] path on the site to come back to
+   */
+  signInWithSteam(next = `${window.location.pathname}${window.location.search}`) {
+    if (!this.isConfigured) throw new Error('Accounts are not configured on this deployment.');
+    const url = `${API_BASE}/api/auth/steam?next=${encodeURIComponent(next || '/')}`;
+    window.location.assign(url);
+  }
+
+  /**
+   * Finish a Steam sign-in, from the ?steam_code= the callback redirected with.
+   *
+   * The code is exchanged for the session over POST rather than the session
+   * riding in the URL; see server/account/steamAuth.js for why. Single use, so
+   * this runs once and strips the parameter whatever happens — a reload that
+   * retried a spent code would show a failure for a sign-in that worked.
+   *
+   * @returns {Promise<{ signedIn: boolean, persona?: string, error?: string }>}
+   */
+  async completeSteamSignIn(search = window.location.search) {
+    const params = new URLSearchParams(search);
+    const code = params.get('steam_code');
+    const failed = params.get('steam_error');
+    if (!code && !failed) return { signedIn: false };
+
+    const strip = () => {
+      const clean = new URLSearchParams(window.location.search);
+      clean.delete('steam_code');
+      clean.delete('steam_error');
+      const qs = clean.toString();
+      window.history.replaceState(
+        {},
+        '',
+        `${window.location.pathname}${qs ? `?${qs}` : ''}${window.location.hash}`
+      );
+    };
+
+    if (failed) {
+      strip();
+      return { signedIn: false, error: failed };
+    }
+
+    strip();
+    let res;
+    try {
+      res = await fetch(`${API_BASE}/api/auth/steam/session`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code })
+      });
+    } catch {
+      return { signedIn: false, error: 'unreachable' };
+    }
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok || !body.access_token || !body.refresh_token) {
+      return { signedIn: false, error: body.error || 'unavailable' };
+    }
+
+    const sb = getSupabase();
+    const { data, error } = await sb.auth.setSession({
+      access_token: body.access_token,
+      refresh_token: body.refresh_token
+    });
+    if (error) return { signedIn: false, error: error.message };
+    const user = data?.user || data?.session?.user || null;
+    if (!user) return { signedIn: false, error: 'unavailable' };
+
+    await this._applySession(user);
+    return { signedIn: true, persona: body.persona || '' };
+  }
+
+  /** @deprecated call linkProvider('google'); kept for existing callers. */
+  async linkGoogle() {
+    return this.linkProvider('google');
   }
 
   async _refreshLinkedProviders() {
@@ -467,7 +621,7 @@ export class AuthManager {
     const sb = getSupabase();
     const { data, error } = await sb
       .from('profiles')
-      .select('id, username, elo, country_code, created_at, username_chosen')
+      .select('id, username, display_name, elo, country_code, created_at, username_chosen')
       .eq('id', this.user.id)
       .maybeSingle();
     if (error) throw new Error(error.message);

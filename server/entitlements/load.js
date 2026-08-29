@@ -83,7 +83,11 @@ export async function loadEntitlements(userId, { fresh = false } = {}) {
       });
     } catch (err) {
       console.warn(`[entitlements] load failed for ${userId}: ${err.message}`);
-      resolved = freeEntitlements();
+      // Free for THIS request, so a read still serves rather than 500s -- but
+      // not remembered. A cached failure is a paid account demoted to free for
+      // the whole TTL: reads keep working, and every metered action is refused
+      // with an upgrade prompt the subscriber has already paid to be rid of.
+      return freeEntitlements();
     }
   }
 

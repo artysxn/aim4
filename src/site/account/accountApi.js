@@ -32,12 +32,23 @@ async function asJson(res) {
 export const accountApi = {
   me: async () => asJson(await fetch(`${API_BASE}/api/me`, { headers: await headers() })),
 
+  /** Change the @ tag. Unique, lowercase, no spaces. */
   setUsername: async (username) =>
     asJson(
       await fetch(`${API_BASE}/api/account/username`, {
         method: 'POST',
         headers: await headers(),
         body: JSON.stringify({ username })
+      })
+    ),
+
+  /** Change the display name. Empty clears it back to the tag. */
+  setDisplayName: async (displayName) =>
+    asJson(
+      await fetch(`${API_BASE}/api/account/display-name`, {
+        method: 'POST',
+        headers: await headers(),
+        body: JSON.stringify({ displayName })
       })
     ),
 

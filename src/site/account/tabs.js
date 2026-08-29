@@ -65,7 +65,15 @@ export function overviewTab(state, { reload, auth }) {
   card.appendChild(avatar);
 
   const idCol = el('div', 'account-identity-main');
-  idCol.appendChild(el('h2', 'account-username', account.username || 'Account'));
+  // The display name is the heading when there is one, with the tag under it;
+  // otherwise the tag is the heading. Two lines saying the same word would be
+  // worse than one.
+  idCol.appendChild(
+    el('h2', 'account-username', account.displayName || account.username || 'Account')
+  );
+  if (account.displayName && account.username) {
+    idCol.appendChild(el('span', 'account-handle', `@${account.username}`));
+  }
   const badge = el('span', `account-plan-badge tier-${ents.tier || 'free'}`, tierBadge(state));
   idCol.appendChild(badge);
 
@@ -80,44 +88,80 @@ export function overviewTab(state, { reload, auth }) {
   card.appendChild(idCol);
   root.appendChild(card);
 
-  // ---- display name -------------------------------------------------------
+  // ---- name and tag -------------------------------------------------------
+  // Two fields, because they do different jobs: the tag addresses the account
+  // and must be unique, the display name is what a person calls themselves and
+  // need not be. Both are assigned automatically at sign-up and both can be
+  // changed here as often as they like.
   if (account.signedIn) {
     const nameCard = el('section', 'account-card');
-    nameCard.appendChild(el('h3', 'account-card-title', 'Display name'));
+    nameCard.appendChild(el('h3', 'account-card-title', 'Name and tag'));
+
+    // Display name.
     nameCard.appendChild(
-      el('p', 'account-muted', 'Shown on every board, table, and team page.')
+      el('p', 'account-muted', 'Your display name is what people read. Spaces are fine.')
     );
-    const nameInput = input('text', account.username || '', 'Display name');
-    nameInput.maxLength = 24;
+    const nameInput = input('text', account.displayName || '', 'Display name');
+    nameInput.maxLength = 32;
     nameInput.className = 'site-input';
-    const save = button(
+    const saveName = button(
       'Save',
       async () => {
-        const next = nameInput.value.trim();
-        if (!next || next === account.username) return;
-        save.disabled = true;
+        const next = nameInput.value.replace(/\s+/g, ' ').trim();
+        if (next === (account.displayName || '')) return;
+        saveName.disabled = true;
         try {
-          await accountApi.setUsername(next);
-          notice(nameCard, 'Name changed.');
+          await accountApi.setDisplayName(next);
+          notice(nameCard, next ? 'Display name changed.' : 'Display name cleared.');
           reload();
         } catch (err) {
           notice(nameCard, err.message, 'error');
         } finally {
-          save.disabled = false;
+          saveName.disabled = false;
         }
       },
       'btn'
     );
-    const row = el('div', 'account-name-row');
-    row.append(nameInput, save);
-    nameCard.appendChild(row);
+    const nameRow = el('div', 'account-name-row');
+    nameRow.append(nameInput, saveName);
+    nameCard.appendChild(nameRow);
+
+    // The @ tag.
+    nameCard.appendChild(
+      el('p', 'account-muted', 'Your @ tag is how others find you. Letters, numbers and underscores.')
+    );
+    const tagInput = input('text', account.username || '', 'yourtag');
+    tagInput.maxLength = 20;
+    tagInput.className = 'site-input';
+    tagInput.spellcheck = false;
+    const saveTag = button(
+      'Save',
+      async () => {
+        const next = tagInput.value.trim().replace(/^@+/, '').toLowerCase();
+        if (!next || next === account.username) return;
+        saveTag.disabled = true;
+        try {
+          await accountApi.setUsername(next);
+          notice(nameCard, 'Tag changed.');
+          reload();
+        } catch (err) {
+          notice(nameCard, err.message, 'error');
+        } finally {
+          saveTag.disabled = false;
+        }
+      },
+      'btn'
+    );
+    const tagRow = el('div', 'account-name-row');
+    tagRow.append(el('span', 'account-tag-at', '@'), tagInput, saveTag);
+    nameCard.appendChild(tagRow);
+
     root.appendChild(nameCard);
   }
 
   // ---- connections --------------------------------------------------------
   // One row per identity provider, driven by account.linked from /api/me.
-  // Google and Steam are live; X stays declared so the section remains a map
-  // of what the account can be connected to.
+  // All four are live; only Google and Steam unlock uploads.
   const linked = account.linked || {};
   const conns = el('section', 'account-card');
   conns.appendChild(el('h3', 'account-card-title', 'Connections'));
@@ -171,15 +215,38 @@ export function overviewTab(state, { reload, auth }) {
         : null
     })
   );
-  list.appendChild(
-    connectionRow({
-      name: 'X',
-      icon: 'X',
-      connected: false,
-      detail: 'Share clips and boards straight from the site.',
-      soon: true
-    })
-  );
+  // Discord and X sign in and link through Supabase's own OAuth, so unlike
+  // Steam there is no endpoint of ours in the loop. Neither anchors uploads:
+  // see the note on `linked` in server/account/routes.js.
+  for (const { name, provider, detail } of [
+    { name: 'Discord', provider: 'discord', detail: 'Sign in with your Discord account.' },
+    { name: 'X', provider: 'twitter', detail: 'Sign in with your X account.' }
+  ]) {
+    const isLinked = Boolean(linked[provider]);
+    list.appendChild(
+      connectionRow({
+        name,
+        icon: name[0],
+        connected: account.signedIn && isLinked,
+        // The state chip already reads "Connected"; repeating it here would
+        // just be the same word twice on one row.
+        detail: isLinked ? '' : detail,
+        connect:
+          account.signedIn && !isLinked
+            ? async () => {
+                // Redirects away; errors are the only thing to render here.
+                await auth?.linkProvider?.(provider);
+              }
+            : null,
+        unlink: isLinked
+          ? async () => {
+              await auth?.unlinkProvider?.(provider);
+              reload();
+            }
+          : null
+      })
+    );
+  }
   conns.appendChild(list);
   root.appendChild(conns);
 

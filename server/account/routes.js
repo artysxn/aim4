@@ -35,7 +35,8 @@ import { ValidationError } from '../entitlements/grants.js';
 import { db } from '../entitlements/service.js';
 import { passwordLogin } from './login.js';
 import { registerAccount } from './register.js';
-import { completeLink, startUrl } from './steam.js';
+import { completeLink, safeNext, siteUrl, startUrl } from './steam.js';
+import { completeSignin, redeemCode, signinUrl } from './steamAuth.js';
 import {
   cancelDeletion,
   deleteAccount,
@@ -106,7 +107,11 @@ async function quotaState(me) {
  */
 export async function handleAccountRequest(req, res, url) {
   const p = url.pathname;
-  const owned = p === '/api/me' || p.startsWith('/api/account') || p.startsWith('/api/trials');
+  const owned =
+    p === '/api/me' ||
+    p.startsWith('/api/account') ||
+    p.startsWith('/api/trials') ||
+    p.startsWith('/api/auth/steam');
   if (!owned) return false;
 
   if (req.method === 'OPTIONS') {
@@ -188,9 +193,64 @@ async function route(req, res, url, me) {
     // Steam redirects the top-level browser, and some setups drop the
     // Authorization-carrying fetch layer entirely on that navigation.
     const result = await completeLink(url.searchParams);
-    const to = result.ok ? '/account?steam=linked' : `/account?steam=${result.error}`;
+    // Absolute, at the SITE. This used to be a bare '/account', which on a
+    // split deploy is api.aim4.io/account -- the API's own 404 -- so a link
+    // that had actually succeeded ended on {"error":"Not found"}.
+    const to = `${siteUrl(req)}/account?steam=${result.ok ? 'linked' : result.error}`;
     res.writeHead(302, { Location: to, 'Cache-Control': 'no-store' });
     res.end();
+    return true;
+  }
+
+  // ---- Steam sign-in -------------------------------------------------------
+  // A plain GET that 302s, unlike the link flow's POST-then-navigate: there is
+  // no session to put in a header yet, so a link or a button can point straight
+  // at it and the browser follows.
+  if (req.method === 'GET' && p === '/api/auth/steam') {
+    const to = signinUrl(req, safeNext(url.searchParams.get('next')));
+    if (!to) {
+      json(res, 503, { error: 'Steam sign-in is not configured on this deployment.' });
+      return true;
+    }
+    res.writeHead(302, { Location: to, 'Cache-Control': 'no-store' });
+    res.end();
+    return true;
+  }
+
+  if (req.method === 'GET' && p === '/api/auth/steam/callback') {
+    // Whatever happens, the browser leaves here for the site: this is a
+    // top-level navigation, and the alternative to a redirect is the API's
+    // JSON error rendered as a page on the wrong origin.
+    const result = await completeSignin(url.searchParams).catch((err) => {
+      console.error('[steam-signin]', err);
+      return { ok: false, next: '/', error: 'unavailable' };
+    });
+    // The code, never the session: see steamAuth.js. It buys one exchange
+    // inside two minutes, where a refresh token in a URL would buy the account.
+    const to = result.ok
+      ? `${siteUrl(req)}${result.next}${result.next.includes('?') ? '&' : '?'}steam_code=${encodeURIComponent(result.code)}`
+      : `${siteUrl(req)}${result.next}${result.next.includes('?') ? '&' : '?'}steam_error=${encodeURIComponent(result.error)}`;
+    res.writeHead(302, { Location: to, 'Cache-Control': 'no-store' });
+    res.end();
+    return true;
+  }
+
+  if (req.method === 'POST' && p === '/api/auth/steam/session') {
+    const body = await readJson(req, 4 * 1024);
+    const claim = redeemCode(body.code);
+    if (!claim) {
+      json(res, 400, { error: 'That sign-in link has already been used or expired.' });
+      return true;
+    }
+    const s = claim.session;
+    json(res, 200, {
+      access_token: s.access_token,
+      refresh_token: s.refresh_token,
+      expires_in: s.expires_in ?? null,
+      token_type: s.token_type || 'bearer',
+      // Prefills the username picker a first-time Steam account lands on.
+      persona: claim.persona || ''
+    });
     return true;
   }
 
@@ -217,21 +277,42 @@ async function route(req, res, url, me) {
       me.signedIn ? trialEligibility(me.id, me.entitlements) : { eligible: false, reason: null }
     ]);
 
+    // The display name lives on the profile, not on the identity, so it is
+    // read here rather than threaded through whoami() -- nothing else in the
+    // request path needs it.
+    const profile = me.signedIn
+      ? await db
+          .selectOne('profiles', { select: 'display_name', id: `eq.${me.id}` })
+          .catch(() => null)
+      : null;
+
     json(res, 200, {
       account: {
         signedIn: me.signedIn,
         id: me.id,
+        // The @ tag: unique, lowercase, how an account is addressed.
         username: me.username,
+        // What they call themselves. Cosmetic, may repeat, may have spaces.
+        // Empty means "no choice made", and the UI falls back to the tag.
+        displayName: String(profile?.display_name || ''),
         admin: me.admin,
         email: me.email || '',
         provider: me.provider || '',
         createdAt: me.createdAt || '',
-        // What actually anchors the account, for the Connections section and
-        // the upload gate's UI: uploads need google or steam to be true.
+        // What the account is connected to, for the Connections section and
+        // the upload gate's UI.
+        //
+        // Only google and steam ANCHOR it: those are the two the upload gate
+        // reads (demoUploadIdentity). X and Discord are listed because they
+        // are ways in and identities to show, not because they unlock uploads
+        // — both are cheap enough to farm that treating one as proof of a real
+        // person would undo the point of the anchor.
         linked: {
           google: me.provider === 'google' || (me.providers || []).includes('google'),
           steam: Boolean(me.steamId),
-          steamId: me.steamId || ''
+          steamId: me.steamId || '',
+          twitter: me.provider === 'twitter' || (me.providers || []).includes('twitter'),
+          discord: me.provider === 'discord' || (me.providers || []).includes('discord')
         }
       },
       entitlements: me.entitlements,
@@ -328,13 +409,20 @@ async function route(req, res, url, me) {
   // rosters list it, leaderboards rank it. Taken names are refused rather than
   // silently suffixed, because two players with one name is a worse outcome
   // than being told to pick another.
+  // ---- the @ tag -----------------------------------------------------------
+  // Lowercased on the way in, and held to the same rule as claim_username and
+  // the profiles unique index. A tag is typed by other people to find someone,
+  // so it cannot carry spaces or case that has to be guessed.
   if (req.method === 'POST' && p === '/api/account/username') {
     if (!requireUser()) return true;
     const body = await readJson(req);
-    const next = String(body?.username || '').trim();
-    if (!/^[A-Za-z0-9_.-]{3,24}$/.test(next)) {
+    const next = String(body?.username || '')
+      .trim()
+      .replace(/^@+/, '')
+      .toLowerCase();
+    if (!/^[a-z0-9_]{3,20}$/.test(next)) {
       json(res, 400, {
-        error: 'Use 3 to 24 characters: letters, numbers, dot, dash or underscore.'
+        error: 'Use 3 to 20 characters: letters, numbers or underscore. No spaces.'
       });
       return true;
     }
@@ -343,11 +431,37 @@ async function route(req, res, url, me) {
       username: `eq.${next}`
     });
     if (taken && taken.id !== me.id) {
-      json(res, 409, { error: 'That name is taken.' });
+      json(res, 409, { error: 'That tag is taken.' });
       return true;
     }
-    await db.update('profiles', { id: `eq.${me.id}` }, { username: next });
+    await db.update('profiles', { id: `eq.${me.id}` }, { username: next, username_chosen: true });
     json(res, 200, { username: next });
+    return true;
+  }
+
+  // ---- the display name ----------------------------------------------------
+  // Free-form and not unique: two people may both be "Daniel". Emptying it is
+  // allowed and means "just show my tag".
+  if (req.method === 'POST' && p === '/api/account/display-name') {
+    if (!requireUser()) return true;
+    const body = await readJson(req);
+    // Any run of whitespace becomes one space: leading, trailing and doubled
+    // spaces are invisible differences that make two names look identical.
+    const next = String(body?.displayName ?? '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (next.length > 32) {
+      json(res, 400, { error: 'Display names can be up to 32 characters.' });
+      return true;
+    }
+    // Control characters and the bidi overrides: both render as nothing and
+    // can reorder the text around them.
+    if (/[\p{Cc}\p{Cf}]/u.test(next)) {
+      json(res, 400, { error: 'That name contains characters that are not allowed.' });
+      return true;
+    }
+    await db.update('profiles', { id: `eq.${me.id}` }, { display_name: next || null });
+    json(res, 200, { displayName: next });
     return true;
   }
 

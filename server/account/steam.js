@@ -58,6 +58,34 @@ export function siteOrigin(req) {
   return host ? `${proto}://${host}` : '';
 }
 
+/**
+ * Where the SITE lives, as opposed to this API.
+ *
+ * They are different hosts in production (www.aim4.io and api.aim4.io), and
+ * Steam necessarily returns the browser to the API, because the API is what
+ * verifies the assertion. So the last hop has to be an absolute URL back to the
+ * site: a relative `/account` redirect lands on api.aim4.io/account, which
+ * serves the API's 404 and leaves the user staring at {"error":"Not found"}
+ * with no idea whether the link worked.
+ */
+export function siteUrl(req) {
+  const configured = String(process.env.AIM4_SITE_URL || '').replace(/\/+$/, '');
+  return configured || siteOrigin(req);
+}
+
+/**
+ * A path on the site to come back to, from untrusted input.
+ *
+ * Only a rooted, single-slash path: `//evil.com` and `https://evil.com` are
+ * both absolute in a browser, so accepting them would make this an open
+ * redirect hanging off a login flow.
+ */
+export function safeNext(next, fallback = '/') {
+  const raw = String(next || '');
+  if (!raw.startsWith('/') || raw.startsWith('//') || raw.includes('\\')) return fallback;
+  return raw;
+}
+
 /** Signed, expiring proof of "this link flow belongs to user X". */
 export function makeState(userId, now = Date.now()) {
   const body = `${userId}.${now + STATE_TTL_MS}`;

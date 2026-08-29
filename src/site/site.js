@@ -9,6 +9,10 @@
 // site.css is linked from the HTML entries directly (no JS import: Vite
 // treats a dual link+import reference as two different modules in dev).
 import accountIcon from '../icons/icon_account.svg?raw';
+import logoGoogle from '../icons/logo_google.svg?raw';
+import logoSteam from '../icons/logo_steam.svg?raw';
+import logoDiscord from '../icons/logo_discord.svg?raw';
+import logoX from '../icons/logo_x.svg?raw';
 import footballIcon from '../icons/webmode_football.svg?raw';
 import toolsIcon from '../icons/webmode_tools.svg?raw';
 import trainingIcon from '../icons/webmode_training.svg?raw';
@@ -345,12 +349,57 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !authModal.hidden) closeAuth();
 });
 
-document.getElementById('auth-google').addEventListener('click', async () => {
-  setAuthStatus('Redirecting to Google…');
+// The brand marks, from the same icon files the rest of the site imports.
+const PROVIDER_ICONS = {
+  google: logoGoogle,
+  steam: logoSteam,
+  discord: logoDiscord,
+  x: logoX
+};
+for (const slot of document.querySelectorAll('[data-provider-icon]')) {
+  const svg = PROVIDER_ICONS[slot.dataset.providerIcon];
+  if (svg) slot.innerHTML = svg;
+}
+
+// Everything Supabase brokers goes through one handler. Steam is separate
+// below because it is our own OpenID flow, not a Supabase provider.
+const OAUTH_BUTTONS = [
+  ['auth-google', 'google', 'Google'],
+  ['auth-discord', 'discord', 'Discord'],
+  ['auth-x', 'twitter', 'X']
+];
+for (const [id, provider, label] of OAUTH_BUTTONS) {
+  document.getElementById(id)?.addEventListener('click', async () => {
+    setAuthStatus(`Redirecting to ${label}…`);
+    try {
+      await auth.signInWithProvider(provider);
+    } catch (e) {
+      setAuthStatus(e.message || `${label} sign-in failed.`, false);
+    }
+  });
+}
+
+/**
+ * What ?steam_error=<code> from the sign-in callback means, in words. Mirrors
+ * SIGNIN_ERRORS in server/account/steamAuth.js, the way tabs.js mirrors the
+ * link flow's copy: the server module cannot be imported into the bundle.
+ */
+const STEAM_SIGNIN_ERRORS = {
+  expired: 'That Steam sign-in expired. Try again.',
+  cancelled: 'Steam sign-in was cancelled.',
+  invalid: 'Steam did not confirm that sign-in.',
+  unreachable: 'Steam could not be reached. Try again in a minute.',
+  unavailable: 'Sign-in is unavailable right now. Try again in a minute.',
+  in_use: 'That Steam account is already linked to a different aim4 account.'
+};
+
+document.getElementById('auth-steam')?.addEventListener('click', () => {
+  setAuthStatus('Redirecting to Steam…');
   try {
-    await auth.signInWithGoogle();
+    // Comes back to whatever page the modal was opened on.
+    auth.signInWithSteam();
   } catch (e) {
-    setAuthStatus(e.message || 'Google sign-in failed.', false);
+    setAuthStatus(e.message || 'Steam sign-in failed.', false);
   }
 });
 
@@ -397,9 +446,17 @@ for (const field of [authIdentifier, authPassword]) {
 }
 
 // ---- Username picker --------------------------------------------------------
-// A Google sign-in carries no username, so a first-run account gets a
-// provisional player_<id> name and username_chosen = false. This modal blocks
-// until a real one is set: no backdrop click, no escape, no close button.
+// Retired by migration 0012, kept as the safety net.
+//
+// A sign-in that carries no username now gets a random @ tag from
+// handle_new_user() with username_chosen = true, and both the tag and the
+// display name are editable under Account. So needsUsername is false for every
+// account this site creates and the modal never opens — which is the point:
+// blocking a brand-new user on a naming decision they have no basis to make is
+// a wall in front of the thing they came for.
+//
+// It still fires for any row that somehow has username_chosen = false, rather
+// than leaving such an account with no way to name itself.
 
 const usernameModal = document.getElementById('username-modal');
 const usernameInput = document.getElementById('username-input');
@@ -520,6 +577,28 @@ sideAccountBtn.addEventListener('click', () => {
 auth.onChange(syncAccountRow);
 syncAccountRow();
 auth.init();
+
+// ---- Steam sign-in, coming back ---------------------------------------------
+// The callback redirects here with ?steam_code=<single-use code>, which is
+// exchanged for the session over POST. A brand-new Steam account already has
+// its @ tag and its display name (the Steam persona, carried through
+// handle_new_user), so there is nothing to ask for — the persona only prefills
+// the picker in the fallback case where it somehow opens.
+auth
+  .completeSteamSignIn()
+  .then((result) => {
+    if (result.error) {
+      openAuth('login');
+      setAuthStatus(STEAM_SIGNIN_ERRORS[result.error] || result.error, false);
+      return;
+    }
+    if (result.signedIn && result.persona && usernameInput && auth.needsUsername) {
+      usernameInput.value = result.persona;
+    }
+  })
+  .catch(() => {
+    /* nothing to recover: the user is simply still signed out */
+  });
 
 // ---- Clear auth tokens out of the address bar --------------------------------
 // The OAuth redirect returns with #access_token=...&refresh_token=... in the

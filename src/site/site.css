@@ -1864,25 +1864,79 @@ a {
   background: var(--surface-hover-solid);
   color: var(--text);
 }
-.btn-google {
+/* Four providers, one row, no words: the mark is the label. Equal columns so
+   the row stays balanced whatever gets added or removed later. */
+.auth-providers {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+.btn-provider {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 10px;
   width: 100%;
+  /* Tall enough to stay a comfortable tap target once the text is gone. */
+  min-height: 44px;
   background: #fff;
   color: #1f1f1f;
   border: none;
   border-radius: var(--radius-sm);
-  padding: 10px 20px;
+  padding: 10px;
   font-family: var(--font-body);
   font-size: 14px;
   font-weight: 500;
   cursor: pointer;
   transition: background 0.15s ease;
 }
-.btn-google:hover {
+.btn-provider:hover {
   background: #f3f3f3;
+}
+/* Steam's mark is near-black, which disappears on the white face the other
+   providers use. Its own dark blue is the one that reads. */
+.btn-provider.is-steam {
+  background: #1b2838;
+  color: #fff;
+}
+.btn-provider.is-steam:hover {
+  background: #24384f;
+}
+.btn-provider.is-discord {
+  background: #5865f2;
+  color: #fff;
+}
+.btn-provider.is-discord:hover {
+  background: #6b76f5;
+}
+.btn-provider.is-x {
+  background: #000;
+  color: #fff;
+}
+.btn-provider.is-x:hover {
+  background: #1a1a1a;
+}
+.btn-provider-icon {
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+  /* The X mark ships with its own <title>X</title>, which the browser would
+     show as the tooltip instead of the button's "Continue with X". Letting the
+     pointer fall through to the button puts the right label back. */
+  pointer-events: none;
+}
+.btn-provider-icon svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+/* Steam's and X's marks ship as near-black paths, which vanish on their own
+   dark faces; Discord's is its brand purple on a purple button. All three want
+   the button's foreground instead. Google keeps its four colours on white. */
+.btn-provider.is-steam .btn-provider-icon svg path,
+.btn-provider.is-x .btn-provider-icon svg path,
+.btn-provider.is-discord .btn-provider-icon svg path {
+  fill: currentColor;
 }
 .auth-divider {
   margin: 14px 0;
@@ -3257,6 +3311,25 @@ table.plan-matrix .plan-matrix-group td {
   gap: 10px;
   margin: 14px 0 18px;
   flex-wrap: wrap;
+}
+.account-name-row .site-input {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+/* The @ sits outside the field, so the tag itself is what gets typed, pasted
+   and read back -- not a value the user has to remember to strip. */
+.account-tag-at {
+  font-family: var(--font-body);
+  font-size: 15px;
+  color: var(--muted);
+  padding-bottom: 9px;
+}
+/* The tag under the display name on the identity card. */
+.account-handle {
+  display: block;
+  color: var(--muted);
+  font-size: 14px;
+  margin-top: 2px;
 }
 
 .account-signout {

@@ -350,6 +350,24 @@ async function refuseUpload(req, res, status, body) {
   json(res, status, body);
 }
 
+/**
+ * The X-Aim4-Filename header, back to a filename. New clients percent-encode
+ * it (headers are Latin-1 only; a Cyrillic demo name cannot travel raw), old
+ * ones sent it as-is -- a name that is not valid percent-encoding is taken
+ * literally.
+ */
+function headerFilename(req, fallback = '') {
+  const raw = String(req.headers['x-aim4-filename'] || '');
+  if (!raw) return fallback;
+  let name = raw;
+  try {
+    name = decodeURIComponent(raw);
+  } catch {
+    /* raw legacy value */
+  }
+  return name.slice(0, 160);
+}
+
 function csv(url, key) {
   const raw = url.searchParams.get(key);
   if (!raw) return undefined;
@@ -1072,7 +1090,7 @@ export async function handleReplayRequest(req, res, url) {
   }
 
   if (req.method === 'POST' && p === '/api/replays/demos') {
-    const filename = String(req.headers['x-aim4-filename'] || 'match.dem').slice(0, 160);
+    const filename = headerFilename(req, 'match.dem');
     // Admitted for one demo. An archive can hold any number, and how many is
     // not knowable until it has been opened, so the check that actually bounds
     // an archive is the one in the ingest loop. This one refuses an account
@@ -1173,7 +1191,7 @@ export async function handleReplayRequest(req, res, url) {
     // package is one request per demo and GET /demos/:id/package hands out a
     // valid package for any visible demo, that made it an unlimited uploader
     // anybody could point at the volume.
-    const filename = String(req.headers['x-aim4-filename'] || `match${PACKAGE_EXT}`).slice(0, 160);
+    const filename = headerFilename(req, `match${PACKAGE_EXT}`);
     // One package is one demo, so this cap check is the whole of it: there is
     // no second check further down the way the archive path has one. Reserved
     // for the same reason, because the body still has to stream before the
@@ -1548,7 +1566,7 @@ export async function handleReplayRequest(req, res, url) {
       try {
         meta = await saveComms(user, id, Buffer.concat(chunks), {
           uploadedBy: me?.id || null,
-          filename: String(req.headers['x-aim4-filename'] || '')
+          filename: headerFilename(req)
         });
       } catch (err) {
         json(res, 400, { error: err?.message || 'That is not a comms file.' });

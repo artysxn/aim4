@@ -193,18 +193,44 @@ export const authAdmin = {
    * `email_confirm: true` marks the address verified without sending mail,
    * which is what makes a seeded test account usable immediately.
    */
-  async createUser({ email, password, username, emailConfirm = true }) {
+  async createUser({ email, password, username, fullName = '', emailConfirm = true }) {
     return request('/auth/v1/admin/users', {
       method: 'POST',
       body: {
         email,
         password,
         email_confirm: emailConfirm,
-        // handle_new_user() reads this and stamps the profile row, so a
-        // seeded account arrives with its username already chosen.
-        user_metadata: username ? { username: String(username).toLowerCase() } : {}
+        // handle_new_user() reads both. `username` means "this account arrives
+        // with its tag already chosen"; without it the trigger assigns a random
+        // one. `full_name` becomes the display name, matching the field Google,
+        // Discord and X send.
+        user_metadata: {
+          ...(username ? { username: String(username).toLowerCase() } : {}),
+          ...(fullName ? { full_name: String(fullName).slice(0, 64) } : {})
+        }
       }
     });
+  },
+
+  /**
+   * A single-use token that can be exchanged for a session, without a password.
+   *
+   * How a provider this box verifies ITSELF — Steam, whose OpenID assertion
+   * Supabase knows nothing about — turns into a Supabase session. Nothing is
+   * emailed: generate_link only mints, and the hash comes straight back here to
+   * be redeemed over /auth/v1/verify.
+   *
+   * @returns {Promise<string>} the token hash, or '' when GoTrue declined
+   */
+  async generateLink({ email, type = 'magiclink' }) {
+    if (!isConfigured()) throw new NotConfiguredError();
+    const body = await request('/auth/v1/admin/generate_link', {
+      method: 'POST',
+      body: { type, email }
+    });
+    // GoTrue has moved these between the top level and `properties` across
+    // versions, and both shapes are still in the wild.
+    return String(body?.hashed_token || body?.properties?.hashed_token || '');
   }
 };
 
