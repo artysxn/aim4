@@ -123,6 +123,74 @@ function post(body, { filename = 'bundle.zip', length = null, token = TOKEN } = 
   console.log('  unlinked username account refused with directions');
 }
 
+// ---- the precheck answers what the upload would ------------------------------
+//
+// Why this route exists at all: every refusal above is decided before the body
+// is read, and a browser will not look at a response while it is still sending
+// a request. Measured against the live API, the far end answers and then drops
+// the connection a few hundred KB in, so what the user sees for "link Steam
+// first" is a network error with no reason in it. The client therefore asks
+// over a few hundred bytes of JSON before it sends a 400 MB demo, which is only
+// worth anything if the answer is identical to the upload's own.
+
+function precheck(body, token = TOKEN) {
+  const payload = JSON.stringify(body);
+  return new Promise((resolve) => {
+    const u = new URL(`${base}/api/replays/uploads/precheck`);
+    const headers = { 'Content-Type': 'application/json', 'Content-Length': payload.length };
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const req = http.request(
+      { hostname: u.hostname, port: u.port, path: u.pathname, method: 'POST', headers },
+      (res) => {
+        let text = '';
+        res.on('data', (d) => (text += d));
+        res.on('end', () => resolve({ status: res.statusCode, text }));
+      }
+    );
+    req.on('error', (err) => resolve({ status: 0, text: err.message }));
+    req.end(payload);
+  });
+}
+
+{
+  const out = await precheck({ filename: 'ok.zip', sizeBytes: 1024 }, '');
+  assert(out.status === 401, `signed-out precheck should be 401, got ${out.status}`);
+
+  const unlinked = await precheck({ filename: 'ok.zip', sizeBytes: 1024 }, TOKEN_UNLINKED);
+  assert(unlinked.status === 403, `unlinked precheck should be 403, got ${unlinked.status}`);
+  assert(/link_required/.test(unlinked.text), `and carry the reason: ${unlinked.text}`);
+
+  const wrongType = await precheck({ filename: 'clip.mp4', sizeBytes: 1024 });
+  assert(wrongType.status === 400, `unsupported type should be 400, got ${wrongType.status}`);
+
+  const tooBig = await precheck({ filename: 'ok.zip', sizeBytes: CAP + 1 });
+  assert(tooBig.status === 413, `oversize precheck should be 413, got ${tooBig.status}`);
+  assert(/can be up to/i.test(tooBig.text), `and name the cap: ${tooBig.text}`);
+
+  const ok = await precheck({ filename: 'ok.zip', sizeBytes: 1024 });
+  assert(ok.status === 200, `an upload that would be taken precheks 200, got ${ok.status}`);
+
+  const tmp = (await fsp.readdir(ROOT)).filter((f) => f.startsWith('.upload-'));
+  assert(tmp.length === 0, 'a precheck writes nothing');
+  console.log('  precheck refuses what the upload would, before any bytes move');
+}
+
+// ---- a refusal reaches a client that is still uploading ----------------------
+
+{
+  // The body is bigger than the socket buffers a browser would fill before it
+  // stalled. The refusal is only useful if it still arrives, so the server
+  // reads the rest and throws it away rather than answering into a socket
+  // nobody is reading yet.
+  const res = await post(Buffer.alloc(2 * 1024 * 1024, 3), {
+    filename: 'ok.zip',
+    token: TOKEN_UNLINKED
+  });
+  assert(res.status === 403, `a refusal mid-body should still be 403, got ${res.status}`);
+  assert(/link_required/.test(res.text), `with its reason intact: ${res.text}`);
+  console.log('  a refusal with the body still in flight arrives with its reason');
+}
+
 // ---- declared oversize is refused before anything is written ----------------
 
 {
@@ -207,6 +275,17 @@ function post(body, { filename = 'bundle.zip', length = null, token = TOKEN } = 
   const res = await post(Buffer.alloc(CAP - 1024, 3), { filename: 'ok.zip' });
   assert(res.status === 202, `an in-limit upload should be accepted, got ${res.status} ${res.text}`);
   console.log('  upload just under the cap accepted');
+
+  // The response lands while the ingest is still running, which is the point of
+  // it. Wait for that ingest to settle before tearing the directory down:
+  // deleting a tree a worker is still writing into fails outright on Windows.
+  const { batch } = JSON.parse(res.text);
+  for (let i = 0; i < 100; i++) {
+    const r = await fetch(`${base}/api/replays/uploads/${batch.id}`);
+    const settled = (await r.json()).batch;
+    if (settled.stage === 'error' || settled.stage === 'done') break;
+    await new Promise((r2) => setTimeout(r2, 50));
+  }
 }
 
 server.close();

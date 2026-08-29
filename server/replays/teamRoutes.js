@@ -73,7 +73,7 @@ import {
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Aim4-Filename, X-Aim4-Visibility',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Aim4-Filename, X-Aim4-Visibility, X-Aim4-Impersonate',
   'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS'
 };
 

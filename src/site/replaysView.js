@@ -1249,6 +1249,14 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
    * The batch is polled rather than pushed: parsing is serialized on the
    * backend and takes minutes, which is far too long to hold a connection open
    * for on a host that will time it out.
+   *
+   * Several of these run at once during a multi-file drop, because a file
+   * starts unpacking and parsing the moment it lands and the rest of the drop
+   * is still going up behind it. Only one of them may write the status line and
+   * the meter, or the two things the user is waiting on would overwrite each
+   * other: while bytes are still moving the transfer owns both, and after that
+   * the batch pass two is currently waiting on does. Everything else still
+   * polls, which is what keeps the parsing rows in the library moving.
    */
   async function followBatch(batchId, label) {
     for (;;) {
@@ -1261,19 +1269,24 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
         if (err.status === 404) return null;
         throw err;
       }
-      renderProgress(100, batch);
+      const loud = !transferring && (statusOwner === '*' || statusOwner === batchId);
+      if (loud) {
+        renderProgress(100, batch);
 
-      const t = batch.totals;
-      if (batch.stage === 'unpacking') setStatus(`${label}Unpacking…`);
-      else if (batch.stage === 'error' && !t.files) setStatus(batch.error, true);
-      else {
-        const current = batch.files.find((f) => !f.failed && f.phase === 'unpacked');
-        const where = current?.total
-          ? ` (${current.name}, round ${current.round}/${current.total})`
-          : current
-            ? ` (${current.name})`
-            : '';
-        setStatus(`${label}Parsed ${t.parsed}/${t.files}, analyzed ${t.analyzed}/${t.files}${where}`);
+        const t = batch.totals;
+        if (batch.stage === 'unpacking') setStatus(`${label}Unpacking…`);
+        else if (batch.stage === 'error' && !t.files) setStatus(batch.error, true);
+        else {
+          const current = batch.files.find((f) => !f.failed && f.phase === 'unpacked');
+          const where = current?.total
+            ? ` (${current.name}, round ${current.round}/${current.total})`
+            : current
+              ? ` (${current.name})`
+              : '';
+          setStatus(
+            `${label}Parsed ${t.parsed}/${t.files}, analyzed ${t.analyzed}/${t.files}${where}`
+          );
+        }
       }
 
       if (batch.stage === 'done' || batch.stage === 'error') return batch;
@@ -1294,6 +1307,14 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
   const PENDING_KEY = 'aim4.replays.pendingUploads';
   /** True while bytes are actually moving — the one thing a reload really kills. */
   let transferring = false;
+  /**
+   * Which follower owns the status line and the meter when several run at once:
+   * a batch id names one, '*' means whoever asks (a resumed upload follows on
+   * its own), and '' means nobody. A drop that failed partway leaves '': the
+   * files that did land are still being followed, and their progress must not
+   * paint over the error that stopped the rest.
+   */
+  let statusOwner = '*';
   /** True while resumePendingUploads is already following what it found. */
   let resuming = false;
 
@@ -1347,6 +1368,9 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     // rest of the session.
     resuming = true;
     uploadOwnsStatus = true;
+    // Followed one at a time here, and nothing else is running: whoever is
+    // being followed may speak.
+    statusOwner = '*';
     try {
       for (const entry of live) {
         let batch;
@@ -1368,6 +1392,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     } finally {
       resuming = false;
       uploadOwnsStatus = false;
+      statusOwner = '';
       clearProgress();
     }
   }
@@ -1548,7 +1573,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     const namingQueue = [];
     /** @type {string[]} */
     const visibilityQueue = [];
-    /** @type {{id: string, name: string, label: string}[]} */
+    /** @type {{id: string, name: string, label: string, watch: Promise<any>|null}[]} */
     const queued = [];
     /** @type {string[]} */
     const alreadyExists = [];
@@ -1596,11 +1621,26 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
               namingQueue.push(res.demo);
               if (res.demo.id) visibilityQueue.push(res.demo.id);
             }
+            // Not awaited: the next file should start going up now, not after a
+            // library listing. It is only here to put the row on screen while
+            // the rest of the drop uploads.
+            void refresh();
           } else {
             const res = await uploadDemo(file, onProgress, 'private');
             renderQuota(res.usage);
             rememberBatch(res.batch.id, name);
-            queued.push({ id: res.batch.id, name, label });
+            const item = { id: res.batch.id, name, label, watch: null };
+            queued.push(item);
+            // The server unpacks and parses a file as soon as it lands, so this
+            // one is working while the next one goes up. Watch it from here
+            // rather than from pass two: its rows appear in the library and its
+            // rounds tick over during the rest of the drop, instead of the
+            // whole batch looking untouched until the last byte of the last
+            // file. Settled either way, so pass two can report it in order.
+            item.watch = followBatch(item.id, item.label).then(
+              (batch) => ({ batch }),
+              (err) => ({ err })
+            );
           }
         } catch (err) {
           // A duplicate is this file only. Keep sending the rest of the drop.
@@ -1622,13 +1662,23 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
         }
         allowance -= 1;
       }
+      // Hand the status line over before the transfers stop owning it: the
+      // followers already running would otherwise all write to it at once in
+      // the gap before pass two picks one.
+      statusOwner = queued[0]?.id || '';
       transferring = false;
 
       // Pass two: watch what the server is doing with them. Leaving at any
       // point from here on is safe.
       if (queued.length) await refresh();
       for (const item of queued) {
-        const batch = await followBatch(item.id, item.label);
+        // In the order they were picked, so the summary reads that way, and so
+        // exactly one of the followers still running owns the status line.
+        statusOwner = item.id;
+        const settled = await item.watch;
+        statusOwner = '';
+        if (settled.err) throw settled.err;
+        const batch = settled.batch;
         forgetBatch(item.id);
         if (batch) {
           parsed += batch.totals.parsed;
@@ -1682,9 +1732,14 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       }
     } catch (err) {
       setStatus(err.message, true);
+      // Not awaited: the files that did land are still being followed, and a
+      // real parse runs for minutes. Silenced instead, so they keep the library
+      // rows moving without painting over the error that stopped the rest.
+      statusOwner = '';
       await refresh();
     } finally {
       transferring = false;
+      statusOwner = '';
       // Released last, after the closing refresh, so the result the user needs
       // to read survives the library reload that follows it.
       uploadOwnsStatus = false;

@@ -168,7 +168,7 @@ const CORS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
   'Access-Control-Allow-Headers':
-    'Authorization, Content-Type, X-Aim4-User, X-Aim4-Filename, X-Aim4-Visibility'
+    'Authorization, Content-Type, X-Aim4-User, X-Aim4-Filename, X-Aim4-Visibility, X-Aim4-Impersonate'
 };
 
 /**
@@ -270,6 +270,84 @@ async function readJson(req, maxBytes = 64 * 1024) {
   } catch {
     throw new Error('Invalid JSON body.');
   }
+}
+
+/**
+ * How much of a refused upload's body is worth reading before answering it.
+ *
+ * A browser does not look at the response while it is still sending the
+ * request. Refusing a 400 MB upload on its first line and returning leaves the
+ * rest of the file in flight with nobody reading it: the socket buffers fill,
+ * the transfer wedges, and what the user eventually sees is the client's
+ * network-error text ("could not reach the backend, check CORS") rather than
+ * the reason they were actually given. Measured against the live API: a 1 MB
+ * body fits in the buffers and the refusal arrives cleanly, 4 MB stalls at 44%
+ * and 20 MB at 18%, both indefinitely.
+ *
+ * So a refusal reads and discards what is left before it answers. Bounded,
+ * because a refused upload must not cost the whole transfer of a 5 GB archive:
+ * past these the socket is dropped, which is the old opaque failure but at a
+ * fixed price. POST /api/replays/uploads/precheck is what keeps ordinary
+ * clients away from here at all.
+ */
+const REFUSAL_DRAIN_BYTES = 32 * 1024 * 1024;
+const REFUSAL_DRAIN_MS = 10000;
+// Nothing on the wire for this long and there is nothing to wait for: a client
+// that declared a length and then sent nothing gets its answer now rather than
+// holding the handler for the full deadline.
+const REFUSAL_IDLE_MS = 1000;
+
+/** @returns {Promise<boolean>} true when there is still a socket worth answering on. */
+function drainBody(req, maxBytes = REFUSAL_DRAIN_BYTES, maxMs = REFUSAL_DRAIN_MS) {
+  if (req.readableEnded) return Promise.resolve(true);
+  if (req.destroyed) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    let seen = 0;
+    let settled = false;
+    let idle = null;
+    const stop = (ok) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(idle);
+      clearTimeout(deadline);
+      req.off('data', onData);
+      req.off('end', onEnd);
+      req.off('error', onErr);
+      // Only a body still arriving is worth cutting off. Everything else keeps
+      // its socket, because the socket is how the reason gets home.
+      if (!ok) req.destroy();
+      resolve(ok);
+    };
+    const armIdle = () => {
+      clearTimeout(idle);
+      idle = setTimeout(() => stop(true), REFUSAL_IDLE_MS);
+      idle.unref?.();
+    };
+    const onData = (chunk) => {
+      seen += chunk.length;
+      if (seen > maxBytes) stop(false);
+      else armIdle();
+    };
+    const onEnd = () => stop(true);
+    const onErr = () => stop(false);
+    const deadline = setTimeout(() => stop(false), maxMs);
+    deadline.unref?.();
+    armIdle();
+    req.on('data', onData);
+    req.on('end', onEnd);
+    req.on('error', onErr);
+  });
+}
+
+/**
+ * Refuse a request whose body may still be arriving, for the reasons above.
+ * Silent when the body was too big to drain: there is no socket left to answer
+ * on, and writing to it would only throw.
+ */
+async function refuseUpload(req, res, status, body) {
+  const drained = await drainBody(req);
+  if (!drained || res.writableEnded || res.destroyed) return;
+  json(res, status, body);
 }
 
 function csv(url, key) {
@@ -741,6 +819,94 @@ export async function handleReplayRequest(req, res, url) {
     }
   };
 
+  /**
+   * Everything an upload can be refused on before a byte of its body is read:
+   * signed in, identity anchored, plan cap, file type, storage quota.
+   *
+   * One function rather than the same five checks written out in each upload
+   * route, because POST /uploads/precheck has to answer exactly what the
+   * upload itself would. A precheck that drifts from the real gate is worse
+   * than none: it promises the upload will be taken and then it is not.
+   *
+   * `reserve` takes the caller's place against the demo cap in the same step
+   * as the check that granted it, so two uploads arriving together cannot both
+   * be admitted against the same count. Whatever comes back in `reserved` is
+   * the caller's to release. The precheck does not reserve: it is a question,
+   * not an admission.
+   *
+   * @returns {Promise<{refusal: {status: number, body: object} | null,
+   *                    reserved: number, gate: object | null}>}
+   */
+  const gateUpload = async ({ kind = 'demo', filename = '', sizeBytes = 0, reserve = false }) => {
+    const out = { refusal: null, reserved: 0, gate: null };
+    if (!me.signedIn) {
+      out.refusal = { status: 401, body: { error: 'Sign in to do that.' } };
+      return out;
+    }
+    // A username account uploads nothing until a real identity anchors it.
+    // 403 with a reason, not 402: this is not a plan problem, and the client
+    // routes the user to Connections rather than to pricing.
+    const anchored = demoUploadIdentity(me);
+    if (!anchored.ok) {
+      out.refusal = { status: 403, body: { error: anchored.error, reason: 'link_required' } };
+      return out;
+    }
+    const cap = await uploadCap(user, me, { incoming: 1, reserve });
+    out.reserved = cap.reserved;
+    if (!cap.allowed) {
+      // 402, not 403: this is "not on your plan", and the client shows an
+      // upgrade prompt rather than a permission error.
+      try {
+        requireLimit(me, CAP.DEMOS_UPLOAD_LIMIT, cap.current, cap.incoming);
+      } catch (err) {
+        const refusal = upgradeResponse(err);
+        if (!refusal) throw err;
+        out.refusal = refusal;
+        return out;
+      }
+    }
+    const named = String(filename || '');
+    const accepted =
+      kind === 'import' ? named.toLowerCase().endsWith(PACKAGE_EXT) : isAcceptedUpload(named);
+    if (!accepted) {
+      out.refusal = {
+        status: 400,
+        body: {
+          error:
+            kind === 'import'
+              ? `Only ${PACKAGE_EXT} packages can be imported.`
+              : 'Upload a .dem file, or a .zip, .rar, .tar.gz, .gz or .zst containing one.'
+        }
+      };
+      return out;
+    }
+    const gate = await checkQuota(user, Math.max(0, Number(sizeBytes) || 0));
+    if (!gate.ok) {
+      out.refusal = { status: 413, body: { error: gate.error, usage: gate.usage } };
+      return out;
+    }
+    out.gate = gate;
+    return out;
+  };
+
+  /**
+   * Every upload this box turns away, in the log, with which gate did it.
+   *
+   * A refused upload reaches the user as whatever their browser makes of a
+   * request that was answered while it was still sending, which historically
+   * was "could not reach the backend, check CORS" and named no gate at all. The
+   * account it happened to is the one piece nobody could recover afterwards, so
+   * it is written down here rather than reconstructed from support messages.
+   */
+  const logRefusal = (kind, filename, sizeBytes, refusal) => {
+    const who = me.signedIn ? `${me.username || 'unnamed'} (${me.id})` : 'signed out';
+    const mb = Math.round((Number(sizeBytes) || 0) / (1024 * 1024));
+    const why = refusal.body?.reason || refusal.body?.error || 'refused';
+    console.warn(
+      `[replays] ${kind} upload refused ${refusal.status} ${why} — ${who}, ${filename || 'unnamed'} ${mb} MB`
+    );
+  };
+
   // ---- status -------------------------------------------------------------
   if (req.method === 'GET' && p === '/api/replays/status') {
     json(res, 200, {
@@ -878,16 +1044,35 @@ export async function handleReplayRequest(req, res, url) {
     return true;
   }
 
-  if (req.method === 'POST' && p === '/api/replays/demos') {
-    if (!requireUser()) return true;
-    // A username account uploads nothing until a real identity anchors it.
-    // 403 with a reason, not 402: this is not a plan problem, and the client
-    // routes the user to Connections rather than to pricing.
-    const anchored = demoUploadIdentity(me);
-    if (!anchored.ok) {
-      json(res, 403, { error: anchored.error, reason: 'link_required' });
+  // Ask before sending. Every refusal below is decided before the body is
+  // read, and a browser mid-upload cannot see a response until it has finished
+  // sending: the answer never arrives, the transfer wedges behind a full
+  // socket buffer, and the client reports a network error instead of the
+  // reason. This route is the same gate over a few hundred bytes of JSON, so
+  // the client can be told "link Steam first" while the file is still on disk.
+  if (req.method === 'POST' && p === '/api/replays/uploads/precheck') {
+    let body = {};
+    try {
+      body = await readJson(req, 4 * 1024);
+    } catch {
+      body = {};
+    }
+    const gated = await gateUpload({
+      kind: body.kind === 'import' ? 'import' : 'demo',
+      filename: String(body.filename || '').slice(0, 160),
+      sizeBytes: Number(body.sizeBytes) || 0
+    });
+    if (gated.refusal) {
+      logRefusal('precheck', body.filename, body.sizeBytes, gated.refusal);
+      json(res, gated.refusal.status, gated.refusal.body);
       return true;
     }
+    json(res, 200, { ok: true, usage: await usage(user) });
+    return true;
+  }
+
+  if (req.method === 'POST' && p === '/api/replays/demos') {
+    const filename = String(req.headers['x-aim4-filename'] || 'match.dem').slice(0, 160);
     // Admitted for one demo. An archive can hold any number, and how many is
     // not knowable until it has been opened, so the check that actually bounds
     // an archive is the one in the ingest loop. This one refuses an account
@@ -895,32 +1080,20 @@ export async function handleReplayRequest(req, res, url) {
     // arriving in the same moment from being admitted against the same count.
     let reserved = 0;
     try {
-      const cap = await uploadCap(user, me, { incoming: 1, reserve: true });
-      reserved = cap.reserved;
-      if (!cap.allowed) {
-        // 402, not 403: this is "not on your plan", and the client shows an
-        // upgrade prompt rather than a permission error.
-        try {
-          requireLimit(me, CAP.DEMOS_UPLOAD_LIMIT, cap.current, cap.incoming);
-        } catch (err) {
-          const refusal = upgradeResponse(err);
-          json(res, refusal.status, refusal.body);
-          return true;
-        }
-      }
-      const filename = String(req.headers['x-aim4-filename'] || 'match.dem').slice(0, 160);
-      if (!isAcceptedUpload(filename)) {
-        json(res, 400, {
-          error: 'Upload a .dem file, or a .zip, .rar, .tar.gz, .gz or .zst containing one.'
-        });
+      const gated = await gateUpload({
+        kind: 'demo',
+        filename,
+        sizeBytes: Number(req.headers['content-length'] || 0),
+        reserve: true
+      });
+      reserved = gated.reserved;
+      if (gated.refusal) {
+        logRefusal('demo', filename, req.headers['content-length'], gated.refusal);
+        // Drained first, or the refusal is never read: see refuseUpload.
+        await refuseUpload(req, res, gated.refusal.status, gated.refusal.body);
         return true;
       }
-      const declared = Number(req.headers['content-length'] || 0);
-      const gate = await checkQuota(user, declared);
-      if (!gate.ok) {
-        json(res, 413, { error: gate.error, usage: gate.usage });
-        return true;
-      }
+      const gate = gated.gate;
 
       // Always land on a temp file first, even for a bare .dem. Unpacking
       // decides where the demo finally lives (a .zip produces several), and the
@@ -934,7 +1107,10 @@ export async function handleReplayRequest(req, res, url) {
       try {
         saved = await saveTempUpload(req, gate.allowed, 'upload');
       } catch (err) {
-        json(res, 413, { error: err.message || 'Upload failed.' });
+        // refuseUpload rather than json: a stream cut off at the cap has
+        // already destroyed the request, and writing to that socket only
+        // throws. When the body is intact this still answers properly.
+        await refuseUpload(req, res, 413, { error: err.message || 'Upload failed.' });
         return true;
       }
       if (!saved.sizeBytes) {
@@ -992,46 +1168,31 @@ export async function handleReplayRequest(req, res, url) {
   // Prefer this path in production: parse on the user's PC, upload only the
   // already-named rounds. No demoparser process runs on the server.
   if (req.method === 'POST' && p === '/api/replays/import') {
-    // Signed in, like every other way of putting a demo in the library. This
-    // route used to accept anonymous callers, and since a package is one
-    // request per demo and GET /demos/:id/package hands out a valid package for
-    // any visible demo, that made it an unlimited uploader anybody could point
-    // at the volume.
-    if (!requireUser()) return true;
-    // Same identity rule as the raw upload path.
-    const anchored = demoUploadIdentity(me);
-    if (!anchored.ok) {
-      json(res, 403, { error: anchored.error, reason: 'link_required' });
-      return true;
-    }
+    // gateUpload holds this route to the same signed-in, anchored account the
+    // raw upload path needs. It used to accept anonymous callers, and since a
+    // package is one request per demo and GET /demos/:id/package hands out a
+    // valid package for any visible demo, that made it an unlimited uploader
+    // anybody could point at the volume.
+    const filename = String(req.headers['x-aim4-filename'] || `match${PACKAGE_EXT}`).slice(0, 160);
     // One package is one demo, so this cap check is the whole of it: there is
     // no second check further down the way the archive path has one. Reserved
     // for the same reason, because the body still has to stream before the
     // record is written.
     let reserved = 0;
     try {
-      const cap = await uploadCap(user, me, { incoming: 1, reserve: true });
-      reserved = cap.reserved;
-      if (!cap.allowed) {
-        try {
-          requireLimit(me, CAP.DEMOS_UPLOAD_LIMIT, cap.current, cap.incoming);
-        } catch (err) {
-          const refusal = upgradeResponse(err);
-          json(res, refusal.status, refusal.body);
-          return true;
-        }
-      }
-      const filename = String(req.headers['x-aim4-filename'] || `match${PACKAGE_EXT}`).slice(0, 160);
-      if (!filename.toLowerCase().endsWith(PACKAGE_EXT)) {
-        json(res, 400, { error: `Only ${PACKAGE_EXT} packages can be imported.` });
+      const gated = await gateUpload({
+        kind: 'import',
+        filename,
+        sizeBytes: Number(req.headers['content-length'] || 0),
+        reserve: true
+      });
+      reserved = gated.reserved;
+      if (gated.refusal) {
+        logRefusal('package', filename, req.headers['content-length'], gated.refusal);
+        await refuseUpload(req, res, gated.refusal.status, gated.refusal.body);
         return true;
       }
-      const declared = Number(req.headers['content-length'] || 0);
-      const gate = await checkQuota(user, declared);
-      if (!gate.ok) {
-        json(res, 413, { error: gate.error, usage: gate.usage });
-        return true;
-      }
+      const gate = gated.gate;
 
       let tmp = null;
       try {

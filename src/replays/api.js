@@ -802,6 +802,44 @@ function uploadBinary(url, file, onProgress, extraHeaders = {}) {
 }
 
 /**
+ * Ask whether this file would be taken, before sending a byte of it.
+ *
+ * The upload routes refuse on identity, plan cap, file type and quota before
+ * they read the body, and a browser will not look at a response while it is
+ * still sending the request: the refusal is written, nobody reads it, the
+ * socket buffers fill and the transfer wedges. What surfaces minutes later is
+ * the xhr error above -- "could not reach the backend" -- for what was really
+ * "link Steam first" or "you are at three demos". Anything over a couple of
+ * megabytes hits this, so every real demo does.
+ *
+ * The server answers the identical gate here over a few hundred bytes of JSON,
+ * so the reason arrives while the file is still on disk. Refusals are thrown in
+ * the same shape uploadBinary throws them, because the callers already read
+ * `upgrade_required` and 409 off these errors.
+ *
+ * @param {File} file
+ * @param {'demo' | 'import'} kind
+ */
+async function precheckUpload(file, kind) {
+  const res = await safeFetch(`${API_BASE}/api/replays/uploads/precheck`, {
+    method: 'POST',
+    headers: await headers({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ kind, filename: file?.name || '', sizeBytes: file?.size || 0 })
+  });
+  if (res.ok) return;
+  let body = {};
+  try {
+    body = await res.json();
+  } catch {
+    /* a refusal that is not JSON is still a refusal */
+  }
+  const err = new Error(body.error || `Upload refused (${res.status})`);
+  err.status = res.status;
+  err.body = body;
+  throw err;
+}
+
+/**
  * Upload a .dem, or a .zip / .gz / .zst containing one or more, for parsing on
  * the server. Resolves as soon as the bytes have landed, with a batch id: the
  * server unpacks and parses in the background because a big archive takes long
@@ -812,6 +850,7 @@ function uploadBinary(url, file, onProgress, extraHeaders = {}) {
  * @returns {Promise<{batch: object, usage: object}>}
  */
 export async function uploadDemo(file, onProgress, visibility = 'public') {
+  await precheckUpload(file, 'demo');
   return uploadBinary(`${API_BASE}/api/replays/demos`, file, onProgress, {
     'X-Aim4-Visibility': visibility
   });
@@ -839,6 +878,7 @@ export async function fetchUploadBatch(batchId) {
  * @param {(pct: number, loaded: number, total: number) => void} [onProgress]
  */
 export async function uploadImport(file, onProgress) {
+  await precheckUpload(file, 'import');
   return uploadBinary(`${API_BASE}/api/replays/import`, file, onProgress);
 }
 

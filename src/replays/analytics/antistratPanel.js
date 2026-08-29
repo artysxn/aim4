@@ -417,9 +417,14 @@ export function createAntistratPanel({ escapeHtml }) {
         scanPayload = await getStatsPayload(
           included.map((d) => d.id),
           {
-            // Round-library tags and match identity, nothing else. This scan
-            // never reads the phase bags, which are two thirds of "shapes".
-            columns: 'roundLibrary',
+            // Round-library tags and match identity, plus the roles the
+            // Positions section names. This scan never reads the phase bags,
+            // which are two thirds of "shapes".
+            //
+            // `roles` is 55 bytes a round and is NOT implied by anything else:
+            // without it every `roleForPlayer` lookup returns null and the
+            // report prints "T unknown, CT unknown" for all five players.
+            columns: ['roundLibrary', 'roles'],
             onProgress: (p) => {
               state.progress = statsProgressLabel(p);
               renderProgress();
