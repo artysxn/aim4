@@ -29,12 +29,14 @@ import { clampElo, DEFAULT_ELO } from '../multiplayer/elo.js';
 const API_BASE = (import.meta.env?.VITE_API_URL || '').replace(/\/$/, '');
 
 /**
- * Display names for the providers, for error copy. The keys are Supabase's own
- * provider ids, which is why X is 'twitter': the OAuth 2.0 provider kept the
- * old id through the rename.
+ * Display names for the providers, for error copy. The keys are Supabase's
+ * own provider ids: 'x' is the OAuth 2.0 provider this site uses, 'twitter'
+ * only ever names the legacy OAuth 1.0a one and is kept for identities that
+ * might still carry it.
  */
 export const PROVIDER_LABELS = {
   google: 'Google',
+  x: 'X',
   twitter: 'X',
   discord: 'Discord',
   steam: 'Steam'
@@ -401,7 +403,7 @@ export class AuthManager {
    * Redirects away from the page; on return the session is restored via
    * detectSessionInUrl in the Supabase client.
    *
-   * @param {'google' | 'twitter' | 'discord'} provider
+   * @param {'google' | 'x' | 'discord'} provider
    */
   async signInWithProvider(provider) {
     if (!this.isConfigured) throw new Error('Accounts are not configured on this deployment.');
@@ -421,7 +423,7 @@ export class AuthManager {
   /**
    * Attach another identity to the account already signed in.
    *
-   * @param {'google' | 'twitter' | 'discord'} provider
+   * @param {'google' | 'x' | 'discord'} provider
    */
   async linkProvider(provider) {
     if (!this.isConfigured) throw new Error('Accounts are not configured on this deployment.');
@@ -447,7 +449,7 @@ export class AuthManager {
    * Detach an identity. Supabase refuses to remove the last one, which is the
    * behaviour we want: an account with no identity left cannot be signed into.
    *
-   * @param {'google' | 'twitter' | 'discord'} provider
+   * @param {'google' | 'x' | 'discord'} provider
    */
   async unlinkProvider(provider) {
     if (!this.isConfigured) throw new Error('Accounts are not configured on this deployment.');

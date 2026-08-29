@@ -30,21 +30,13 @@ import {
 import { CAP } from '../../../shared/entitlements/keys.js';
 import { bytes, button, date, el, field, input, notice, table } from '../admin/dom.js';
 import { accountApi } from './accountApi.js';
+import logoGoogle from '../../icons/logo_google.svg?raw';
+import logoSteam from '../../icons/logo_steam.svg?raw';
+import logoDiscord from '../../icons/logo_discord.svg?raw';
+import logoX from '../../icons/logo_x.svg?raw';
 
-const SOURCE_LABEL = {
-  free: 'No plan',
-  seat: 'Seat on a team plan',
-  subscription: 'Own subscription',
-  grant: 'Granted',
-  admin: 'Site admin'
-};
-
-function tierBadge(state) {
-  const ents = state.entitlements || {};
-  const trial = ents.trial;
-  if (trial) return `${PLAN_NAMES[ents.tier] || ents.tier}, trial, ${trial.daysLeft} days left`;
-  return `${PLAN_NAMES[ents.tier] || ents.tier} · ${SOURCE_LABEL[ents.source] || ents.source}`;
-}
+const PENCIL_SVG =
+  '<svg viewBox="0 -960 960 960" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M200-200h57l391-391-57-57-391 391v57Zm-80 80v-170l528-527q12-11 26.5-17t30.5-6q16 0 31 6t26 18l55 56q12 11 17.5 26t5.5 30q0 16-5.5 30.5T817-647L290-120H120Zm640-584-56-56 56 56Zm-141 85-28-29 57 57-29-28Z"/></svg>';
 
 function limitText(value) {
   return Number(value) === UNLIMITED ? 'Unlimited' : String(value);
@@ -55,27 +47,54 @@ function limitText(value) {
 export function overviewTab(state, { reload, auth }) {
   const root = el('div', 'account-panel');
   const account = state.account || {};
-  const ents = state.entitlements || {};
 
   // ---- identity card ------------------------------------------------------
-  // The page answers "who does this site think I am" in one card: name, email,
-  // plan, when the account started. Everything else hangs off tabs.
+  // Who this site thinks you are, and where you change it: the display name
+  // and the @ tag edit in place, behind a pencil that appears on hover. No
+  // separate settings card repeating the same two values under labels.
   const card = el('section', 'account-card account-identity');
   const avatar = el('div', 'account-avatar', (account.username || '?').slice(0, 1).toUpperCase());
   card.appendChild(avatar);
 
   const idCol = el('div', 'account-identity-main');
-  // The display name is the heading when there is one, with the tag under it;
-  // otherwise the tag is the heading. Two lines saying the same word would be
-  // worse than one.
   idCol.appendChild(
-    el('h2', 'account-username', account.displayName || account.username || 'Account')
+    editable({
+      tag: 'h2',
+      className: 'account-username',
+      value: account.displayName || account.username || 'Account',
+      label: 'Change display name',
+      maxLength: 32,
+      allowEmpty: true,
+      enabled: account.signedIn,
+      save: async (next) => {
+        const clean = next.replace(/\s+/g, ' ').trim();
+        if (clean === (account.displayName || '')) return;
+        await accountApi.setDisplayName(clean);
+        reload();
+      },
+      host: card
+    })
   );
-  if (account.displayName && account.username) {
-    idCol.appendChild(el('span', 'account-handle', `@${account.username}`));
+  if (account.username) {
+    idCol.appendChild(
+      editable({
+        tag: 'span',
+        className: 'account-handle',
+        value: account.username,
+        prefix: '@',
+        label: 'Change @ tag',
+        maxLength: 20,
+        enabled: account.signedIn,
+        save: async (next) => {
+          const clean = next.trim().replace(/^@+/, '').toLowerCase();
+          if (!clean || clean === account.username) return;
+          await accountApi.setUsername(clean);
+          reload();
+        },
+        host: card
+      })
+    );
   }
-  const badge = el('span', `account-plan-badge tier-${ents.tier || 'free'}`, tierBadge(state));
-  idCol.appendChild(badge);
 
   const meta = el('div', 'account-meta');
   if (account.email) meta.appendChild(metaRow('Email', account.email));
@@ -86,169 +105,93 @@ export function overviewTab(state, { reload, auth }) {
   meta.appendChild(metaRow('Account id', account.id || '', true));
   idCol.appendChild(meta);
   card.appendChild(idCol);
-  root.appendChild(card);
-
-  // ---- name and tag -------------------------------------------------------
-  // Two fields, because they do different jobs: the tag addresses the account
-  // and must be unique, the display name is what a person calls themselves and
-  // need not be. Both are assigned automatically at sign-up and both can be
-  // changed here as often as they like.
-  if (account.signedIn) {
-    const nameCard = el('section', 'account-card');
-    nameCard.appendChild(el('h3', 'account-card-title', 'Name and tag'));
-
-    // Display name.
-    nameCard.appendChild(
-      el('p', 'account-muted', 'Your display name is what people read. Spaces are fine.')
-    );
-    const nameInput = input('text', account.displayName || '', 'Display name');
-    nameInput.maxLength = 32;
-    nameInput.className = 'site-input';
-    const saveName = button(
-      'Save',
-      async () => {
-        const next = nameInput.value.replace(/\s+/g, ' ').trim();
-        if (next === (account.displayName || '')) return;
-        saveName.disabled = true;
-        try {
-          await accountApi.setDisplayName(next);
-          notice(nameCard, next ? 'Display name changed.' : 'Display name cleared.');
-          reload();
-        } catch (err) {
-          notice(nameCard, err.message, 'error');
-        } finally {
-          saveName.disabled = false;
-        }
-      },
-      'btn'
-    );
-    const nameRow = el('div', 'account-name-row');
-    nameRow.append(nameInput, saveName);
-    nameCard.appendChild(nameRow);
-
-    // The @ tag.
-    nameCard.appendChild(
-      el('p', 'account-muted', 'Your @ tag is how others find you. Letters, numbers and underscores.')
-    );
-    const tagInput = input('text', account.username || '', 'yourtag');
-    tagInput.maxLength = 20;
-    tagInput.className = 'site-input';
-    tagInput.spellcheck = false;
-    const saveTag = button(
-      'Save',
-      async () => {
-        const next = tagInput.value.trim().replace(/^@+/, '').toLowerCase();
-        if (!next || next === account.username) return;
-        saveTag.disabled = true;
-        try {
-          await accountApi.setUsername(next);
-          notice(nameCard, 'Tag changed.');
-          reload();
-        } catch (err) {
-          notice(nameCard, err.message, 'error');
-        } finally {
-          saveTag.disabled = false;
-        }
-      },
-      'btn'
-    );
-    const tagRow = el('div', 'account-name-row');
-    tagRow.append(el('span', 'account-tag-at', '@'), tagInput, saveTag);
-    nameCard.appendChild(tagRow);
-
-    root.appendChild(nameCard);
-  }
 
   // ---- connections --------------------------------------------------------
-  // One row per identity provider, driven by account.linked from /api/me.
-  // All four are live; only Google and Steam unlock uploads.
-  const linked = account.linked || {};
-  const conns = el('section', 'account-card');
-  conns.appendChild(el('h3', 'account-card-title', 'Connections'));
-  conns.appendChild(
-    el(
-      'p',
-      'account-muted',
-      linked.google || linked.steam
-        ? 'Linked accounts can sign in here and attach their identity to your stats.'
-        : 'Link Google or Steam to upload demos. A username account can do everything else without one.'
-    )
-  );
-  // The return leg of the Steam link lands back here with ?steam=<result>.
-  const steamNotice = steamReturnNotice();
-  if (steamNotice) conns.appendChild(steamNotice);
+  // Four provider marks in one row, inside the identity card: lit when
+  // connected, dim when not. Click connects; click again unlinks, behind a
+  // confirm because losing the Google or Steam link also locks uploads.
+  if (account.signedIn) {
+    const linked = account.linked || {};
+    // The return leg of the Steam link lands back here with ?steam=<result>.
+    const steamNotice = steamReturnNotice();
+    if (steamNotice) root.appendChild(steamNotice);
 
-  const list = el('div', 'account-connections');
-  list.appendChild(
-    connectionRow({
-      name: 'Google',
-      icon: 'G',
-      connected: account.signedIn && Boolean(linked.google),
-      detail: linked.google ? account.email || '' : 'Sign in with Google and unlock demo uploads.',
-      connect: account.signedIn
-        ? async () => {
-            // Redirects away; errors are the only thing to render here.
-            await auth?.linkGoogle?.();
-          }
-        : null
-    })
-  );
-  list.appendChild(
-    connectionRow({
-      name: 'Steam',
-      icon: 'S',
-      connected: account.signedIn && Boolean(linked.steam),
-      detail: linked.steam
-        ? `SteamID ${linked.steamId}`
-        : 'Verify through Steam sign-in and unlock demo uploads.',
-      connect: account.signedIn
-        ? async () => {
-            const res = await accountApi.steamStart();
-            window.location.href = res.url;
-          }
-        : null,
-      unlink: linked.steam
-        ? async () => {
-            await accountApi.steamUnlink();
+    const PROVIDERS = [
+      {
+        key: 'google',
+        name: 'Google',
+        svg: logoGoogle,
+        connected: Boolean(linked.google),
+        connect: () => auth?.linkProvider?.('google'),
+        unlink: () => auth?.unlinkProvider?.('google')
+      },
+      {
+        key: 'steam',
+        name: 'Steam',
+        svg: logoSteam,
+        connected: Boolean(linked.steam),
+        connect: async () => {
+          const res = await accountApi.steamStart();
+          window.location.href = res.url;
+        },
+        unlink: () => accountApi.steamUnlink()
+      },
+      {
+        key: 'discord',
+        name: 'Discord',
+        svg: logoDiscord,
+        connected: Boolean(linked.discord),
+        connect: () => auth?.linkProvider?.('discord'),
+        unlink: () => auth?.unlinkProvider?.('discord')
+      },
+      {
+        key: 'x',
+        name: 'X',
+        svg: logoX,
+        connected: Boolean(linked.x),
+        connect: () => auth?.linkProvider?.('x'),
+        unlink: () => auth?.unlinkProvider?.('x')
+      }
+    ];
+
+    const row = el('div', 'account-conn-icons');
+    for (const p of PROVIDERS) {
+      const btn = el('button', `conn-icon-btn conn-${p.key}${p.connected ? ' is-connected' : ''}`);
+      btn.type = 'button';
+      btn.innerHTML = p.svg;
+      const label = p.connected ? `${p.name} connected. Click to unlink.` : `Connect ${p.name}`;
+      btn.title = label;
+      btn.setAttribute('aria-label', label);
+      btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        try {
+          if (p.connected) {
+            if (!window.confirm(`Unlink ${p.name} from this account?`)) return;
+            await p.unlink();
             reload();
+          } else {
+            // Connect redirects away; errors are the only thing to render.
+            await p.connect();
           }
-        : null
-    })
-  );
-  // Discord and X sign in and link through Supabase's own OAuth, so unlike
-  // Steam there is no endpoint of ours in the loop. Neither anchors uploads:
-  // see the note on `linked` in server/account/routes.js.
-  for (const { name, provider, detail } of [
-    { name: 'Discord', provider: 'discord', detail: 'Sign in with your Discord account.' },
-    { name: 'X', provider: 'twitter', detail: 'Sign in with your X account.' }
-  ]) {
-    const isLinked = Boolean(linked[provider]);
-    list.appendChild(
-      connectionRow({
-        name,
-        icon: name[0],
-        connected: account.signedIn && isLinked,
-        // The state chip already reads "Connected"; repeating it here would
-        // just be the same word twice on one row.
-        detail: isLinked ? '' : detail,
-        connect:
-          account.signedIn && !isLinked
-            ? async () => {
-                // Redirects away; errors are the only thing to render here.
-                await auth?.linkProvider?.(provider);
-              }
-            : null,
-        unlink: isLinked
-          ? async () => {
-              await auth?.unlinkProvider?.(provider);
-              reload();
-            }
-          : null
-      })
-    );
+        } catch (err) {
+          notice(card, err.message, 'error');
+        } finally {
+          btn.disabled = false;
+        }
+      });
+      row.appendChild(btn);
+    }
+    idCol.appendChild(row);
+
+    // One line, only while it matters: without Google or Steam, uploads stay
+    // locked, and nothing on this card would otherwise say so.
+    if (!linked.google && !linked.steam) {
+      idCol.appendChild(
+        el('p', 'account-muted account-conn-hint', 'Connect Google or Steam to upload demos.')
+      );
+    }
   }
-  conns.appendChild(list);
-  root.appendChild(conns);
+  root.appendChild(card);
 
   // ---- trial --------------------------------------------------------------
   const trial = state.entitlements?.trial;
@@ -316,58 +259,68 @@ function metaRow(label, value, mono = false) {
 }
 
 /**
- * One provider row: icon, name, state, action.
+ * A value that edits where it is shown.
  *
- * `soon: true` renders the row locked rather than omitting it. The section is
- * a map of what the account can be connected to, and a bridge that is not
- * built yet still belongs on the map.
+ * Renders as text with a pencil that appears on hover. The pencil swaps the
+ * text for an input: Enter saves, Escape or clicking away cancels. No labels,
+ * no separate form — the identity card IS the form.
+ *
+ * `host` is where errors land, because the field itself is replaced by the
+ * input while one could occur.
  */
-function connectionRow({ name, icon, connected, detail = '', soon = false, connect = null, unlink = null }) {
-  const row = el('div', `account-conn${connected ? ' is-connected' : ''}`);
-  row.appendChild(el('span', `account-conn-icon conn-${name.toLowerCase()}`, icon));
-  const mid = el('div', 'account-conn-main');
-  mid.appendChild(el('span', 'account-conn-name', name));
-  if (detail) mid.appendChild(el('span', 'account-conn-detail', detail));
-  row.appendChild(mid);
-  if (connected) {
-    row.appendChild(el('span', 'account-conn-state is-on', 'Connected'));
-    if (unlink) {
-      row.appendChild(
-        button(
-          'Unlink',
-          async () => {
-            try {
-              await unlink();
-            } catch (err) {
-              notice(row, err.message, 'error');
-            }
-          },
-          'btn btn-sm'
-        )
-      );
-    }
-  } else if (soon) {
-    row.appendChild(el('span', 'account-conn-state', 'Soon'));
-  } else if (connect) {
-    const btn = button(
-      'Connect',
-      async () => {
-        btn.disabled = true;
-        try {
-          await connect();
-        } catch (err) {
-          notice(row, err.message, 'error');
-        } finally {
-          btn.disabled = false;
-        }
-      },
-      'btn btn-sm'
-    );
-    row.appendChild(btn);
-  } else {
-    row.appendChild(el('span', 'account-conn-state', 'Sign in first'));
-  }
-  return row;
+function editable({
+  tag,
+  className,
+  value,
+  save,
+  host,
+  label,
+  prefix = '',
+  maxLength = 32,
+  allowEmpty = false,
+  enabled = true
+}) {
+  const wrap = el(tag, `${className} account-editable`);
+  const text = el('span', 'account-editable-text', `${prefix}${value}`);
+  wrap.appendChild(text);
+  if (!enabled) return wrap;
+
+  const pencil = el('button', 'account-editable-pencil');
+  pencil.type = 'button';
+  pencil.innerHTML = PENCIL_SVG;
+  pencil.title = label;
+  pencil.setAttribute('aria-label', label);
+  wrap.appendChild(pencil);
+
+  pencil.addEventListener('click', () => {
+    const field = input('text', value, '');
+    field.className = 'account-editable-input';
+    field.maxLength = maxLength;
+    field.spellcheck = false;
+    wrap.replaceChildren(prefix ? el('span', 'account-editable-prefix', prefix) : '', field);
+    field.focus();
+    field.select();
+
+    let done = false;
+    const finish = async (commit) => {
+      if (done) return;
+      done = true;
+      const next = field.value;
+      wrap.replaceChildren(text, pencil);
+      if (!commit || next === value || (!next.trim() && !allowEmpty)) return;
+      try {
+        await save(next);
+      } catch (err) {
+        notice(host, err.message, 'error');
+      }
+    };
+    field.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') finish(true);
+      if (e.key === 'Escape') finish(false);
+    });
+    field.addEventListener('blur', () => finish(false));
+  });
+  return wrap;
 }
 
 /** What ?steam=<code> from the link's return redirect means, said once. */

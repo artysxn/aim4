@@ -161,8 +161,12 @@ export async function verifyAssertion(query, fetchImpl = fetch) {
 /**
  * The whole return leg: state, assertion, claim, write.
  *
+ * `userId` rides back on success so the caller can drop that user's cached
+ * whoami: the 60s token cache otherwise keeps answering "no Steam linked" to
+ * the very page the browser is being redirected to.
+ *
  * @param {URLSearchParams} query  the query string Steam redirected with
- * @returns {Promise<{ ok: boolean, error?: string }>}
+ * @returns {Promise<{ ok: boolean, error?: string, userId?: string }>}
  */
 export async function completeLink(query, { fetchImpl = fetch, now = Date.now() } = {}) {
   const userId = readState(query.get('state'), now);
@@ -191,7 +195,7 @@ export async function completeLink(query, { fetchImpl = fetch, now = Date.now() 
     }
     throw err;
   }
-  return { ok: true };
+  return { ok: true, userId };
 }
 
 /** Human copy for each failure, shown on /account after the redirect. */

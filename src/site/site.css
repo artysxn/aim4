@@ -2551,7 +2551,8 @@ body.is-impersonating .site-toast-stack {
 
 .admin-root,
 .account-root {
-  padding: 4px 0 40px;
+  /* Left padding keeps the cards off the sidebar edge. */
+  padding: 4px 0 40px 22px;
 }
 
 /* Autocoach smokes editor reuses Utility Archive chrome at full height. */
@@ -2843,8 +2844,8 @@ body.is-impersonating .site-toast-stack {
   max-width: 980px;
 }
 
+/* Borderless: the surface tone and the spacing do the separating. */
 .account-card {
-  border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
   padding: 18px 20px;
@@ -3330,6 +3331,99 @@ table.plan-matrix .plan-matrix-group td {
   color: var(--muted);
   font-size: 14px;
   margin-top: 2px;
+}
+
+/* ---- edit-in-place ---------------------------------------------------------
+   The identity card is the form: hover a value and a pencil appears; the
+   pencil swaps the value for an input. */
+.account-editable {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 1.4em;
+}
+.account-editable-pencil {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease, color 0.15s ease;
+}
+.account-editable:hover .account-editable-pencil,
+.account-editable-pencil:focus-visible {
+  opacity: 1;
+}
+.account-editable-pencil:hover {
+  color: var(--text);
+}
+.account-editable-input {
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  outline: none;
+  padding: 0;
+  min-width: 0;
+  max-width: 320px;
+}
+.account-editable-prefix {
+  color: var(--muted);
+}
+
+/* ---- provider icons --------------------------------------------------------
+   Four marks in a row: lit when connected, dim when not. */
+.account-conn-icons {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+}
+.conn-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2, rgba(255, 255, 255, 0.04));
+  cursor: pointer;
+  opacity: 0.35;
+  filter: grayscale(1);
+  transition: opacity 0.15s ease, filter 0.15s ease, background 0.15s ease;
+}
+.conn-icon-btn:hover {
+  opacity: 0.75;
+  filter: grayscale(0.3);
+}
+.conn-icon-btn.is-connected {
+  opacity: 1;
+  filter: none;
+}
+.conn-icon-btn svg {
+  width: 20px;
+  height: 20px;
+  display: block;
+  pointer-events: none;
+}
+/* Steam, X and Discord ship near-black or brand-purple marks that vanish on
+   the dark card; render them white. Google keeps its four colours, which
+   already read on dark. */
+.conn-icon-btn {
+  color: #fff;
+}
+.conn-icon-btn:not(.conn-google) svg path {
+  fill: currentColor;
+}
+.account-conn-hint {
+  margin-top: 10px;
 }
 
 .account-signout {

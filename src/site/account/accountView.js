@@ -32,14 +32,20 @@ export function initAccountView(host, { auth } = {}) {
   let state = null;
   let billing = { configured: false };
   let active = 'overview';
+  // #page-head-actions is one element shared by every page; a deferred paint
+  // arriving after navigation must not write tabs under someone else's title.
+  // Same guard performanceView documents at length.
+  let visible = false;
 
-  function renderShell() {
-    if (!state) return;
-    const wrap = el('div');
-
-    const nav = el('nav', 'account-nav');
+  function mountTabs() {
+    const slot = document.getElementById('page-head-actions');
+    if (!slot || !visible) return;
+    // The same chapter-nav chrome Performance and Analytics put here, so the
+    // top bar reads as one thing across pages.
+    const nav = el('nav', 'an-chapters');
+    nav.setAttribute('aria-label', 'Account');
     for (const tab of TABS) {
-      const btn = el('button', `account-tab${tab.id === active ? ' active' : ''}`, tab.label);
+      const btn = el('button', `an-chapter-btn${tab.id === active ? ' active' : ''}`, tab.label);
       btn.type = 'button';
       btn.addEventListener('click', () => {
         active = tab.id;
@@ -50,14 +56,17 @@ export function initAccountView(host, { auth } = {}) {
       });
       nav.appendChild(btn);
     }
-    wrap.appendChild(nav);
+    slot.replaceChildren(nav);
+  }
+
+  function renderShell() {
+    if (!state) return;
+    mountTabs();
 
     const panel = el('div', 'account-body');
     const tab = TABS.find((t) => t.id === active) || TABS[0];
     panel.appendChild(tab.render(state, { reload: load, billing, auth }));
-    wrap.appendChild(panel);
-
-    render(root, wrap);
+    render(root, panel);
   }
 
   async function load() {
@@ -81,12 +90,16 @@ export function initAccountView(host, { auth } = {}) {
 
   return {
     onShow(params = {}) {
+      visible = true;
       // Deep links land on the right tab.
       const path = window.location.pathname.replace(/\/+$/, '');
       const match = TABS.find((t) => t.path === path);
       active = params.tab || match?.id || 'overview';
       load();
     },
-    onHide() {}
+    onHide() {
+      visible = false;
+      document.getElementById('page-head-actions')?.replaceChildren();
+    }
   };
 }

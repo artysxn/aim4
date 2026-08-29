@@ -363,10 +363,13 @@ for (const slot of document.querySelectorAll('[data-provider-icon]')) {
 
 // Everything Supabase brokers goes through one handler. Steam is separate
 // below because it is our own OpenID flow, not a Supabase provider.
+// 'x' is Supabase's OAuth 2.0 provider id; 'twitter' is the LEGACY OAuth 1.0a
+// one. Enabling "X (OAuth 2.0)" in the dashboard turns on 'x' only, so sending
+// 'twitter' answers "provider is not enabled" no matter what is enabled.
 const OAUTH_BUTTONS = [
   ['auth-google', 'google', 'Google'],
   ['auth-discord', 'discord', 'Discord'],
-  ['auth-x', 'twitter', 'X']
+  ['auth-x', 'x', 'X']
 ];
 for (const [id, provider, label] of OAUTH_BUTTONS) {
   document.getElementById(id)?.addEventListener('click', async () => {

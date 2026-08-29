@@ -17,7 +17,7 @@ import { guardImpersonation } from '../admin/guard.js';
 import { peek } from '../entitlements/quota.js';
 import { quotaSubjectFor } from '../entitlements/enforce.js';
 import { ensureEffectiveEntitlements } from '../entitlements/load.js';
-import { whoami } from '../replays/identity.js';
+import { invalidateUserIdentity, whoami } from '../replays/identity.js';
 import {
   activeSubscription,
   cancelSubscription,
@@ -193,6 +193,10 @@ async function route(req, res, url, me) {
     // Steam redirects the top-level browser, and some setups drop the
     // Authorization-carrying fetch layer entirely on that navigation.
     const result = await completeLink(url.searchParams);
+    // The 60s whoami cache still holds "no Steam linked" for this user, and
+    // the very next request is the account page asking /api/me. Without this,
+    // the page that says "Steam linked" shows the Steam row as not connected.
+    if (result.ok) invalidateUserIdentity(result.userId);
     // Absolute, at the SITE. This used to be a bare '/account', which on a
     // split deploy is api.aim4.io/account -- the API's own 404 -- so a link
     // that had actually succeeded ended on {"error":"Not found"}.
@@ -260,6 +264,9 @@ async function route(req, res, url, me) {
       return true;
     }
     await db.update('profiles', { id: `eq.${me.id}` }, { steam_id: null });
+    // Same cache, opposite direction: an unlink that still reads as linked
+    // for a minute would let one more upload through the identity gate.
+    invalidateUserIdentity(me.id);
     json(res, 200, { ok: true });
     return true;
   }
@@ -277,12 +284,14 @@ async function route(req, res, url, me) {
       me.signedIn ? trialEligibility(me.id, me.entitlements) : { eligible: false, reason: null }
     ]);
 
-    // The display name lives on the profile, not on the identity, so it is
-    // read here rather than threaded through whoami() -- nothing else in the
-    // request path needs it.
+    // The tag and display name live on the profile, so they are read here
+    // rather than threaded through whoami(). The profile is also the truth for
+    // the tag: me.username comes from auth METADATA, which is stamped at
+    // registration and never updated by a tag change -- serving it here meant
+    // renaming your tag and watching the page keep the old one.
     const profile = me.signedIn
       ? await db
-          .selectOne('profiles', { select: 'display_name', id: `eq.${me.id}` })
+          .selectOne('profiles', { select: 'username, display_name', id: `eq.${me.id}` })
           .catch(() => null)
       : null;
 
@@ -291,7 +300,7 @@ async function route(req, res, url, me) {
         signedIn: me.signedIn,
         id: me.id,
         // The @ tag: unique, lowercase, how an account is addressed.
-        username: me.username,
+        username: profile?.username || me.username,
         // What they call themselves. Cosmetic, may repeat, may have spaces.
         // Empty means "no choice made", and the UI falls back to the tag.
         displayName: String(profile?.display_name || ''),
@@ -311,7 +320,10 @@ async function route(req, res, url, me) {
           google: me.provider === 'google' || (me.providers || []).includes('google'),
           steam: Boolean(me.steamId),
           steamId: me.steamId || '',
-          twitter: me.provider === 'twitter' || (me.providers || []).includes('twitter'),
+          // 'x' is Supabase's OAuth 2.0 provider id; 'twitter' would be the
+          // legacy 1.0a one, checked anyway so an old identity still shows.
+          x: ['x', 'twitter'].includes(me.provider) ||
+            (me.providers || []).some((p) => p === 'x' || p === 'twitter'),
           discord: me.provider === 'discord' || (me.providers || []).includes('discord')
         }
       },

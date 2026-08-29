@@ -34,6 +34,7 @@
 import crypto from 'node:crypto';
 
 import { authAdmin, db } from '../entitlements/service.js';
+import { invalidateUserIdentity } from '../replays/identity.js';
 import { safeNext, siteOrigin, steamIdFromClaim, verifyAssertion } from './steam.js';
 
 const STEAM_OPENID = 'https://steamcommunity.com/openid/login';
@@ -290,6 +291,9 @@ export async function completeSignin(query, { fetchImpl = fetch, now = Date.now(
       // Idempotent, and the reason a Steam sign-in can upload straight away:
       // this column is what the upload gate reads for an anchored identity.
       await db.update('profiles', { id: `eq.${userId}` }, { steam_id: steamId });
+      // This session is new, but the same account may be signed in elsewhere
+      // with a whoami cached before the link existed.
+      invalidateUserIdentity(userId);
     } catch (err) {
       if (/duplicate|unique|conflict|23505/i.test(String(err?.message || err))) {
         return { ok: false, next, error: 'in_use' };
