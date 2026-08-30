@@ -205,7 +205,24 @@ async function customerFor({ userId, email }) {
     provider_customer_id: 'not.is.null',
     order: 'created_at.desc'
   });
-  if (existing?.provider_customer_id) return existing.provider_customer_id;
+  if (existing?.provider_customer_id) {
+    // Trust it only if this Paddle account still has it. A stored id can be
+    // from the other environment -- sandbox ids do not exist in live and vice
+    // versa -- or point at a customer since deleted. Either way the id is
+    // useless here, and using it fails later at transaction creation with a
+    // "customer not found" that reads like a Paddle outage rather than stale
+    // data. One cheap GET on a path already making several turns it into a
+    // fresh customer instead of a dead checkout.
+    const known = await api(`/customers/${existing.provider_customer_id}`).catch((err) => {
+      if (err instanceof PaddleError && err.status === 404) return null;
+      throw err;
+    });
+    if (known?.id) return known.id;
+    console.warn(
+      `[billing] stored Paddle customer ${existing.provider_customer_id} is not in the ` +
+        `${paddleEnv()} account, creating a new one for user ${userId}`
+    );
+  }
 
   // whoami() does not carry an email, and widening it for one caller is worse
   // than one lookup on a path that is about to do several network round trips.
