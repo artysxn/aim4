@@ -1246,9 +1246,9 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
   /**
    * Follow one upload until the server is finished with it.
    *
-   * The batch is polled rather than pushed: parsing is serialized on the
-   * backend and takes minutes, which is far too long to hold a connection open
-   * for on a host that will time it out.
+   * The batch is polled rather than pushed: a parse takes minutes and waits
+   * its turn in the backend's queue, which is far too long to hold a
+   * connection open for on a host that will time it out.
    *
    * Several of these run at once during a multi-file drop, because a file
    * starts unpacking and parsing the moment it lands and the rest of the drop
@@ -1353,8 +1353,9 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
    * reported: it finished, and the library listing is where its result lives.
    */
   async function resumePendingUploads() {
-    // onShow fires on every navigation back into the view; one follower is enough.
-    if (resuming || transferring) return;
+    // onShow fires on every navigation back into the view; one follower is
+    // enough, and a running upload pump is already following its own batches.
+    if (resuming || runActive) return;
     const pending = readPending();
     if (!pending.length) return;
     // Older than the server's snapshot window is not worth asking about.
@@ -1397,10 +1398,11 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     }
   }
 
-  // Only a transfer in progress is worth interrupting someone for; anything
-  // past that finishes on the server whether the tab is open or not.
+  // Only bytes still to move are worth interrupting someone for: a file on
+  // the wire, or accepted files the pump has not sent yet. Anything past that
+  // finishes on the server whether the tab is open or not.
   window.addEventListener('beforeunload', (e) => {
-    if (!transferring) return;
+    if (!transferring && !fileQueue.length) return;
     e.preventDefault();
     e.returnValue = '';
   });
@@ -1503,7 +1505,32 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     }
   }
 
-  async function startUpload(fileList) {
+  // ---- the upload queue -----------------------------------------------------
+  // Files move through three stages (upload, parse, analyze) and every stage
+  // runs the moment its input exists: the first demo is parsing on the server
+  // while the second is still on the wire. The queue here is what makes the
+  // client match that: a drop APPENDS, always. Forgetting two demos no longer
+  // means waiting for twenty to finish all three stages before sending them —
+  // they join the same run and go up as soon as the wire is free.
+
+  /** Files accepted but not yet on the wire. Drops during a run land here. */
+  const fileQueue = [];
+  /** True from the first byte of a run to its summary. One pump, ever. */
+  let runActive = false;
+  /** Accepted into this run / sent so far, for the "(n/m)" upload label. */
+  let runTotal = 0;
+  let runSent = 0;
+  /**
+   * What this run may still send before the demo cap. Spent as files go up,
+   * because the server's own count lags a send by the seconds it takes the
+   * record to land — checking uploadsLeft() per file would happily admit the
+   * same allowance twice.
+   */
+  let runAllowance = 0;
+  /** Wakes the pump out of watching a parse when more files arrive. */
+  let moreFilesArrived = null;
+
+  function startUpload(fileList) {
     if (!account.signedIn) {
       setStatus(
         auth?.isLoggedIn
@@ -1514,6 +1541,9 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       return;
     }
     const { ok, skipped, tooBig } = pickUploadFiles(fileList);
+    // Cleared now rather than after the run, so picking the same file again
+    // still fires a change event while a long run is in flight.
+    if (uploadInput) uploadInput.value = '';
     const cap = `${Math.round(maxUploadBytes / 1024 ** 3)} GB`;
     if (!ok.length) {
       setStatus(
@@ -1525,23 +1555,22 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       return;
     }
 
-    // The cap is checked against the whole selection, and the selection is
-    // known only after picking. The old check ran once, before a loop that
-    // uploaded every picked file, so ten files at 0 of 3 refused none of them.
+    // The cap is checked against the whole selection before anything is
+    // queued, and against what the running pump has not already claimed:
+    // runAllowance is spent at send time, and files queued ahead of these
+    // will spend theirs.
     //
     // Refused as a set rather than partially: what lands should be what the
-    // user chose. `allowance` then rides the loop below so a batch stops on the
-    // file that would go over instead of pushing the rest at a server that will
-    // refuse them one 402 at a time.
+    // user chose.
     const demoCap = uploadDemoCap();
-    let allowance = uploadsLeft();
-    if (allowance <= 0) {
+    const available = runActive ? runAllowance - fileQueue.length : uploadsLeft();
+    if (available <= 0) {
       setStatus(`You are at your limit of ${demoCap} demos. Delete one first.`, true);
       return;
     }
-    if (ok.length > allowance) {
+    if (ok.length > available) {
       setStatus(
-        `You picked ${ok.length} files and can upload ${allowance} more of a limit of ${demoCap}. ` +
+        `You picked ${ok.length} files and can upload ${available} more of a limit of ${demoCap}. ` +
           'Pick fewer, or delete some of what you have.',
         true
       );
@@ -1554,67 +1583,104 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     if (tooBig.length) {
       notes.push(`Skipped ${tooBig.length} over ${cap}.`);
     }
-    if (notes.length) setStatus(notes.join(' '), true);
 
-    dropEl?.classList.add('busy');
+    for (let i = 0; i < ok.length; i++) {
+      fileQueue.push({ file: ok[i], name: ok[i].name || `file ${i + 1}` });
+    }
+
+    if (runActive) {
+      runTotal += ok.length;
+      setStatus(
+        notes.length
+          ? notes.join(' ')
+          : ok.length === 1
+            ? 'Added 1 more file to this upload.'
+            : `Added ${ok.length} more files to this upload.`,
+        notes.length > 0
+      );
+      // If the pump is watching a parse, pull it back to moving bytes.
+      moreFilesArrived?.();
+      return;
+    }
+    if (notes.length) setStatus(notes.join(' '), true);
+    void runUploadQueue();
+  }
+
+  /**
+   * The pump. Everything the run needs to say at the end (counts, failures,
+   * the visibility and naming prompts) is gathered per LAP, and a lap only
+   * ends when both the file queue and the followers have drained. Files
+   * dropped during the summary or a prompt start the next lap instead of
+   * being lost to a pump that already returned.
+   */
+  async function runUploadQueue() {
+    if (runActive) return;
+    runActive = true;
     uploadOwnsStatus = true;
+    statusOwner = '';
+    dropEl?.classList.add('busy');
+    try {
+      while (fileQueue.length) {
+        runTotal = fileQueue.length;
+        runSent = 0;
+        runAllowance = uploadsLeft();
+        await runUploadLap();
+      }
+    } finally {
+      runActive = false;
+      transferring = false;
+      statusOwner = '';
+      uploadOwnsStatus = false;
+      dropEl?.classList.remove('busy');
+    }
+  }
+
+  async function runUploadLap() {
     let imported = 0;
     let parsed = 0;
     let failed = 0;
     /**
-     * Reasons an upload died before it produced a single demo.
-     *
-     * These live on the batch rather than on any file, because there were no
-     * files. Counting only per-file outcomes made a whole-upload failure look
-     * like "nothing succeeded and nothing failed", which then reported itself
-     * as "Upload complete." over the top of the real error.
+     * Reasons an upload died before it produced a single demo. These live on
+     * the batch rather than on any file, because there were no files.
      */
     const batchErrors = [];
     const namingQueue = [];
     /** @type {string[]} */
     const visibilityQueue = [];
-    /** @type {{id: string, name: string, label: string, watch: Promise<any>|null}[]} */
-    const queued = [];
     /** @type {string[]} */
     const alreadyExists = [];
-    try {
-      // Pass one: get every file onto the server. Nothing here waits on a parse,
-      // so dropping ten demos and walking away leaves all ten queued rather than
-      // one uploaded and nine abandoned in the browser.
-      // Visibility starts private; the prompt after parse is what opens it up.
-      // If the tab is gone when parsing finishes, demos stay private.
-      transferring = true;
-      for (let i = 0; i < ok.length; i++) {
-        const file = ok[i];
-        const name = file.name || `file ${i + 1}`;
-        const isPackage = name.toLowerCase().endsWith(PACKAGE_EXT);
-        const label = ok.length > 1 ? `(${i + 1}/${ok.length}) ` : '';
+    /** @type {{id: string, name: string, label: string, watch: Promise<any>}[]} */
+    const watchers = [];
+    let folded = 0;
 
-        // Re-checked per file, not once for the batch: an archive earlier in
-        // the selection can have carried more demos than the one it was
-        // counted as, and the allowance is the count the server will hold us
-        // to. Stopping here is cleaner than sending the rest to be refused.
-        if (allowance <= 0) {
-          const rest = ok.length - i;
+    for (;;) {
+      // Bytes first: a file only starts its server-side work once it lands,
+      // so nothing queued ever waits behind the watching.
+      if (fileQueue.length) {
+        if (runAllowance <= 0) {
+          const rest = fileQueue.splice(0, fileQueue.length).length;
           batchErrors.push(
-            `Stopped at your limit of ${demoCap} demos. ${rest} ${
+            `Stopped at your limit of ${uploadDemoCap()} demos. ${rest} ${
               rest === 1 ? 'file was' : 'files were'
             } not uploaded.`
           );
-          break;
+          continue;
         }
-
+        const next = fileQueue.shift();
+        const name = next.name;
+        const isPackage = name.toLowerCase().endsWith(PACKAGE_EXT);
+        const label = runTotal > 1 ? `(${Math.min(runSent + 1, runTotal)}/${runTotal}) ` : '';
         setStatus(`Uploading ${label}${name}…`);
         renderProgress(0, null);
         const onProgress = (pct) => {
           setStatus(`Uploading ${label}${name}: ${pct}%`);
           renderProgress(pct, null);
         };
-
+        transferring = true;
         try {
           if (isPackage) {
             // A package is already parsed, so it lands ready and skips the queue.
-            const res = await uploadImport(file, onProgress);
+            const res = await uploadImport(next.file, onProgress);
             renderQuota(res.usage);
             imported++;
             if (res.demo) {
@@ -1623,63 +1689,83 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
             }
             // Not awaited: the next file should start going up now, not after a
             // library listing. It is only here to put the row on screen while
-            // the rest of the drop uploads.
+            // the rest of the queue uploads.
             void refresh();
           } else {
-            const res = await uploadDemo(file, onProgress, 'private');
+            // Visibility starts private; the prompt after parse is what opens
+            // it up. If the tab is gone when parsing finishes, demos stay
+            // private.
+            const res = await uploadDemo(next.file, onProgress, 'private');
             renderQuota(res.usage);
             rememberBatch(res.batch.id, name);
             const item = { id: res.batch.id, name, label, watch: null };
-            queued.push(item);
-            // The server unpacks and parses a file as soon as it lands, so this
-            // one is working while the next one goes up. Watch it from here
-            // rather than from pass two: its rows appear in the library and its
-            // rounds tick over during the rest of the drop, instead of the
-            // whole batch looking untouched until the last byte of the last
-            // file. Settled either way, so pass two can report it in order.
+            // Watched from the moment it lands: the server unpacks and parses
+            // it now, so its rows appear and its rounds tick over while the
+            // rest of the queue is still going up.
             item.watch = followBatch(item.id, item.label).then(
               (batch) => ({ batch }),
               (err) => ({ err })
             );
+            watchers.push(item);
           }
+          runSent += 1;
+          runAllowance -= 1;
         } catch (err) {
-          // A duplicate is this file only. Keep sending the rest of the drop.
+          runSent += 1;
+          // A duplicate is this file only. Keep sending the rest of the queue.
           if (isDuplicateRefusal(err)) {
             alreadyExists.push(err.message || `${name} already exists.`);
-            continue;
+          } else if (isCapRefusal(err)) {
+            // The server refusing on the cap ends the queue rather than the
+            // request: the files after this one would be refused too, and
+            // each would cost its whole body on the wire to find that out.
+            const rest = fileQueue.splice(0, fileQueue.length).length + 1;
+            runAllowance = 0;
+            batchErrors.push(
+              `Stopped at your limit of ${uploadDemoCap()} demos. ${rest} ${
+                rest === 1 ? 'file was' : 'files were'
+              } not uploaded.`
+            );
+          } else {
+            // Anything else means the connection itself is the suspect, so
+            // the rest of the queue is not fed to it one failure at a time.
+            const rest = fileQueue.splice(0, fileQueue.length).length;
+            batchErrors.push(err.message || `Could not upload ${name}.`);
+            if (rest) {
+              batchErrors.push(
+                `${rest} ${rest === 1 ? 'file was' : 'files were'} not uploaded.`
+              );
+            }
           }
-          // The server refusing on the cap ends the batch rather than the
-          // request: the files after this one would be refused too, and each
-          // one would cost its whole body on the wire to find that out.
-          if (!isCapRefusal(err)) throw err;
-          const rest = ok.length - i;
-          batchErrors.push(
-            `Stopped at your limit of ${demoCap} demos. ${rest} ${
-              rest === 1 ? 'file was' : 'files were'
-            } not uploaded.`
-          );
-          break;
+        } finally {
+          transferring = false;
         }
-        allowance -= 1;
+        continue;
       }
-      // Hand the status line over before the transfers stop owning it: the
-      // followers already running would otherwise all write to it at once in
-      // the gap before pass two picks one.
-      statusOwner = queued[0]?.id || '';
-      transferring = false;
 
-      // Pass two: watch what the server is doing with them. Leaving at any
-      // point from here on is safe.
-      if (queued.length) await refresh();
-      for (const item of queued) {
-        // In the order they were picked, so the summary reads that way, and so
-        // exactly one of the followers still running owns the status line.
+      // Then fold in what the server has finished, in the order sent, so the
+      // summary reads that way and exactly one follower owns the status line.
+      if (folded < watchers.length) {
+        const item = watchers[folded];
         statusOwner = item.id;
-        const settled = await item.watch;
+        // Race the watch against new files arriving: two demos remembered
+        // late must not wait for a parse to finish before going up.
+        const arrival = new Promise((resolve) => {
+          moreFilesArrived = () => resolve('files');
+        });
+        const first = await Promise.race([item.watch, arrival]);
+        moreFilesArrived = null;
         statusOwner = '';
-        if (settled.err) throw settled.err;
-        const batch = settled.batch;
+        if (first === 'files') continue;
+
+        folded += 1;
         forgetBatch(item.id);
+        const settled = first;
+        if (settled.err) {
+          batchErrors.push(settled.err.message || `Lost track of ${item.name}.`);
+          continue;
+        }
+        const batch = settled.batch;
         if (batch) {
           parsed += batch.totals.parsed;
           for (const f of batch.files || []) {
@@ -1695,58 +1781,44 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
           } else if (batch.error) {
             // A batch can carry an error and still have landed demos, which is
             // what an archive refused partway through the cap looks like.
-            // Reporting only the whole-upload case turned that into a bare
-            // "3 demos failed." with no reason attached.
             batchErrors.push(batch.error);
           }
         } else {
-          // The batch is dropped once it settles, so losing track of it is not
-          // proof of success either.
+          // The batch is dropped once it settles, so losing track of it is
+          // not proof of success either.
           batchErrors.push(`Lost track of ${item.name} before it finished.`);
         }
+        continue;
       }
 
-      const parts = [];
-      if (imported) parts.push(imported === 1 ? '1 package imported.' : `${imported} packages imported.`);
-      if (parsed) parts.push(parsed === 1 ? '1 demo parsed.' : `${parsed} demos parsed.`);
-      if (failed) parts.push(failed === 1 ? '1 demo failed.' : `${failed} demos failed.`);
-      parts.push(...alreadyExists);
-      parts.push(...batchErrors);
-
-      const nothingLanded = !imported && !parsed;
-      setStatus(
-        parts.join(' ') || 'Upload complete.',
-        nothingLanded && (failed > 0 || alreadyExists.length > 0 || batchErrors.length > 0)
-      );
-      await refresh();
-
-      const seenVis = new Set();
-      for (const id of visibilityQueue) {
-        if (!id || seenVis.has(id)) continue;
-        seenVis.add(id);
-        const demo = demos.find((d) => d.id === id);
-        await promptDemoVisibility(demo || id);
-      }
-      for (const demo of namingQueue) {
-        await promptTeamNames(demo);
-      }
-    } catch (err) {
-      setStatus(err.message, true);
-      // Not awaited: the files that did land are still being followed, and a
-      // real parse runs for minutes. Silenced instead, so they keep the library
-      // rows moving without painting over the error that stopped the rest.
-      statusOwner = '';
-      await refresh();
-    } finally {
-      transferring = false;
-      statusOwner = '';
-      // Released last, after the closing refresh, so the result the user needs
-      // to read survives the library reload that follows it.
-      uploadOwnsStatus = false;
-      dropEl?.classList.remove('busy');
-      if (uploadInput) uploadInput.value = '';
-      if (!failed && !alreadyExists.length && !batchErrors.length) clearProgress();
+      break;
     }
+
+    const parts = [];
+    if (imported) parts.push(imported === 1 ? '1 package imported.' : `${imported} packages imported.`);
+    if (parsed) parts.push(parsed === 1 ? '1 demo parsed.' : `${parsed} demos parsed.`);
+    if (failed) parts.push(failed === 1 ? '1 demo failed.' : `${failed} demos failed.`);
+    parts.push(...alreadyExists);
+    parts.push(...batchErrors);
+
+    const nothingLanded = !imported && !parsed;
+    setStatus(
+      parts.join(' ') || 'Upload complete.',
+      nothingLanded && (failed > 0 || alreadyExists.length > 0 || batchErrors.length > 0)
+    );
+    await refresh();
+
+    const seenVis = new Set();
+    for (const id of visibilityQueue) {
+      if (!id || seenVis.has(id)) continue;
+      seenVis.add(id);
+      const demo = demos.find((d) => d.id === id);
+      await promptDemoVisibility(demo || id);
+    }
+    for (const demo of namingQueue) {
+      await promptTeamNames(demo);
+    }
+    if (!failed && !alreadyExists.length && !batchErrors.length) clearProgress();
   }
 
   uploadInput?.addEventListener('change', () => startUpload(uploadInput.files));

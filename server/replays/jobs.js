@@ -2,9 +2,12 @@
 // replays/jobs.js
 // Parse queue, and the ingest pipeline that feeds it.
 //
-// Demos are parsed one at a time in a separate process: the native parser
-// saturates a core and a 300 MB demo takes a while, so running two at once on a
-// small host just makes both slower and risks the heap.
+// Each demo parses in a separate process: the native parser saturates a core
+// and a 300 MB demo takes a while. How many of those processes run at once is
+// derived from what the box can hold (deriveParseConcurrency) — a host the
+// size of one parse runs one, and WHO goes next is decided per uploader,
+// round-robin (parseLanes.js), so one account's bulk drop cannot park another
+// account's single upload behind all of it.
 //
 // One upload can carry several demos (a .zip), so an upload is tracked as a
 // BATCH and each demo inside it walks four phases:
@@ -44,7 +47,8 @@ import {
 import { unpackUpload } from './archive.js';
 import { getZones } from '../zonesStore.js';
 import { getCoachSmokes } from '../coachSmokesStore.js';
-import { deriveBatchTicks } from './hostMemory.js';
+import { deriveBatchTicks, deriveParseConcurrency } from './hostMemory.js';
+import { createLanes } from './parseLanes.js';
 import { scheduleStatsIndex } from './statsIndex.js';
 import { clearUserParseActive, markUserParseActive } from './parseGate.js';
 import { CAP } from '../../shared/entitlements/keys.js';
@@ -106,8 +110,30 @@ const STALL_MS = Number(process.env.AIM4_PARSE_STALL_MS || 15 * 60 * 1000);
 
 const jobs = new Map(); // demoId -> job
 const batches = new Map(); // batchId -> batch
-const queue = [];
-let running = null;
+
+/**
+ * Queued parses, one lane per uploader, served round-robin: a bulk drop keeps
+ * every one of its demos but stops being able to park another account's single
+ * upload behind all of them.
+ */
+const laneQueue = createLanes();
+/** @type {Map<string, object>} jobKey -> job, for every parse running now */
+const running = new Map();
+
+/**
+ * How many parses run at once. Derived from what the box can hold — a host the
+ * size of one parse still derives 1 and behaves exactly as before; see
+ * deriveParseConcurrency for the ladder and the AIM4_PARSE_CONCURRENCY
+ * override. Read once: the ceiling this is derived from (cgroup limit, cores)
+ * does not move while the process lives.
+ */
+const PARSE_SLOTS = deriveParseConcurrency();
+if (PARSE_SLOTS > 1) {
+  console.log(`[replays] parse queue runs up to ${PARSE_SLOTS} demos at once`);
+}
+
+/** Which lane a job waits in: the uploader when known, else the library. */
+const laneKeyFor = (job) => job.uploaderId || job.user;
 
 /**
  * Finished batches are kept in memory so a client that polls a moment late
@@ -148,7 +174,7 @@ export function allJobs(user) {
  * ingesting is the site doing its job, a sim run is one admin's errand.
  */
 export function parseQueueBusy() {
-  return Boolean(running) || queue.length > 0;
+  return running.size > 0 || laneQueue.size() > 0;
 }
 
 /** Drop an in-memory parse job so a deleted demo cannot reappear as a ghost. */
@@ -629,19 +655,27 @@ export function enqueueParse({
     finishedAt: null
   };
   jobs.set(key, job);
-  queue.push(job);
+  laneQueue.push(laneKeyFor(job), job);
   pump();
   return job;
 }
 
+/**
+ * Fill every free slot from the lanes. Called whenever the picture changes: a
+ * job queued, a job finished, a retry requeued.
+ */
 function pump() {
-  if (running || !queue.length) {
-    // Queue truly drained: tell ingest (parseGate) it may parse again.
-    if (!running && !queue.length) clearUserParseActive();
-    return;
+  while (running.size < PARSE_SLOTS) {
+    const job = laneQueue.next();
+    if (!job) break;
+    startJob(job);
   }
-  const job = queue.shift();
-  running = job;
+  // Truly drained: tell ingest (parseGate) it may parse again.
+  if (!running.size && !laneQueue.size()) clearUserParseActive();
+}
+
+function startJob(job) {
+  running.set(jobKey(job.user, job.demoId), job);
   // Cross-process signal, not just the in-memory flag: the HLTV ingest child
   // polls this before starting its own parse, so user work never shares the
   // box's memory with an ingest parse it cannot see.
@@ -693,7 +727,7 @@ function pump() {
     if (job.finishedAt) return; // kill() and exit can both land here
     if (stallTimer) clearTimeout(stallTimer);
     Object.assign(job, patch, { finishedAt: Date.now() });
-    running = null;
+    running.delete(jobKey(job.user, job.demoId));
     if (!worker.killed) worker.kill('SIGKILL');
     if (patch.state === 'error') {
       const batch = batches.get(job.batchId);
@@ -779,7 +813,7 @@ function pump() {
   });
 
   worker.on('exit', (code, signal) => {
-    if (running !== job) return;
+    if (running.get(jobKey(job.user, job.demoId)) !== job) return;
     if (code === 0) return;
 
     // SIGKILL with no exit code is the kernel's out-of-memory killer. The
@@ -815,8 +849,8 @@ function pump() {
         job.batchTicks = next;
         job.state = 'queued';
         job.stage = 'retrying';
-        running = null;
-        queue.unshift(job); // it has already waited once
+        running.delete(jobKey(job.user, job.demoId));
+        laneQueue.requeue(laneKeyFor(job), job); // it has already waited once
         pump();
         return;
       }

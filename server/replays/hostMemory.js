@@ -279,3 +279,48 @@ export function memorySnapshot(extra = {}) {
     ...extra
   };
 }
+
+// ---- how many parses at once --------------------------------------------------
+
+/**
+ * What one parse worker costs the box while it runs: the V8 heap ceiling
+ * jobs.js hands the child (1024 MB by default) plus the native parser's own
+ * working set, which lives outside that heap entirely.
+ */
+export const PARSE_WORKER_FOOTPRINT_MB = 1400;
+
+/** Kept back for the API process, the page cache and everything that is not a parse. */
+export const PARSE_HOST_RESERVE_MB = 1024;
+
+/**
+ * How many parse workers may run at once.
+ *
+ * One was the right answer when this ran on a box the size of one parse, and
+ * one is still what a small host derives here. But serializing globally means
+ * a 20-demo drop takes 20 parse-lengths of wall clock even on a host with the
+ * cores and memory to run three — so the count comes from what the box can
+ * hold rather than from a constant.
+ *
+ * Both limits have to agree, and the smaller one wins:
+ *   - memory: each worker needs its footprint, after the host reserve;
+ *   - cpu: the native parser saturates a core, and one core stays with the
+ *     API process so live traffic is not scheduled against parse work.
+ *
+ * Capped at 4 because past that the volume becomes the constraint: four
+ * parsers streaming multi-hundred-MB demos are already seeking against each
+ * other, and more lanes just move the queue from the CPU to the disk.
+ *
+ * AIM4_PARSE_CONCURRENCY overrides the derivation outright (clamped 1..8),
+ * for the operator who has measured their own box.
+ */
+export function deriveParseConcurrency({
+  availableMb = availableMemoryMb(),
+  cpus = cpuAllowance().cpus ?? os.cpus().length,
+  env = process.env.AIM4_PARSE_CONCURRENCY
+} = {}) {
+  const forced = Number(env);
+  if (Number.isInteger(forced) && forced >= 1) return Math.min(forced, 8);
+  const byMemory = Math.floor((availableMb - PARSE_HOST_RESERVE_MB) / PARSE_WORKER_FOOTPRINT_MB);
+  const byCpu = Math.floor(cpus) - 1;
+  return Math.max(1, Math.min(byMemory, byCpu, 4));
+}

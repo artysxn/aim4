@@ -2,7 +2,7 @@
 // server/replays/parseGate.js
 // Cross-process rule: user parses outrank ingest parses.
 //
-// jobs.js keeps its own "one parse at a time" invariant, but only inside the
+// jobs.js bounds how many parses it runs at once, but only inside the
 // API process. HLTV ingest parses in a DETACHED process (ingest/hltv/process.js)
 // and cannot see the queue's memory, so with ingest on the box was running two
 // 1 GB parse children plus Chromium at once — which is exactly when user

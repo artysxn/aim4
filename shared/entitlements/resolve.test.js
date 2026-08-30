@@ -141,7 +141,11 @@ function grant(extra = {}) {
 {
   const r = resolveEntitlements({ subscription: sub('solo_premium'), now: NOW });
   assert(r.tier === 'solo_premium' && r.source === 'subscription', `got ${r.tier}/${r.source}`);
-  assert(r.capabilities[CAP.DEMOS_UPLOAD_LIMIT] === 75, 'solo premium uploads 75');
+  // Derived, not hardcoded: the exact figure is pricing, and pricing moves.
+  // What this test owns is that the plan's own catalogue value comes through.
+  const premiumLimit = capabilitiesForPlan('solo_premium')[CAP.DEMOS_UPLOAD_LIMIT];
+  assert(r.capabilities[CAP.DEMOS_UPLOAD_LIMIT] === premiumLimit, 'solo premium uploads its catalogue limit');
+  assert(premiumLimit > 3, 'and that limit is worth more than free');
   assert(r.expiresAt === iso(NOW + 30 * DAY), 'expiry comes from the period end');
   console.log('  an own subscription sets the tier and its expiry');
 }
@@ -376,7 +380,11 @@ function grant(extra = {}) {
     grants: [grant({ capability: CAP.DEMOS_UPLOAD_LIMIT, value: 1, mode: 'upgrade' })],
     now: NOW
   });
-  assert(ignored.capabilities[CAP.DEMOS_UPLOAD_LIMIT] === 75, 'a weaker upgrade grant is ignored');
+  assert(
+    ignored.capabilities[CAP.DEMOS_UPLOAD_LIMIT] ===
+      capabilitiesForPlan('solo_premium')[CAP.DEMOS_UPLOAD_LIMIT],
+    'a weaker upgrade grant is ignored'
+  );
 
   const forced = resolveEntitlements({
     subscription: sub('solo_premium'),

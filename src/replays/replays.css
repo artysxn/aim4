@@ -76,8 +76,8 @@
 }
 
 .rp-drop.busy {
-  pointer-events: none;
-  opacity: 0.6;
+  /* Still interactive on purpose: a drop during a run joins the queue. */
+  opacity: 0.85;
 }
 
 .rp-drop svg {
