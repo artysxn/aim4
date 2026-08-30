@@ -241,7 +241,10 @@ export async function handleBillingRequest(req, res, url) {
   }
 
   // ---- checkout and portal ------------------------------------------------
-  if (req.method === 'POST' && (p === '/api/billing/checkout' || p === '/api/billing/portal')) {
+  if (
+    req.method === 'POST' &&
+    (p === '/api/billing/checkout' || p === '/api/billing/portal' || p === '/api/billing/change-plan')
+  ) {
     const me = await whoami(req);
     if (!me.signedIn) {
       json(res, 401, { error: 'Sign in first.' });
@@ -277,7 +280,38 @@ export async function handleBillingRequest(req, res, url) {
           json(res, 400, { error: `Unknown term: ${parsed.term}` });
           return true;
         }
-        session = await provider.createCheckoutSession({ userId: me.id, planId, term });
+        // A customer who already has a subscription must never be sold a
+        // second one. Two live subscriptions bill in parallel: the entitlement
+        // side copes (applyEvent displaces the old row) but the customer pays
+        // twice, which no amount of downstream cleverness fixes. Paddle changes
+        // the plan on the subscription they already have, prorated.
+        const current = await provider.activeSubscriptionFor(me.id);
+        if (current) {
+          // Preview only. The change bills the card on file with no checkout
+          // screen, so the page has to show the amount and get a yes first.
+          session = await provider.previewPlanChange({ userId: me.id, planId, term });
+        } else {
+          session = await provider.createCheckoutSession({ userId: me.id, planId, term });
+        }
+      } else if (p === '/api/billing/change-plan') {
+        const planId = String(parsed.planId || '');
+        const term = String(parsed.term || 'month');
+        if (!PLAN_IDS.includes(planId) || planId === 'free') {
+          json(res, 400, { error: `Unknown plan: ${parsed.planId}` });
+          return true;
+        }
+        if (!TERM_IDS.includes(term)) {
+          json(res, 400, { error: `Unknown term: ${parsed.term}` });
+          return true;
+        }
+        // The client has to say it showed the customer a price and got a yes.
+        // Applying a charge because a request arrived is how people get billed
+        // by a stray double-click.
+        if (parsed.confirm !== true) {
+          json(res, 400, { error: 'confirm_required' });
+          return true;
+        }
+        session = await provider.applyPlanChange({ userId: me.id, planId, term });
       } else {
         session = await provider.createPortalSession({ userId: me.id });
       }
@@ -382,6 +416,23 @@ export async function applyEvent(event, deps = {}) {
   // log does not already give: each entry records the plan it settled on, so
   // a change is two consecutive entries that disagree.
   if (known) return finish(known, 'updated');
+
+  // Past this point the event is about a subscription we do not track. Only a
+  // subscription that is actually granting may take a live row over.
+  //
+  // Without this, a `canceled` event for an OLD subscription displaced the
+  // customer's CURRENT one: the row was rewritten to the dead subscription and
+  // marked cancelled, so someone who had just paid was entitled to nothing.
+  // Cancelling a superseded subscription is routine, which made it routine to
+  // revoke the wrong plan. A terminal event for something we never tracked
+  // grants nothing and must change nothing.
+  if (status !== 'active' && status !== 'trialing') {
+    console.log(
+      `[billing] ${providerSubscriptionId} is ${status} and is not the tracked ` +
+        `subscription for this account, so there is nothing to grant. Ignored.`
+    );
+    return false;
+  }
 
   // Attribution comes from custom_data, which createCheckoutSession set and
   // the signature check just vouched for. Without a user id there is nothing

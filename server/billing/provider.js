@@ -99,6 +99,30 @@ export const provider = {
   async planForPriceIds(priceIds) {
     if (!ACTIVE?.planForPriceIds) return null;
     return ACTIVE.planForPriceIds(priceIds);
+  },
+
+  /** The provider subscription this user is already being billed for, or null. */
+  async activeSubscriptionFor(userId) {
+    if (!ACTIVE?.activeSubscriptionFor) return null;
+    return ACTIVE.activeSubscriptionFor(userId);
+  },
+
+  /**
+   * What moving an existing subscription to another plan would cost. Charges
+   * nothing; the caller shows this to the customer before applyPlanChange.
+   */
+  async previewPlanChange(args) {
+    if (!ACTIVE?.previewPlanChange) throw new BillingNotConfiguredError();
+    return ACTIVE.previewPlanChange(args);
+  },
+
+  /**
+   * Move an existing subscription to another plan. Bills the card on file, so
+   * only call this once the customer has agreed to the previewed amount.
+   */
+  async applyPlanChange(args) {
+    if (!ACTIVE?.applyPlanChange) throw new BillingNotConfiguredError();
+    return ACTIVE.applyPlanChange(args);
   }
 };
 

@@ -320,6 +320,151 @@ export async function cancelSubscription({ subscriptionId, atPeriodEnd = true })
 }
 
 // ---------------------------------------------------------------------------
+// Changing plan on an existing subscription
+// ---------------------------------------------------------------------------
+
+/**
+ * The subscription Paddle is currently billing this user for, or null.
+ *
+ * `status` is read from our own row rather than Paddle's, because our row is
+ * what resolve.js entitles from: if the two ever disagree, the one that decides
+ * access is the one worth acting on.
+ */
+export async function activeSubscriptionFor(userId) {
+  if (!isConfigured()) throw new PaddleError('Database is not configured', 500);
+  const row = await db.selectOne('subscriptions', {
+    select: 'id,plan_id,term,status,provider_subscription_id',
+    user_id: `eq.${userId}`,
+    provider: 'eq.paddle',
+    provider_subscription_id: 'not.is.null',
+    status: 'in.(trialing,active,past_due)',
+    order: 'created_at.desc'
+  });
+  return row?.provider_subscription_id ? row : null;
+}
+
+/**
+ * The body for a plan change. Shared by preview and apply so the two cannot
+ * describe different changes: a preview that does not match what is applied is
+ * worse than no preview at all.
+ *
+ * `items` is the COMPLETE list Paddle should end up with, not a delta. One
+ * price, quantity one — a plan is one item here, and sending only the new price
+ * is what replaces the old one rather than stacking on top of it.
+ *
+ * `scheduled_change: null` clears a pending cancellation, because choosing a
+ * new plan plainly means staying.
+ */
+function planChangeBody(priceId) {
+  return {
+    items: [{ price_id: priceId, quantity: 1 }],
+    // Charge the difference now, crediting unused time on the old plan, and
+    // keep the existing billing anniversary. The alternatives either bill a
+    // full period again or defer access, and neither is what "upgrade" means.
+    proration_billing_mode: 'prorated_immediately',
+    // If the card is declined, leave them where they were. `apply_change`
+    // would hand out the new plan and hope to collect later.
+    on_payment_failure: 'prevent_change'
+  };
+}
+
+/**
+ * Clear a pending cancellation, if there is one.
+ *
+ * Choosing a new plan plainly means staying, so a scheduled cancel has to go or
+ * the customer pays for an upgrade that still expires. Paddle refuses to accept
+ * `scheduled_change` alongside anything else ("you cannot combine updating
+ * schedule_change with other fields"), so it is its own call, made first.
+ */
+async function clearScheduledCancel(subscriptionId) {
+  const sub = await api(`/subscriptions/${subscriptionId}`);
+  if (!sub?.scheduled_change) return false;
+  await api(`/subscriptions/${subscriptionId}`, {
+    method: 'PATCH',
+    body: { scheduled_change: null }
+  });
+  return true;
+}
+
+/**
+ * What a plan change would cost, without making it.
+ *
+ * Nothing is charged here. This exists so the page can say what the customer
+ * is about to pay before they agree to it: a plan change bills the card on
+ * file with no checkout screen in between, so the confirmation is ours to show.
+ */
+export async function previewPlanChange({ userId, planId, term }) {
+  const current = await activeSubscriptionFor(userId);
+  if (!current) throw new PaddleError('No subscription to change', 409);
+  if (current.plan_id === planId && current.term === term) {
+    throw new PaddleError('That is already the current plan', 409);
+  }
+
+  const priceId = await priceIdFor(planId, term);
+  const data = await api(`/subscriptions/${current.provider_subscription_id}/preview`, {
+    method: 'PATCH',
+    body: planChangeBody(priceId)
+  });
+
+  const immediate = data?.immediate_transaction?.details?.totals ?? null;
+  const recurring = data?.recurring_transaction_details?.totals ?? null;
+
+  return {
+    kind: 'change',
+    subscriptionId: current.provider_subscription_id,
+    from: { planId: current.plan_id, term: current.term },
+    to: { planId, term },
+    // What is taken from the card now, after crediting unused time. Paddle
+    // returns a signed grand total: a downgrade can be zero or a credit.
+    dueNowCents: immediate ? Number(immediate.grand_total) : 0,
+    currency: immediate?.currency_code || recurring?.currency_code || 'EUR',
+    // What each period costs from here on.
+    recurringCents: recurring ? Number(recurring.grand_total) : null,
+    nextBilledAt: data?.next_billed_at ?? null
+  };
+}
+
+/**
+ * Apply the change. Paddle bills the card on file as part of this call, so a
+ * caller must have shown the customer previewPlanChange() first.
+ *
+ * The local row is deliberately NOT written here. Paddle answers with
+ * subscription.updated, and letting that webhook be the only writer means a
+ * change made here and one made from Paddle's customer portal converge on the
+ * same path. See applyEvent in routes.js.
+ */
+export async function applyPlanChange({ userId, planId, term }) {
+  const current = await activeSubscriptionFor(userId);
+  if (!current) throw new PaddleError('No subscription to change', 409);
+  if (current.plan_id === planId && current.term === term) {
+    throw new PaddleError('That is already the current plan', 409);
+  }
+
+  const priceId = await priceIdFor(planId, term);
+  const resumed = await clearScheduledCancel(current.provider_subscription_id);
+  const data = await api(`/subscriptions/${current.provider_subscription_id}`, {
+    method: 'PATCH',
+    body: {
+      ...planChangeBody(priceId),
+      // Keep the attribution fresh: the webhook prefers price ids, but a stale
+      // plan_id in custom_data is a lie waiting to be read by something else.
+      custom_data: { user_id: userId, plan_id: planId, term }
+    }
+  });
+
+  return {
+    kind: 'changed',
+    subscriptionId: data.id,
+    status: data.status,
+    planId,
+    term,
+    // True when the change also called off a cancellation they had scheduled.
+    resumed,
+    nextBilledAt: data.next_billed_at ?? null
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Webhooks
 // ---------------------------------------------------------------------------
 
@@ -447,5 +592,8 @@ export const paddle = {
   cancelSubscription,
   verifyWebhook,
   clientConfig,
-  planForPriceIds
+  planForPriceIds,
+  activeSubscriptionFor,
+  previewPlanChange,
+  applyPlanChange
 };

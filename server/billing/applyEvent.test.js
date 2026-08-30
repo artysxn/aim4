@@ -209,3 +209,53 @@ test('a paused subscription stops granting entitlements', async () => {
   assert.equal(store.calls.updates[0].patch.status, 'expired');
   assert.equal(store.calls.updates[0].patch.provider_status, 'paused');
 });
+
+test('a cancel for an untracked subscription never touches the live row', async () => {
+  // The regression that mattered: an old subscription being cancelled arrived
+  // while a different, paid subscription was live. The displace path rewrote
+  // the live row to the dead subscription and marked it cancelled, leaving a
+  // paying customer entitled to nothing.
+  const store = fakeStore({
+    live: { id: 'row-1', user_id: 'u-1', provider_subscription_id: 'sub_current', source: 'billing' }
+  });
+  const { deps: d, audits } = deps(store);
+
+  const handled = await applyEvent(
+    event({ status: 'canceled', subscriptionId: 'sub_old', priceIds: ['pri_elite_y'] }),
+    d
+  );
+
+  assert.equal(handled, false, 'the event is ignored');
+  assert.equal(store.calls.updates.length, 1, 'only the match-by-id probe ran');
+  assert.equal(store.calls.inserts.length, 0, 'and nothing was inserted');
+  assert.equal(audits.length, 0, 'nothing was granted, so nothing is audited');
+});
+
+test('an expired untracked subscription is ignored too', async () => {
+  const store = fakeStore({
+    live: { id: 'row-1', user_id: 'u-1', provider_subscription_id: 'sub_current', source: 'billing' }
+  });
+  const { deps: d } = deps(store);
+  assert.equal(await applyEvent(event({ status: 'paused', subscriptionId: 'sub_old' }), d), false);
+  assert.equal(store.calls.inserts.length, 0);
+});
+
+test('cancelling the subscription we DO track still applies', async () => {
+  // The guard must not deafen us to a cancellation of the real subscription:
+  // that one matches by id on path 1 and has to be written.
+  const store = fakeStore({ known: { user_id: 'u-1', plan_id: 'solo_lite', term: 'month' } });
+  const { deps: d, audits } = deps(store);
+
+  assert.equal(await applyEvent(event({ status: 'canceled' }), d), true);
+  assert.equal(store.calls.updates[0].patch.status, 'cancelled');
+  assert.equal(audits[0].payload.outcome, 'updated');
+});
+
+test('a trialing subscription may still adopt a live row', async () => {
+  const store = fakeStore({
+    live: { id: 'row-1', user_id: 'u-1', provider_subscription_id: null, source: 'admin' }
+  });
+  const { deps: d, audits } = deps(store);
+  assert.equal(await applyEvent(event({ status: 'trialing' }), d), true);
+  assert.equal(audits[0].payload.outcome, 'adopted');
+});

@@ -465,7 +465,7 @@ export function subscriptionTab(state, { reload, billing, openAuth }) {
     // Free belongs to neither ladder, so it gets its own row above them rather
     // than a column of its own next to six paid cards.
     const freeRow = el('div', 'plan-free-row');
-    freeRow.appendChild(planCard('free', currentTier, billing, term, root, { signedIn, openAuth }));
+    freeRow.appendChild(planCard('free', currentTier, billing, term, root, { signedIn, openAuth, reload }));
     grid.appendChild(freeRow);
 
     grid.appendChild(el('div', 'plan-ladder-head is-solo', 'Solo'));
@@ -478,7 +478,7 @@ export function subscriptionTab(state, { reload, billing, openAuth }) {
     for (const band of LADDER_BANDS) {
       for (const ladder of [SOLO_PLAN_IDS, TEAM_PLAN_IDS]) {
         const planId = ladder.find((id) => PLAN_BANDS[id] === band);
-        if (planId) grid.appendChild(planCard(planId, currentTier, billing, term, root, { signedIn, openAuth }));
+        if (planId) grid.appendChild(planCard(planId, currentTier, billing, term, root, { signedIn, openAuth, reload }));
       }
     }
   };
@@ -734,7 +734,14 @@ function featureMatrix(currentTier) {
  * `band-` and the ladder class are on the card because the narrow-screen rules
  * use them to regroup the interleaved grid into two blocks.
  */
-function planCard(planId, currentTier, billing, term = 'month', noticeHost = null, { signedIn = true, openAuth = null } = {}) {
+function planCard(
+  planId,
+  currentTier,
+  billing,
+  term = 'month',
+  noticeHost = null,
+  { signedIn = true, openAuth = null, reload = null } = {}
+) {
   const price = priceForTerm(planId, term);
   const isCurrent = planId === currentTier;
   const ladder = planId === 'free' ? 'is-free' : isTeamPlan(planId) ? 'is-team' : 'is-solo';
@@ -807,6 +814,36 @@ function planCard(planId, currentTier, billing, term = 'month', noticeHost = nul
         cta.disabled = true;
         try {
           const res = await accountApi.checkout(planId, term);
+
+          // Already subscribed: the server previewed a change to the existing
+          // subscription rather than selling a second one. Paddle bills the
+          // card on file with no checkout screen, so the amount is shown here
+          // and nothing happens without a yes.
+          if (res?.kind === 'change') {
+            const now = euros(res.dueNowCents || 0);
+            const per = res.recurringCents == null ? null : euros(res.recurringCents);
+            const lines = [
+              `Change to ${PLAN_NAMES[planId]}, ${TERM_NAMES[term].toLowerCase()}.`,
+              '',
+              (res.dueNowCents || 0) > 0
+                ? `${now} is charged now, with unused time on ${PLAN_NAMES[res.from.planId]} credited.`
+                : 'Nothing is charged now: the unused time on your current plan covers it.',
+              per ? `Then ${per} every ${TERM_NAMES[term].toLowerCase()}.` : '',
+              '',
+              'Your card on file is used. Continue?'
+            ].filter(Boolean);
+
+            if (!window.confirm(lines.join('\n'))) {
+              cta.disabled = false;
+              return;
+            }
+            await accountApi.changePlan(planId, term);
+            if (noticeHost) {
+              notice(noticeHost, `You are on ${PLAN_NAMES[planId]}. This page may take a moment to catch up.`, 'ok');
+            }
+            reload?.();
+            return;
+          }
 
           // The overlay is the wanted path: the buyer never leaves the pricing
           // page, and the transaction already carries the plan, the term and

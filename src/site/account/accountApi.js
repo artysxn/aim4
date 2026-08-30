@@ -139,6 +139,20 @@ export const accountApi = {
       })
     ),
 
+  /**
+   * Applies a plan change to the subscription the customer already has, and
+   * bills the difference. `confirm` is not optional: the server refuses without
+   * it, so an accidental call cannot charge anyone.
+   */
+  changePlan: async (planId, term) =>
+    asJson(
+      await fetch(`${API_BASE}/api/billing/change-plan`, {
+        method: 'POST',
+        headers: await headers(),
+        body: JSON.stringify({ planId, term, confirm: true })
+      })
+    ),
+
   billingPortal: async () =>
     asJson(
       await fetch(`${API_BASE}/api/billing/portal`, {
