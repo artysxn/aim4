@@ -572,11 +572,11 @@ function syncAccountRow() {
 // every other app puts the profile, and there was nowhere else to change a
 // name from. Sign out moved onto the page itself.
 sideAccountBtn.addEventListener('click', () => {
-  if (auth.isLoggedIn) {
-    setView('account', true, {});
-  } else {
-    openAuth('login');
-  }
+  // Both states land on the same page. Signed out it opens on Subscription,
+  // where the plans are readable and the sign-in button sits at the top: one
+  // more step than the modal that used to open here, and the pricing is no
+  // longer behind a login form.
+  setView('account', true, {});
 });
 
 auth.onChange(syncAccountRow);
@@ -1050,7 +1050,7 @@ initIntegrity(auth, entitlements);
 
 viewControllers.account = initAccountView(
   document.querySelector('.view[data-view="account"]'),
-  { auth }
+  { auth, openAuth }
 );
 
 // Heavy shells: import on first visit so cold Home/Training never parse demos,

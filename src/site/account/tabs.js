@@ -406,10 +406,11 @@ function termSavingRange(term) {
   return low === high ? `Save ${low}%` : `Save ${low}% to ${high}%`;
 }
 
-export function subscriptionTab(state, { reload, billing }) {
+export function subscriptionTab(state, { reload, billing, openAuth }) {
   const root = el('div', 'account-panel');
   const currentTier = state.entitlements?.tier || 'free';
   const sub = state.subscription;
+  const signedIn = Boolean(state.account?.signedIn);
 
   // The provider bounces back here with ?checkout=success|cancelled once
   // payments are live; saying nothing on that return would leave the user
@@ -418,6 +419,90 @@ export function subscriptionTab(state, { reload, billing }) {
   if (returned) root.appendChild(returned);
 
   // ---- current state ------------------------------------------------------
+  // Only for someone who has a plan. Signed out there is nothing to report,
+  // and the sign-in card the page puts above this already says what to do.
+  if (signedIn) root.appendChild(currentPlanHead(state, currentTier, sub, { reload, billing }));
+
+  // ---- term, then the tier cards ------------------------------------------
+  // One term for the whole grid rather than a switch per card: the question is
+  // asked once and every price on screen answers it. The starting term is the
+  // one the account is actually billed on, so a subscriber does not land on a
+  // page quoting prices they are not paying. A term the buttons do not offer,
+  // 'lifetime', falls back to monthly rather than selecting nothing.
+  let term = TERM_IDS.includes(sub?.term) ? sub.term : 'month';
+  const termRow = el('div', 'plan-term');
+  const grid = el('div', 'plan-ladders');
+
+  const renderTerm = () => {
+    termRow.replaceChildren();
+    for (const id of TERM_IDS) {
+      const btn = el('button', `plan-term-btn${term === id ? ' is-on' : ''}`);
+      btn.type = 'button';
+      btn.appendChild(el('span', 'plan-term-name', TERM_NAMES[id]));
+      const saving = termSavingRange(id);
+      if (saving) btn.appendChild(el('span', 'plan-term-save', saving));
+      btn.addEventListener('click', () => {
+        if (term === id) return;
+        term = id;
+        renderTerm();
+        renderCards();
+      });
+      termRow.appendChild(btn);
+    }
+  };
+
+  const renderCards = () => {
+    grid.replaceChildren();
+
+    // Free belongs to neither ladder, so it gets its own row above them rather
+    // than a column of its own next to six paid cards.
+    const freeRow = el('div', 'plan-free-row');
+    freeRow.appendChild(planCard('free', currentTier, billing, term, root, { signedIn, openAuth }));
+    grid.appendChild(freeRow);
+
+    grid.appendChild(el('div', 'plan-ladder-head is-solo', 'Solo'));
+    grid.appendChild(el('div', 'plan-ladder-head is-team', 'Team'));
+
+    // Written band by band, not ladder by ladder. The grid is two columns
+    // wide, so appending the solo plan and then the team plan of the same band
+    // puts Solo Lite next to Team Tier 3 and keeps matching bands on one row.
+    // The narrow-screen rules reorder them back into two blocks.
+    for (const band of LADDER_BANDS) {
+      for (const ladder of [SOLO_PLAN_IDS, TEAM_PLAN_IDS]) {
+        const planId = ladder.find((id) => PLAN_BANDS[id] === band);
+        if (planId) grid.appendChild(planCard(planId, currentTier, billing, term, root, { signedIn, openAuth }));
+      }
+    }
+  };
+
+  renderTerm();
+  renderCards();
+  root.appendChild(termRow);
+  root.appendChild(grid);
+
+  if (!billing?.configured) {
+    root.appendChild(
+      el(
+        'p',
+        'account-muted account-billing-note',
+        'Payments open soon. Plans and prices are final; checkout switches on the day they do.'
+      )
+    );
+  }
+
+  // ---- feature matrix -----------------------------------------------------
+  root.appendChild(featureMatrix(currentTier));
+
+  return root;
+}
+
+/**
+ * The "Your plan" card: current tier, status, renewal, and the manage row.
+ *
+ * Its own function because the tab now renders for signed-out visitors too,
+ * who have no plan and no subscription to describe.
+ */
+function currentPlanHead(state, currentTier, sub, { reload, billing }) {
   const head = el('section', 'account-card account-sub-head');
   head.appendChild(el('h3', 'account-card-title', 'Your plan'));
   head.appendChild(
@@ -454,79 +539,7 @@ export function subscriptionTab(state, { reload, billing }) {
       )
     );
   }
-  root.appendChild(head);
-
-  // ---- term, then the tier cards ------------------------------------------
-  // One term for the whole grid rather than a switch per card: the question is
-  // asked once and every price on screen answers it. The starting term is the
-  // one the account is actually billed on, so a subscriber does not land on a
-  // page quoting prices they are not paying. A term the buttons do not offer,
-  // 'lifetime', falls back to monthly rather than selecting nothing.
-  let term = TERM_IDS.includes(sub?.term) ? sub.term : 'month';
-  const termRow = el('div', 'plan-term');
-  const grid = el('div', 'plan-ladders');
-
-  const renderTerm = () => {
-    termRow.replaceChildren();
-    for (const id of TERM_IDS) {
-      const btn = el('button', `plan-term-btn${term === id ? ' is-on' : ''}`);
-      btn.type = 'button';
-      btn.appendChild(el('span', 'plan-term-name', TERM_NAMES[id]));
-      const saving = termSavingRange(id);
-      if (saving) btn.appendChild(el('span', 'plan-term-save', saving));
-      btn.addEventListener('click', () => {
-        if (term === id) return;
-        term = id;
-        renderTerm();
-        renderCards();
-      });
-      termRow.appendChild(btn);
-    }
-  };
-
-  const renderCards = () => {
-    grid.replaceChildren();
-
-    // Free belongs to neither ladder, so it gets its own row above them rather
-    // than a column of its own next to six paid cards.
-    const freeRow = el('div', 'plan-free-row');
-    freeRow.appendChild(planCard('free', currentTier, billing, term, root));
-    grid.appendChild(freeRow);
-
-    grid.appendChild(el('div', 'plan-ladder-head is-solo', 'Solo'));
-    grid.appendChild(el('div', 'plan-ladder-head is-team', 'Team'));
-
-    // Written band by band, not ladder by ladder. The grid is two columns
-    // wide, so appending the solo plan and then the team plan of the same band
-    // puts Solo Lite next to Team Tier 3 and keeps matching bands on one row.
-    // The narrow-screen rules reorder them back into two blocks.
-    for (const band of LADDER_BANDS) {
-      for (const ladder of [SOLO_PLAN_IDS, TEAM_PLAN_IDS]) {
-        const planId = ladder.find((id) => PLAN_BANDS[id] === band);
-        if (planId) grid.appendChild(planCard(planId, currentTier, billing, term, root));
-      }
-    }
-  };
-
-  renderTerm();
-  renderCards();
-  root.appendChild(termRow);
-  root.appendChild(grid);
-
-  if (!billing?.configured) {
-    root.appendChild(
-      el(
-        'p',
-        'account-muted account-billing-note',
-        'Payments open soon. Plans and prices are final; checkout switches on the day they do.'
-      )
-    );
-  }
-
-  // ---- feature matrix -----------------------------------------------------
-  root.appendChild(featureMatrix(currentTier));
-
-  return root;
+  return head;
 }
 
 /**
@@ -713,7 +726,7 @@ function featureMatrix(currentTier) {
  * `band-` and the ladder class are on the card because the narrow-screen rules
  * use them to regroup the interleaved grid into two blocks.
  */
-function planCard(planId, currentTier, billing, term = 'month', noticeHost = null) {
+function planCard(planId, currentTier, billing, term = 'month', noticeHost = null, { signedIn = true, openAuth = null } = {}) {
   const price = priceForTerm(planId, term);
   const isCurrent = planId === currentTier;
   const ladder = planId === 'free' ? 'is-free' : isTeamPlan(planId) ? 'is-team' : 'is-solo';
@@ -775,6 +788,12 @@ function planCard(planId, currentTier, billing, term = 'month', noticeHost = nul
       // is configured, with no client change.
       cta.disabled = true;
       cta.title = planId === 'free' ? 'Cancel your plan instead' : 'Payments open soon';
+    } else if (!signedIn) {
+      // Checkout needs an account: /api/billing/checkout answers 401 without
+      // one. Ask for the sign-in here rather than letting someone click a
+      // buy button and be told no by an error toast.
+      cta.textContent = 'Sign in to subscribe';
+      cta.addEventListener('click', () => openAuth?.('login'));
     } else {
       cta.addEventListener('click', async () => {
         cta.disabled = true;

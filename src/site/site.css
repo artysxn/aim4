@@ -2860,6 +2860,16 @@ body.is-impersonating .site-toast-stack {
   text-transform: uppercase;
 }
 
+/* The way in, at the top of the account page for a signed-out visitor. The
+   pricing below it is public; this is the step that was previously a modal
+   opening straight off the sidebar button. */
+.account-signin-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+
 .account-identity {
   display: flex;
   align-items: flex-start;
@@ -5189,6 +5199,27 @@ body.deck-mode .site-main {
 
 .legal-page p {
   margin: 0 0 10px;
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--text);
+}
+
+/* The refund policy is the one place a legal section needs a sub-heading and
+   a list; the reset zeroes list padding, so the bullets need it back or they
+   render outside the text column. */
+.legal-page h3 {
+  margin: 18px 0 8px;
+  font-size: 15px;
+}
+
+.legal-page ul {
+  margin: 0 0 10px;
+  padding-left: 22px;
+  list-style: disc;
+}
+
+.legal-page li {
+  margin-bottom: 6px;
   font-size: 14px;
   line-height: 1.65;
   color: var(--text);

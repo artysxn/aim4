@@ -23,7 +23,7 @@ const TABS = [
  * @param {HTMLElement} host  the `.view[data-view="account"]` element
  * @param {{auth: object}} deps
  */
-export function initAccountView(host, { auth } = {}) {
+export function initAccountView(host, { auth, openAuth } = {}) {
   if (!host) return { onShow() {}, onHide() {} };
 
   const root = el('div', 'account-root');
@@ -37,6 +37,16 @@ export function initAccountView(host, { auth } = {}) {
   // Same guard performanceView documents at length.
   let visible = false;
 
+  /**
+   * Tabs this visitor can actually use. Signed out, only Subscription: plans
+   * and prices are public (a payment provider's review has to be able to see
+   * what is sold and for how much), and every other tab is about an account
+   * that does not exist yet.
+   */
+  function visibleTabs() {
+    return state?.account?.signedIn ? TABS : TABS.filter((t) => t.id === 'subscription');
+  }
+
   function mountTabs() {
     const slot = document.getElementById('page-head-actions');
     if (!slot || !visible) return;
@@ -44,7 +54,7 @@ export function initAccountView(host, { auth } = {}) {
     // top bar reads as one thing across pages.
     const nav = el('nav', 'an-chapters');
     nav.setAttribute('aria-label', 'Account');
-    for (const tab of TABS) {
+    for (const tab of visibleTabs()) {
       const btn = el('button', `an-chapter-btn${tab.id === active ? ' active' : ''}`, tab.label);
       btn.type = 'button';
       btn.addEventListener('click', () => {
@@ -59,13 +69,46 @@ export function initAccountView(host, { auth } = {}) {
     slot.replaceChildren(nav);
   }
 
+  /**
+   * The way in, at the top of the page.
+   *
+   * The sidebar's account button used to open the sign-in modal directly for a
+   * signed-out visitor, which put a login form in front of the pricing before
+   * anyone could read it. It now opens this page, and signing in is a step
+   * taken from here instead.
+   */
+  function signInCard() {
+    const card = el('section', 'account-card account-signin');
+    card.appendChild(el('h3', 'account-card-title', 'Sign in'));
+    card.appendChild(
+      el(
+        'p',
+        'account-muted',
+        'Plans and prices are below, and the free tier needs no account. Sign in to subscribe, upload demos, and keep your library.'
+      )
+    );
+    const row = el('div', 'account-signin-actions');
+    const signIn = el('button', 'btn btn-primary', 'Sign in');
+    signIn.type = 'button';
+    signIn.addEventListener('click', () => openAuth?.('login'));
+    const create = el('button', 'btn', 'Create account');
+    create.type = 'button';
+    create.addEventListener('click', () => openAuth?.('register'));
+    row.appendChild(signIn);
+    row.appendChild(create);
+    card.appendChild(row);
+    return card;
+  }
+
   function renderShell() {
     if (!state) return;
     mountTabs();
 
     const panel = el('div', 'account-body');
-    const tab = TABS.find((t) => t.id === active) || TABS[0];
-    panel.appendChild(tab.render(state, { reload: load, billing, auth }));
+    if (!state.account?.signedIn) panel.appendChild(signInCard());
+    const tabs = visibleTabs();
+    const tab = tabs.find((t) => t.id === active) || tabs[0];
+    panel.appendChild(tab.render(state, { reload: load, billing, auth, openAuth }));
     render(root, panel);
   }
 
@@ -78,10 +121,9 @@ export function initAccountView(host, { auth } = {}) {
       ]);
       state = me;
       billing = billingStatus;
-      if (!state.account?.signedIn) {
-        render(root, el('p', 'account-empty', 'Sign in to see your account.'));
-        return;
-      }
+      // Signed out is no longer a dead end: the page opens on Subscription,
+      // which is public, with the way in above it.
+      if (!state.account?.signedIn) active = 'subscription';
       renderShell();
     } catch (err) {
       render(root, el('p', 'account-error', err.message));

@@ -14,6 +14,23 @@
 
 export const CHANGELOG = Object.freeze([
   {
+    date: '2026-08-30',
+    title: 'Fair use, legal pages, and a steadier viewer',
+    tag: 'new',
+    points: [
+      'Your account is for one player. A sign-in from a different country on a different device of the same kind, within six hours of the last one, is flagged: an iPhone and then another iPhone. A phone and then your PC is not, and the same device never is.',
+      'The first flag is a warning with a 60 second wait before you carry on. A second puts the account on probation, which drops it to the free tier until you show the sign-ins were yours. Your subscription keeps running and is not cancelled.',
+      'Probation lists your last few sign-ins with the country and device for each, so you can see what was matched. A VPN can trip this, because it changes the country your connection appears to come from. Open a ticket from the contact page and it gets lifted.',
+      'New Terms of Service and Privacy pages, linked in the footer: what is stored, how long it is kept, who processes it, and your responsibility for consent when you upload voice recordings. The documentation page now has a section for every page on the site.',
+      'Uploads no longer stall while the background ingest is running, and two upload tabs no longer fight each other. Large bulk drops finish instead of failing part way through.',
+      'Loading the database, opening demos, anti-strat and the Pattern Finder no longer slow the site down for everyone else while they run.',
+      'In the 2D timeline, a round you have opened once switches back instantly. The map also sits clear of the score bar instead of running under it.',
+      'The 3D viewer holds the right weapon, utility included, and draws thrown grenades as real models instead of coloured circles. Outlines and names disappear when you turn away from a player, bodies keep animating after a round change, and switching player while paused draws the hands as well as the gun.',
+      'The 3D scoreboard uses T red and CT blue, with one square per player and the player you are watching marked. In the POV view their name sits above the playback buttons.',
+      'In aim training modes where you click static targets with a pistol, there is no spray pattern and no ammo to run out of.'
+    ]
+  },
+  {
     date: '2026-08-28',
     title: 'Six plans, player scout, and team comms',
     tag: 'new',
