@@ -388,6 +388,29 @@ setTimeout(async () => {
     console.warn('[stats] boot snapshot load skipped:', err?.message || err);
   }
 }, 5 * 1000);
+// Wire the aim rescan to the shared library. Wiring only: nothing starts here.
+// It is begun either from the admin tools or by the first reader who opens the
+// Aim chapter, and it never builds anything at boot for the reason set out
+// immediately below.
+setTimeout(async () => {
+  try {
+    const { listDemos, readRoundMeta, readRoundTicks, userDir } = await import(
+      './replays/demoStore.js'
+    );
+    const { SHARED_LIBRARY } = await import('./replays/auth.js');
+    const { getZones } = await import('./zonesStore.js');
+    const { initAimScan, ensureAimScanLedger } = await import('./replays/aimScan.js');
+    initAimScan({
+      io: { userDir, readRoundMeta, readRoundTicks, getZones },
+      user: SHARED_LIBRARY,
+      listRecords: () => listDemos(SHARED_LIBRARY)
+    });
+    // One small JSON file, so the first reader is answered from memory.
+    await ensureAimScanLedger();
+  } catch (err) {
+    console.warn('[aim] rescan wiring skipped:', err?.message || err);
+  }
+}, 6 * 1000);
 // NO boot-time warm of the aggregate store. There was one here; it made things
 // worse, not better, and the way it failed is worth keeping written down.
 //

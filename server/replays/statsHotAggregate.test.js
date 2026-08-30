@@ -16,6 +16,7 @@ import {
 import { aggregatePlayers, aggregateTeams, teamNameKey } from '../../src/replays/shared/statsMath.js';
 import { attachExpectedRatings } from '../../src/replays/shared/expectedRating.js';
 import { attachPlayerRoles } from '../../src/replays/roles/assignRoles.js';
+import { AIM_MOTION_FIELDS } from '../../src/replays/shared/aimMetrics.js';
 
 const MAPS = ['de_nuke', 'de_mirage', 'de_inferno'];
 
@@ -46,13 +47,17 @@ function makeEntry(i) {
   const players = pids.map((id, j) => ({ id, name: `name${j}`, team: j < 5 ? 1 : 2, slot: j }));
   const map = MAPS[i % MAPS.length];
   const rounds = Array.from({ length: 6 + rnd(6) }, (_, k) => {
-    const p = {}, sw = {}, am = {}, ut = {}, du = {}, mv = {}, aw = {};
+    const p = {}, sw = {}, am = {}, a2 = {}, ut = {}, du = {}, mv = {}, aw = {};
     for (const id of pids) {
       p[id] = [rnd(4), rnd(2), rnd(2), rnd(140), rnd(30), rnd(14), rnd(5), rnd(6), rnd(3), rnd(2)];
       sw[id] = rnd(400) / 10 - 20;
       am[id] = { engagements: rnd(6), crosshairErrorSum: rnd(90), fightsReady: rnd(4),
         fightsUnaware: rnd(2), shots: rnd(30), hits: rnd(12), shotsInSmoke: rnd(3),
         firstBullets: rnd(6), firstBulletHits: rnd(4), overflicks: rnd(3), underflicks: rnd(2) };
+      // The motion half, packed. Every third round has none, which is the
+      // shape of a library the aim rescan is halfway through: the two paths
+      // have to agree about a partially scanned player, not just a scanned one.
+      if (k % 3 !== 2) a2[id] = AIM_MOTION_FIELDS.map(() => rnd(600) / 10);
       ut[id] = { heThrown: rnd(3), heDamage: rnd(80), fireThrown: rnd(2), fireDamage: rnd(60),
         flashesThrown: rnd(4), flashesLanded: rnd(3), enemyBlindSeconds: rnd(60) / 10 };
       if (rnd(10) > 1) {
@@ -70,7 +75,7 @@ function makeEntry(i) {
       // it deliberately, or neither the AWP filters nor buyBucket's 5 -> 4
       // folding is exercised by any of the comparisons here.
       e1: k % 5 === 0 ? 5 : rnd(6), e2: k % 7 === 3 ? 5 : rnd(6),
-      ok: pids[rnd(10)], od: pids[rnd(10)], p, sw, am, ut, du, mv, aw,
+      ok: pids[rnd(10)], od: pids[rnd(10)], p, sw, am, a2, ut, du, mv, aw,
       cok: rnd(2) ? [pids[rnd(10)]] : [], cod: rnd(2) ? [pids[rnd(10)]] : [],
       dur: 40 + rnd(50), pt: rnd(2) ? rnd(60) : null,
       kt: [], ev: [], ph: {}, utt: {}, rl: tagsFor(i, k),

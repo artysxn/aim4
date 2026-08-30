@@ -30,6 +30,7 @@ import { createWriteStream } from 'node:fs';
 import { finished } from 'node:stream/promises';
 import {
   AIM_FIELDS,
+  AIM_MOTION_WIDTH,
   DUEL_BUCKETS,
   R3_FIELDS,
   SEAT,
@@ -49,6 +50,9 @@ function layoutStamp() {
     duelBuckets: DUEL_BUCKETS,
     r3: R3_FIELDS.join('|'),
     aim: AIM_FIELDS.join('|'),
+    // Width, not names: the motion vector is packed and read back by index.
+    // Any change to its length is a different statistic in the same slots.
+    motion: `a2:${AIM_MOTION_WIDTH}`,
     util: UTILITY_FIELDS.join('|'),
     // The round-library tag run: off/len per round into key/side/clock. Named
     // here so every snapshot written before the tags existed is discarded — the

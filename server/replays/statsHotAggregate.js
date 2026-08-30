@@ -18,7 +18,7 @@ import {
   teamNameKey,
   teamSeat
 } from '../../src/replays/shared/statsMath.js';
-import { AIM_FIELDS } from '../../src/replays/shared/aimMetrics.js';
+import { AIM_FIELDS, AIM_MOTION_WIDTH, emptyMotion } from '../../src/replays/shared/aimMetrics.js';
 import { UTILITY_FIELDS } from '../../src/replays/shared/utilityMetrics.js';
 import { emptyRating3 } from '../../src/replays/shared/rating3.js';
 import { DUEL_BUCKETS, R3_FIELDS, SEAT } from './statsHotStore.js';
@@ -59,7 +59,7 @@ const SCALARS = Object.freeze([
   // write every field including zeros, so a summed-to-zero field must still be
   // present — but a player with no aim data at all keeps an empty object, and
   // aimRating tells those two cases apart.
-  'aimSeen', 'utilSeen'
+  'aimSeen', 'utilSeen', 'motSeen'
 ]);
 const S = Object.freeze(Object.fromEntries(SCALARS.map((k, i) => [k, i])));
 
@@ -67,7 +67,8 @@ const OFF_BUCKETS = 0;
 const OFF_SCALARS = OFF_BUCKETS + BUCKET_NAMES.length * BUCKET_STRIDE;
 const OFF_MK = OFF_SCALARS + SCALARS.length;
 const OFF_AIM = OFF_MK + 6;
-const OFF_UTIL = OFF_AIM + AIM_FIELDS.length;
+const OFF_MOT = OFF_AIM + AIM_FIELDS.length;
+const OFF_UTIL = OFF_MOT + AIM_MOTION_WIDTH;
 const OFF_DUELB = OFF_UTIL + UTILITY_FIELDS.length;
 const STRIDE = OFF_DUELB + DUEL_BUCKETS * 3;
 
@@ -167,7 +168,8 @@ export function aggregateHot(store, filter = {}, allowDemo = null) {
   const {
     nRounds, seatsPerRound, duelStride,
     rDemo, rMap, rSide1, rEcon1, rEcon2, rWinner, rOkSeat, rOdSeat, rHasDuel, rHasCore, rFileIdx,
-    sStats, sPlayer, sTeam, sR3, sSwing, sHasSwing, sAim, sHasAim, sUtil, sHasUtil,
+    sStats, sPlayer, sTeam, sR3, sSwing, sHasSwing, sAim, sHasAim, sMot, sHasMot,
+    sUtil, sHasUtil,
     sDuel, sHasDuelSeat, sPsdt, sHasPsdt, sDt, sHasDt, sAwHold, sCoreKill, sCoreDeath, sName
   } = store;
 
@@ -210,6 +212,7 @@ export function aggregateHot(store, filter = {}, allowDemo = null) {
   const sideTId = store.sides.values.indexOf('T');
   const nR3 = R3_FIELDS.length;
   const nAim = AIM_FIELDS.length;
+  const nMot = AIM_MOTION_WIDTH;
   const nUtil = UTILITY_FIELDS.length;
 
   for (let r = 0; r < nRounds; r++) {
@@ -335,6 +338,12 @@ export function aggregateHot(store, filter = {}, allowDemo = null) {
         const to = pBase + OFF_AIM;
         for (let i = 0; i < nAim; i++) acc[to + i] += sAim[ab + i];
       }
+      if (sHasMot[seat]) {
+        acc[sc + S.motSeen] += 1;
+        const mb = seat * nMot;
+        const to = pBase + OFF_MOT;
+        for (let i = 0; i < nMot; i++) acc[to + i] += sMot[mb + i];
+      }
       if (sHasUtil[seat]) {
         acc[sc + S.utilSeen] += 1;
         const ub = seat * nUtil;
@@ -427,7 +436,7 @@ export function aggregateHot(store, filter = {}, allowDemo = null) {
     }
     const sc = pBase + OFF_SCALARS;
     for (const k of SCALARS) {
-      if (k === 'aimSeen' || k === 'utilSeen') continue;
+      if (k === 'aimSeen' || k === 'utilSeen' || k === 'motSeen') continue;
       state[k] = acc[sc + S[k]];
     }
     state.mk = Array.from({ length: 6 }, (_, i) => acc[pBase + OFF_MK + i]);
@@ -436,6 +445,10 @@ export function aggregateHot(store, filter = {}, allowDemo = null) {
     state.aim = {};
     if (acc[sc + S.aimSeen] > 0) {
       for (let i = 0; i < AIM_FIELDS.length; i++) state.aim[AIM_FIELDS[i]] = acc[pBase + OFF_AIM + i];
+    }
+    if (acc[sc + S.motSeen] > 0) {
+      state.motion = emptyMotion();
+      for (let i = 0; i < AIM_MOTION_WIDTH; i++) state.motion[i] = acc[pBase + OFF_MOT + i];
     }
     state.util = {};
     if (acc[sc + S.utilSeen] > 0) {

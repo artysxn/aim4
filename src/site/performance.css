@@ -508,3 +508,336 @@ a.pf-rt-go:hover {
     font-size: 40px;
   }
 }
+
+/* ---------------------------------------------------------------------------
+   Aim chapter
+
+   Two halves that have to read as one page: the radar is the seven motion
+   categories, the tables are those same seven plus the six outcome ones, and a
+   reader should be able to point at a spoke and find its row. Same order, same
+   colour, same 0-100 behind every bar.
+   --------------------------------------------------------------------------- */
+
+.pf-aim-hero {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 20px;
+  flex-wrap: wrap;
+  padding: 4px 2px 12px;
+}
+
+.pf-aim-hero-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pf-aim-hero-value {
+  font: 600 56px/0.95 var(--font-body);
+  letter-spacing: -0.03em;
+  color: var(--text);
+}
+
+.pf-aim-hero-label {
+  color: var(--muted);
+  font: 400 12px var(--font-body);
+}
+
+.pf-aim-hero-side {
+  display: flex;
+  gap: 28px;
+  margin: 0;
+  padding: 0 0 6px;
+}
+
+.pf-aim-hero-side div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.pf-aim-hero-side dt {
+  color: var(--muted);
+  font: 400 11px var(--font-body);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.pf-aim-hero-side dd {
+  margin: 0;
+  color: var(--text);
+  font: 600 15px/1.2 var(--font-body);
+}
+
+.pf-aim-delta {
+  margin-left: 4px;
+  color: var(--muted);
+  font-weight: 400;
+  font-size: 12px;
+}
+
+.pf-aim-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .pf-aim-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.pf-aim-radar-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: #101010;
+}
+
+.pf-aim-radar {
+  width: 100%;
+  max-width: 340px;
+  height: auto;
+  overflow: visible;
+}
+
+.pf-aim-radar-note {
+  margin: 0;
+  color: var(--muted);
+  font: 400 11px var(--font-body);
+  text-align: center;
+}
+
+.pf-aim-ring {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.07);
+  stroke-width: 1;
+}
+
+.pf-aim-ring.outer {
+  stroke: rgba(255, 255, 255, 0.14);
+}
+
+.pf-aim-spoke {
+  stroke: rgba(255, 255, 255, 0.07);
+  stroke-width: 1;
+}
+
+/* Where a 1.00 on every category would sit. Dashed so it never reads as data. */
+.pf-aim-base {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.26);
+  stroke-width: 1;
+  stroke-dasharray: 3 4;
+}
+
+.pf-aim-shape {
+  fill: var(--accent-dim);
+  stroke: var(--accent);
+  stroke-width: 1.75;
+  stroke-linejoin: round;
+}
+
+.pf-aim-dot {
+  fill: var(--accent);
+}
+
+/* An axis with too little sample sits at the centre and says so in its row. */
+.pf-aim-dot.thin {
+  fill: #4a4a50;
+}
+
+.pf-aim-axis {
+  font: 400 11px var(--font-body);
+  fill: var(--muted);
+  dominant-baseline: middle;
+}
+
+.pf-aim-axis-score {
+  fill: var(--text);
+  font-weight: 600;
+}
+
+.pf-aim-halves {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.pf-aim-half {
+  min-width: 0;
+}
+
+.pf-aim-title {
+  margin: 0 0 8px;
+  color: var(--text);
+  font: 600 13px var(--font-body);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+}
+
+.pf-aim-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: auto;
+}
+
+.pf-aim-table thead th {
+  padding: 0 0 6px;
+  color: var(--muted);
+  font: 400 11px var(--font-body);
+  text-align: right;
+  font-weight: 400;
+}
+
+.pf-aim-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.pf-aim-row th {
+  padding: 7px 12px 7px 0;
+  color: var(--text);
+  font: 500 13px var(--font-body);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.pf-aim-row td {
+  padding: 7px 0;
+  border-top: 1px solid var(--border);
+  vertical-align: middle;
+}
+
+.pf-aim-row th {
+  border-top: 1px solid var(--border);
+}
+
+.pf-aim-row.thin th,
+.pf-aim-row.thin .pf-aim-value {
+  color: var(--muted);
+}
+
+.pf-aim-value {
+  padding-right: 12px !important;
+  color: var(--text);
+  font: 600 13px var(--font-body);
+  white-space: nowrap;
+  text-align: right;
+}
+
+.pf-aim-note {
+  /* The flexible column. Below this it wraps a short phrase onto four lines,
+     which is harder to read than the number it is explaining. */
+  min-width: 190px;
+  padding-right: 14px !important;
+  color: var(--muted);
+  font: 400 11px/1.35 var(--font-body);
+}
+
+.pf-aim-bar-cell {
+  width: 22%;
+  min-width: 64px;
+}
+
+/* Narrow: the bar is the score drawn twice, so it is the column to lose.
+   Collapsed rather than `display: none`, because the header above it spans the
+   first four columns and removing one from the body rows alone would leave the
+   Rating heading sitting over the wrong column. */
+@media (max-width: 820px) {
+  .pf-aim-bar-cell {
+    width: 0;
+    min-width: 0;
+    padding: 0 !important;
+  }
+
+  .pf-aim-bar {
+    display: none;
+  }
+}
+
+.pf-aim-bar {
+  display: block;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.07);
+  overflow: hidden;
+}
+
+.pf-aim-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent);
+}
+
+.pf-aim-row.thin .pf-aim-bar-fill {
+  background: #4a4a50;
+}
+
+.pf-aim-score {
+  padding-left: 12px !important;
+  width: 56px;
+  color: var(--text);
+  font: 600 13px var(--font-body);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.pf-aim-foot {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font: 400 11px var(--font-body);
+}
+
+/* ---- while the matches are being measured -------------------------------- */
+
+.pf-aim-scanning {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 56px 20px 64px;
+  text-align: center;
+}
+
+.pf-aim-scan-count {
+  margin: 0;
+  color: var(--text);
+  font: 600 15px var(--font-body);
+}
+
+.pf-aim-scan-bar {
+  display: block;
+  width: min(320px, 80%);
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.pf-aim-scan-bar span {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent);
+  transition: width 400ms ease;
+}
+
+.pf-aim-scan-note {
+  margin: 0;
+  color: var(--muted);
+  font: 400 12px var(--font-body);
+}

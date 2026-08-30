@@ -84,6 +84,12 @@ import {
   saveCoachSmokes
 } from '../coachSmokesStore.js';
 import { countPitchEdits, getPitchText, savePitchText } from '../pitchStore.js';
+import {
+  aimScanStatus,
+  setAimScanPauseWhen,
+  startAimScan,
+  stopAimScan
+} from '../replays/aimScan.js';
 
 const statsIo = {
   userDir,
@@ -157,6 +163,16 @@ function ratingsStatus() {
 function playerNamesStatus() {
   return jobStatus(playerNamesJob);
 }
+
+/**
+ * The aim rescan stands aside for every job below.
+ *
+ * It is deliberately NOT one of them: it runs beside ordinary traffic for as
+ * long as the library takes, so gating the admin tools on it would lock them
+ * out for hours. What it must not do is write an entry while a full rebuild is
+ * writing the same one, and that is what the pause is for.
+ */
+setAimScanPauseWhen(() => libraryJobBusy());
 
 function libraryJobBusy() {
   return (
@@ -1416,6 +1432,41 @@ async function route(req, res, url, me) {
     });
 
     json(res, req, 202, { ok: true, started: true, ...positionsRefreshStatus() });
+    return true;
+  }
+
+  // Aim rating rescan. Unlike every other tool on this page it is a BACKGROUND
+  // pass: it returns immediately, runs one demo at a time beside live traffic,
+  // pauses while any library job holds the thread, and can be stopped. Opening
+  // the Aim chapter for a player promotes that player's demos to the front of
+  // the same queue (see /api/replays/aim/progress).
+  if (req.method === 'GET' && p === '/api/admin/stats/rescan-aim') {
+    json(res, req, 200, aimScanStatus());
+    return true;
+  }
+
+  if (req.method === 'POST' && p === '/api/admin/stats/rescan-aim') {
+    const body = await readJson(req).catch(() => ({}));
+    if (body.stop) {
+      json(res, req, 200, stopAimScan());
+      return true;
+    }
+    const force = body.force === true;
+    let status;
+    try {
+      status = await startAimScan({ force, startedBy: me.id });
+    } catch (err) {
+      json(res, req, 503, { error: err?.message || 'Aim rescan is not available yet.' });
+      return true;
+    }
+    await writeAudit({
+      actorId: me.id,
+      targetUser: null,
+      action: 'stats.rescanAim',
+      payload: { force, pending: status.pending },
+      req
+    });
+    json(res, req, 202, { ok: true, started: true, ...status });
     return true;
   }
 

@@ -10,9 +10,10 @@
 // roster. There is no Guns chapter for a team.
 // ---------------------------------------------------------------------------
 
-import { getStatsPayload } from '../replays/statsCache.js';
+import { getStatsPayload, invalidateStatsCache } from '../replays/statsCache.js';
 import {
   fetchAggregate,
+  fetchAimProgress,
   fetchPeerAverages,
   fetchRoster,
   fetchVrsRanks,
@@ -51,6 +52,11 @@ import {
 } from '../replays/performance/performanceMath.js';
 import { aggregateGuns, gunMapForPlayer } from '../replays/performance/gunStats.js';
 import {
+  aimChapterHtml,
+  aimModel,
+  aimScanningHtml
+} from '../replays/performance/aimChapter.js';
+import {
   MAP_ROUND_CODES,
   mapRoundGrid,
   teamMapRoundGrid
@@ -80,12 +86,17 @@ import './performance.css';
 
 const CHAPTERS = [
   { key: 'summary', label: 'Summary' },
+  { key: 'aim', label: 'Aim' },
   { key: 'guns', label: 'Guns' },
   { key: 'maps', label: 'Maps' }
 ];
 
-/** A team has no held-gun table: Guns is a question about one pair of hands. */
-const TEAM_CHAPTERS = CHAPTERS.filter((c) => c.key !== 'guns');
+/**
+ * A team has no held-gun table, and no aim: both are questions about one pair
+ * of hands. Five people's flicks averaged together is not a statistic.
+ */
+const TEAM_ONLY_CHAPTERS = new Set(['guns', 'aim']);
+const TEAM_CHAPTERS = CHAPTERS.filter((c) => !TEAM_ONLY_CHAPTERS.has(c.key));
 
 /**
  * The chapters a subscription pays for. Summary is not one of them.
@@ -95,7 +106,7 @@ const TEAM_CHAPTERS = CHAPTERS.filter((c) => c.key !== 'guns');
  * is shown. So the page has no route gate, and the two paid chapters carry the
  * gate themselves.
  */
-const GATED_CHAPTERS = new Set(['guns', 'maps']);
+const GATED_CHAPTERS = new Set(['aim', 'guns', 'maps']);
 
 /**
  * Is this chapter locked for the current account?
@@ -891,6 +902,139 @@ export function initPerformanceView({ auth, escapeHtml }) {
       </div>`;
   }
 
+  // ---- Aim chapter ---------------------------------------------------------
+  //
+  // The only chapter that can be waiting on the server for something other
+  // than a fetch. The motion half of the Aim rating is measured by a background
+  // pass over the demo files (server/replays/aimScan.js), and a player whose
+  // matches it has not reached has an outcome-only rating and no radar.
+  //
+  // So opening this chapter asks the server for that player's matches to be
+  // measured NEXT, and shows the count while it happens. A player who is
+  // already measured never sees any of it: `aimHasMotion` is true on the row
+  // the page already holds, and the chapter paints on the first frame.
+
+  /** @type {{ player: string, total: number, pending: number, ready: boolean }|null} */
+  let aimProgress = null;
+  /** Polling handle, and whether a request is in flight right now. */
+  let aimPollTimer = 0;
+  let aimPollBusy = false;
+  /**
+   * True between opening the chapter and the first answer.
+   *
+   * Without it the chapter paints its empty tables for the length of one
+   * request and then replaces them with a progress bar, which reads as a bug
+   * rather than as loading.
+   */
+  let aimChecking = false;
+  /** How often to ask again while matches are still being measured. */
+  const AIM_POLL_MS = 3000;
+
+  function stopAimPoll() {
+    if (aimPollTimer) clearTimeout(aimPollTimer);
+    aimPollTimer = 0;
+  }
+
+  function aimStats() {
+    const { players, demos } = maps();
+    return playerStats(payload, playerId, ui, players, demos);
+  }
+
+  /**
+   * Is this chapter waiting on the scan?
+   *
+   * Only when the player has NO motion at all. A player with some measured
+   * matches is shown what is measured rather than a progress bar over numbers
+   * they can already read, and the rest arrives on a later visit.
+   */
+  function aimWaiting(stats) {
+    if (stats?.aimHasMotion) return false;
+    if (aimChecking) return true;
+    return Boolean(aimProgress && aimProgress.pending > 0);
+  }
+
+  function aimBodyHtml() {
+    const stats = aimStats();
+    if (aimWaiting(stats)) {
+      return `${filtersHtml()}<div id="pf-stats">${aimScanningHtml(aimProgress, spinnerHtml)}</div>`;
+    }
+    return `${filtersHtml()}<div id="pf-stats">${aimChapterHtml(aimModel(stats), escapeHtml)}</div>`;
+  }
+
+  /**
+   * Ask how much of this player's aim is measured, and keep asking while it is
+   * being worked on.
+   *
+   * The first call promotes their matches to the front of the queue; the polls
+   * after it do not, so leaving the tab open does not reshuffle the queue every
+   * three seconds. When the last one lands, the client's cached payload is one
+   * version behind the server's, so it is dropped and refetched: that is the
+   * moment the radar appears.
+   */
+  function trackAimProgress({ promote = true } = {}) {
+    const who = playerId;
+    if (!who) return;
+    aimPollBusy = true;
+    void fetchAimProgress(who, { promote })
+      .then(async (res) => {
+        aimPollBusy = false;
+        aimChecking = false;
+        if (playerId !== who || !visible) return;
+        aimProgress = res;
+        if (res.pending > 0) {
+          // Only the table slot, not the whole page: this runs every few
+          // seconds for as long as the reader watches the count come down.
+          if (chapter === 'aim') refreshStats();
+          aimPollTimer = window.setTimeout(
+            () => trackAimProgress({ promote: false }),
+            AIM_POLL_MS
+          );
+          return;
+        }
+        stopAimPoll();
+        // Everything this player has is measured. The payload in hand was
+        // fetched before that was true, so it still carries the outcome-only
+        // rating; nothing short of refetching it will show the new one.
+        if (!aimStats()?.aimHasMotion) {
+          // Clearing the SCOPE stamp, not the payload: ensurePayload overwrites
+          // `payload` only once the new one has landed, so a failed refetch
+          // leaves the page showing the numbers it already had rather than
+          // rendering against nothing.
+          invalidateStatsCache();
+          scopedTo = '';
+          try {
+            await ensurePayload();
+          } catch {
+            /* leave the previous paint alone; the filters still work */
+          }
+        }
+        if (playerId === who && visible) render();
+      })
+      .catch(() => {
+        // The endpoint is optional to the page: without it the chapter simply
+        // shows whatever is measured, which is what it would show anyway.
+        aimPollBusy = false;
+        aimChecking = false;
+        stopAimPoll();
+        if (playerId === who && visible && chapter === 'aim') render();
+      });
+  }
+
+  /** Called when the Aim chapter becomes the visible one. */
+  function enterAimChapter() {
+    if (!playerId || chapterLocked('aim')) return;
+    if (aimStats()?.aimHasMotion) return;
+    // Already asking. Leaving and re-entering the chapter must not start a
+    // second chain of polls beside the first.
+    if (aimPollTimer || aimPollBusy) return;
+    // Repaint into the waiting state before the request goes out. The caller
+    // has already painted; this is the second frame, and it is the one that
+    // stops the reader seeing empty tables that are about to fill in.
+    aimChecking = true;
+    render();
+    trackAimProgress({ promote: true });
+  }
+
   function gunsBodyHtml() {
     const { players, demos } = maps();
     const careerRows = [];
@@ -924,6 +1068,7 @@ export function initPerformanceView({ auth, escapeHtml }) {
     }
     if (chapter === 'maps') return mapsBodyHtml();
     if (chapter === 'guns') return gunsBodyHtml();
+    if (chapter === 'aim') return aimBodyHtml();
     return summaryHtml();
   }
 
@@ -983,6 +1128,11 @@ export function initPerformanceView({ auth, escapeHtml }) {
       slot.innerHTML = gunsHtml(aggregateGuns(rows, playerId, players, demos, gunByFile));
     } else if (chapter === 'maps') {
       slot.innerHTML = mapsStatsHtml();
+    } else if (chapter === 'aim') {
+      const stats = aimStats();
+      slot.innerHTML = aimWaiting(stats)
+        ? aimScanningHtml(aimProgress, spinnerHtml)
+        : aimChapterHtml(aimModel(stats), escapeHtml);
     } else if (chapter === 'summary') {
       const { players, demos } = maps();
       const stats = playerStats(payload, playerId, ui, players, demos);
@@ -1070,6 +1220,11 @@ export function initPerformanceView({ auth, escapeHtml }) {
     chapter = 'summary';
     searchQuery = '';
     searchOpen = false;
+    // A different subject: the previous one's scan progress is not this one's.
+    stopAimPoll();
+    aimProgress = null;
+    aimChecking = false;
+    aimPollBusy = false;
     renderScoped();
   }
 
@@ -1080,6 +1235,11 @@ export function initPerformanceView({ auth, escapeHtml }) {
     chapter = 'summary';
     searchQuery = '';
     searchOpen = false;
+    // A different subject: the previous one's scan progress is not this one's.
+    stopAimPoll();
+    aimProgress = null;
+    aimChecking = false;
+    aimPollBusy = false;
     renderScoped();
   }
 
@@ -1103,6 +1263,7 @@ export function initPerformanceView({ auth, escapeHtml }) {
     if (chapterBtn) {
       chapter = chapterBtn.dataset.pfChapter || 'summary';
       render();
+      if (chapter === 'aim') enterAimChapter();
       return;
     }
     const pick = e.target.closest('[data-pf-pick]');
@@ -1231,6 +1392,7 @@ export function initPerformanceView({ auth, escapeHtml }) {
     if (chapterBtn) {
       chapter = chapterBtn.dataset.pfChapter || 'summary';
       render();
+      if (chapter === 'aim') enterAimChapter();
       return;
     }
     const pick = e.target.closest('[data-pf-pick]');
@@ -1260,6 +1422,7 @@ export function initPerformanceView({ auth, escapeHtml }) {
     chapter = chapters.some((c) => c.key === ch) ? ch : 'summary';
     resolveDefault();
     await renderScoped();
+    if (chapter === 'aim') enterAimChapter();
     // The gate may have been painted against the pre-/api/me answer.
     void getEntitlements()
       ?.ready()
@@ -1279,6 +1442,9 @@ export function initPerformanceView({ auth, escapeHtml }) {
     onShow: show,
     onHide() {
       visible = false;
+      // A poll that outlives the page repaints somebody else's screen, which
+      // is the same failure `visible` exists to prevent for the search box.
+      stopAimPoll();
       document.getElementById('page-head-actions')?.replaceChildren();
     }
   };

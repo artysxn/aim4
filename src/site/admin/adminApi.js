@@ -191,6 +191,19 @@ export const adminApi = {
   /** Progress for an in-flight (or just-finished) rating recalculation. */
   refreshRatingsStatus: () => get('/api/admin/stats/refresh-ratings'),
 
+  /**
+   * Start the background aim rescan. Returns immediately: it walks the library
+   * one demo at a time beside live traffic, so there is nothing to hold open.
+   */
+  rescanAim: ({ force = false } = {}) =>
+    send('POST', '/api/admin/stats/rescan-aim', { force }),
+
+  /** Ask the aim rescan to stop after the demo it is on. */
+  stopRescanAim: () => send('POST', '/api/admin/stats/rescan-aim', { stop: true }),
+
+  /** Progress for the aim rescan, running or not. */
+  rescanAimStatus: () => get('/api/admin/stats/rescan-aim'),
+
   /** Merge player display names by Steam ID (most-used name wins) + rebuild stats. */
   rescanPlayerNames: () => send('POST', '/api/admin/players/rescan-names', {}),
 

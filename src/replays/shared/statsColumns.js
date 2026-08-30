@@ -47,6 +47,12 @@ export const COLUMN_GROUPS = Object.freeze({
   prw:          { rows: ['prw1', 'prw2'],              bytes: 35   },
   kills:        { rows: ['kt', 'ev'],                  bytes: 407  },
   aim:          { rows: ['am'],                        bytes: 1996 },
+  // The motion half of the Aim rating. A THIRD of what `aim` weighs for half
+  // again as many numbers, because `row.a2` stores packed arrays rather than
+  // named keys (see AIM_MOTION_FIELDS). Its own group so the contracts that
+  // never draw an aim number — Pattern Finder, the round list, the team tables
+  // — do not start paying for one.
+  aimV2:        { rows: ['a2'], entry: ['a2v'],        bytes: 640  },
   duels:        { rows: ['du'],                        bytes: 2231 },
   utility:      { rows: ['ut', 'utt'],                 bytes: 1234 },
   movement:     { rows: ['mv'],                        bytes: 301  },
@@ -98,6 +104,11 @@ export const COLUMN_PRESETS = Object.freeze({
    */
   rating: [
     ...RATING_CORE,
+    // Performance's Aim chapter. Deliberately in the SAME contract as the rest
+    // of the page rather than a chapter-specific one: a separate contract would
+    // make opening the Aim tab a second full fetch of the same demos, which
+    // costs the reader more than 640 bytes a round costs the other chapters.
+    'aimV2',
     'coreOpenings',
     'roles',
     'heldGun',

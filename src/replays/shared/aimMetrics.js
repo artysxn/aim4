@@ -23,6 +23,14 @@
 
 import { FLAG_ALIVE, readHeader, readRecord } from './tickFormat.js';
 import { segmentCrossesVision } from '../zones/visionLayers.js';
+import {
+  adjustmentsScore,
+  higherIsBetter,
+  lowerIsBetter,
+  precisionScore,
+  reactionScore,
+  speedScore
+} from '../../lib/aim4Ratings.js';
 
 /** An enemy inside this cone counts as "you were on them" for first bullet. */
 export const FIRST_BULLET_CONE_DEG = 25;
@@ -603,6 +611,358 @@ export function calibrateAnchors(population) {
     const lo = at(0.05);
     const hi = at(0.95);
     out[key] = AIM_ANCHORS[key].invert ? { worst: hi, best: lo, invert: true } : { worst: lo, best: hi, invert: false };
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// The motion column
+//
+// aimMotion.js measures the hand; these are the counters it writes and the fold
+// that rolls them up. They live here, not there, because aimMotion.js already
+// depends on this file for the weapon filter and the yaw helpers, and one of
+// the two modules has to be the leaf.
+//
+// The counters are stored PACKED — `row.a2[playerId]` is an array in exactly
+// this order, not an object. Seventeen named keys per player per round is over
+// two kilobytes a round of JSON that is nothing but field names; the same
+// numbers as an array are a third of that. The order is therefore frozen:
+// append to it, never rearrange it, or every stored index becomes a different
+// statistic without anything failing.
+// ---------------------------------------------------------------------------
+
+/** @see aimMotionFromRound for what each one counts. */
+export const AIM_MOTION_FIELDS = Object.freeze([
+  /** Flicks that finished on the target hull (or whose bullet connected). */
+  'flickHit',
+  /** Flicks that finished past the target. */
+  'flickOver',
+  /** Flicks that stopped short of it. */
+  'flickUnder',
+  /** Σ per-flick closeness %, and how many flicks had a gap worth closing. */
+  'closeSum',
+  'closeN',
+  /** Σ view travel during flicks (degrees) and Σ time spent flicking (ms). */
+  'pathDeg',
+  'flickMs',
+  /** Σ direct angular distance for the same flicks — the tension denominator. */
+  'directDeg',
+  /** How many flicks fed the three totals above. Speed and tension gate on it. */
+  'speedN',
+  /** Motion segments spent on targets, and targets actually killed. */
+  'segments',
+  'targets',
+  /** Σ visible→moving delay (ms) and its sample count. */
+  'reactDirMs',
+  'reactDirN',
+  /** Σ on-target→click delay (ms) and its sample count. */
+  'reactHoldMs',
+  'reactHoldN',
+  /** Engagement ticks with the crosshair on the hull, and total. */
+  'trackOn',
+  'trackN'
+]);
+
+export const AIM_MOTION_WIDTH = AIM_MOTION_FIELDS.length;
+
+/** Blank counter vector. */
+export function emptyMotion() {
+  return new Array(AIM_MOTION_WIDTH).fill(0);
+}
+
+/** Fold `from` into `into`, both packed vectors. Tolerates a missing `into`. */
+export function addMotion(into, from) {
+  if (!Array.isArray(from)) return into;
+  const out = Array.isArray(into) && into.length === AIM_MOTION_WIDTH ? into : emptyMotion();
+  for (let i = 0; i < AIM_MOTION_WIDTH; i++) out[i] += Number(from[i]) || 0;
+  return out;
+}
+
+/** Packed vector → named object, for readers that want names. */
+export function motionObject(vec) {
+  const out = {};
+  for (let i = 0; i < AIM_MOTION_WIDTH; i++) {
+    out[AIM_MOTION_FIELDS[i]] = Array.isArray(vec) ? Number(vec[i]) || 0 : 0;
+  }
+  return out;
+}
+
+/** Is there anything in this vector worth reading? */
+export function motionHasSample(vec) {
+  if (!Array.isArray(vec)) return false;
+  for (let i = 0; i < vec.length; i++) if (vec[i]) return true;
+  return false;
+}
+
+// ---------------------------------------------------------------------------
+// Aim rating v2
+//
+// The rating above measures OUTCOMES: was the crosshair near the enemy, did
+// the bullet land. aimMotion.js measures the hand that produced them, in the
+// same seven categories the aim trainer scores a run on. v2 is both halves —
+// what happened, and the motion behind it — because either alone is half an
+// answer. A player who wins fights with lazy placement and a player who loses
+// them with a beautiful flick both come out of a one-sided rating wrong.
+//
+// The trainer's own engines do the per-axis scoring (lib/aim4Ratings.js), so a
+// change to the shape of the Speed or Reaction curve moves the trainer and the
+// demo page together instead of leaving two versions of the same idea. What is
+// local to this file is the BASELINES: 39°/s of flick speed means something in
+// Gridshot and nothing in a demo, so every baseline is re-anchored to CS2.
+// ---------------------------------------------------------------------------
+
+/**
+ * B = a 1.00 engine rating, per axis, on CS2 demo data.
+ *
+ * PROVISIONAL until run over the library: these are plausible mid-table values,
+ * not measured ones. `calibrateMotionBaselines` below turns a population of raw
+ * values into the real thing — run it once the rescan has covered the library
+ * and paste the result over this.
+ */
+export const AIM_V2_BASELINES = Object.freeze({
+  /** Degrees of view travel per second while flicking. */
+  speed: 250,
+  /** Share of the engagement with the crosshair on the hull. */
+  tracking: 0.35,
+  /**
+   * Share of flicks that finished on the target.
+   *
+   * Higher than the first-bullet HIT rate it looks like, and not the same
+   * statistic: a flick counts as landed when the crosshair finished on the
+   * hull, whether or not spread and recoil put the bullet there.
+   */
+  flicks_hit_percent: 55,
+  /** Motion segments per target killed. 1.0 is one clean flick per kill. */
+  adjustments: 2.2,
+  /** Visible→moving and on-target→click, blended 50/50, in ms. */
+  reaction_time_ms: 250,
+  /** Path length over the direct angular distance, as a % excess. */
+  tension_percent: 45
+});
+
+/**
+ * Closeness that scores 1.00 for a demo flick.
+ *
+ * Much higher than the trainer's 62.5: a trainer target is a small sphere and
+ * closing 62% of the gap to it is respectable, while a demo flick ends on a
+ * player-sized hull and a competent one closes most of the way there. Scoring
+ * demo flicks on the trainer's pivot would put the whole library at the top of
+ * the curve, which is a scale that has stopped distinguishing anybody.
+ */
+export const AIM_V2_PRECISION_PIVOT = 88;
+
+/**
+ * Where an engine score (0.00–2.00) lands on the 0–100 aim scale.
+ *
+ * Chosen so a baseline 1.00 scores 63, which is where the outcome half already
+ * puts a typical player (see AIM_ANCHORS). That is not cosmetic: the Aim column
+ * feeds the A4R composite against a fixed 0.631 constant, so a motion half
+ * centred anywhere else would move every rating in the library the day v2
+ * shipped, and the move would be an artefact of the scale rather than anything
+ * anybody's aim did.
+ */
+export const AIM_V2_ENGINE_ANCHOR = Object.freeze({ worst: 0.4, best: 1.35 });
+
+/** Weight of each v2 component. Outcome half and motion half, 50/50. */
+export const AIM_V2_WEIGHTS = Object.freeze({
+  // Outcome — AIM_WEIGHTS, halved, so their proportions to each other survive.
+  readyRate: 0.14,
+  crosshairError: 0.12,
+  accuracy: 0.08,
+  firstBullet: 0.08,
+  overflick: 0.04,
+  underflick: 0.04,
+  // Motion. Precision and Flicks lead: they are the two that say whether the
+  // hand arrived, and everything else describes how it got there.
+  precision: 0.1,
+  flicks: 0.1,
+  tracking: 0.08,
+  adjustments: 0.08,
+  reaction: 0.06,
+  speed: 0.04,
+  tension: 0.04
+});
+
+/** Minimum sample per motion component. Below it the component is dropped. */
+export const AIM_V2_MIN_SAMPLE = Object.freeze({
+  precision: 25,
+  speed: 25,
+  flicks: 25,
+  adjustments: 10,
+  reaction: 15,
+  tension: 25,
+  tracking: 200
+});
+
+/** The seven motion axes, in display order, with their labels. */
+export const AIM_V2_MOTION_KEYS = Object.freeze([
+  { key: 'precision', label: 'Precision' },
+  { key: 'speed', label: 'Speed' },
+  { key: 'flicks', label: 'Flicks' },
+  { key: 'adjustments', label: 'Adjustments' },
+  { key: 'reaction', label: 'Reaction' },
+  { key: 'tension', label: 'Tension' },
+  { key: 'tracking', label: 'Tracking' }
+]);
+
+/**
+ * Packed motion counters → the seven raw trainer statistics.
+ *
+ * Every value is null when its denominator is empty, never 0: "no flick was
+ * ever measured" and "every flick missed" are different claims and only one of
+ * them is safe to score.
+ *
+ * @param {number[]|object} totals packed vector, or an already-named object
+ */
+export function aimTelemetry(totals) {
+  const m = Array.isArray(totals) ? motionObject(totals) : { ...(totals || {}) };
+  for (const key of AIM_MOTION_FIELDS) m[key] = Number(m[key]) || 0;
+
+  const flicks = m.flickHit + m.flickOver + m.flickUnder;
+  const reactN = m.reactDirN + m.reactHoldN;
+  const div = (a, b) => (b > 0 ? a / b : null);
+
+  const raw = {
+    /** Mean % of the start→target gap one flick closed. */
+    precision: div(m.closeSum, m.closeN),
+    /** Degrees of view travel per second while flicking. */
+    speed: m.flickMs > 0 ? (m.pathDeg / m.flickMs) * 1000 : null,
+    /** Share of flicks that finished on the target, as a percent. */
+    flicks: flicks > 0 ? (m.flickHit / flicks) * 100 : null,
+    /** Motion segments per target killed. */
+    adjustments: div(m.segments, m.targets),
+    /**
+     * Blended reaction, in ms. 50/50 when both halves have samples, matching
+     * the trainer; whichever half exists alone carries it otherwise.
+     */
+    reaction:
+      reactN > 0
+        ? m.reactDirN > 0 && m.reactHoldN > 0
+          ? (m.reactDirMs / m.reactDirN) * 0.5 + (m.reactHoldMs / m.reactHoldN) * 0.5
+          : (m.reactDirMs + m.reactHoldMs) / reactN
+        : null,
+    /** Path length over the direct distance, as a % excess. */
+    tension: m.directDeg > 0 ? Math.max(0, (m.pathDeg / m.directDeg - 1) * 100) : null,
+    /** Share of engagement ticks with the crosshair on the hull. */
+    tracking: div(m.trackOn, m.trackN)
+  };
+
+  const sample = {
+    precision: m.closeN,
+    speed: m.speedN,
+    flicks,
+    // Both halves of the ratio have to be there for it to be a ratio.
+    adjustments: Math.min(m.targets, m.segments),
+    reaction: reactN,
+    tension: m.speedN,
+    tracking: m.trackN
+  };
+
+  return { raw, sample, totals: m, flicks };
+}
+
+/** Raw motion statistics → the trainer engine's 0.00–2.00 score, per axis. */
+export function motionEngineScores(raw, baselines = AIM_V2_BASELINES) {
+  const B = { ...AIM_V2_BASELINES, ...(baselines || {}) };
+  const at = (v, fn) => (Number.isFinite(v) ? fn(v) : null);
+  return {
+    precision: at(raw.precision, (v) => precisionScore(v, AIM_V2_PRECISION_PIVOT)),
+    speed: at(raw.speed, (v) => speedScore(v, B.speed)),
+    flicks: at(raw.flicks, (v) => higherIsBetter(v, B.flicks_hit_percent)),
+    adjustments: at(raw.adjustments, (v) => adjustmentsScore(v, B.adjustments)),
+    reaction: at(raw.reaction, (v) => reactionScore(v, B.reaction_time_ms)),
+    tension: at(raw.tension, (v) => lowerIsBetter(v, B.tension_percent)),
+    tracking: at(raw.tracking, (v) => higherIsBetter(v, B.tracking))
+  };
+}
+
+/** Engine score (0–2) onto the 0–100 aim scale. */
+export function engineToHundred(score) {
+  if (!Number.isFinite(score)) return null;
+  const { worst, best } = AIM_V2_ENGINE_ANCHOR;
+  return Math.max(0, Math.min(100, ((score - worst) / (best - worst)) * 100));
+}
+
+/**
+ * The Aim rating, v2: outcome components and motion components in one score.
+ *
+ * Degrades in one direction only. A player whose demos have not been scanned
+ * for motion yet has no motion components at all, every motion weight drops
+ * out, and the renormalised result is exactly the v1 rating — the number the
+ * library already shows. So the rescan can run for hours across a live library
+ * without any page showing a rating that is neither one thing nor the other.
+ *
+ * @param {object} totals   summed AIM_FIELDS counters
+ * @param {number[]|object|null} motion  summed AIM_MOTION_FIELDS vector
+ * @param {{ baselines?: object }} [opts]
+ */
+export function aimRatingV2(totals, motion = null, opts = {}) {
+  const base = aimRating(totals || {});
+  const tele = aimTelemetry(motion || []);
+  const engines = motionEngineScores(tele.raw, opts.baselines);
+
+  /** @type {Record<string, number|null>} */
+  const components = {};
+  let weighted = 0;
+  let weightUsed = 0;
+  const add = (key, score) => {
+    components[key] = score;
+    if (score == null) return;
+    weighted += score * AIM_V2_WEIGHTS[key];
+    weightUsed += AIM_V2_WEIGHTS[key];
+  };
+
+  for (const key of Object.keys(AIM_ANCHORS)) add(key, base.components[key]);
+  for (const { key } of AIM_V2_MOTION_KEYS) {
+    const enough = (tele.sample[key] || 0) >= AIM_V2_MIN_SAMPLE[key];
+    add(key, enough ? engineToHundred(engines[key]) : null);
+  }
+
+  const hasMotion = AIM_V2_MOTION_KEYS.some(({ key }) => components[key] != null);
+  return {
+    rating: weightUsed > 0 ? Math.round((weighted / weightUsed) * 10) / 10 : null,
+    /** The outcome-only rating, kept so the page can show what v2 changed. */
+    v1: base.rating,
+    hasMotion,
+    components,
+    raw: { ...base.raw, ...tele.raw },
+    sample: { ...base.sample, ...tele.sample },
+    engines,
+    motion: tele.totals
+  };
+}
+
+/**
+ * Re-anchor the motion baselines from a real population, the same way
+ * `calibrateAnchors` re-anchors the outcome half.
+ *
+ * A baseline is the MEDIAN raw value, not a percentile edge: the engines are
+ * curves around B = 1.00, so B has to be the middle of the population for the
+ * curve either side of it to mean anything.
+ *
+ * @param {Array<Record<string, number|null>>} population raw values per player
+ */
+export function calibrateMotionBaselines(population) {
+  const median = (key) => {
+    const values = (population || [])
+      .map((p) => p?.[key])
+      .filter((v) => Number.isFinite(v))
+      .sort((a, b) => a - b);
+    if (values.length < 20) return null;
+    return values[Math.floor(values.length / 2)];
+  };
+  const out = { ...AIM_V2_BASELINES };
+  const map = {
+    speed: 'speed',
+    tracking: 'tracking',
+    flicks_hit_percent: 'flicks',
+    adjustments: 'adjustments',
+    reaction_time_ms: 'reaction',
+    tension_percent: 'tension'
+  };
+  for (const [baselineKey, rawKey] of Object.entries(map)) {
+    const m = median(rawKey);
+    if (m != null && m > 0) out[baselineKey] = Math.round(m * 1000) / 1000;
   }
   return out;
 }

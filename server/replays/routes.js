@@ -78,6 +78,13 @@ import { cpuProbe, memorySnapshot } from './hostMemory.js';
 import { forgetDemoIndex, loadStoredEntry, patchIndexTeamNames, refreshLibraryStats, scheduleStatsIndex, STATS_LIBRARY_PAGE, statsPayload } from './statsIndex.js';
 import { ColumnContractError, resolveColumns } from '../../src/replays/shared/statsColumns.js';
 import { getRoster, invalidateRoster, scopeRoster } from './rosterCatalogue.js';
+import {
+  aimScanPending,
+  aimScanStatus,
+  ensureAimScanLedger,
+  prioritizeAimScan
+} from './aimScan.js';
+import { demosForPlayer } from '../../src/replays/shared/rosterQuery.js';
 import { peerAverages, peerAveragesHot } from './peerAverages.js';
 import {
   hotBuildProgress,
@@ -1759,6 +1766,55 @@ export async function handleReplayRequest(req, res, url) {
       sizeBytes: record.sizeBytes
     });
     json(res, 202, { job: { state: job.state, stage: job.stage } });
+    return true;
+  }
+
+  // ---- aim rescan progress -------------------------------------------------
+  //
+  // What the Aim chapter waits on. Two jobs in one request, on purpose: it
+  // answers "how many of this player's demos still have no motion half", and
+  // it moves exactly those demos to the front of the background queue.
+  //
+  // The reader is therefore the reason their own demos get measured first, and
+  // the answer they poll for is the same counter the scanner is decrementing.
+  // A player whose demos are all measured is answered `pending: 0` on the first
+  // call and never sees a loading state at all.
+  if (req.method === 'GET' && p === '/api/replays/aim/progress') {
+    const playerId = String(url.searchParams.get('player') || '').trim();
+    if (!playerId) {
+      json(res, 400, { error: 'player is required' });
+      return true;
+    }
+    const { records: allRecords, allowed } = await readable();
+    const ready = allRecords.filter((r) => (r.status || 'ready') === 'ready');
+    const allowedIds = new Set(
+      allowed.filter((r) => (r.status || 'ready') === 'ready').map((r) => r.id)
+    );
+    const roster = await getRoster(statsIo, user, ready, {
+      readEntry: (u, id) => loadStoredEntry(statsIo, u, id)
+    });
+    // Only demos this caller may read. Promoting one they cannot open would
+    // let an anonymous visitor reorder the queue against the whole library.
+    const ids = demosForPlayer(roster, playerId).filter((id) => allowedIds.has(id));
+    await ensureAimScanLedger();
+    // `promote` is off for a poll: the first call moves them to the front and
+    // every call after it only wants the count, so the queue is not reshuffled
+    // once a second for as long as somebody leaves the tab open.
+    const promote = url.searchParams.get('promote') !== '0';
+    if (promote && ids.length) await prioritizeAimScan(ids);
+    const pending = aimScanPending(ids);
+    const scan = aimScanStatus();
+    json(res, 200, {
+      player: playerId,
+      total: ids.length,
+      pending,
+      done: ids.length - pending,
+      /** True when nothing is left to measure for this player. */
+      ready: pending === 0,
+      scanning: scan.running,
+      /** Library-wide, for context while a big rescan is going. */
+      library: { pending: scan.pending, running: scan.running, current: scan.current }
+    });
     return true;
   }
 

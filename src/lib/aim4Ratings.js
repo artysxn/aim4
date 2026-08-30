@@ -154,15 +154,21 @@ function round2(v) {
 /**
  * Engine 1 — Precision curve. A = average per-flick closeness % (how much of
  * the start→target gap each adjustment closed). 62.5% = a 1.00 rating.
+ *
+ * The pivot is a parameter because the same curve is used on CS2 demo flicks
+ * (replays/shared/aimMetrics.js), where closeness is measured against a body
+ * rather than a small target and a typical flick closes far more of the gap.
+ * Callers that pass nothing get the trainer's own pivot, unchanged.
  */
-const PRECISION_PIVOT = 62.5;
-export function precisionScore(A) {
+export const PRECISION_PIVOT = 62.5;
+export function precisionScore(A, pivot = PRECISION_PIVOT) {
   const a = Number(A) || 0;
+  const p = Math.max(1, Math.min(99, Number(pivot) || PRECISION_PIVOT));
   let s;
-  if (a < PRECISION_PIVOT) {
-    s = a / PRECISION_PIVOT;
+  if (a < p) {
+    s = a / p;
   } else {
-    s = 1.0 + Math.pow((a - PRECISION_PIVOT) / (100 - PRECISION_PIVOT), 2.2);
+    s = 1.0 + Math.pow((a - p) / (100 - p), 2.2);
   }
   return clamp(s, 0, 2);
 }

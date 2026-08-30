@@ -12,7 +12,7 @@
 // ---------------------------------------------------------------------------
 
 import { buyBucket, econHasAwp } from './roundId.js';
-import { addAim, aimRating } from './aimMetrics.js';
+import { addAim, addMotion, aimRatingV2, emptyMotion } from './aimMetrics.js';
 import { AKPR_HOLD_SECONDS } from './awpHold.js';
 import { addUtility, utilityAverages } from './utilityMetrics.js';
 import {
@@ -550,6 +550,8 @@ export function accumulatePlayers(acc, rows, players, filter = {}, demos = null)
         dtRounds: 0,
         /** Aim counters (aimMetrics), summed across every round that passes. */
         aim: {},
+        /** Aim MOTION counters (aimMotion), packed, same rounds. */
+        motion: emptyMotion(),
         /** Utility counters (utilityMetrics), same. */
         util: {},
         /** Rounds counted for the per-round utility average. */
@@ -651,6 +653,11 @@ export function accumulatePlayers(acc, rows, players, filter = {}, demos = null)
       // whole match.
       const am = row.am?.[id];
       if (am) addAim(s.aim, am);
+      // Absent on every demo the aim rescan has not reached yet, which is what
+      // makes aimRatingV2 fall back to the outcome-only rating rather than to a
+      // rating built from one player's scanned half.
+      const a2 = row.a2?.[id];
+      if (a2) s.motion = addMotion(s.motion, a2);
       const ut = row.ut?.[id];
       if (ut) addUtility(s.util, ut);
       s.utilRounds++;
@@ -752,7 +759,7 @@ export function derivePlayers(acc) {
         : null;
     const a4or = aim4OpeningRating({ opkd, swing, opatt });
     // Divided once, here, over exactly the rounds that passed the filter.
-    const aim = aimRating(s.aim);
+    const aim = aimRatingV2(s.aim, s.motion);
     const utilAvg = utilityAverages({ ...s.util, rounds: s.utilRounds });
     const teams = [...s.teamRounds.values()].sort(
       (a, b) => b.rounds - a.rounds || a.name.localeCompare(b.name)
@@ -894,12 +901,25 @@ export function derivePlayers(acc) {
       /** All utility damage per round played. */
       utilDmgPerRound: utilAvg.utilDamagePerRound,
 
-      // ---- aim (stats index v11) ------------------------------------------
-      /** 0-100. Null until every component has enough sample to be honest. */
+      // ---- aim (stats index v11, motion half v2) --------------------------
+      /**
+       * 0-100. Null until every component has enough sample to be honest.
+       *
+       * v2: outcome components and motion components blended. Identical to the
+       * v1 number for any player whose demos the aim rescan has not reached, so
+       * this column is never half one rating and half another.
+       */
       a4aim: aim.rating,
+      /** The outcome-only rating, for "what did the motion half change". */
+      a4aimV1: aim.v1,
+      /** False while this player's demos are still waiting on the rescan. */
+      aimHasMotion: aim.hasMotion,
       aimComponents: aim.components,
       aimRaw: aim.raw,
       aimSample: aim.sample,
+      aimEngines: aim.engines,
+      /** Summed motion counters, for the Aim chapter's own tables. */
+      aimMotion: aim.motion,
 
       // ---- multi-kill round counts + AWP KPR ----------------------------
       mk5: s.mk[5],

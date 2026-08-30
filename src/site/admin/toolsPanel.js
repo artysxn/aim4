@@ -280,6 +280,110 @@ function pistolFixCard() {
 }
 
 /**
+ * The aim rescan.
+ *
+ * Its own card rather than a row in the JOBS table above, because it is the
+ * one tool here that is not exclusive: it re-opens each parsed demo, measures
+ * the motion half of the Aim rating, and does it in the background beside live
+ * traffic for as long as the library takes. Putting it in that table would
+ * disable every other button on this page for hours.
+ */
+function aimRescanCard() {
+  const card = el('div', 'admin-tool-card');
+  card.appendChild(el('h3', 'admin-tool-title', 'Aim rating'));
+  card.appendChild(
+    el(
+      'p',
+      'admin-muted',
+      'Re-opens each parsed demo and measures the flick, tracking, reaction and tension statistics behind the v2 Aim rating. Runs in the background, one demo at a time, and pauses while any other tool on this page is running. Demos already measured are skipped. Opening a player’s Aim tab in Performance moves their demos to the front of the queue.'
+    )
+  );
+  const status = el('div', 'admin-tool-status');
+  const detail = el('div', 'admin-tool-status');
+  const runBtn = button('Rescan aim rating', () => start(false), 'btn btn-primary btn-sm');
+  const forceBtn = button('Re-measure everything', () => start(true), 'btn btn-sm');
+  const stopBtn = button('Stop', () => stop(), 'btn btn-sm');
+  const row = el('div', 'admin-inline');
+  row.append(runBtn, forceBtn, stopBtn);
+  card.append(row, status, detail);
+
+  let timer = 0;
+
+  function paint(st) {
+    if (!st) return;
+    runBtn.disabled = st.running;
+    forceBtn.disabled = st.running;
+    stopBtn.disabled = !st.running;
+    const r = st.report || {};
+    if (st.running) {
+      const where = st.current ? `: ${st.current}` : '';
+      status.textContent = st.stopping
+        ? `Stopping after the current demo${where}`
+        : `${st.done} of ${st.total} demos, ${st.pending} left${where}`;
+    } else if (st.finishedAt) {
+      status.textContent =
+        `Finished in ${Math.round((st.ms || 0) / 1000)}s. ` +
+        `${r.measured || 0} measured, ${r.current || 0} already current, ` +
+        `${r.skipped || 0} skipped, ${r.failed || 0} failed.`;
+    } else {
+      status.textContent = st.scanned
+        ? `${st.scanned} demos measured. Not running.`
+        : 'Not running.';
+    }
+    const bits = [];
+    if (r.rounds) bits.push(`${r.rounds} rounds measured`);
+    if (st.unscannable) bits.push(`${st.unscannable} without a stats index`);
+    if (st.error) bits.push(`Last error: ${st.error}`);
+    detail.textContent = bits.join(' · ');
+  }
+
+  async function poll() {
+    try {
+      const st = await adminApi.rescanAimStatus();
+      paint(st);
+      if (st.running) timer = window.setTimeout(poll, 2000);
+    } catch {
+      /* quiet */
+    }
+  }
+
+  async function start(force) {
+    if (
+      force &&
+      !window.confirm(
+        'Re-measure the aim motion statistics on every demo, including the ones already done?\n\nThe normal rescan skips those and is far quicker.'
+      )
+    ) {
+      return;
+    }
+    runBtn.disabled = true;
+    forceBtn.disabled = true;
+    try {
+      paint(await adminApi.rescanAim({ force }));
+      timer = window.setTimeout(poll, 1000);
+    } catch (err) {
+      status.textContent = err.message;
+      runBtn.disabled = false;
+      forceBtn.disabled = false;
+    }
+  }
+
+  async function stop() {
+    stopBtn.disabled = true;
+    try {
+      paint(await adminApi.stopRescanAim());
+      timer = window.setTimeout(poll, 1000);
+    } catch (err) {
+      status.textContent = err.message;
+    }
+  }
+
+  void poll();
+  card.addEventListener('admin:panel-hidden', () => window.clearTimeout(timer));
+  return card;
+}
+
+/**
  * Duplicate matches: the same game imported twice. Marked only when map,
  * teams and all ten players are identical, the score is within ±2, 80%+ of
  * rounds were won by the same team, and at least two rounds have 90%+
@@ -642,7 +746,7 @@ export function toolsPanel() {
   card.appendChild(status);
 
   const wrap = el('div');
-  wrap.append(card, pistolFixCard(), dupeScanCard());
+  wrap.append(card, aimRescanCard(), pistolFixCard(), dupeScanCard());
   render(root, wrap);
 
   // If a rebuild is already running (other tab, prior click, deploy), show it

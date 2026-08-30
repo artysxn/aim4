@@ -200,8 +200,8 @@ export const PLAYER_COLUMN_INFO = [
     key: 'a4aim',
     label: 'Aim',
     about:
-      'Aim rating out of 100, combining crosshair placement, readiness, accuracy, first-bullet hits and flick control.',
-    groups: ['aim']
+      'Aim rating out of 100. Half of it is outcome: crosshair placement, readiness, accuracy, first-bullet hits and flick control. The other half is the motion behind them, measured in the aim trainer’s own seven categories, on matches the aim rescan has reached.',
+    groups: ['aim', 'aimV2']
   },
   {
     key: 'accuracy',

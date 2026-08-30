@@ -27,7 +27,7 @@
 // to a storage width later would cost far more than the memory does now.
 // ---------------------------------------------------------------------------
 
-import { AIM_FIELDS } from '../../src/replays/shared/aimMetrics.js';
+import { AIM_FIELDS, AIM_MOTION_WIDTH } from '../../src/replays/shared/aimMetrics.js';
 import { UTILITY_FIELDS } from '../../src/replays/shared/utilityMetrics.js';
 import {
   addRating3Round,
@@ -175,6 +175,8 @@ export function createPacker(capacityRounds = 1024, seed = null) {
   const sR3 = new Float64Array(nSeats * R3_FIELDS.length);
   const sAim = new Float64Array(nSeats * AIM_FIELDS.length);
   const sHasAim = new Uint8Array(nSeats);
+  const sMot = new Float64Array(nSeats * AIM_MOTION_WIDTH);
+  const sHasMot = new Uint8Array(nSeats);
   const sUtil = new Float64Array(nSeats * UTILITY_FIELDS.length);
   const sHasUtil = new Uint8Array(nSeats);
   const sDuel = new Float64Array(nSeats * (3 + DUEL_BUCKETS * 3));
@@ -214,13 +216,14 @@ export function createPacker(capacityRounds = 1024, seed = null) {
   };
   const tagCols = { gTagKey, gTagSide, gTagAt };
   const seatCols = {
-    sPlayer, sTeam, sStats, sSwing, sHasSwing, sR3, sAim, sHasAim, sUtil, sHasUtil,
-    sDuel, sHasDuelSeat, sPsdt, sHasPsdt, sDt, sHasDt, sAwHold, sCoreKill, sCoreDeath, sName
+    sPlayer, sTeam, sStats, sSwing, sHasSwing, sR3, sAim, sHasAim, sMot, sHasMot,
+    sUtil, sHasUtil, sDuel, sHasDuelSeat, sPsdt, sHasPsdt, sDt, sHasDt, sAwHold, sCoreKill, sCoreDeath, sName
   };
   /** Elements per round / per seat, for reallocation. */
   const seatWidth = {
     sPlayer: 1, sTeam: 1, sStats: SEAT, sSwing: 1, sHasSwing: 1, sR3: R3_FIELDS.length,
-    sAim: AIM_FIELDS.length, sHasAim: 1, sUtil: UTILITY_FIELDS.length, sHasUtil: 1,
+    sAim: AIM_FIELDS.length, sHasAim: 1, sMot: AIM_MOTION_WIDTH, sHasMot: 1,
+    sUtil: UTILITY_FIELDS.length, sHasUtil: 1,
     sDuel: DUEL_STRIDE, sHasDuelSeat: 1, sPsdt: 1, sHasPsdt: 1, sDt: 1, sHasDt: 1,
     sAwHold: 1, sCoreKill: 1, sCoreDeath: 1, sName: 1
   };
@@ -426,6 +429,15 @@ export function createPacker(capacityRounds = 1024, seed = null) {
           for (let i = 0; i < AIM_FIELDS.length; i++) sAim[base + i] = Number(am[AIM_FIELDS[i]]) || 0;
         }
 
+        // The motion half arrives packed already, so this is a copy rather
+        // than a field walk. Absent until the aim rescan reaches the demo.
+        const a2 = row.a2?.[id];
+        if (Array.isArray(a2)) {
+          sHasMot[seat] = 1;
+          const base = seat * AIM_MOTION_WIDTH;
+          for (let i = 0; i < AIM_MOTION_WIDTH; i++) sMot[base + i] = Number(a2[i]) || 0;
+        }
+
         const ut = row.ut?.[id];
         if (ut) {
           sHasUtil[seat] = 1;
@@ -524,6 +536,7 @@ export function createPacker(capacityRounds = 1024, seed = null) {
       sSwing: cutS(sSwing, 1), sHasSwing: cutS(sHasSwing, 1),
       sR3: cutS(sR3, R3_FIELDS.length),
       sAim: cutS(sAim, AIM_FIELDS.length), sHasAim: cutS(sHasAim, 1),
+      sMot: cutS(sMot, AIM_MOTION_WIDTH), sHasMot: cutS(sHasMot, 1),
       sUtil: cutS(sUtil, UTILITY_FIELDS.length), sHasUtil: cutS(sHasUtil, 1),
       sDuel: cutS(sDuel, DUEL_STRIDE), sHasDuelSeat: cutS(sHasDuelSeat, 1),
       sPsdt: cutS(sPsdt, 1), sHasPsdt: cutS(sHasPsdt, 1),
@@ -556,4 +569,4 @@ export function packStore(entries) {
   return packer.finish();
 }
 
-export { P, SEAT, AIM_FIELDS, UTILITY_FIELDS };
+export { P, SEAT, AIM_FIELDS, AIM_MOTION_WIDTH, UTILITY_FIELDS };

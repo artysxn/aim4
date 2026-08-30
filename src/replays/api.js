@@ -368,6 +368,27 @@ export async function fetchPeerAverages(filter = {}) {
 }
 
 /**
+ * How much of one player's aim is measured, and ask for the rest.
+ *
+ * The request does two things at once by design: it reports how many of this
+ * player's matches still have no motion half, and it moves exactly those to the
+ * front of the server's background queue. So the reader polling this endpoint
+ * is the reason their own matches are the ones being measured.
+ *
+ * `promote` is off for follow-up polls: the first call sets the order and the
+ * rest only want the count.
+ */
+export async function fetchAimProgress(playerId, { promote = true } = {}) {
+  const params = new URLSearchParams({ player: String(playerId || '') });
+  if (!promote) params.set('promote', '0');
+  return asJson(
+    await safeFetch(`${API_BASE}/api/replays/aim/progress?${params}`, {
+      headers: await headers()
+    })
+  );
+}
+
+/**
  * Player / team tables for a filter, aggregated on the server.
  *
  * The alternative is what the Database used to do: pull every round of every

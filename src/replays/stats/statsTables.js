@@ -440,6 +440,21 @@ export const PLAYER_METRIC_COLUMNS = [
             `First bullet: ${pct1(p.aimRaw?.firstBullet)} (${f0(p.aimComponents?.firstBullet)})`,
             `Overflick: ${pct1(p.aimRaw?.overflick)} (${f0(p.aimComponents?.overflick)})`,
             `Underflick: ${pct1(p.aimRaw?.underflick)} (${f0(p.aimComponents?.underflick)})`,
+            // The motion half, when this player's demos have been measured for
+            // it. Absent, the rating above is the outcome-only one and saying
+            // nothing about motion is the honest tooltip.
+            ...(p.aimHasMotion
+              ? [
+                  `Precision: ${f1(p.aimRaw?.precision)}% closed per flick (${f0(p.aimComponents?.precision)})`,
+                  `Flicks on target: ${f1(p.aimRaw?.flicks)}% (${f0(p.aimComponents?.flicks)})`,
+                  `Speed: ${f0(p.aimRaw?.speed)}°/s (${f0(p.aimComponents?.speed)})`,
+                  `Adjustments: ${f2(p.aimRaw?.adjustments)} per kill (${f0(p.aimComponents?.adjustments)})`,
+                  `Reaction: ${f0(p.aimRaw?.reaction)} ms (${f0(p.aimComponents?.reaction)})`,
+                  `Tension: ${f0(p.aimRaw?.tension)}% over the direct path (${f0(p.aimComponents?.tension)})`,
+                  `Tracking: ${pct1(p.aimRaw?.tracking)} on the hull (${f0(p.aimComponents?.tracking)})`,
+                  `Outcome only: ${f1(p.a4aimV1)}`
+                ]
+              : ['Motion not measured for these matches yet.']),
             `Sample: ${p.aimSample?.crosshairError || 0} engagements, ${p.aimSample?.accuracy || 0} shots`
           ])
         : 'Not enough sampled duels yet for an aim rating.'

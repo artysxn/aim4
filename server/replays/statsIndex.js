@@ -27,6 +27,7 @@ import { awpAccuracyFromTicks } from '../../src/replays/shared/awpAccuracy.js';
 import { cappedDamageFromMeta, playerRoundDamage } from '../../src/replays/shared/roundDamage.js';
 import { applyAwpHoldFields } from '../../src/replays/shared/awpHold.js';
 import { aimFromRound } from '../../src/replays/shared/aimMetrics.js';
+import { AIM_MOTION_VERSION, aimMotionFromRound } from '../../src/replays/shared/aimMotion.js';
 import { utilityFromRound } from '../../src/replays/shared/utilityMetrics.js';
 import { phaseCombatFromMeta } from '../../src/replays/roles/phaseCombat.js';
 import {
@@ -406,9 +407,10 @@ function applyPrwFields(row, meta) {
  * line, because they are sums that get divided at query time and the line array
  * is a set of plain counters.
  */
-function applyAimUtility(row, meta, tickBuffer, network = null) {
+function applyAimUtility(row, meta, tickBuffer, network = null, { motion = true } = {}) {
   if (!tickBuffer) {
     row.am = null;
+    row.a2 = null;
     row.ut = null;
     row.utt = null;
     return;
@@ -426,6 +428,16 @@ function applyAimUtility(row, meta, tickBuffer, network = null) {
     row.am = aimFromRound(meta, tickBuffer, { visionBlockAt });
   } catch {
     row.am = null;
+  }
+  // The motion half of the Aim rating (see AIM_MOTION_VERSION). Skipped when a
+  // caller only wanted the utility columns: it walks the ticks around every
+  // burst and is the most expensive thing in this function.
+  if (motion) {
+    try {
+      row.a2 = aimMotionFromRound(meta, tickBuffer, { visionBlockAt });
+    } catch {
+      row.a2 = null;
+    }
   }
   try {
     const { players, teams } = utilityFromRound(meta, tickBuffer);
@@ -863,7 +875,9 @@ async function enrichPhases(io, user, entry, { roles = true, fields = null } = {
         : null;
       const track = new TickTrack(tickBuffer);
       if (want('aim') || want('utility')) {
-        applyAimUtility(row, meta, tickBuffer, network || zoneCache.get(meta.map || row.m));
+        applyAimUtility(row, meta, tickBuffer, network || zoneCache.get(meta.map || row.m), {
+          motion: want('aim')
+        });
       }
       if (want('possession')) await applyPossessionFields(row, meta, track, network);
       if (want('duels')) applyDuelFields(row, meta, track, network);
@@ -881,7 +895,9 @@ async function enrichPhases(io, user, entry, { roles = true, fields = null } = {
         });
       }
     } else {
-      if (want('aim') || want('utility')) applyAimUtility(row, meta, tickBuffer, null);
+      if (want('aim') || want('utility')) {
+        applyAimUtility(row, meta, tickBuffer, null, { motion: want('aim') });
+      }
       if (want('possession')) {
         row.pos1 = null;
         row.pos2 = null;
@@ -911,6 +927,8 @@ async function enrichPhases(io, user, entry, { roles = true, fields = null } = {
   entry.positions = false;
   entry.pz = 0;
   entry.v = STATS_VERSION;
+  // Only the pass that actually wrote a2 may claim it is current.
+  if (want('aim')) entry.a2v = AIM_MOTION_VERSION;
   return entry;
 }
 
@@ -1189,6 +1207,14 @@ async function buildIndex(io, user, record) {
   return {
     id: record.id,
     v: STATS_VERSION,
+    /**
+     * Which revision of the aim MOTION pass wrote every `row.a2` below.
+     *
+     * Its own version, apart from STATS_VERSION, because it is the only column
+     * whose backfill is a background job rather than a lazy page-view repair:
+     * `needsPhaseEnrichment` must never see it (see aimScan.js).
+     */
+    a2v: AIM_MOTION_VERSION,
     key: versionKey(record),
     map: record.map || rounds[0]?.m || '',
     mapName: record.mapName || '',
@@ -1708,6 +1734,109 @@ export async function refreshLibraryFields(io, user, records, { fields, onProgre
 
   emit(ready.length, null);
   return report;
+}
+
+/**
+ * Measure the aim MOTION half for one demo, from round files already on disk.
+ *
+ * The narrowest possible pass: one column, one demo, no reparse, and no other
+ * field touched. That is what lets it run in the background against a live
+ * library (see replays/aimScan.js) — a demo it has not reached yet keeps
+ * serving the outcome-only Aim rating it already served, and one it has
+ * finished starts serving the blended one, with nothing in between.
+ *
+ * Nothing here is lazy-repaired on a page view on purpose. `enrichPhases`
+ * heals missing columns when GET /stats walks a stale demo, which is right for
+ * a column that costs a JSON read and wrong for one that costs every tick of
+ * every round: that is the shape of the 30-minute table build this codebase
+ * has already paid for once.
+ *
+ * @param {object} io
+ * @param {string} user
+ * @param {object} record  one listDemos record
+ * @param {{ force?: boolean }} [opts]  force re-measures an already-current demo
+ * @returns {Promise<{ state: 'updated'|'current'|'skipped', rounds: number, reason?: string }>}
+ */
+export async function refreshAimMotion(io, user, record, { force = false } = {}) {
+  const entry = await loadStoredEntry(io, user, record.id);
+  if (!entry?.rounds?.length) {
+    // Never indexed, or indexed to nothing. Building one is a full stats pass
+    // and is not this function's job: the enrichment tools own that.
+    return { state: 'skipped', rounds: 0, reason: 'no stats index' };
+  }
+  if (!keyMatchesRecord(entry.key, record)) {
+    return { state: 'skipped', rounds: 0, reason: 'index is for different demo bytes' };
+  }
+  if (!force && entry.a2v === AIM_MOTION_VERSION) {
+    return { state: 'current', rounds: entry.rounds.length };
+  }
+  if (typeof io.readRoundTicks !== 'function') {
+    return { state: 'skipped', rounds: 0, reason: 'no tick storage' };
+  }
+
+  const networks = new Map();
+  let measured = 0;
+
+  for (const row of entry.rounds) {
+    let meta = null;
+    try {
+      meta = await io.readRoundMeta(user, row.f);
+    } catch {
+      meta = null;
+    }
+    if (!meta) {
+      // Terminal, exactly as applyInertPhaseDefaults is terminal: a round whose
+      // meta cannot be read must end up with a value, or the entry never
+      // reaches AIM_MOTION_VERSION and the scan revisits this demo forever.
+      row.a2 = null;
+      continue;
+    }
+    meta.map = meta.map || row.m || entry.map || '';
+
+    let tickBuffer = null;
+    try {
+      tickBuffer = await io.readRoundTicks(user, row.f, 1);
+    } catch {
+      tickBuffer = null;
+    }
+    if (!tickBuffer) {
+      row.a2 = null;
+      continue;
+    }
+
+    const mapCode = meta.map;
+    if (mapCode && !networks.has(mapCode)) {
+      networks.set(mapCode, await loadMapNetwork(io, mapCode));
+    }
+    let visionBlockAt = null;
+    try {
+      const network = mapCode ? networks.get(mapCode) : null;
+      if (network) visionBlockAt = getVisionLayerTests(network, mapCode).visionBlockAt;
+    } catch {
+      visionBlockAt = null;
+    }
+
+    try {
+      row.a2 = aimMotionFromRound(meta, tickBuffer, { visionBlockAt });
+      measured += 1;
+    } catch {
+      row.a2 = null;
+    }
+    // One round at a time, with the loop released in between. A demo is
+    // twenty-odd megabytes of ticks and this is a background pass: holding the
+    // thread through all of it is the whole failure mode being avoided.
+    await yieldEventLoop();
+  }
+
+  entry.a2v = AIM_MOTION_VERSION;
+  await persistEntry(io, user, entry.key, entry);
+  return { state: 'updated', rounds: measured };
+}
+
+/** Has this demo's stored index already been measured at the current version? */
+export async function hasAimMotion(io, user, demoId) {
+  const entry = await loadStoredEntry(io, user, demoId);
+  return entry?.a2v === AIM_MOTION_VERSION;
 }
 
 /**
