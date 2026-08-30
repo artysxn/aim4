@@ -16,7 +16,7 @@ function assert(cond, msg) {
   if (!cond) throw new Error(msg || 'assert failed');
 }
 
-const { handleBillingRequest, alreadyHandled, mapProviderStatus, _resetSeenEvents } = await import(
+const { handleBillingRequest, alreadyHandled, releaseEvent, mapProviderStatus, _resetSeenEvents } = await import(
   './routes.js'
 );
 const { provider } = await import('./provider.js');
@@ -119,12 +119,25 @@ function post(path, body, headers = {}) {
 // ---- idempotency ------------------------------------------------------------
 
 {
+  // alreadyHandled is async now: the real store is the billing_events primary
+  // key (0014), and this in-memory path is the fallback for a process with no
+  // database. These tests run unconfigured, so they exercise the fallback.
   _resetSeenEvents();
-  assert(alreadyHandled('evt_100') === false, 'a new event is not already handled');
-  assert(alreadyHandled('evt_100') === true, 'the same event twice is a duplicate');
-  assert(alreadyHandled('evt_101') === false, 'a different event is not');
-  assert(alreadyHandled('') === false, 'a missing id is never treated as a duplicate');
+  assert((await alreadyHandled('evt_100')) === false, 'a new event is not already handled');
+  assert((await alreadyHandled('evt_100')) === true, 'the same event twice is a duplicate');
+  assert((await alreadyHandled('evt_101')) === false, 'a different event is not');
+  assert((await alreadyHandled('')) === false, 'a missing id is never treated as a duplicate');
   console.log('  event ids are remembered so a retry is not applied twice');
+
+  // The claim is taken BEFORE the event is applied, so that two instances
+  // cannot both process the same delivery. That is only safe if a failure
+  // hands the claim back: otherwise the retry Paddle sends for exactly this
+  // case comes back "duplicate" and the payment is never recorded.
+  assert((await alreadyHandled('evt_fail')) === false, 'a new event is claimed');
+  assert((await alreadyHandled('evt_fail')) === true, 'and held while it is worked on');
+  await releaseEvent('evt_fail');
+  assert((await alreadyHandled('evt_fail')) === false, 'a released event can be retried');
+  console.log('  a failed event releases its claim so the retry is not swallowed');
 }
 
 {

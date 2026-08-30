@@ -9,7 +9,6 @@
 // A sweep that has not run for a day is a reporting problem, not a security one.
 // ---------------------------------------------------------------------------
 
-import { billingConfigured, provider } from '../billing/provider.js';
 import { PLAN_NAMES } from '../../shared/entitlements/catalogue.js';
 import { markNotified, notify, wasNotified } from './notify.js';
 import { sweepCounters } from './quota.js';
@@ -24,10 +23,14 @@ const planName = (id) => PLAN_NAMES[id] || id;
 /**
  * Trials whose end date has passed.
  *
- * The last branch is the one that matters: while billing is not wired, a trial
- * must EXPIRE, not silently become an active paid plan. Otherwise every trial
- * user becomes a permanent free Premium user and there is no way to tell them
- * apart from real customers afterwards.
+ * Two outcomes, and the split is on whether a provider is actually running the
+ * trial rather than on whether billing is configured at all.
+ *
+ * A trial with a provider subscription behind it is left alone: the provider
+ * charges when the trial ends and tells us over the webhook. A trial without
+ * one has no payment method to charge, so it EXPIRES. It must never silently
+ * become an active paid plan, or every trial user turns into a permanent free
+ * Premium user with no way to tell them from real customers afterwards.
  */
 async function convertTrials(now) {
   const due = await db.select('subscriptions', {
@@ -37,8 +40,8 @@ async function convertTrials(now) {
     limit: 500
   });
 
-  let converted = 0;
   let expired = 0;
+  let deferred = 0;
 
   for (const sub of due) {
     if (sub.cancel_at_period_end) {
@@ -48,23 +51,26 @@ async function convertTrials(now) {
       continue;
     }
 
-    if (billingConfigured()) {
-      try {
-        await provider.cancelSubscription({ subscriptionId: sub.id, atPeriodEnd: false });
-        // A real charge happens here once a provider exists. Until then this
-        // branch is unreachable, which is why it is not pretending to work.
-        await setStatus(sub, 'active', { current_period_end: null });
-        await notify({
-          userId: sub.user_id,
-          kind: 'trial.converted',
-          data: { planName: planName(sub.plan_id) }
-        });
-        converted++;
-      } catch {
-        await setStatus(sub, 'past_due', {});
-      }
+    // A trial the provider is running converts itself. Paddle charges when the
+    // trial period ends and sends subscription.updated, which applyEvent
+    // writes; doing anything here would race that webhook.
+    //
+    // This used to be an `if (billingConfigured())` branch that called
+    // provider.cancelSubscription with `sub.id` and, on success, marked the row
+    // active. Three things were wrong with it. Cancelling is not charging.
+    // Marking a row active right after cancelling it is backwards. And `sub.id`
+    // is our local uuid, not a provider subscription id, so the call could only
+    // ever fail and drop every ending trial into `past_due` with no notice
+    // sent and no lapsed_at recorded. It was unreachable while no provider
+    // existed, which is why it survived this long.
+    if (sub.provider_subscription_id) {
+      deferred++;
       continue;
     }
+
+    // Everything below here has no payment method behind it: an admin grant or
+    // a manual trial. There is nothing to charge, so it expires. That holds
+    // whether or not a provider is configured.
 
     await setStatus(sub, 'expired', { lapsed_at: now.toISOString() });
     await notify({
@@ -75,7 +81,7 @@ async function convertTrials(now) {
     expired++;
   }
 
-  return { converted, expired };
+  return { expired, deferred };
 }
 
 /** The 48 hour warning. Sent once, recorded so a restart cannot repeat it. */

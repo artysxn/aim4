@@ -30,6 +30,7 @@ import {
 import { CAP } from '../../../shared/entitlements/keys.js';
 import { bytes, button, date, el, field, input, notice, table } from '../admin/dom.js';
 import { accountApi } from './accountApi.js';
+import { checkoutSuccessUrl, openCheckout } from './paddleCheckout.js';
 import logoGoogle from '../../icons/logo_google.svg?raw';
 import logoSteam from '../../icons/logo_steam.svg?raw';
 import logoDiscord from '../../icons/logo_discord.svg?raw';
@@ -799,8 +800,30 @@ function planCard(planId, currentTier, billing, term = 'month', noticeHost = nul
         cta.disabled = true;
         try {
           const res = await accountApi.checkout(planId, term);
-          if (res?.url) {
-            window.location.href = res.url;
+
+          // The overlay is the wanted path: the buyer never leaves the pricing
+          // page, and the transaction already carries the plan, the term and
+          // the user id, so nothing about the purchase travels through the
+          // browser where it could be edited.
+          if (res?.transactionId) {
+            await openCheckout({
+              transactionId: res.transactionId,
+              billing,
+              successUrl: checkoutSuccessUrl(),
+              // Paddle gives no signal for "paid" here, only "closed". Re-enable
+              // so a buyer who dismissed the overlay by accident can click again;
+              // one who paid gets redirected before this matters.
+              onClose: () => {
+                cta.disabled = false;
+              }
+            });
+            return;
+          }
+
+          // Hosted page. Reached when Paddle.js cannot load at all, and worth
+          // keeping: a blocked CDN should cost the overlay, not the sale.
+          if (res?.checkoutUrl) {
+            window.location.href = res.checkoutUrl;
             return;
           }
           throw new Error('Checkout did not return a payment page.');
