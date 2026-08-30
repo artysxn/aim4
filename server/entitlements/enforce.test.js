@@ -88,6 +88,7 @@ process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-role-test-key';
 
 const { CAP } = await import('../../shared/entitlements/keys.js');
 const { resolveEntitlements } = await import('../../shared/entitlements/resolve.js');
+const { capabilitiesForPlan } = await import('../../shared/entitlements/catalogue.js');
 const {
   UpgradeRequiredError,
   can,
@@ -150,9 +151,23 @@ function teamSeatUser(userId, subId = 'team-sub-shared') {
 // ---- reading capabilities ---------------------------------------------------
 
 {
+  // Two of these are policy and stay literal: free gets a handful, and the top
+  // team plan is uncapped. Both are promises the pricing page makes, and a test
+  // that derived them from the catalogue would agree with any change, including
+  // a mistake.
   assert(capability(userOn('free'), CAP.DEMOS_UPLOAD_LIMIT) === 3, 'free uploads 3');
-  assert(capability(userOn('solo_premium'), CAP.DEMOS_UPLOAD_LIMIT) === 75, 'solo premium uploads 75');
   assert(capability(userOn('team_tier1'), CAP.DEMOS_UPLOAD_LIMIT) === -1, 'tier 1 is unlimited');
+
+  // The middle of the ladder is a number that moves whenever the plans are
+  // repriced, and hardcoding it here only ever produced a second place to
+  // update. What matters is that the gate reads the plan's value at all, so
+  // assert it against the catalogue rather than against a remembered figure.
+  const premiumLimit = capabilitiesForPlan('solo_premium')[CAP.DEMOS_UPLOAD_LIMIT];
+  assert(
+    capability(userOn('solo_premium'), CAP.DEMOS_UPLOAD_LIMIT) === premiumLimit,
+    'solo premium reads its own plan limit'
+  );
+  assert(premiumLimit > 3, 'and it is worth more than the free tier');
 
   // A route that forgot to await whoami() passes something with no entitlements.
   // That must read as the free tier, never as undefined-and-therefore-allowed.

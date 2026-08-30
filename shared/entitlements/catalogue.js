@@ -370,11 +370,15 @@ export const CAPABILITIES = Object.freeze({
     // because a roster feeds one shared library.
     values: {
       free: 3,
-      solo_lite: 25,
-      solo_premium: 75,
+      solo_lite: 100,
+      solo_premium: 300,
       solo_elite: UNLIMITED,
-      team_tier3: 100,
-      team_tier2: 300,
+      team_tier3: 400,
+      // Tier 2 joins Tier 1 as unlimited rather than taking the 1200 the
+      // quadrupling implies: a roster that hits four figures of held demos is
+      // going to keep hitting it, and a cap nobody reaches is a cap that only
+      // ever surfaces as a support ticket.
+      team_tier2: UNLIMITED,
       team_tier1: UNLIMITED
     }
   },
