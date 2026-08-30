@@ -19,6 +19,8 @@ import { whoami } from '../replays/identity.js';
 import { writeAudit } from '../entitlements/audit.js';
 import { recomputeUser } from '../entitlements/recompute.js';
 import { db, isConfigured } from '../entitlements/service.js';
+import { attributeReferral, recordCommission } from '../affiliates/commissions.js';
+import { affiliateForCode } from '../affiliates/codes.js';
 
 const MAX_WEBHOOK_BYTES = 1024 * 1024;
 
@@ -291,7 +293,40 @@ export async function handleBillingRequest(req, res, url) {
           // screen, so the page has to show the amount and get a yes first.
           session = await provider.previewPlanChange({ userId: me.id, planId, term });
         } else {
-          session = await provider.createCheckoutSession({ userId: me.id, planId, term });
+          // An affiliate code, if the buyer arrived through one. Resolved here
+          // rather than inside the provider so the adapter stays a translation
+          // of our shapes into Paddle's, with no idea what an affiliate is.
+          //
+          // Every failure is swallowed: a mistyped, suspended or self-owned
+          // code must never stop a sale. The worst case is an unattributed
+          // purchase, which is strictly better than a checkout that will not
+          // open.
+          let affiliateCode = null;
+          let discountId = null;
+          const ref = String(parsed.ref || '').trim();
+          if (ref) {
+            try {
+              const affiliate = await affiliateForCode(ref);
+              if (affiliate && affiliate.status === 'active' && affiliate.user_id !== me.id) {
+                affiliateCode = affiliate.code;
+                discountId = affiliate.paddle_discount_id || null;
+                // Written now rather than when the payment lands: the code is
+                // known here, and first touch is what the referral table
+                // records. A checkout abandoned at the card screen still
+                // attributes the customer, which is the intent of a referral.
+                await attributeReferral({ userId: me.id, code: affiliate.code, req });
+              }
+            } catch (err) {
+              console.warn(`[affiliate] could not resolve ref "${ref}": ${err?.message}`);
+            }
+          }
+          session = await provider.createCheckoutSession({
+            userId: me.id,
+            planId,
+            term,
+            affiliateCode,
+            discountId
+          });
         }
       } else if (p === '/api/billing/change-plan') {
         const planId = String(parsed.planId || '');
@@ -369,10 +404,77 @@ export async function applyEvent(event, deps = {}) {
     provider: prov = provider,
     recomputeUser: recompute = recomputeUser,
     writeAudit: audit = writeAudit,
-    configured = isConfigured
+    configured = isConfigured,
+    recordCommission: commission = recordCommission
   } = deps;
 
   if (!configured()) return false;
+
+  // ---- transaction.completed: affiliate commission ------------------------
+  // A different shape of event entirely. It carries money and no subscription
+  // status, so everything below would drop it (mapProviderStatus has no case
+  // for 'completed'), which is exactly what happened to these events before
+  // affiliates existed. Handled first and returned, so the subscription logic
+  // never sees a payload it was not written for.
+  if (event?.type === 'transaction.completed') {
+    const t = event.data || {};
+    // Who paid. custom_data is the direct answer; the subscription lookup is
+    // for anything Paddle created outside our checkout, where there is no
+    // custom_data to read.
+    let payerUserId = t.userId || null;
+    if (!payerUserId && t.subscriptionId) {
+      const sub = await store
+        .selectOne('subscriptions', {
+          select: 'user_id',
+          provider_subscription_id: `eq.${t.subscriptionId}`
+        })
+        .catch(() => null);
+      payerUserId = sub?.user_id || null;
+    }
+    if (!payerUserId) return false;
+
+    // Never allowed to fail the webhook.
+    //
+    // These events were ignored entirely before affiliates existed, so any
+    // throw here is a NEW way for a payment notification to fail, and a 500
+    // makes Paddle retry it for three days. The affiliate tables also arrive
+    // by hand (0016_affiliates.sql), so between deploying this and applying
+    // that migration every completed transaction would wedge the queue.
+    //
+    // A missed commission is recoverable: Paddle keeps the transaction list
+    // and a row can be written from it. A webhook that keeps 500ing is not
+    // recoverable in the same quiet way, so the sale wins over the ledger.
+    let result = null;
+    try {
+      result = await commission({
+        transactionId: t.transactionId,
+        subscriptionId: t.subscriptionId || null,
+        payerUserId,
+        affiliateCode: t.affiliateCode || null,
+        details: t.details,
+        origin: t.origin,
+        occurredAt: event.occurredAt
+      });
+    } catch (err) {
+      // Loud, because this is the branch where someone is owed money and did
+      // not get a row for it.
+      console.error(
+        `[affiliate] commission for ${t.transactionId} failed and was skipped: ${err?.message}`
+      );
+      return false;
+    }
+    // Logged only when something was actually owed. "no_referral" is the
+    // normal case for most sales and would otherwise fill the log.
+    if (result?.recorded) {
+      console.log(
+        `[affiliate] ${t.transactionId} earned ` +
+          `${result.commission.commission_amount} ${result.commission.currency} ` +
+          `for affiliate ${result.commission.affiliate_id}`
+      );
+    }
+    return Boolean(result?.recorded);
+  }
+
   const status = mapProviderStatus(event?.data?.status);
   const providerSubscriptionId = event?.data?.subscriptionId;
   if (!status || !providerSubscriptionId) return false;

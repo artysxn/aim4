@@ -61,6 +61,20 @@ export const adminApi = {
   createPromoCode: (body) => send('POST', '/api/admin/promo-codes', body),
   archivePromoCode: (id) => send('POST', '/api/admin/promo-codes/archive', { id }),
 
+  // Affiliates. Rates and suspensions are ours; the payout itself happens in a
+  // bank and is only recorded here.
+  listAffiliates: (status) =>
+    get(`/api/admin/affiliates${status ? `?status=${encodeURIComponent(status)}` : ''}`),
+  listAffiliateCommissions: (affiliateId) =>
+    get(`/api/admin/affiliates/commissions?affiliateId=${encodeURIComponent(affiliateId)}`).then(
+      (r) => r.commissions
+    ),
+  updateAffiliate: (body) => send('POST', '/api/admin/affiliates/update', body),
+  approveAffiliateCommissions: () => send('POST', '/api/admin/affiliates/approve', {}),
+  recordAffiliatePayout: (body) => send('POST', '/api/admin/affiliates/payout', body),
+  reverseAffiliateCommission: (commissionId, reason) =>
+    send('POST', '/api/admin/affiliates/reverse', { commissionId, reason }),
+
   ingestStatus: () => get('/api/admin/ingest'),
   ingestLog: (tail = 999) => get(`/api/admin/ingest/log?tail=${encodeURIComponent(tail)}`),
   ingestLogClear: () => send('DELETE', '/api/admin/ingest/log'),

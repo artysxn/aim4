@@ -277,7 +277,14 @@ async function customerFor({ userId, email }) {
  * checkout. `checkoutUrl` is the hosted fallback for anywhere Paddle.js is not
  * loaded.
  */
-export async function createCheckoutSession({ userId, planId, term, email }) {
+export async function createCheckoutSession({
+  userId,
+  planId,
+  term,
+  email,
+  affiliateCode = null,
+  discountId = null
+}) {
   const priceId = await priceIdFor(planId, term);
   const customerId = await customerFor({ userId, email });
 
@@ -291,6 +298,14 @@ export async function createCheckoutSession({ userId, planId, term, email }) {
     // completes days later on another device.
     custom_data: { user_id: userId, plan_id: planId, term }
   };
+  // Attribution rides the same echo. The referral row is written at checkout
+  // and is what commissions are paid from; this is the copy that survives on
+  // the subscription, so a renewal months later is still attributable even if
+  // the row were lost.
+  if (affiliateCode) body.custom_data.affiliate_code = affiliateCode;
+  // The buyer's side of an affiliate code, when it has one. Paddle owns the
+  // discount and applies it; passing the id is the whole integration.
+  if (discountId) body.discount_id = discountId;
   if (process.env.PADDLE_CHECKOUT_URL) {
     body.checkout = { url: process.env.PADDLE_CHECKOUT_URL };
   }
@@ -584,7 +599,18 @@ export function verifyWebhook(rawBody, signature) {
       priceIds: Array.isArray(d.items) ? d.items.map((i) => i?.price?.id).filter(Boolean) : [],
       userId: custom.user_id ?? null,
       planId: custom.plan_id ?? null,
-      term: custom.term ?? null
+      term: custom.term ?? null,
+      // ---- transaction.completed ----
+      // The money, which only exists on transaction events. `details` is
+      // passed through whole rather than flattened here: the commission side
+      // has to choose between payout_totals and totals for itself (they are in
+      // different currencies), and that choice does not belong in a parser.
+      transactionId: isSubscription ? null : d.id ?? null,
+      details: d.details ?? null,
+      origin: d.origin ?? null,
+      // Stamped by createCheckoutSession. The referral row written at checkout
+      // is the real record; this is the fallback for one that did not land.
+      affiliateCode: custom.affiliate_code ?? null
     }
   };
 }

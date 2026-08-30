@@ -34,6 +34,8 @@ import { billingConfigured, provider } from '../billing/provider.js';
 import { ValidationError } from '../entitlements/grants.js';
 // Aliased: steamAuth.js already exports a redeemCode, for Steam tickets.
 import { redeemCode as redeemTrialCode } from '../entitlements/codes.js';
+import { DEFAULT_COMMISSION_PCT, affiliateForUser, claimCode, suggestCode } from '../affiliates/codes.js';
+import { HOLD_DAYS, affiliateStats, listCommissions } from '../affiliates/commissions.js';
 import { db } from '../entitlements/service.js';
 import { clientIp } from '../entitlements/audit.js';
 import { ackWarning, integrityState, recordSession } from './integrity.js';
@@ -454,6 +456,81 @@ async function route(req, res, url, me) {
       // "expired"). Anything else is ours and should not be spelled out.
       const known = err?.name === 'ValidationError';
       json(res, known ? 400 : 500, { error: known ? err.message : 'Could not redeem that code.' });
+    }
+    return true;
+  }
+
+  // ---- affiliate ----------------------------------------------------------
+  // The code someone shares, and what it has earned them. Read-only apart from
+  // claiming a code: rates, suspensions and payouts are the admin's, because
+  // they are money decisions and the person they benefit is the one asking.
+  if (req.method === 'GET' && p === '/api/account/affiliate') {
+    if (!requireUser()) return true;
+    const affiliate = await affiliateForUser(me.id);
+    if (!affiliate) {
+      json(res, 200, {
+        affiliate: null,
+        // What to put in the box, so claiming a code is one click for anyone
+        // who does not care what it says.
+        suggestion: suggestCode(me.username || 'AIM'),
+        // The rate a new code starts on. Sent rather than duplicated in the
+        // browser bundle, so changing AIM4_AFFILIATE_PCT changes what the
+        // page promises without a rebuild.
+        defaultPct: DEFAULT_COMMISSION_PCT,
+        holdDays: HOLD_DAYS
+      });
+      return true;
+    }
+    const [stats, commissions] = await Promise.all([
+      affiliateStats(affiliate.id),
+      listCommissions({ affiliateId: affiliate.id, limit: 50 })
+    ]);
+    json(res, 200, {
+      affiliate: {
+        code: affiliate.code,
+        commissionPct: Number(affiliate.commission_pct),
+        recurring: affiliate.recurring,
+        maxMonths: affiliate.max_months,
+        status: affiliate.status,
+        createdAt: affiliate.created_at
+      },
+      stats,
+      holdDays: HOLD_DAYS,
+      commissions: commissions.map((c) => ({
+        id: c.id,
+        amount: Number(c.commission_amount),
+        base: Number(c.base_amount),
+        currency: c.currency,
+        pct: Number(c.commission_pct),
+        status: c.status,
+        isRenewal: c.is_renewal,
+        occurredAt: c.occurred_at,
+        payableAt: c.payable_at
+      }))
+    });
+    return true;
+  }
+
+  if (req.method === 'POST' && p === '/api/account/affiliate') {
+    if (!requireUser()) return true;
+    const body = await readJson(req);
+    try {
+      const row = await claimCode({ userId: me.id, code: body.code, req });
+      json(res, 200, {
+        affiliate: {
+          code: row.code,
+          commissionPct: Number(row.commission_pct),
+          recurring: row.recurring,
+          maxMonths: row.max_months,
+          status: row.status,
+          createdAt: row.created_at
+        }
+      });
+    } catch (err) {
+      const known = err?.name === 'AffiliateError';
+      json(res, known ? err.status || 400 : 500, {
+        error: known ? err.message : 'Could not set up that code.'
+      });
     }
     return true;
   }

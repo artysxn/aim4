@@ -1263,3 +1263,186 @@ export function securityTab(state, { auth }) {
 
   return root;
 }
+
+// ---------------------------------------------------------------------------
+// Affiliate
+// ---------------------------------------------------------------------------
+
+/** Minor units and a currency code into something a person reads. */
+function money(amount, currency = 'EUR') {
+  const value = (Number(amount) || 0) / 100;
+  try {
+    return new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(value);
+  } catch {
+    // An unknown currency code should still show the number.
+    return `${value.toFixed(2)} ${currency}`;
+  }
+}
+
+/** The share link for a code, against whatever origin the page is served from. */
+function referralLink(code) {
+  const origin =
+    typeof window !== 'undefined' && window.location?.origin
+      ? window.location.origin
+      : 'https://aim4.io';
+  return `${origin}/?ref=${encodeURIComponent(code)}`;
+}
+
+/** How this affiliate's terms read as one line. */
+function termsText(affiliate) {
+  const pct = `${Number(affiliate.commissionPct)}% of each payment`;
+  if (!affiliate.recurring) return `${pct}, first payment only`;
+  if (affiliate.maxMonths) return `${pct}, renewals included for ${affiliate.maxMonths} months`;
+  return `${pct}, renewals included`;
+}
+
+export function affiliateTab(state, { reload }) {
+  const wrap = el('div', 'account-pane');
+
+  if (!state?.account?.signedIn) {
+    const card = el('section', 'account-card');
+    card.appendChild(el('h3', null, 'Affiliate'));
+    card.appendChild(el('p', 'account-empty', 'Sign in to set up a code.'));
+    wrap.appendChild(card);
+    return wrap;
+  }
+
+  const card = el('section', 'account-card');
+  card.appendChild(el('h3', null, 'Affiliate'));
+  const body = el('div', 'account-affiliate-body');
+  card.appendChild(body);
+  wrap.appendChild(card);
+
+  body.appendChild(el('p', 'account-empty', 'Loading.'));
+
+  accountApi
+    .affiliate()
+    .then((data) => {
+      body.replaceChildren();
+      if (data.affiliate) renderAffiliate(body, data, reload);
+      else renderClaim(body, data, reload);
+    })
+    .catch((err) => {
+      body.replaceChildren();
+      body.appendChild(el('p', 'account-empty', err?.message || 'Could not load your code.'));
+    });
+
+  return wrap;
+}
+
+/** No code yet: pick one. */
+function renderClaim(body, data, reload) {
+  const row = el('div', 'account-redeem-row');
+  const box = input('text', data.suggestion || '', 'YOURCODE');
+  box.autocapitalize = 'characters';
+  box.spellcheck = false;
+  box.maxLength = 24;
+  box.setAttribute('aria-label', 'Affiliate code');
+  row.appendChild(box);
+
+  const submit = button(
+    'Create code',
+    async () => {
+      const code = box.value.trim();
+      if (!code) return;
+      submit.disabled = true;
+      try {
+        await accountApi.claimAffiliateCode(code);
+        reload?.();
+      } catch (err) {
+        notice(body, err.message, 'error');
+      } finally {
+        submit.disabled = false;
+      }
+    },
+    'btn btn-primary'
+  );
+  box.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') submit.click();
+  });
+  row.appendChild(submit);
+  body.appendChild(row);
+
+  // The terms, and the one thing that is not undoable about this form.
+  body.appendChild(metaRow('Rate', `${data.defaultPct ?? 20}% of each payment`));
+  body.appendChild(metaRow('Code', 'Permanent once created'));
+}
+
+/** A code exists: show it, and what it has made. */
+function renderAffiliate(body, data, reload) {
+  const { affiliate, stats, commissions, holdDays } = data;
+
+  body.appendChild(metaRow('Code', affiliate.code, true));
+
+  const link = referralLink(affiliate.code);
+  const linkRow = el('div', 'account-affiliate-link');
+  const linkBox = input('text', link);
+  linkBox.readOnly = true;
+  linkBox.setAttribute('aria-label', 'Referral link');
+  linkBox.addEventListener('focus', () => linkBox.select());
+  linkRow.appendChild(linkBox);
+  const copy = button(
+    'Copy',
+    async () => {
+      try {
+        await navigator.clipboard.writeText(link);
+        copy.textContent = 'Copied';
+        setTimeout(() => {
+          copy.textContent = 'Copy';
+        }, 1500);
+      } catch {
+        // Clipboard is blocked in some contexts, so fall back to selecting the
+        // text and letting the person copy it themselves.
+        linkBox.select();
+      }
+    },
+    'btn'
+  );
+  linkRow.appendChild(copy);
+  body.appendChild(linkRow);
+
+  body.appendChild(metaRow('Rate', termsText(affiliate)));
+  body.appendChild(metaRow('Referrals', String(stats?.referrals ?? 0)));
+
+  if (affiliate.status === 'suspended') {
+    notice(body, 'This code is suspended and is not earning. Contact support.', 'error');
+  }
+
+  for (const bucket of stats?.currencies || []) {
+    body.appendChild(
+      metaRow(`Earned (${bucket.currency})`, money(bucket.total, bucket.currency))
+    );
+    body.appendChild(
+      metaRow(
+        'Held',
+        `${money(bucket.pending, bucket.currency)} for ${holdDays} days, ` +
+          `${money(bucket.approved, bucket.currency)} ready, ` +
+          `${money(bucket.paid, bucket.currency)} paid`
+      )
+    );
+  }
+
+  if (!commissions?.length) {
+    body.appendChild(el('p', 'account-empty', 'Nothing has been bought through this code yet.'));
+    return;
+  }
+
+  body.appendChild(
+    table(
+      ['Date', 'Type', 'Sale', 'Rate', 'You earn', 'Status'],
+      commissions.map((c) => [
+        date(c.occurredAt),
+        c.isRenewal ? 'Renewal' : 'First payment',
+        money(c.base, c.currency),
+        `${c.pct}%`,
+        money(c.amount, c.currency),
+        c.status === 'pending' ? `Held until ${date(c.payableAt)}` : capitalise(c.status)
+      ])
+    )
+  );
+}
+
+function capitalise(s) {
+  const text = String(s || '');
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}

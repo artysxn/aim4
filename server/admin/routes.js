@@ -27,6 +27,15 @@ import { recomputeUser } from '../entitlements/recompute.js';
 import { invalidateAdmin, isSiteAdmin, siteAdmin } from '../entitlements/service.js';
 import { archiveCodes, listCodes, mintCodes } from '../entitlements/codes.js';
 import { archivePromoCode, createPromoCode, listPromoCodes } from '../billing/promoCodes.js';
+import { listAffiliates, updateAffiliate } from '../affiliates/codes.js';
+import {
+  HOLD_DAYS,
+  affiliateStats,
+  approveDueCommissions,
+  listCommissions,
+  recordPayout,
+  reverseCommission
+} from '../affiliates/commissions.js';
 import * as ingest from '../ingest/hltv/service.js';
 import { cancelProbe, probeState, startProbe } from '../ingest/hltv/probe.js';
 import { loadConfig as loadIngestConfig } from '../ingest/hltv/config.js';
@@ -442,6 +451,86 @@ async function route(req, res, url, me) {
     const body = await readJson(req);
     const row = await archivePromoCode(body.id);
     json(res, req, 200, { promoCode: row });
+    return true;
+  }
+
+  // ---- affiliates ---------------------------------------------------------
+  // Rates, suspensions and payouts. All of it here rather than on the account
+  // page, because every one of these is a money decision and the person it
+  // benefits is the one who would otherwise be making it.
+  if (req.method === 'GET' && p === '/api/admin/affiliates') {
+    const rows = await listAffiliates({ status: url.searchParams.get('status') || null });
+    // Each affiliate with what it has earned, so the list can be read without
+    // opening every row. One stats query per affiliate is fine at this scale:
+    // there are tens of these, not thousands.
+    const affiliates = [];
+    for (const row of rows) {
+      affiliates.push({
+        id: row.id,
+        userId: row.user_id,
+        code: row.code,
+        commissionPct: Number(row.commission_pct),
+        recurring: row.recurring,
+        maxMonths: row.max_months,
+        status: row.status,
+        note: row.note,
+        paddleDiscountId: row.paddle_discount_id,
+        createdAt: row.created_at,
+        stats: await affiliateStats(row.id)
+      });
+    }
+    json(res, req, 200, { affiliates, holdDays: HOLD_DAYS });
+    return true;
+  }
+
+  if (req.method === 'GET' && p === '/api/admin/affiliates/commissions') {
+    const affiliateId = url.searchParams.get('affiliateId') || null;
+    const status = url.searchParams.get('status') || null;
+    json(res, req, 200, {
+      commissions: await listCommissions({ affiliateId, status, limit: 500 })
+    });
+    return true;
+  }
+
+  if (req.method === 'POST' && p === '/api/admin/affiliates/update') {
+    const body = await readJson(req);
+    const row = await updateAffiliate({
+      affiliateId: body.affiliateId,
+      patch: body,
+      actorId: me.id,
+      req
+    });
+    json(res, req, 200, { affiliate: row });
+    return true;
+  }
+
+  // Move everything past its hold from pending to approved. Separate from
+  // paying, so the amount owed is settled before anyone acts on it.
+  if (req.method === 'POST' && p === '/api/admin/affiliates/approve') {
+    const rows = await approveDueCommissions({ actorId: me.id, req });
+    json(res, req, 200, { approved: rows.length });
+    return true;
+  }
+
+  // Records a transfer that has ALREADY been made. Paddle pays the seller, not
+  // the seller's affiliates, so nothing here can send money; this is the note
+  // that says it was sent, and it closes the rows it covers.
+  if (req.method === 'POST' && p === '/api/admin/affiliates/payout') {
+    const body = await readJson(req);
+    const result = await recordPayout({ ...body, actorId: me.id, req });
+    json(res, req, 201, result);
+    return true;
+  }
+
+  if (req.method === 'POST' && p === '/api/admin/affiliates/reverse') {
+    const body = await readJson(req);
+    const row = await reverseCommission({
+      commissionId: body.commissionId,
+      reason: body.reason,
+      actorId: me.id,
+      req
+    });
+    json(res, req, 200, { commission: row });
     return true;
   }
 

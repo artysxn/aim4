@@ -8,13 +8,21 @@
 
 import { el, render } from '../admin/dom.js';
 import { accountApi } from './accountApi.js';
-import { dataTab, overviewTab, securityTab, subscriptionTab, teamsTab } from './tabs.js';
+import {
+  affiliateTab,
+  dataTab,
+  overviewTab,
+  securityTab,
+  subscriptionTab,
+  teamsTab
+} from './tabs.js';
 import { spinnerNode } from '../../lib/spinner.js';
 
 const TABS = [
   { id: 'overview', label: 'Overview', path: '/account', render: overviewTab },
   { id: 'subscription', label: 'Subscription', path: '/account/subscription', render: subscriptionTab },
   { id: 'teams', label: 'Teams', path: '/account/teams', render: teamsTab },
+  { id: 'affiliate', label: 'Affiliate', path: '/account/affiliate', render: affiliateTab },
   { id: 'data', label: 'Data', path: '/account/data', render: dataTab },
   { id: 'security', label: 'Security', path: '/account/security', render: securityTab }
 ];

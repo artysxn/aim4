@@ -10,6 +10,7 @@
 import { adminApi } from './adminApi.js';
 import { auditPanel } from './auditPanel.js';
 import { codesPanel } from './codesPanel.js';
+import { affiliatesPanel } from './affiliatesPanel.js';
 import { el, render } from './dom.js';
 import { ingestPanel } from './ingestPanel.js';
 import { toolsPanel } from './toolsPanel.js';
@@ -33,6 +34,7 @@ const TABS = [
   { id: 'smokes', label: 'Utility' },
   { id: 'perf', label: 'Performance' },
   { id: 'codes', label: 'Codes' },
+  { id: 'affiliates', label: 'Affiliates' },
   { id: 'pitch', label: 'Pitch' },
   { id: 'audit', label: 'Audit' }
 ];
@@ -98,6 +100,8 @@ export function initAdminView(host) {
       panel.appendChild(livePanel);
     } else if (tab === 'codes') {
       panel.appendChild(codesPanel());
+    } else if (tab === 'affiliates') {
+      panel.appendChild(affiliatesPanel());
     } else if (tab === 'pitch') {
       // Not polling, but it registers a beforeunload guard for unsaved text and
       // uses the same hook to drop it when the tab changes.
