@@ -542,16 +542,44 @@ function currentPlanHead(state, currentTier, sub, { reload, billing }) {
     }
     head.appendChild(manageRow(sub, { reload, billing }));
   }
-  if (state.entitlements?.source === 'seat' && sub) {
-    head.appendChild(
-      el(
-        'p',
-        'account-warning',
-        `You hold both your own ${PLAN_NAMES[sub.planId] || sub.planId} and a team seat. Your effective tier is ${
-          PLAN_NAMES[currentTier] || currentTier
-        }.`
-      )
-    );
+  // A seat is where the access came from, and saying so is not optional. The
+  // holder pays nothing, cannot cancel or manage it, and loses it when the team
+  // owner's plan ends. Left unexplained, the page reads as though they bought a
+  // plan themselves, and the day it disappears looks like a bug.
+  //
+  // Both branches matter. This used to be one branch guarded on `sub`, so the
+  // explanation only appeared for the rarer case of a seat holder who ALSO had
+  // their own subscription, and the common case -- a seat and nothing else --
+  // showed a bare plan name with no status, no end date and no context at all.
+  const ent = state.entitlements || {};
+  if (ent.source === 'seat') {
+    const until = ent.expiresAt ? ` It lasts until ${date(ent.expiresAt)}.` : '';
+    if (sub) {
+      head.appendChild(
+        el(
+          'p',
+          'account-warning',
+          `You hold both your own ${PLAN_NAMES[sub.planId] || sub.planId} and a team seat. Your ` +
+            `effective tier is ${PLAN_NAMES[currentTier] || currentTier}, the better of the two.`
+        )
+      );
+    } else {
+      head.appendChild(
+        el(
+          'p',
+          'account-notice',
+          `This comes from a team seat, not a subscription of your own.${until}`
+        )
+      );
+      head.appendChild(
+        el(
+          'p',
+          'account-muted',
+          'Nothing is charged to you. The team owner manages this seat, and the daily model ' +
+            'allowances are shared across the whole roster rather than counted per person.'
+        )
+      );
+    }
   }
   return head;
 }
