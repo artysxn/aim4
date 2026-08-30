@@ -11,10 +11,12 @@
 //      this one runs beside ordinary traffic for as long as it takes, one demo
 //      at a time, releasing the loop after every round and pausing outright
 //      while any of those tools is running.
-//   2. Its queue is REORDERABLE. Opening the Aim chapter for a player moves
-//      that player's unscanned demos to the front, so the reader waits for
-//      their own thirty demos rather than for the library's four thousand.
-//      Everything else keeps its place behind them.
+//   2. Its queue is REORDERABLE, and a player visit does not start a library
+//      job. Opening Performance for a player measures THAT player's pending
+//      demos, even if no site-wide rescan is running, and then stops. The
+//      remaining thousands wait for the admin "Rescan aim rating" pass, which
+//      is the overnight job. If a library rescan IS already going, the same
+//      visit only jumps the line; everything else keeps its place behind them.
 //
 // What "done" means lives in the stats index itself: `entry.a2v` is the version
 // of the motion pass that wrote its rows. The ledger on disk beside it is a
@@ -70,6 +72,19 @@ let queued = new Set();
 let running = false;
 let stopping = false;
 let force = false;
+/**
+ * 'queued'  player visit: only ids already in `queue`.
+ * 'library' admin rescan: every demo the ledger has not finished.
+ */
+let runScope = 'library';
+/**
+ * Admin asked for the overnight pass while a player-scoped run is still on
+ * that player's demos. The loop rebuilds the full pending list at the next
+ * breath instead of no-op'ing until they finish.
+ */
+let expandToLibrary = false;
+/** Promotions that arrived before initAimScan wired storage. */
+let deferredPromote = [];
 let startedAt = 0;
 let finishedAt = 0;
 let startedBy = '';
@@ -85,10 +100,15 @@ const report = { measured: 0, current: 0, skipped: 0, failed: 0, rounds: 0 };
  * @param {string} opts.user         the library owner (the shared library)
  * @param {() => Promise<object[]>} opts.listRecords
  */
-export function initAimScan({ io: storage, user, listRecords: list }) {
+export async function initAimScan({ io: storage, user, listRecords: list }) {
   io = storage;
   ledgerUser = user;
   listRecords = list;
+  if (deferredPromote.length) {
+    const ids = deferredPromote;
+    deferredPromote = [];
+    await prioritizeAimScan(ids);
+  }
 }
 
 /** The scan stands aside whenever `fn()` is true. */
@@ -190,17 +210,26 @@ export async function ensureAimScanLedger() {
 }
 
 /**
- * Move these demos to the front of the queue and make sure the scan is running.
+ * Move these demos to the front of the queue and start a player-scoped scan
+ * if nothing is running.
  *
- * This is what the Aim chapter calls when somebody opens it. Ids already
- * measured are ignored; ids the queue does not hold yet are inserted, because
- * a scan that finished before this player's demos were uploaded has an empty
- * queue and would otherwise answer "nothing pending" forever.
+ * A player visit measures only these ids, then stops. It does not enqueue the
+ * rest of the library: that is the admin overnight rescan. If a library rescan
+ * is already running, this only jumps the line.
+ *
+ * Ids already measured are ignored; ids the queue does not hold yet are
+ * inserted, because a scan that finished before this player's demos were
+ * uploaded has an empty queue and would otherwise answer "nothing pending"
+ * forever.
  *
  * @returns {Promise<{ pending: number, running: boolean }>}
  */
 export async function prioritizeAimScan(ids, { start = true } = {}) {
-  if (!io) return { pending: 0, running: false };
+  const wantedRaw = (Array.isArray(ids) ? ids : []).filter(Boolean);
+  if (!io || !listRecords) {
+    deferredPromote.push(...wantedRaw);
+    return { pending: wantedRaw.length, running: false };
+  }
   await loadLedger();
   const wanted = (Array.isArray(ids) ? ids : []).filter(
     (id) => id && !done.has(id) && !unscannable.has(id)
@@ -252,20 +281,44 @@ async function scanOne(id, recordsById) {
 }
 
 async function runLoop() {
-  const records = await listRecords();
-  const recordsById = new Map(records.map((r) => [r.id, r]));
-  // A reader may have promoted their demos before this loop existed. The
-  // rebuild below is library-wide and would drop that order, so it is taken
-  // first and put back on the front afterwards.
-  const promoted = queue.filter((id) => recordsById.has(id));
-  const promotedSet = new Set(promoted);
-  await rebuildQueue(records);
-  if (promoted.length) {
-    queue = [...promoted, ...queue.filter((id) => !promotedSet.has(id))];
+  let records = await listRecords();
+  let recordsById = new Map(records.map((r) => [r.id, r]));
+  if (runScope === 'queued') {
+    // Player visit: do not pull in the rest of the library. Opening
+    // Performance is how someone measures their own matches today without
+    // starting the overnight job for everybody else.
+    queue = queue.filter(
+      (id) => recordsById.has(id) && (force || (!done.has(id) && !unscannable.has(id)))
+    );
     queued = new Set(queue);
+  } else {
+    // A reader may have promoted their demos before this loop existed. The
+    // rebuild below is library-wide and would drop that order, so it is taken
+    // first and put back on the front afterwards.
+    const promoted = queue.filter((id) => recordsById.has(id));
+    const promotedSet = new Set(promoted);
+    await rebuildQueue(records);
+    if (promoted.length) {
+      queue = [...promoted, ...queue.filter((id) => !promotedSet.has(id))];
+      queued = new Set(queue);
+    }
   }
 
-  while (queue.length && !stopping) {
+  while (!stopping && (queue.length || expandToLibrary)) {
+    if (expandToLibrary) {
+      expandToLibrary = false;
+      runScope = 'library';
+      records = await listRecords();
+      recordsById = new Map(records.map((r) => [r.id, r]));
+      const promoted = queue.filter((id) => recordsById.has(id));
+      const promotedSet = new Set(promoted);
+      await rebuildQueue(records);
+      if (promoted.length) {
+        queue = [...promoted, ...queue.filter((id) => !promotedSet.has(id))];
+        queued = new Set(queue);
+      }
+      continue;
+    }
     if (pauseWhen()) {
       // A library rebuild is writing the same files. Wait it out rather than
       // racing it: both passes persist whole entries, and the loser's column
@@ -293,13 +346,27 @@ async function runLoop() {
  *
  * @param {{ force?: boolean, startedBy?: string, reason?: string }} [opts]
  *   force re-measures demos already at the current version.
+ *   reason 'player' scans only the ids already queued (a Performance visit).
+ *   Anything else rebuilds the library-wide pending list.
  */
 export async function startAimScan(opts = {}) {
   if (!io || !listRecords) throw new Error('Aim scan is not wired to a library.');
-  if (running) return aimScanStatus();
+  if (running) {
+    // Overnight: Rescan arriving while a player-scoped run is still going
+    // should pick up the rest of the library, not sit as a no-op until they
+    // finish. Force still waits: wiping the ledger under a live pass is how
+    // you measure the same demo twice in one run.
+    if (opts.reason !== 'player' && runScope === 'queued' && !opts.force) {
+      expandToLibrary = true;
+      if (opts.startedBy) startedBy = opts.startedBy;
+    }
+    return aimScanStatus();
+  }
   running = true;
   stopping = false;
   force = Boolean(opts.force);
+  expandToLibrary = false;
+  runScope = opts.reason === 'player' ? 'queued' : 'library';
   startedAt = Date.now();
   finishedAt = 0;
   startedBy = opts.startedBy || opts.reason || '';
@@ -322,12 +389,18 @@ export async function startAimScan(opts = {}) {
     } catch (err) {
       lastError = err?.message || String(err);
     } finally {
+      await flushLedger();
+      const chain = expandToLibrary && !stopping;
+      expandToLibrary = false;
       running = false;
       stopping = false;
       force = false;
-      finishedAt = Date.now();
       current = null;
-      await flushLedger();
+      if (chain) {
+        void startAimScan({ startedBy, reason: 'library' });
+        return;
+      }
+      finishedAt = Date.now();
     }
   })();
 
@@ -350,6 +423,10 @@ export function aimScanStatus() {
     startedAt: startedAt || null,
     finishedAt: finishedAt || null,
     startedBy: startedBy || null,
+    /** 'queued' is one player's demos; 'library' is the overnight pass. */
+    scope: running ? runScope : null,
+    /** Admin rescan was requested; the loop will pull in the rest next. */
+    expanding: expandToLibrary,
     ms: startedAt ? (finishedAt || Date.now()) - startedAt : 0,
     /** Demos measured or confirmed current since this run began. */
     done: finished,
@@ -367,6 +444,9 @@ export function aimScanStatus() {
 
 /** Tests and a fresh boot both want a clean slate. */
 export function resetAimScanForTests() {
+  io = null;
+  listRecords = null;
+  ledgerUser = '';
   done = new Set();
   unscannable = new Set();
   queue = [];
@@ -376,6 +456,9 @@ export function resetAimScanForTests() {
   running = false;
   stopping = false;
   force = false;
+  runScope = 'library';
+  expandToLibrary = false;
+  deferredPromote = [];
   startedAt = 0;
   finishedAt = 0;
   current = null;

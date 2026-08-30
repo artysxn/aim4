@@ -55,10 +55,15 @@ await seed('d5', { name1: 'Real Name FC', name2: 'Opp', a: [...core, 'x1', 'x2']
 await seed('d6', { name1: 'Opp', name2: 'n-c3', a: opp, b: [...core, 'w1', 'w2'] });
 store.invalidateDemoList(USER);
 
-const { record, alsoRenamed, capped } = await applyTeamRename(io, USER, 'd1', 'Sharks', 'Opp');
+const { record, alsoRenamed, capped, others } = await applyTeamRename(io, USER, 'd1', 'Sharks', 'Opp');
 assert.equal(record?.team1?.name, 'Sharks', 'the seed demo is renamed');
 assert.equal(capped, false, 'a handful of demos is not a runaway sweep');
 assert.equal(alsoRenamed, 3, 'd2, d3 and d6 come with it');
+assert.deepEqual(
+  (others || []).map((o) => o.id).sort(),
+  ['d2', 'd3', 'd6'],
+  'the extras are named in the response'
+);
 
 const after = new Map((await store.listDemos(USER, { fresh: true })).map((r) => [r.id, r]));
 assert.equal(after.get('d2').team1.name, 'Sharks', 'same core, invented label: renamed');

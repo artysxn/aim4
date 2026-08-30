@@ -909,16 +909,19 @@ export function initPerformanceView({ auth, escapeHtml }) {
   // pass over the demo files (server/replays/aimScan.js), and a player whose
   // matches it has not reached has an outcome-only rating and no radar.
   //
-  // So opening this chapter asks the server for that player's matches to be
-  // measured NEXT, and shows the count while it happens. A player who is
-  // already measured never sees any of it: `aimHasMotion` is true on the row
-  // the page already holds, and the chapter paints on the first frame.
+  // So opening Performance asks the server to measure that player's pending
+  // matches even if no site-wide rescan is running, and the Aim chapter shows
+  // the count while it happens. A player who is already measured never sees
+  // any of it: `aimHasMotion` is true on the row the page already holds, and
+  // the chapter paints on the first frame.
 
   /** @type {{ player: string, total: number, pending: number, ready: boolean }|null} */
   let aimProgress = null;
   /** Polling handle, and whether a request is in flight right now. */
   let aimPollTimer = 0;
   let aimPollBusy = false;
+  /** Player id we have already asked the scan about, so filters do not re-GET. */
+  let aimTrackedFor = '';
   /**
    * True between opening the chapter and the first answer.
    *
@@ -985,8 +988,12 @@ export function initPerformanceView({ auth, escapeHtml }) {
           // Only the table slot, not the whole page: this runs every few
           // seconds for as long as the reader watches the count come down.
           if (chapter === 'aim') refreshStats();
+          // If the scan is not actually running (boot wiring lag, or a
+          // previous promote that landed before the scanner existed), keep
+          // asking it to start. Polls after it is running only want the count.
+          const retryPromote = res.scanning !== true;
           aimPollTimer = window.setTimeout(
-            () => trackAimProgress({ promote: false }),
+            () => trackAimProgress({ promote: retryPromote }),
             AIM_POLL_MS
           );
           return;
@@ -1020,19 +1027,29 @@ export function initPerformanceView({ auth, escapeHtml }) {
       });
   }
 
+  /**
+   * Ask the server to measure this player's pending matches.
+   *
+   * Independent of the Aim chapter: Summary shows the same rating, and a
+   * library-wide rescan does not have to be running for this to start. Their
+   * demos are the whole of that run; the rest of the library waits for admin.
+   */
+  function ensureAimScanForPlayer() {
+    if (!playerId) return;
+    if (aimTrackedFor === playerId && (aimPollTimer || aimPollBusy || aimProgress)) return;
+    if (aimPollTimer || aimPollBusy) return;
+    aimTrackedFor = playerId;
+    trackAimProgress({ promote: true });
+  }
+
   /** Called when the Aim chapter becomes the visible one. */
   function enterAimChapter() {
     if (!playerId || chapterLocked('aim')) return;
-    if (aimStats()?.aimHasMotion) return;
-    // Already asking. Leaving and re-entering the chapter must not start a
-    // second chain of polls beside the first.
-    if (aimPollTimer || aimPollBusy) return;
-    // Repaint into the waiting state before the request goes out. The caller
-    // has already painted; this is the second frame, and it is the one that
-    // stops the reader seeing empty tables that are about to fill in.
-    aimChecking = true;
-    render();
-    trackAimProgress({ promote: true });
+    if (!aimStats()?.aimHasMotion) {
+      aimChecking = true;
+      render();
+    }
+    ensureAimScanForPlayer();
   }
 
   function gunsBodyHtml() {
@@ -1197,6 +1214,7 @@ export function initPerformanceView({ auth, escapeHtml }) {
       }
     }
     render();
+    if (playerId) ensureAimScanForPlayer();
     // Peer averages land separately: the cards render immediately with the
     // player's own numbers and gain their comparison notch a moment later.
     if (playerId) {
@@ -1225,6 +1243,7 @@ export function initPerformanceView({ auth, escapeHtml }) {
     aimProgress = null;
     aimChecking = false;
     aimPollBusy = false;
+    aimTrackedFor = '';
     renderScoped();
   }
 
@@ -1240,6 +1259,7 @@ export function initPerformanceView({ auth, escapeHtml }) {
     aimProgress = null;
     aimChecking = false;
     aimPollBusy = false;
+    aimTrackedFor = '';
     renderScoped();
   }
 

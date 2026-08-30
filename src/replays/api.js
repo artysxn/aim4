@@ -908,10 +908,13 @@ export async function fetchUploadBatch(batchId) {
  *
  * @param {File} file
  * @param {(pct: number, loaded: number, total: number) => void} [onProgress]
+ * @param {string} [visibility]
  */
-export async function uploadImport(file, onProgress) {
+export async function uploadImport(file, onProgress, visibility = 'private') {
   await precheckUpload(file, 'import');
-  return uploadBinary(`${API_BASE}/api/replays/import`, file, onProgress);
+  return uploadBinary(`${API_BASE}/api/replays/import`, file, onProgress, {
+    'X-Aim4-Visibility': visibility
+  });
 }
 
 /**

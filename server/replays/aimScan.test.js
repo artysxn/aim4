@@ -217,22 +217,82 @@ async function settle(limitMs = 15000) {
 
 // ---------------------------------------------------------------------------
 {
-  // The line-jump. d4 is at the back of a queue ordered newest first; a reader
-  // opening its player's Aim chapter has to move it to the front.
+  // A Performance visit without a library rescan running measures ONLY the
+  // demos that player opened. The rest of the library waits for the overnight
+  // admin pass, instead of riding along as a side effect of looking at Aim.
   for (const id of DEMOS) await writeEntry(id);
   await fsp.rm(path.join(statsDir(), 'aim-scan.json'), { force: true });
   resetAimScanForTests();
   initAimScan({ io, user: USER, listRecords: async () => records });
 
-  // Held at the gate so the order can be inspected before anything is measured.
+  const mine = await prioritizeAimScan(['d1']);
+  assert.equal(mine.pending, 1, 'one demo promoted');
+  await settle();
+  assert.equal(aimScanPending(['d1']), 0, 'theirs is done');
+  assert.equal(aimScanPending(['d2', 'd3', 'd4']), 3, 'the rest are not pulled in');
+
+  await startAimScan({ startedBy: 'admin' });
+  await settle();
+  assert.equal(aimScanPending(DEMOS), 0, 'the admin run then does the rest');
+}
+
+// ---------------------------------------------------------------------------
+{
+  // A promote that arrives before the scanner is wired (the 6s boot lag) is
+  // kept and started as a player-scoped run, not dropped.
+  for (const id of DEMOS) await writeEntry(id);
+  await fsp.rm(path.join(statsDir(), 'aim-scan.json'), { force: true });
+  resetAimScanForTests();
+
+  const early = await prioritizeAimScan(['d1']);
+  assert.equal(early.running, false, 'not wired yet');
+  await initAimScan({ io, user: USER, listRecords: async () => records });
+  await settle();
+  assert.equal(aimScanPending(['d1']), 0, 'deferred promote ran once wired');
+  assert.equal(aimScanPending(['d2', 'd3', 'd4']), 3, 'and did not pull the library in');
+}
+
+// ---------------------------------------------------------------------------
+{
+  // Admin Rescan while a player-scoped run is still going expands into the
+  // rest of the library instead of being a no-op until that player finishes.
+  for (const id of DEMOS) await writeEntry(id);
+  await fsp.rm(path.join(statsDir(), 'aim-scan.json'), { force: true });
+  resetAimScanForTests();
+  initAimScan({ io, user: USER, listRecords: async () => records });
+
+  let held = true;
+  setAimScanPauseWhen(() => held);
+  await prioritizeAimScan(['d1']);
+  const mid = await startAimScan({ startedBy: 'admin' });
+  assert.ok(
+    mid.expanding || mid.scope === 'library',
+    `admin rescan is taken: ${JSON.stringify({ expanding: mid.expanding, scope: mid.scope })}`
+  );
+  held = false;
+  await settle();
+  assert.equal(aimScanPending(DEMOS), 0, 'the rest of the library then finish');
+  setAimScanPauseWhen(() => false);
+}
+
+// ---------------------------------------------------------------------------
+{
+  // The line-jump against an already-running library rescan. d4 is newest and
+  // would have been first; a reader opening d1's player has to go first, and
+  // the rest of that library job still finishes after.
+  for (const id of DEMOS) await writeEntry(id);
+  await fsp.rm(path.join(statsDir(), 'aim-scan.json'), { force: true });
+  resetAimScanForTests();
+  initAimScan({ io, user: USER, listRecords: async () => records });
+
   let paused = true;
   setAimScanPauseWhen(() => paused);
+  await startAimScan({ startedBy: 'admin' });
 
   const promoted = await prioritizeAimScan(['d1']);
   assert.equal(promoted.pending, 1, 'one demo promoted');
   assert.equal(aimScanPending(['d1']), 1, 'and it is still pending');
 
-  // Let one demo through, then hold again.
   paused = false;
   const seen = [];
   const until = Date.now() + 8000;
@@ -241,9 +301,8 @@ async function settle(limitMs = 15000) {
     if (aimScanPending(['d1']) === 0) seen.push('d1');
   }
   assert.deepEqual(seen, ['d1'], 'the promoted demo was measured first');
-  // d4 is newest and would have been first without the promotion.
   await settle();
-  assert.equal(aimScanPending(DEMOS), 0, 'the rest still get measured');
+  assert.equal(aimScanPending(DEMOS), 0, 'the rest of the library job still finish');
   setAimScanPauseWhen(() => false);
 }
 
@@ -287,4 +346,4 @@ async function settle(limitMs = 15000) {
 }
 
 await fsp.rm(root, { recursive: true, force: true });
-console.log('aimScan.test.js: queue order, ledger, skips, force and stop all pass');
+console.log('aimScan.test.js: queue order, player-only runs, deferred start, expand, ledger, skips, force and stop all pass');

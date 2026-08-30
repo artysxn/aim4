@@ -121,7 +121,6 @@ export async function importReplayPackage(user, buf, meta = {}) {
     // it, and an anonymous import owns nothing.
     uploaderId: meta.uploaderId || '',
     uploaderName: meta.uploaderName || '',
-    // Packages land private until the uploader picks in the client prompt.
     visibility: meta.visibility || record.visibility || 'private'
   };
 

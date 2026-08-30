@@ -295,7 +295,7 @@ function aimRescanCard() {
     el(
       'p',
       'admin-muted',
-      'Re-opens each parsed demo and measures the flick, tracking, reaction and tension statistics behind the v2 Aim rating. Runs in the background, one demo at a time, and pauses while any other tool on this page is running. Demos already measured are skipped. Opening a player’s Aim tab in Performance moves their demos to the front of the queue.'
+      'Re-opens each parsed demo and measures the flick, tracking, reaction and tension statistics behind the v2 Aim rating. Runs in the background, one demo at a time, and pauses while any other tool on this page is running. Demos already measured are skipped. Opening Performance for a player measures that player immediately even if this rescan is not running; this button is the overnight pass for everybody else.'
     )
   );
   const status = el('div', 'admin-tool-status');
@@ -311,15 +311,20 @@ function aimRescanCard() {
 
   function paint(st) {
     if (!st) return;
-    runBtn.disabled = st.running;
+    // A player-scoped run (someone opened Performance) is not the overnight
+    // job. Rescan stays clickable so it can expand into the rest of the library.
+    const libraryJob = Boolean(st.running && st.scope !== 'queued');
+    runBtn.disabled = libraryJob || Boolean(st.expanding);
     forceBtn.disabled = st.running;
     stopBtn.disabled = !st.running;
     const r = st.report || {};
     if (st.running) {
       const where = st.current ? `: ${st.current}` : '';
+      const who = st.scope === 'queued' ? 'this player, ' : '';
+      const extra = st.expanding ? '. Library rescan queued next' : '';
       status.textContent = st.stopping
         ? `Stopping after the current demo${where}`
-        : `${st.done} of ${st.total} demos, ${st.pending} left${where}`;
+        : `${who}${st.done} of ${st.total} demos, ${st.pending} left${where}${extra}`;
     } else if (st.finishedAt) {
       status.textContent =
         `Finished in ${Math.round((st.ms || 0) / 1000)}s. ` +

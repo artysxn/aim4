@@ -15,6 +15,15 @@
 export const CHANGELOG = Object.freeze([
   {
     date: '2026-08-30',
+    title: 'Rename one demo, name the rest',
+    tag: 'improved',
+    points: [
+      'When you give a demo a real team name, other unnamed demos that share that lineup get the same name. Public matches still sitting under a player name are included. A side that already has a proper name is left alone.',
+      'The page tells you how many other demos came with it. Saving the same names again does not run another sweep.'
+    ]
+  },
+  {
+    date: '2026-08-30',
     title: 'Fair use, legal pages, and a steadier viewer',
     tag: 'new',
     points: [

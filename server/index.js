@@ -389,9 +389,8 @@ setTimeout(async () => {
   }
 }, 5 * 1000);
 // Wire the aim rescan to the shared library. Wiring only: nothing starts here.
-// It is begun either from the admin tools or by the first reader who opens the
-// Aim chapter, and it never builds anything at boot for the reason set out
-// immediately below.
+// It is begun either from the admin tools or by a reader opening Performance,
+// and it never builds anything at boot for the reason set out immediately below.
 setTimeout(async () => {
   try {
     const { listDemos, readRoundMeta, readRoundTicks, userDir } = await import(
@@ -400,7 +399,7 @@ setTimeout(async () => {
     const { SHARED_LIBRARY } = await import('./replays/auth.js');
     const { getZones } = await import('./zonesStore.js');
     const { initAimScan, ensureAimScanLedger } = await import('./replays/aimScan.js');
-    initAimScan({
+    await initAimScan({
       io: { userDir, readRoundMeta, readRoundTicks, getZones },
       user: SHARED_LIBRARY,
       listRecords: () => listDemos(SHARED_LIBRARY)

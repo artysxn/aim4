@@ -1527,8 +1527,9 @@ async function route(req, res, url, me) {
   // Aim rating rescan. Unlike every other tool on this page it is a BACKGROUND
   // pass: it returns immediately, runs one demo at a time beside live traffic,
   // pauses while any library job holds the thread, and can be stopped. Opening
-  // the Aim chapter for a player promotes that player's demos to the front of
-  // the same queue (see /api/replays/aim/progress).
+  // Performance for a player starts a separate, player-scoped scan of just
+  // their pending demos (see /api/replays/aim/progress); this route is the
+  // library-wide overnight job.
   if (req.method === 'GET' && p === '/api/admin/stats/rescan-aim') {
     json(res, req, 200, aimScanStatus());
     return true;

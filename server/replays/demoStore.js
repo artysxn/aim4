@@ -323,20 +323,25 @@ export async function renameDemoTeams(user, id, team1Name, team2Name) {
   record.team1 = { ...(record.team1 || {}), name: n1, id: record.team1?.id };
   record.team2 = { ...(record.team2 || {}), name: n2, id: record.team2?.id };
 
-  for (const r of record.rounds || []) {
-    if (!r?.file) continue;
-    try {
-      const meta = await readRoundMeta(user, r.file);
-      if (!meta) continue;
-      if (meta.team1) meta.team1 = { ...meta.team1, name: n1 };
-      if (meta.team2) meta.team2 = { ...meta.team2, name: n2 };
-      await writeRoundMeta(user, sanitizeStem(r.file), meta);
-    } catch {
-      /* round file missing or unreadable; skip */
-    }
-  }
-
+  // Listing reads the record. Write it first so the name change is visible
+  // even if a round file is missing, then patch round metas in parallel so a
+  // 30-round demo is not 30 sequential JSON rewrites on the request path.
   await writeRecord(user, record);
+  await Promise.all(
+    (record.rounds || []).map(async (r) => {
+      if (!r?.file) return;
+      try {
+        const meta = await readRoundMeta(user, r.file);
+        if (!meta) return;
+        if (meta.team1) meta.team1 = { ...meta.team1, name: n1 };
+        if (meta.team2) meta.team2 = { ...meta.team2, name: n2 };
+        await writeRoundMeta(user, sanitizeStem(r.file), meta);
+      } catch {
+        /* round file missing or unreadable; skip */
+      }
+    })
+  );
+
   return record;
 }
 

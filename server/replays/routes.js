@@ -9,7 +9,7 @@
 //   GET    /api/replays/uploads/:batchId         unpack + parse progress for one upload
 //   POST   /api/replays/import                   upload a local .aim4replay package
 //   GET    /api/replays/demos/:id                one demo + parse progress
-//   POST   /api/replays/demos/:id/teams          rename both teams
+//   POST   /api/replays/demos/:id/teams          rename both teams (and matching unnamed lineups)
 //   POST   /api/replays/demos/:id/visibility     public / unlisted / private
 //   POST   /api/replays/demos/:id/parse          re-run a failed parse
 //   DELETE /api/replays/demos/:id                remove demo + its rounds
@@ -64,7 +64,6 @@ import {
   readRoundTicks,
   readRoundTicksPacked,
   removePlaylist,
-  renameDemoTeams,
   saveTempUpload,
   setDemoTags,
   setDemoVisibility,
@@ -74,10 +73,11 @@ import {
   writeRecord,
   writeRoundNotes
 } from './demoStore.js';
+import { applyTeamRename } from './teamRescan.js';
 import { cpuProbe, memorySnapshot } from './hostMemory.js';
-import { forgetDemoIndex, loadStoredEntry, patchIndexTeamNames, refreshLibraryStats, scheduleStatsIndex, STATS_LIBRARY_PAGE, statsPayload } from './statsIndex.js';
+import { forgetDemoIndex, loadStoredEntry, refreshLibraryStats, scheduleStatsIndex, STATS_LIBRARY_PAGE, statsPayload } from './statsIndex.js';
 import { ColumnContractError, resolveColumns } from '../../src/replays/shared/statsColumns.js';
-import { getRoster, invalidateRoster, scopeRoster } from './rosterCatalogue.js';
+import { getRoster, scopeRoster } from './rosterCatalogue.js';
 import {
   aimScanPending,
   aimScanStatus,
@@ -91,8 +91,7 @@ import {
   hotRefreshing,
   hotStoreStatus,
   hotMatches,
-  hotTables,
-  patchHotStoreTeamNames
+  hotTables
 } from './statsHotService.js';
 import { isAcceptedUpload, rarSupport } from './archive.js';
 import {
@@ -1243,7 +1242,7 @@ export async function handleReplayRequest(req, res, url) {
           uploadedAt: Date.now(),
           uploaderId: me.id,
           uploaderName: me.username,
-          visibility: 'private'
+          visibility: normalizeVisibility(req.headers['x-aim4-visibility'] || 'private')
         });
         scheduleStatsIndex(statsIo, user, record);
         json(res, 201, {
@@ -1316,22 +1315,27 @@ export async function handleReplayRequest(req, res, url) {
       json(res, 403, { error: 'Only the uploader can rename that demo.' });
       return true;
     }
-    const record = await renameDemoTeams(user, id, body.team1, body.team2);
+    // Same sweep as the admin uploads tool: unnamed sides sharing this
+    // roster's core take the new name, including public demos still labelled
+    // after a player. Real names are not overwritten.
+    const { record, alsoRenamed, capped, others } = await applyTeamRename(
+      statsIo,
+      user,
+      id,
+      body.team1,
+      body.team2
+    );
     if (!record) {
       json(res, 404, { error: 'Replay not found.' });
       return true;
     }
-    // Names are hashed into both the stats-index fingerprint and the hot
-    // store's record key, so an unpatched rename means a lazy index rebuild
-    // for this demo AND a full store rebuild for everybody — minutes of
-    // background CPU to change two strings. Patch both in place instead; a
-    // cold store simply reads the fresh index when it next builds. (No
-    // roster propagation here on purpose: an uploader renames their own
-    // demo, the admin tool is what sweeps the library.)
-    await patchIndexTeamNames(statsIo, user, record);
-    patchHotStoreTeamNames(statsIo, user, [record]);
-    invalidateRoster(user);
-    json(res, 200, { demo: withJob(user, record), usage: await usage(user) });
+    json(res, 200, {
+      demo: withJob(user, record),
+      usage: await usage(user),
+      alsoRenamed,
+      capped,
+      others
+    });
     return true;
   }
 
@@ -1771,11 +1775,14 @@ export async function handleReplayRequest(req, res, url) {
 
   // ---- aim rescan progress -------------------------------------------------
   //
-  // What the Aim chapter waits on. Two jobs in one request, on purpose: it
+  // What Performance waits on. Two jobs in one request, on purpose: it
   // answers "how many of this player's demos still have no motion half", and
-  // it moves exactly those demos to the front of the background queue.
+  // it starts a player-scoped scan of exactly those demos if nothing is
+  // already running. It does not enqueue the rest of the library: that is
+  // the admin overnight rescan. If a library rescan is already going, the
+  // same call only jumps the line.
   //
-  // The reader is therefore the reason their own demos get measured first, and
+  // The reader is therefore the reason their own demos get measured, and
   // the answer they poll for is the same counter the scanner is decrementing.
   // A player whose demos are all measured is answered `pending: 0` on the first
   // call and never sees a loading state at all.

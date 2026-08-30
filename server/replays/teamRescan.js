@@ -59,29 +59,33 @@ export function teamRescanStatus() {
 /**
  * One hand-rename, plus every unnamed lineup that shares its core.
  *
- * The admin renames a side of one demo; the same five people appear under a
- * different invented label in the next map of the series and in every other
- * demo the parser could not name. Those are the same team, so they take the
- * name too — see findRenameTargets for why the match is one hop and only ever
- * catches sides the demo itself never named.
+ * Naming a side of one demo (My Uploads, the library, or the admin tool)
+ * carries that name to every other side the parser labelled after a player,
+ * so a Bo3 that defaulted to jcobbb / neityu / jboen becomes FaZe on all
+ * three maps. Public demos are included when their stored name is still a
+ * placeholder. A side that already has a real name is left alone.
  *
- * @returns {{ record: object|null, alsoRenamed: number, capped: boolean }}
+ * Targets are taken from the listing we already hold, not a second library
+ * read: the seed write would otherwise force a full rescan of every record.
+ *
+ * @returns {{ record: object|null, alsoRenamed: number, capped: boolean, others: object[] }}
  */
 export async function applyTeamRename(io, user, demoId, team1, team2) {
-  const before = (await listDemos(user)).find((r) => r.id === demoId);
-  if (!before) return { record: null, alsoRenamed: 0, capped: false };
+  const empty = { record: null, alsoRenamed: 0, capped: false, others: [] };
+  const records = await listDemos(user);
+  const before = records.find((r) => r.id === demoId);
+  if (!before) return empty;
 
   const wanted = {
     1: String(team1 ?? before.team1?.name ?? '').trim(),
     2: String(team2 ?? before.team2?.name ?? '').trim()
   };
   const record = await renameDemoTeams(user, demoId, wanted[1], wanted[2]);
-  if (!record) return { record: null, alsoRenamed: 0, capped: false };
+  if (!record) return empty;
   await patchIndexTeamNames(io, user, record);
 
   // Only a side whose name actually MOVED propagates. Re-saving the dialog
   // unchanged must not sweep the library.
-  const records = await listDemos(user);
   /** @type {Map<string, { 1?: string, 2?: string }>} */
   const edits = new Map();
   let capped = false;
@@ -129,7 +133,12 @@ export async function applyTeamRename(io, user, demoId, team1, team2) {
   const patched = patchHotStoreTeamNames(io, user, touched);
   if (patched < touched.length) invalidateHotStore();
 
-  return { record, alsoRenamed: touched.length - 1, capped };
+  const others = touched.slice(1).map((r) => ({
+    id: r.id,
+    team1: r.team1,
+    team2: r.team2
+  }));
+  return { record, alsoRenamed: others.length, capped, others };
 }
 
 /** The stored teams database, or null before the first rescan. */

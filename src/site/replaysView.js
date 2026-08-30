@@ -192,8 +192,14 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
   };
   /** Selected demo ids on My Uploads (bulk visibility / click-to-select). */
   const selectedMine = new Set();
+  /** Serializes team-name saves per demo so two blurs cannot race. */
+  const teamSaveTail = new Map();
+  /** Serializes visibility saves per demo so click-throughs cannot race. */
+  const visSaveTail = new Map();
   const MINE_PAGE_SIZE = 100;
   let minePage = 1;
+  const uploadVisEl = document.getElementById('rp-upload-vis');
+  const UPLOAD_VIS_KEY = 'aim4.uploadVisibility';
   /**
    * Full list of demos for My Uploads (not capped by the library’s 50-page fetch).
    * @type {object[]}
@@ -600,6 +606,156 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     { key: 'private', label: 'Private', note: 'Only you, link or not.' }
   ];
 
+  function readUploadVisibility() {
+    try {
+      const v = localStorage.getItem(UPLOAD_VIS_KEY);
+      if (VISIBILITY_OPTIONS.some((o) => o.key === v)) return v;
+    } catch {
+      /* private is the safe default */
+    }
+    return 'private';
+  }
+
+  let uploadVisibility = readUploadVisibility();
+
+  function visSegHtml(current, { demoId = '', aria = 'Visibility' } = {}) {
+    return `<div class="rp-seg rp-mine-vis-seg" role="group" aria-label="${escapeHtml(aria)}">
+      ${VISIBILITY_OPTIONS.map((o) => {
+        const on = current === o.key;
+        const bind = demoId
+          ? `data-set-visibility="${escapeHtml(demoId)}" data-vis="${o.key}"`
+          : `data-upload-visibility="${o.key}"`;
+        return `<button type="button" class="rp-seg-btn vis-${o.key}${on ? ' active' : ''}" ${bind} title="${escapeHtml(
+          o.note
+        )}" aria-pressed="${on ? 'true' : 'false'}">${escapeHtml(o.label)}</button>`;
+      }).join('')}
+    </div>`;
+  }
+
+  function renderUploadVis() {
+    if (!uploadVisEl) return;
+    uploadVisEl.innerHTML = visSegHtml(uploadVisibility, {
+      aria: 'Visibility for new uploads'
+    });
+  }
+
+  function mineRow(id) {
+    return mineEl?.querySelector(`tr[data-id="${CSS.escape(id)}"]`) || null;
+  }
+
+  function forDemoLists(id, fn) {
+    for (const arr of [demos, mineDemos]) {
+      const i = arr.findIndex((d) => d.id === id);
+      if (i >= 0) fn(arr[i]);
+    }
+    const extra = extraDemos.get(id);
+    if (extra) fn(extra);
+  }
+
+  function applyVisibilityLocal(id, visibility) {
+    forDemoLists(id, (d) => {
+      d.visibility = visibility;
+      d.owner = { ...(d.owner || {}), visibility };
+    });
+  }
+
+  function applyTeamNamesLocal(id, team1, team2) {
+    forDemoLists(id, (d) => {
+      d.team1 = { ...(d.team1 || {}), name: team1 };
+      d.team2 = { ...(d.team2 || {}), name: team2 };
+    });
+  }
+
+  function paintMineRowVis(id, visibility) {
+    const row = mineRow(id);
+    if (!row) return;
+    row.querySelectorAll('[data-vis]').forEach((btn) => {
+      const on = btn.dataset.vis === visibility;
+      btn.classList.toggle('active', on);
+      btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+  }
+
+  function paintMineTeamInputs(id, t1, t2) {
+    const row = mineRow(id);
+    if (!row) return;
+    const a = row.querySelector('[data-set-team="1"]');
+    const b = row.querySelector('[data-set-team="2"]');
+    if (a && a !== document.activeElement) a.value = t1;
+    if (b && b !== document.activeElement) b.value = t2;
+  }
+
+  /**
+   * A save that named one demo may have named others with the same roster.
+   * Paint those rows too, and say how far it reached.
+   */
+  function applyPropagatedTeamNames(res) {
+    for (const o of res?.others || []) {
+      const a = o.team1?.name;
+      const b = o.team2?.name;
+      if (!o.id || !a) continue;
+      applyTeamNamesLocal(o.id, a, b || '');
+      paintMineTeamInputs(o.id, a, b || '');
+    }
+    const extra = Number(res?.alsoRenamed) || 0;
+    if (res?.capped) {
+      setStatus('Too many demos shared that roster, so only this one was renamed.', true);
+    } else if (extra) {
+      setStatus(
+        extra === 1
+          ? '1 more demo with the same roster renamed.'
+          : `${extra} more demos with the same roster renamed.`
+      );
+    }
+  }
+
+  function mineBulkHtml() {
+    const selCount = selectedMine.size;
+    if (!selCount) return '';
+    return `<div class="rp-mine-bulk">
+            <span class="rp-mine-bulk-count">${selCount} selected</span>
+            <div class="rp-chips">
+              ${VISIBILITY_OPTIONS.map(
+                (o) =>
+                  `<button type="button" class="rp-chip vis-${o.key}" data-bulk-visibility="${o.key}" title="${escapeHtml(
+                    o.note
+                  )}">${escapeHtml(o.label)}</button>`
+              ).join('')}
+            </div>
+            <button type="button" class="btn btn-sm" data-mine-deselect>Deselect</button>
+          </div>`;
+  }
+
+  function syncMineChrome() {
+    if (!mineEl) return;
+    const head = mineEl.querySelector('.rp-mine-head');
+    if (!head) return;
+    const html = mineBulkHtml();
+    const bulk = mineEl.querySelector('.rp-mine-bulk');
+    if (html) {
+      if (bulk) bulk.outerHTML = html;
+      else head.insertAdjacentHTML('afterend', html);
+    } else {
+      bulk?.remove();
+    }
+    const rows = [...mineEl.querySelectorAll('tr[data-id]')];
+    for (const row of rows) {
+      const id = row.dataset.id;
+      const on = selectedMine.has(id);
+      row.classList.toggle('is-selected', on);
+      const cb = row.querySelector('[data-mine-check]');
+      if (cb) cb.checked = on;
+    }
+    const all = mineEl.querySelector('[data-mine-select-all]');
+    if (all) {
+      const pageIds = rows.map((r) => r.dataset.id);
+      const allOn = pageIds.length > 0 && pageIds.every((id) => selectedMine.has(id));
+      all.checked = allOn;
+      all.title = allOn ? 'Deselect page' : 'Select page';
+      all.setAttribute('aria-label', allOn ? 'Deselect page' : 'Select page');
+    }
+  }
+
   /** Demos this account uploaded. Admins see the whole library here. */
   function myDemos() {
     if (!account.signedIn) return [];
@@ -686,7 +842,6 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     for (const id of [...selectedMine]) {
       if (!mineIds.has(id)) selectedMine.delete(id);
     }
-    const selCount = selectedMine.size;
 
     const sorted = mine
       .slice()
@@ -706,7 +861,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       .map((d) => {
         const id = escapeHtml(d.id);
         const mapName = d.mapName || (d.map ? MAPS[d.map]?.name : '') || '';
-        const visibility = d.owner?.visibility || 'public';
+        const visibility = demoVisibility(d);
         const checked = selectedMine.has(d.id);
         return `
         <tr data-id="${id}" class="${checked ? 'is-selected' : ''}" tabindex="0">
@@ -717,49 +872,30 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
             ${escapeHtml(formatWhen(d.uploadedAt || d.parsedAt))}
             ${parserStampHtml(d)}
           </td>
-          <td class="rp-mine-match">${escapeHtml(d.team1?.name || 'Team 1')} vs ${escapeHtml(
-            d.team2?.name || 'Team 2'
-          )}</td>
+          <td class="rp-mine-match">
+            <div class="rp-mine-teams">
+              <input class="site-input rp-mine-team-input" data-set-team="1" data-demo="${id}"
+                maxlength="48" value="${escapeHtml(d.team1?.name || '')}" aria-label="Team 1" />
+              <span class="rp-mine-vs">vs</span>
+              <input class="site-input rp-mine-team-input" data-set-team="2" data-demo="${id}"
+                maxlength="48" value="${escapeHtml(d.team2?.name || '')}" aria-label="Team 2" />
+            </div>
+          </td>
           <td class="rp-mine-map">${escapeHtml(mapName)}</td>
           <td class="rp-mine-tags">
             <input class="site-input rp-mine-tag-input" data-set-tags="${id}"
               value="${escapeHtml((d.tags || []).join(', '))}"
               placeholder="Tags" title="Comma separated. Your own labels." />
           </td>
-          <td class="rp-mine-vis">
-            <select class="site-select rp-mine-vis-select" data-set-visibility="${id}" title="Who can see this demo">
-              ${VISIBILITY_OPTIONS.map(
-                (o) =>
-                  `<option value="${o.key}"${visibility === o.key ? ' selected' : ''}>${escapeHtml(
-                    o.label
-                  )}</option>`
-              ).join('')}
-            </select>
-          </td>
+          <td class="rp-mine-vis">${visSegHtml(visibility, { demoId: d.id })}</td>
           <td class="rp-mine-actions">
-            <button type="button" class="rp-btn-icon" data-rename="${id}" title="Rename teams">Aa</button>
             <button type="button" class="rp-btn-icon danger" data-delete="${id}" title="Delete">${deleteIconHtml()}</button>
           </td>
         </tr>`;
       })
       .join('');
 
-    const bulk =
-      selCount > 0
-        ? `<div class="rp-mine-bulk">
-            <span class="rp-mine-bulk-count">${selCount} selected</span>
-            <span class="rp-vis-label">Set to</span>
-            <div class="rp-chips">
-              ${VISIBILITY_OPTIONS.map(
-                (o) =>
-                  `<button type="button" class="rp-chip vis-${o.key}" data-bulk-visibility="${o.key}" title="${escapeHtml(
-                    o.note
-                  )}">${escapeHtml(o.label)}</button>`
-              ).join('')}
-            </div>
-            <button type="button" class="btn btn-sm" data-mine-deselect>Deselect</button>
-          </div>`
-        : '';
+    const bulk = mineBulkHtml();
 
     const from = total ? (minePage - 1) * MINE_PAGE_SIZE + 1 : 0;
     const to = Math.min(minePage * MINE_PAGE_SIZE, total);
@@ -806,37 +942,48 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       }`;
   }
 
+  function lookupMineDemo(id) {
+    return mineDemos.find((d) => d.id === id) || demos.find((d) => d.id === id) || extraDemos.get(id) || null;
+  }
+
+  function queueMineVisibility(id, visibility) {
+    const prev = visSaveTail.get(id) || Promise.resolve();
+    const next = prev.then(
+      () => setOneMineVisibility(id, visibility),
+      () => setOneMineVisibility(id, visibility)
+    );
+    visSaveTail.set(id, next);
+    return next;
+  }
+
+  async function setOneMineVisibility(id, visibility) {
+    const current = demoVisibility(lookupMineDemo(id));
+    if (current === visibility) return;
+    applyVisibilityLocal(id, visibility);
+    paintMineRowVis(id, visibility);
+    try {
+      const res = await setDemoVisibility(id, visibility);
+      const vis = res?.demo?.owner?.visibility || res?.demo?.visibility || visibility;
+      applyVisibilityLocal(id, vis);
+      paintMineRowVis(id, vis);
+    } catch (err) {
+      applyVisibilityLocal(id, current);
+      paintMineRowVis(id, current);
+      throw err;
+    }
+  }
+
   async function applyMineVisibility(ids, visibility) {
-    const list = [...ids];
+    const list = [...new Set(ids)].filter(
+      (id) => id && demoVisibility(lookupMineDemo(id)) !== visibility
+    );
     if (!list.length) return;
+    const results = await Promise.allSettled(list.map((id) => queueMineVisibility(id, visibility)));
     let ok = 0;
     let lastErr = '';
-    for (const id of list) {
-      try {
-        const res = await setDemoVisibility(id, visibility);
-        const demo = res?.demo;
-        if (demo) {
-          const patch = (arr) => {
-            const i = arr.findIndex((d) => d.id === id);
-            const next = {
-              ...(i >= 0 ? arr[i] : {}),
-              ...demo,
-              visibility: demo.owner?.visibility || demo.visibility || visibility,
-              owner: demo.owner || {
-                ...(i >= 0 ? arr[i]?.owner : {}),
-                visibility
-              }
-            };
-            if (i >= 0) arr[i] = next;
-            else arr.push(next);
-          };
-          patch(demos);
-          if (mineDemosLoaded) patch(mineDemos);
-        }
-        ok++;
-      } catch (err) {
-        lastErr = err?.message || 'Failed to update visibility.';
-      }
+    for (const result of results) {
+      if (result.status === 'fulfilled') ok++;
+      else lastErr = result.reason?.message || 'Failed to update visibility.';
     }
     if (ok) {
       setStatus(
@@ -847,7 +994,6 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     } else if (lastErr) {
       setStatus(lastErr, true);
     }
-    renderMine();
   }
 
   /**
@@ -1060,7 +1206,6 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       overlay.innerHTML = `
         <div class="rp-name-card" role="dialog" aria-label="Name teams">
           <h3>Name the teams</h3>
-          <p>These names show up in the match list and the viewer. Round ids stay the same.</p>
           <div class="rp-name-fields">
             <label>Team 1
               <input type="text" id="rp-name-t1" maxlength="48" value="${escapeHtml(demo.team1?.name || '')}" />
@@ -1070,7 +1215,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
             </label>
           </div>
           <div class="rp-name-actions">
-            <button type="button" class="btn btn-sm" data-skip>Skip</button>
+            <button type="button" class="btn btn-sm" data-skip>Cancel</button>
             <button type="button" class="btn btn-sm primary" data-save>Save</button>
           </div>
         </div>`;
@@ -1090,71 +1235,32 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
         if (e.target === overlay) close();
       });
       overlay.querySelector('[data-save]').addEventListener('click', async () => {
+        const n1 = String(t1.value || '').trim().slice(0, 48) || demo.team1?.name || 'Team 1';
+        const n2 = String(t2.value || '').trim().slice(0, 48) || demo.team2?.name || 'Team 2';
+        const prev1 = demo.team1?.name || '';
+        const prev2 = demo.team2?.name || '';
+        applyTeamNamesLocal(demo.id, n1, n2);
+        paintMineTeamInputs(demo.id, n1, n2);
+        close();
         try {
-          const res = await renameDemoTeams(demo.id, t1.value, t2.value);
-          renderQuota(res.usage);
-          setStatus('Team names saved.');
-          await refresh();
+          const res = await renameDemoTeams(demo.id, n1, n2);
+          const next = res?.demo;
+          if (next?.team1) {
+            applyTeamNamesLocal(demo.id, next.team1.name, next.team2?.name || n2);
+            paintMineTeamInputs(demo.id, next.team1.name, next.team2?.name || n2);
+          }
+          applyPropagatedTeamNames(res);
+          if (res?.usage) renderQuota(res.usage);
+          invalidateStatsCache();
+          if (subpage === 'library' || !subpage) {
+            renderDemos();
+            renderResults();
+          }
         } catch (err) {
+          applyTeamNamesLocal(demo.id, prev1, prev2);
+          paintMineTeamInputs(demo.id, prev1, prev2);
           setStatus(err.message, true);
         }
-        close();
-      });
-    });
-  }
-
-  /**
-   * Ask who may see a freshly uploaded demo. Uploads land as private; if this
-   * prompt never runs (tab closed / offline), they stay private.
-   */
-  function promptDemoVisibility(demoOrId) {
-    const id = typeof demoOrId === 'string' ? demoOrId : demoOrId?.id;
-    if (!id) return Promise.resolve();
-    const label =
-      typeof demoOrId === 'object' && demoOrId
-        ? `${demoOrId.team1?.name || 'Team 1'} vs ${demoOrId.team2?.name || 'Team 2'}`
-        : id;
-    return new Promise((resolve) => {
-      const overlay = document.createElement('div');
-      overlay.className = 'rp-name-dialog';
-      overlay.innerHTML = `
-        <div class="rp-name-card" role="dialog" aria-label="Demo visibility">
-          <h3>Who can see this demo?</h3>
-          <p>${escapeHtml(label)} is private until you pick. If you close this without choosing, it stays private.</p>
-          <div class="rp-vis-prompt-chips">
-            ${VISIBILITY_OPTIONS.map(
-              (o) =>
-                `<button type="button" class="btn btn-sm vis-pick vis-${o.key}" data-pick="${o.key}" title="${escapeHtml(
-                  o.note
-                )}">${escapeHtml(o.label)}</button>`
-            ).join('')}
-          </div>
-          <p class="rp-vis-prompt-note">Public: anyone · Unlisted: team + link · Private: only you</p>
-          <div class="rp-name-actions">
-            <button type="button" class="btn btn-sm" data-skip>Keep private</button>
-          </div>
-        </div>`;
-      document.body.appendChild(overlay);
-
-      const close = () => {
-        overlay.remove();
-        resolve();
-      };
-
-      overlay.querySelector('[data-skip]').addEventListener('click', close);
-      overlay.addEventListener('click', (e) => {
-        if (e.target === overlay) close();
-      });
-      overlay.querySelectorAll('[data-pick]').forEach((btn) => {
-        btn.addEventListener('click', async () => {
-          const visibility = btn.dataset.pick;
-          try {
-            await applyMineVisibility([id], visibility);
-          } catch (err) {
-            setStatus(err?.message || 'Could not set visibility.', true);
-          }
-          close();
-        });
       });
     });
   }
@@ -1425,7 +1531,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     }
     if (e.target.closest('[data-mine-deselect]')) {
       selectedMine.clear();
-      renderMine();
+      syncMineChrome();
       return;
     }
     const selectAll = e.target.closest('[data-mine-select-all]');
@@ -1440,7 +1546,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       const allOn = pageItems.length > 0 && pageItems.every((d) => selectedMine.has(d.id));
       if (allOn) for (const d of pageItems) selectedMine.delete(d.id);
       else for (const d of pageItems) selectedMine.add(d.id);
-      renderMine();
+      syncMineChrome();
       return;
     }
     const check = e.target.closest('[data-mine-check]');
@@ -1448,7 +1554,14 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       const id = check.dataset.mineCheck;
       if (check.checked) selectedMine.add(id);
       else selectedMine.delete(id);
-      renderMine();
+      syncMineChrome();
+      return;
+    }
+    const visBtn = e.target.closest('[data-set-visibility]');
+    if (visBtn) {
+      const id = visBtn.dataset.setVisibility;
+      const visibility = visBtn.dataset.vis;
+      if (id && visibility) void applyMineVisibility([id], visibility);
       return;
     }
     if (e.target.closest('[data-rename], [data-delete], [data-retry], [data-open], [data-demo-stats]')) {
@@ -1462,19 +1575,24 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       const id = row.dataset.id;
       if (selectedMine.has(id)) selectedMine.delete(id);
       else selectedMine.add(id);
-      renderMine();
+      syncMineChrome();
     }
   });
 
   mineEl?.addEventListener('change', (e) => {
-    const sel = e.target.closest('[data-set-visibility]');
-    if (sel) {
-      applyMineVisibility([sel.dataset.setVisibility], sel.value);
+    const tagInput = e.target.closest('[data-set-tags]');
+    if (tagInput) {
+      void applyDemoTags(tagInput.dataset.setTags, tagInput.value);
       return;
     }
-    // Tags commit on blur / Enter, which is what `change` is on a text input.
-    const tagInput = e.target.closest('[data-set-tags]');
-    if (tagInput) void applyDemoTags(tagInput.dataset.setTags, tagInput.value);
+    const teamInput = e.target.closest('[data-set-team]');
+    if (teamInput?.dataset.demo) void applyMineTeams(teamInput.dataset.demo);
+  });
+
+  mineEl?.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    const field = e.target.closest('[data-set-tags], [data-set-team]');
+    if (field) field.blur();
   });
 
   /**
@@ -1492,16 +1610,58 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       const res = await setDemoTags(id, tags);
       const next = res?.demo;
       if (!next) return;
-      const apply = (list) => {
-        const at = (list || []).findIndex((d) => d.id === id);
-        if (at >= 0) list[at] = { ...list[at], tags: next.tags || [] };
-      };
-      apply(demos);
-      apply(mineDemos);
-      renderMine();
-      renderResults();
+      forDemoLists(id, (d) => {
+        d.tags = next.tags || [];
+      });
+      const input = mineRow(id)?.querySelector('[data-set-tags]');
+      if (input && input !== document.activeElement) {
+        input.value = (next.tags || []).join(', ');
+      }
     } catch (err) {
       setStatus(err?.message || 'Could not save tags.', true);
+    }
+  }
+
+  function applyMineTeams(id) {
+    const prev = teamSaveTail.get(id) || Promise.resolve();
+    const next = prev.then(
+      () => saveMineTeams(id),
+      () => saveMineTeams(id)
+    );
+    teamSaveTail.set(id, next);
+    return next;
+  }
+
+  async function saveMineTeams(id) {
+    const row = mineRow(id);
+    if (!row) return;
+    const n1 = String(row.querySelector('[data-set-team="1"]')?.value || '')
+      .trim()
+      .slice(0, 48);
+    const n2 = String(row.querySelector('[data-set-team="2"]')?.value || '')
+      .trim()
+      .slice(0, 48);
+    const demo = lookupMineDemo(id);
+    const cur1 = demo?.team1?.name || '';
+    const cur2 = demo?.team2?.name || '';
+    const next1 = n1 || cur1 || 'Team 1';
+    const next2 = n2 || cur2 || 'Team 2';
+    if (next1 === cur1 && next2 === cur2) return;
+    applyTeamNamesLocal(id, next1, next2);
+    try {
+      const res = await renameDemoTeams(id, next1, next2);
+      const saved = res?.demo;
+      if (saved?.team1) {
+        applyTeamNamesLocal(id, saved.team1.name, saved.team2?.name || next2);
+        paintMineTeamInputs(id, saved.team1.name, saved.team2?.name || next2);
+      }
+      applyPropagatedTeamNames(res);
+      if (res?.usage) renderQuota(res.usage);
+      invalidateStatsCache();
+    } catch (err) {
+      applyTeamNamesLocal(id, cur1, cur2);
+      paintMineTeamInputs(id, cur1, cur2);
+      setStatus(err?.message || 'Could not save team names.', true);
     }
   }
 
@@ -1607,11 +1767,10 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
   }
 
   /**
-   * The pump. Everything the run needs to say at the end (counts, failures,
-   * the visibility and naming prompts) is gathered per LAP, and a lap only
-   * ends when both the file queue and the followers have drained. Files
-   * dropped during the summary or a prompt start the next lap instead of
-   * being lost to a pump that already returned.
+   * The pump. Everything the run needs to say at the end (counts, failures)
+   * is gathered per LAP, and a lap only ends when both the file queue and the
+   * followers have drained. Files dropped during the summary start the next
+   * lap instead of being lost to a pump that already returned.
    */
   async function runUploadQueue() {
     if (runActive) return;
@@ -1644,9 +1803,6 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
      * the batch rather than on any file, because there were no files.
      */
     const batchErrors = [];
-    const namingQueue = [];
-    /** @type {string[]} */
-    const visibilityQueue = [];
     /** @type {string[]} */
     const alreadyExists = [];
     /** @type {{id: string, name: string, label: string, watch: Promise<any>}[]} */
@@ -1680,22 +1836,17 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
         try {
           if (isPackage) {
             // A package is already parsed, so it lands ready and skips the queue.
-            const res = await uploadImport(next.file, onProgress);
+            const res = await uploadImport(next.file, onProgress, uploadVisibility);
             renderQuota(res.usage);
             imported++;
-            if (res.demo) {
-              namingQueue.push(res.demo);
-              if (res.demo.id) visibilityQueue.push(res.demo.id);
-            }
             // Not awaited: the next file should start going up now, not after a
             // library listing. It is only here to put the row on screen while
             // the rest of the queue uploads.
             void refresh();
           } else {
-            // Visibility starts private; the prompt after parse is what opens
-            // it up. If the tab is gone when parsing finishes, demos stay
-            // private.
-            const res = await uploadDemo(next.file, onProgress, 'private');
+            // Visibility comes from the upload-page control. If the tab is
+            // gone when parsing finishes, the header on the batch still applies.
+            const res = await uploadDemo(next.file, onProgress, uploadVisibility);
             renderQuota(res.usage);
             rememberBatch(res.batch.id, name);
             const item = { id: res.batch.id, name, label, watch: null };
@@ -1774,7 +1925,6 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
             } else if (f.failed) {
               failed += 1;
             }
-            if (!f.failed && f.demoId) visibilityQueue.push(f.demoId);
           }
           if (batch.stage === 'error' && !batch.totals.files) {
             batchErrors.push(batch.error || `Could not unpack ${item.name}.`);
@@ -1807,17 +1957,6 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       nothingLanded && (failed > 0 || alreadyExists.length > 0 || batchErrors.length > 0)
     );
     await refresh();
-
-    const seenVis = new Set();
-    for (const id of visibilityQueue) {
-      if (!id || seenVis.has(id)) continue;
-      seenVis.add(id);
-      const demo = demos.find((d) => d.id === id);
-      await promptDemoVisibility(demo || id);
-    }
-    for (const demo of namingQueue) {
-      await promptTeamNames(demo);
-    }
     if (!failed && !alreadyExists.length && !batchErrors.length) clearProgress();
   }
 
@@ -1833,6 +1972,21 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     dropEl.classList.remove('over');
     startUpload(e.dataTransfer?.files);
   });
+
+  uploadVisEl?.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-upload-visibility]');
+    if (!btn) return;
+    const v = btn.dataset.uploadVisibility;
+    if (!VISIBILITY_OPTIONS.some((o) => o.key === v)) return;
+    uploadVisibility = v;
+    try {
+      localStorage.setItem(UPLOAD_VIS_KEY, v);
+    } catch {
+      /* ignore quota / private mode */
+    }
+    renderUploadVis();
+  });
+  renderUploadVis();
 
   // ---- team clustering ----------------------------------------------------
 
