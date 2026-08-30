@@ -23,7 +23,7 @@ const CDN = 'https://cdn.paddle.com/paddle/v2/paddle.js';
 let loading = null;
 
 /** Resolves with window.Paddle, initialised once for the given config. */
-function loadPaddle({ environment, clientToken }) {
+function loadPaddle({ environment, clientToken }, customerId = null) {
   if (loading) return loading;
 
   loading = new Promise((resolve, reject) => {
@@ -41,7 +41,14 @@ function loadPaddle({ environment, clientToken }) {
     // Environment must be set before Setup, and only for sandbox: calling
     // it with 'production' is not valid.
     if (environment === 'sandbox') Paddle.Environment.set('sandbox');
-    Paddle.Setup({ token: clientToken });
+    // pwCustomer identifies the signed-in customer to Paddle Retain, which
+    // runs their payment-recovery and cancellation flows. It must be the
+    // Paddle customer id (ctm_...), which the server already knows; without it
+    // Retain cannot attribute anything and quietly does nothing.
+    Paddle.Setup({
+      token: clientToken,
+      ...(customerId ? { pwCustomer: { id: customerId } } : {})
+    });
     return Paddle;
   });
 
@@ -63,16 +70,27 @@ function loadPaddle({ environment, clientToken }) {
  * @param {object} args
  * @param {string} args.transactionId  txn_... from /api/billing/checkout
  * @param {object} args.billing        the /api/billing/status payload
+ * @param {string} [args.customerId]   ctm_... from the same response, for Retain
  * @param {string} [args.successUrl]   where Paddle sends the buyer after paying
  * @param {() => void} [args.onClose]  called when the overlay is dismissed
  */
-export async function openCheckout({ transactionId, billing, successUrl, onClose }) {
+export async function openCheckout({ transactionId, billing, customerId, successUrl, onClose }) {
   if (!transactionId) throw new Error('No transaction to check out.');
   if (!billing?.clientToken || !billing?.environment) {
     throw new Error(billing?.error || 'Payments are not configured.');
   }
 
-  const Paddle = await loadPaddle(billing);
+  const Paddle = await loadPaddle(billing, customerId || null);
+  // Setup only runs once, so a customer id learned after the first load is
+  // applied with Update. Best effort: Retain missing a customer must never
+  // block a checkout.
+  if (customerId) {
+    try {
+      Paddle.Update({ pwCustomer: { id: customerId } });
+    } catch {
+      /* older Paddle.js without Update, or already identified */
+    }
+  }
 
   Paddle.Checkout.open({
     transactionId,

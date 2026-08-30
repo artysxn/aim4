@@ -852,6 +852,7 @@ function planCard(
           if (res?.transactionId) {
             await openCheckout({
               transactionId: res.transactionId,
+              customerId: res.customerId || null,
               billing,
               successUrl: checkoutSuccessUrl(),
               // Paddle gives no signal for "paid" here, only "closed". Re-enable
