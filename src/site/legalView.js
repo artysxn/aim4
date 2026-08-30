@@ -46,7 +46,7 @@ const TERMS_HTML = `
     <h2>5. Plans, trials and billing</h2>
     <p>The free tier covers watching demos, browsing the database, and trying the tools. Paid plans raise limits and unlock features as described on <a href="/account/subscription">Account → Subscription</a>. Trials (normally 7 days) are one per account and can be cancelled at any time without charge.</p>
     <p>You can cancel a paid plan whenever you like; access continues to the end of the paid period and no further charges are made. When a plan lapses, <strong>nothing is deleted</strong>: content over the free tier's limits locks, and you have 90 days to choose what to keep or export before over-limit content may be removed.</p>
-    <p>Payments are taken by our payment provider, who acts as the seller of record for the transaction and issues your invoice. Card details never reach aim4's servers. Prices are shown in euros; any tax due is determined by the country you buy from and is shown before you confirm.</p>
+    <p>Payments are taken by Paddle, our merchant of record: Paddle acts as the seller of record for the transaction, collects any tax due, and issues your invoice. Card details never reach aim4's servers. Prices are shown in euros; any tax due is determined by the country you buy from and is shown before you confirm.</p>
     <h3>Refunds</h3>
     <p>The policy, in full:</p>
     <ul>
