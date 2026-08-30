@@ -95,7 +95,15 @@ export function storedReferral() {
   }
 }
 
-/** Forget it. Called once a checkout has carried it to the server. */
+/**
+ * Forget it.
+ *
+ * Deliberately not called after a checkout. Once the server has written the
+ * referral row, that row is the source of truth and first touch is settled
+ * there, so re-sending the same code changes nothing. Clearing it here would
+ * only lose the attribution for a second purchase made before the window is
+ * up. This exists for a person who wants it gone, and for the tests.
+ */
 export function clearReferral() {
   try {
     localStorage.removeItem(KEY);
