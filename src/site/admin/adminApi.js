@@ -52,6 +52,15 @@ export const adminApi = {
   // Demo ingest. start/stop only signal the separate ingester process; the
   // status they return is the same shape as ingestStatus so the panel can
   // redraw from the response without a second round trip.
+  // Codes. Trial codes are ours; promo codes are proxied to Paddle.
+  listCodes: (batch = null) =>
+    get(`/api/admin/codes${batch ? `?batch=${encodeURIComponent(batch)}` : ''}`).then((r) => r.codes),
+  mintCodes: (body) => send('POST', '/api/admin/codes', body),
+  archiveCodes: (body) => send('POST', '/api/admin/codes/archive', body),
+  listPromoCodes: () => get('/api/admin/promo-codes').then((r) => r.promoCodes),
+  createPromoCode: (body) => send('POST', '/api/admin/promo-codes', body),
+  archivePromoCode: (id) => send('POST', '/api/admin/promo-codes/archive', { id }),
+
   ingestStatus: () => get('/api/admin/ingest'),
   ingestLog: (tail = 999) => get(`/api/admin/ingest/log?tail=${encodeURIComponent(tail)}`),
   ingestLogClear: () => send('DELETE', '/api/admin/ingest/log'),

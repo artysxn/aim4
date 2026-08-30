@@ -82,6 +82,10 @@ export class PaddleError extends Error {
  * mapping either side of it, and a wrapper that hides the status code makes a
  * failed charge harder to diagnose, not easier.
  */
+export async function paddleRequest(path, opts) {
+  return api(path, opts);
+}
+
 async function api(path, { method = 'GET', body } = {}) {
   const key = apiKey();
   if (!key) throw new PaddleError('PADDLE_API_KEY is not set', 500);
@@ -168,6 +172,22 @@ export async function planForPriceIds(priceIds) {
     }
   }
   return null;
+}
+
+/**
+ * Every price id belonging to these plans, across all terms.
+ *
+ * Promo codes restrict by price, not by plan: that is what makes a code work on
+ * Solo Elite but not on Free, and it is the finest grain Paddle offers, so a
+ * code can later be limited to one term without a different mechanism.
+ */
+export async function priceIdsForPlans(planIds) {
+  const map = await priceMap();
+  const out = [];
+  for (const planId of planIds) {
+    for (const id of Object.values(map[planId] || {})) out.push(id);
+  }
+  return out;
 }
 
 export async function priceIdFor(planId, term) {

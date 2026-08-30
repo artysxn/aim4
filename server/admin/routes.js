@@ -25,6 +25,8 @@ import { ValidationError, createGrant, listGrants, revokeGrant } from '../entitl
 import { invalidateUser, loadEntitlements } from '../entitlements/load.js';
 import { recomputeUser } from '../entitlements/recompute.js';
 import { invalidateAdmin, isSiteAdmin, siteAdmin } from '../entitlements/service.js';
+import { archiveCodes, listCodes, mintCodes } from '../entitlements/codes.js';
+import { archivePromoCode, createPromoCode, listPromoCodes } from '../billing/promoCodes.js';
 import * as ingest from '../ingest/hltv/service.js';
 import { cancelProbe, probeState, startProbe } from '../ingest/hltv/probe.js';
 import { loadConfig as loadIngestConfig } from '../ingest/hltv/config.js';
@@ -392,6 +394,54 @@ async function route(req, res, url, me) {
   if (req.method === 'DELETE' && grantMatch) {
     const row = await revokeGrant({ grantId: grantMatch[1], actorId: me.id, req });
     json(res, req, 200, { grant: row });
+    return true;
+  }
+
+  // ---- trial codes --------------------------------------------------------
+  // Minting is a bulk operation on purpose: a batch of 200 single-use codes for
+  // a giveaway is the normal case, and one-at-a-time is the same call with
+  // count 1.
+  if (req.method === 'GET' && p === '/api/admin/codes') {
+    const batch = url.searchParams.get('batch') || null;
+    const includeArchived = url.searchParams.get('archived') === '1';
+    json(res, req, 200, { codes: await listCodes({ batch, includeArchived }) });
+    return true;
+  }
+
+  if (req.method === 'POST' && p === '/api/admin/codes') {
+    const body = await readJson(req);
+    const result = await mintCodes({ ...body, createdBy: me.id, req });
+    json(res, req, 201, result);
+    return true;
+  }
+
+  if (req.method === 'POST' && p === '/api/admin/codes/archive') {
+    const body = await readJson(req);
+    const rows = await archiveCodes({ ...body, actorId: me.id, req });
+    json(res, req, 200, { archived: rows.length });
+    return true;
+  }
+
+  // ---- promo codes --------------------------------------------------------
+  // These live in Paddle, so this is a proxy rather than a store. Reads go to
+  // Paddle every time: a cached discount list is a list that can disagree with
+  // what a customer is actually charged.
+  if (req.method === 'GET' && p === '/api/admin/promo-codes') {
+    json(res, req, 200, { promoCodes: await listPromoCodes({}) });
+    return true;
+  }
+
+  if (req.method === 'POST' && p === '/api/admin/promo-codes') {
+    const body = await readJson(req);
+    const row = await createPromoCode(body);
+    json(res, req, 201, { promoCode: row });
+    return true;
+  }
+
+  if (req.method === 'POST' && p === '/api/admin/promo-codes/archive') {
+    const body = await readJson(req);
+    const row = await archivePromoCode(body.id);
+    json(res, req, 200, { promoCode: row });
     return true;
   }
 

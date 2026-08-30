@@ -12,7 +12,7 @@
 // the UI can show a locked state instead of a failed request.
 // ---------------------------------------------------------------------------
 
-import { CAPABILITIES, UNLIMITED } from '../../shared/entitlements/catalogue.js';
+import { CAPABILITIES, PLAN_NAMES, UNLIMITED } from '../../shared/entitlements/catalogue.js';
 import { guardImpersonation } from '../admin/guard.js';
 import { peek } from '../entitlements/quota.js';
 import { quotaSubjectFor } from '../entitlements/enforce.js';
@@ -32,6 +32,8 @@ import {
 } from '../entitlements/subscriptions.js';
 import { billingConfigured, provider } from '../billing/provider.js';
 import { ValidationError } from '../entitlements/grants.js';
+// Aliased: steamAuth.js already exports a redeemCode, for Steam tickets.
+import { redeemCode as redeemTrialCode } from '../entitlements/codes.js';
 import { db } from '../entitlements/service.js';
 import { clientIp } from '../entitlements/audit.js';
 import { ackWarning, integrityState, recordSession } from './integrity.js';
@@ -430,6 +432,32 @@ async function route(req, res, url, me) {
   // Cancellation works before payments do: an admin-granted or migrated
   // subscription can be wound down by its owner, and when a billing provider
   // lands the same route also tells it, so the customer stops being charged.
+  // ---- redeem a trial code ------------------------------------------------
+  // Rate limited by the code itself rather than the endpoint: a code is a
+  // guessable secret, so the interesting attack is enumeration. The alphabet
+  // and length in codes.js make that expensive, and every attempt lands in the
+  // audit log through redeemCode.
+  if (req.method === 'POST' && p === '/api/account/redeem-code') {
+    if (!requireUser()) return true;
+    const body = await readJson(req);
+    try {
+      const result = await redeemTrialCode({ code: body.code, userId: me.id, req });
+      json(res, 200, {
+        redeemed: true,
+        planId: result.planId,
+        planName: PLAN_NAMES[result.planId] || result.planId,
+        durationDays: result.durationDays,
+        expiresAt: result.expiresAt
+      });
+    } catch (err) {
+      // ValidationError carries the customer-facing reason ("already used",
+      // "expired"). Anything else is ours and should not be spelled out.
+      const known = err?.name === 'ValidationError';
+      json(res, known ? 400 : 500, { error: known ? err.message : 'Could not redeem that code.' });
+    }
+    return true;
+  }
+
   if (req.method === 'POST' && p === '/api/account/subscription/cancel') {
     if (!requireUser()) return true;
     const row = await cancelSubscription({ userId: me.id, actorId: me.id, req });

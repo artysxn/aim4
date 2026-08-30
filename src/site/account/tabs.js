@@ -431,6 +431,12 @@ export function subscriptionTab(state, { reload, billing, openAuth }) {
   // and the sign-in card the page puts above this already says what to do.
   if (signedIn) root.appendChild(currentPlanHead(state, currentTier, sub, { reload, billing }));
 
+  // ---- redeem a code ------------------------------------------------------
+  // Above the ladder rather than below it: someone arriving with a code in hand
+  // is not shopping, and making them scroll past six plans to use it reads as a
+  // dark pattern.
+  if (signedIn) root.appendChild(redeemCard({ reload }));
+
   // ---- term, then the tier cards ------------------------------------------
   // One term for the whole grid rather than a switch per card: the question is
   // asked once and every price on screen answers it. The starting term is the
@@ -880,6 +886,59 @@ function planCard(
     }
     card.appendChild(cta);
   }
+  return card;
+}
+
+/**
+ * Redeem a trial code.
+ *
+ * Deliberately not a plan card. A code is not a purchase: nothing is charged,
+ * no card is stored, and what arrives is a time-boxed grant that sits on top of
+ * whatever the account already has. Presenting it as a seventh tile would
+ * suggest otherwise.
+ */
+function redeemCard({ reload }) {
+  const card = el('section', 'account-card account-redeem');
+  card.appendChild(el('h3', null, 'Redeem a code'));
+
+  const row = el('div', 'account-redeem-row');
+  const box = input('text', '', 'AIM4-XXXX-XXXX');
+  box.autocapitalize = 'characters';
+  box.spellcheck = false;
+  box.setAttribute('aria-label', 'Trial code');
+  row.appendChild(box);
+
+  const submit = button(
+    'Redeem',
+    async () => {
+      const code = box.value.trim();
+      if (!code) return;
+      submit.disabled = true;
+      try {
+        const res = await accountApi.redeemCode(code);
+        notice(
+          card,
+          `${res.planName} unlocked for ${res.durationDays} days, until ${date(res.expiresAt)}.`,
+          'ok'
+        );
+        box.value = '';
+        reload?.();
+      } catch (err) {
+        // The server sends a plain reason for the cases a person can act on:
+        // already used, expired, not recognised.
+        notice(card, err.message, 'error');
+      } finally {
+        submit.disabled = false;
+      }
+    },
+    'btn btn-primary'
+  );
+  // Enter is what people press after typing a code.
+  box.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') submit.click();
+  });
+  row.appendChild(submit);
+  card.appendChild(row);
   return card;
 }
 

@@ -153,6 +153,16 @@ export const accountApi = {
       })
     ),
 
+  /** Redeem a trial code. The server decides everything; this only carries it. */
+  redeemCode: async (code) =>
+    asJson(
+      await fetch(`${API_BASE}/api/account/redeem-code`, {
+        method: 'POST',
+        headers: await headers(),
+        body: JSON.stringify({ code })
+      })
+    ),
+
   billingPortal: async () =>
     asJson(
       await fetch(`${API_BASE}/api/billing/portal`, {
