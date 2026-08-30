@@ -59,6 +59,7 @@ import { initHomeView } from './homeView.js';
 import { initChangelogView } from './changelogView.js';
 import { initDocsView } from './docsView.js';
 import { initContactView } from './contactView.js';
+import { initPrivacyView, initTermsView } from './legalView.js';
 import { initNotifications } from './notify.js';
 import { initIntegrity } from './integrity.js';
 import { initAccountView } from './account/accountView.js';
@@ -717,6 +718,8 @@ const ROUTES = {
   changelog: { title: 'Changelog', path: '/changelog', shell: 'changelog' },
   docs: { title: 'Documentation', path: '/docs', shell: 'docs' },
   contact: { title: 'Contact', path: '/contact', shell: 'contact' },
+  terms: { title: 'Terms of service', path: '/terms', shell: 'terms' },
+  privacy: { title: 'Privacy', path: '/privacy', shell: 'privacy' },
   // Admin-only, chromeless. The view refuses non-admins itself; the route
   // entry only stops the deep link from falling through to the trainer.
   pitchdeck: { title: 'Pitch deck', path: '/tools/pitchdeck', shell: 'pitchdeck' },
@@ -1031,6 +1034,8 @@ viewControllers.contact = initContactView(document.querySelector('.view[data-vie
   auth,
   escapeHtml
 });
+viewControllers.terms = initTermsView(document.querySelector('.view[data-view="terms"]'));
+viewControllers.privacy = initPrivacyView(document.querySelector('.view[data-view="privacy"]'));
 // One manager per page, refreshed whenever the session changes. Gates read it
 // for UI state only; the server has already made every decision it reflects.
 const entitlements = getEntitlements(auth);

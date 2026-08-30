@@ -63,7 +63,7 @@ import { Controls } from '../../cs3d/controls.js';
 import { placeThirdPersonCamera, THIRD_PERSON_BACK } from '../../cs3d/thirdPerson.js';
 import { mountCrosshair } from '../../cs3d/crosshairOverlay.js';
 import { rayAabb, botBox, hitgroupFromHeight } from '../../cs3d/practiceBots.js';
-import { isGun, isGrenade, bareWeapon, hudLoadout, inventoryAt } from './equipmentIcons.js';
+import { isGun, isGrenade, bareWeapon, hudLoadout, inventoryAt, viewModelWeaponName } from './equipmentIcons.js';
 import { createXrayPass, markXrayObject, xrayIconList } from '../../cs3d/xray.js';
 import { createMatchHud } from '../../cs3d/matchHud.js';
 import { BloodSpray } from '../../cs3d/blood.js';
@@ -752,7 +752,7 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange }) {
   }
 
   function heldWeapon(raw) {
-    const name = bareWeapon(raw);
+    const name = viewModelWeaponName(raw);
     if (!name || name === 'none') return 'knife';
     return vmAssets.stats?.(name) ? name : 'knife';
   }
@@ -1002,6 +1002,20 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange }) {
       if (s.side === 'CT') ctAlive++;
       else tAlive++;
     }
+    // One square per player in slot order, lit while alive, the spectated
+    // player's outlined — the count-based fallback outlined square #1 no
+    // matter who was being watched.
+    const ctSquares = [];
+    const tSquares = [];
+    for (let slot = 0; slot < (frame.states || []).length; slot++) {
+      const s = frame.states[slot];
+      if (!s) continue;
+      const side = s.side === 'CT' || s.side === 'T' ? s.side : sideOf(slot);
+      if (side !== 'CT' && side !== 'T') continue;
+      (side === 'CT' ? ctSquares : tSquares).push({ on: !!s.alive, self: slot === povSlot });
+    }
+    while (ctSquares.length < 5) ctSquares.push({ on: false, self: false });
+    while (tSquares.length < 5) tSquares.push({ on: false, self: false });
     matchHud.update({
       src: [over.x, over.y, over.z],
       yaw: over.yaw,
@@ -1009,6 +1023,8 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange }) {
       clock: frame.clock,
       ctAlive,
       tAlive,
+      ctSquares,
+      tSquares,
       scoreCt: frame.scoreCt,
       scoreT: frame.scoreT,
       overlay: over
@@ -1528,7 +1544,12 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange }) {
       frame = next;
       if (povSlot < 0) {
         const live = liveSlots();
-        if (live.length) povSlot = live[0];
+        if (live.length) {
+          povSlot = live[0];
+          // The first frame just picked who is being watched; the host's
+          // spectate label reads povName off this callback.
+          onModeChange?.(mode);
+        }
       }
       applyFrame();
     },

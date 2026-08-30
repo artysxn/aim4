@@ -501,7 +501,10 @@ function healStore(io, user, key, hit, wanted) {
       hit.ids.add(k);
       n += 1;
       if (hp) hp.done = n;
-      if (n % 8 === 0) await yieldEventLoop();
+      // Every demo, not every 8th: one stored index is a sync JSON.parse of
+      // up to several MB, and eight back-to-back was a measured ~100 ms hole
+      // in the loop while a heal ran. A setImmediate per demo costs microseconds.
+      await yieldEventLoop();
     }
     // finish() hands back views over the current buffers, so it must be
     // re-run after an append: growth reallocates, and the previous views
@@ -562,7 +565,9 @@ function startBuild(io, user, records, opts = {}) {
       // JSON.parse + rating context for one demo is sync. Without this a cold
       // pack after deploy holds the only thread until every index is in, so
       // Database /status / everything else looks down until it finishes.
-      if (done % 8 === 0) await yieldEventLoop();
+      // Per demo, not per 8: eight parses between yields still held the loop
+      // ~100 ms at a stretch, which is a visible hiccup on every live request.
+      await yieldEventLoop();
     }
     if (skipped) console.warn(`[stats] hot store built with ${skipped} demos skipped`);
     const store = packer.finish();

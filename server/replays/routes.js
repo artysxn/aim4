@@ -898,7 +898,10 @@ export async function handleReplayRequest(req, res, url) {
       };
       return out;
     }
-    const gate = await checkQuota(user, Math.max(0, Number(sizeBytes) || 0));
+    // `reserve` also holds the declared bytes (not just the demo-count slot),
+    // so the quota gate can read cached usage instead of stat-walking the
+    // rounds directory per request — see checkQuota.
+    const gate = await checkQuota(user, Math.max(0, Number(sizeBytes) || 0), { reserve });
     if (!gate.ok) {
       out.refusal = { status: 413, body: { error: gate.error, usage: gate.usage } };
       return out;
@@ -1097,6 +1100,7 @@ export async function handleReplayRequest(req, res, url) {
     // that is already full, and takes the place that stops a second request
     // arriving in the same moment from being admitted against the same count.
     let reserved = 0;
+    let releaseQuota = null;
     try {
       const gated = await gateUpload({
         kind: 'demo',
@@ -1105,6 +1109,7 @@ export async function handleReplayRequest(req, res, url) {
         reserve: true
       });
       reserved = gated.reserved;
+      releaseQuota = gated.gate?.release || null;
       if (gated.refusal) {
         logRefusal('demo', filename, req.headers['content-length'], gated.refusal);
         // Drained first, or the refusal is never read: see refuseUpload.
@@ -1158,17 +1163,20 @@ export async function handleReplayRequest(req, res, url) {
           // The resolved caller, for the per-demo cap check inside the unpack.
           account: me
         },
-        reserved
+        reserved,
+        releaseQuota
       });
-      // The ingest pipeline owns the reservation from here and releases it once
-      // the records it wrote can count themselves.
+      // The ingest pipeline owns both reservations from here and releases them
+      // once the records it wrote can count themselves.
       reserved = 0;
+      releaseQuota = null;
       json(res, 202, { batch: batchStatus(batch), usage: await usage(user) });
       return true;
     } finally {
       // Every path that answered without starting an ingest gives its place
       // back, or a refused upload would hold it until the process restarted.
       if (reserved) releaseUploads(me.id, reserved);
+      releaseQuota?.();
     }
   }
 
@@ -1197,6 +1205,7 @@ export async function handleReplayRequest(req, res, url) {
     // for the same reason, because the body still has to stream before the
     // record is written.
     let reserved = 0;
+    let releaseQuota = null;
     try {
       const gated = await gateUpload({
         kind: 'import',
@@ -1205,6 +1214,7 @@ export async function handleReplayRequest(req, res, url) {
         reserve: true
       });
       reserved = gated.reserved;
+      releaseQuota = gated.gate?.release || null;
       if (gated.refusal) {
         logRefusal('package', filename, req.headers['content-length'], gated.refusal);
         await refuseUpload(req, res, gated.refusal.status, gated.refusal.body);
@@ -1245,6 +1255,7 @@ export async function handleReplayRequest(req, res, url) {
       // path there is nothing to hand the reservation on to: by the time this
       // runs the demo is either in the library or it never will be.
       if (reserved) releaseUploads(me.id, reserved);
+      releaseQuota?.();
     }
   }
 

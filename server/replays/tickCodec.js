@@ -33,6 +33,7 @@
 // ---------------------------------------------------------------------------
 
 import zlib from 'node:zlib';
+import { promisify } from 'node:util';
 import {
   HEADER_BYTES,
   TICK_BYTES,
@@ -68,6 +69,15 @@ function zstd(buf, level) {
 function unzstd(buf) {
   return zlib.zstdDecompressSync(buf);
 }
+
+/**
+ * The threadpool form. The sync form above stays for workers and tests, but a
+ * REQUEST must not decompress on the main loop: the round-packs route reads
+ * up to 400 rounds per call and every sync block was loop time nothing else
+ * could use — the measured shape of "opening the pattern finder lags the
+ * whole site".
+ */
+const unzstdAsync = promisify(zlib.zstdDecompress);
 
 // ---- codec 2: columns, deltas, varints --------------------------------------
 // The transform itself lives in src/replays/shared/tickPacked.js: the viewer's
@@ -166,7 +176,7 @@ export function readTickzHeader(buf) {
   };
 }
 
-function blockAt(b, meta, index) {
+function blockSpan(b, meta, index) {
   let offset = PREFIX_BYTES + meta.blockCount * 4;
   for (let i = 0; i < index; i++) offset += b.readUInt32LE(PREFIX_BYTES + i * 4);
   const length = b.readUInt32LE(PREFIX_BYTES + index * 4);
@@ -174,7 +184,18 @@ function blockAt(b, meta, index) {
     meta.blockTicks,
     meta.source.tickCount - index * meta.blockTicks
   );
+  return { offset, length, rows };
+}
+
+function blockAt(b, meta, index) {
+  const { offset, length, rows } = blockSpan(b, meta, index);
   const plain = unzstd(b.subarray(offset, offset + length));
+  return meta.codec === CODEC_COLUMNAR ? unpackBlock(plain, rows) : plain;
+}
+
+async function blockAtAsync(b, meta, index) {
+  const { offset, length, rows } = blockSpan(b, meta, index);
+  const plain = await unzstdAsync(b.subarray(offset, offset + length));
   return meta.codec === CODEC_COLUMNAR ? unpackBlock(plain, rows) : plain;
 }
 
@@ -192,6 +213,19 @@ export function decodeTickz(source) {
   b.copy(out, 0, SRC_HEADER_AT, SRC_HEADER_AT + HEADER_BYTES);
   for (let i = 0; i < meta.blockCount; i++) {
     blockAt(b, meta, i).copy(out, HEADER_BYTES + i * meta.blockTicks * TICK_BYTES);
+  }
+  return out.buffer.slice(out.byteOffset, out.byteOffset + out.byteLength);
+}
+
+/** decodeTickz with the zstd on the threadpool — the request-path form. */
+export async function decodeTickzAsync(source) {
+  const b = toBuffer(source);
+  const meta = readTickzHeader(b);
+  const rowsTotal = meta.source.tickCount;
+  const out = Buffer.alloc(HEADER_BYTES + rowsTotal * TICK_BYTES);
+  b.copy(out, 0, SRC_HEADER_AT, SRC_HEADER_AT + HEADER_BYTES);
+  for (let i = 0; i < meta.blockCount; i++) {
+    (await blockAtAsync(b, meta, i)).copy(out, HEADER_BYTES + i * meta.blockTicks * TICK_BYTES);
   }
   return out.buffer.slice(out.byteOffset, out.byteOffset + out.byteLength);
 }
@@ -227,6 +261,35 @@ export function decodeTickzStride(source, stride) {
     const bi = Math.floor(row / meta.blockTicks);
     if (bi !== cached) {
       block = blockAt(b, meta, bi);
+      cached = bi;
+    }
+    const from = (row - bi * meta.blockTicks) * TICK_BYTES;
+    block.copy(out, HEADER_BYTES + i * TICK_BYTES, from, from + TICK_BYTES);
+  }
+  return out.buffer.slice(out.byteOffset, out.byteOffset + out.byteLength);
+}
+
+/** decodeTickzStride with the zstd on the threadpool — the request-path form. */
+export async function decodeTickzStrideAsync(source, stride) {
+  const b = toBuffer(source);
+  const meta = readTickzHeader(b);
+  const step = Math.max(1, stride | 0);
+  if (step === 1) return decodeTickzAsync(b);
+
+  const rowsTotal = meta.source.tickCount;
+  const rows = Math.ceil(rowsTotal / step);
+  const out = Buffer.alloc(HEADER_BYTES + rows * TICK_BYTES);
+  b.copy(out, 0, SRC_HEADER_AT, SRC_HEADER_AT + HEADER_BYTES);
+  out.writeUInt32LE(rows, 8);
+  out.writeUInt32LE(meta.source.stride * step, 16);
+
+  let cached = -1;
+  let block = null;
+  for (let i = 0; i < rows; i++) {
+    const row = i * step;
+    const bi = Math.floor(row / meta.blockTicks);
+    if (bi !== cached) {
+      block = await blockAtAsync(b, meta, bi);
       cached = bi;
     }
     const from = (row - bi * meta.blockTicks) * TICK_BYTES;

@@ -245,6 +245,42 @@ const STATE = {
   assert(!body._ragdoll, 'respawn restores the bind pose');
 }
 
+// ---- a body revived after a ragdoll death animates again --------------------
+//
+// _beginRagdoll calls mixer.stopAllAction(), and a stopped action ignores the
+// weights _blend writes. Reviving that body (a round switch, a scrub back over
+// the kill) therefore left every locomotion loop inert: the restored pose held
+// while the position kept updating, which on screen was a lobby of players
+// gliding around frozen. The revive branch must put the loops back in play.
+{
+  const body = new PlayerBody(makeModels(), 'T');
+  body.set(STATE);
+  for (let i = 0; i < 30; i++) body.update(1 / 64);
+  body.startRagdoll({ force: { x: 80, y: 20, z: 0 }, hitPos: { x: 0, y: 20, z: 0 } });
+  body.set({ ...STATE, alive: false });
+  body.update(1 / 64);
+  assert(body._ragdoll?.active, 'the kill ragdolled (stopAllAction has run)');
+
+  // The kill deactivated the loops (that is what stopAllAction does), and a
+  // deactivated action ignores the weight and time _blend writes every frame.
+  const stopped = [...body.actions.values()].filter(
+    (a) => a.timeScale === 0 && !body.mixer._isActiveAction(a)
+  );
+  assert(stopped.length > 0, 'precondition: the ragdoll death deactivated the loops');
+
+  // The round switches back: same slot, alive, running. Every loop must be
+  // back in play or the body holds its restored pose while the position moves.
+  body.set(STATE);
+  body.update(1 / 64);
+  const inert = [...body.actions.values()].filter(
+    (a) => a.timeScale === 0 && !body.mixer._isActiveAction(a)
+  );
+  assert(
+    inert.length === 0,
+    `a revived body must animate again, not glide frozen (${inert.length} loops still stopped)`
+  );
+}
+
 // ---- TraceAttack punch tilts the spine on top of the view pitch ------------
 {
   const body = new PlayerBody(makeModels(), 'T');

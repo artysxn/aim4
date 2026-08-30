@@ -30,11 +30,20 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import zlib from 'node:zlib';
+import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
+
+/** Request-path decompression goes to the threadpool, never the main loop. */
+const zstdDecompress = promisify(zlib.zstdDecompress);
 import { collectRounds, sortRounds } from '../../src/replays/shared/roundFilter.js';
 import { readHeader, sliceStride } from '../../src/replays/shared/tickFormat.js';
 import { encodePacked } from '../../src/replays/shared/tickPacked.js';
-import { TICKZ_EXT, decodeTickz, decodeTickzStride, encodeTickz } from './tickCodec.js';
+import {
+  TICKZ_EXT,
+  decodeTickzAsync,
+  decodeTickzStrideAsync,
+  encodeTickz
+} from './tickCodec.js';
 import {
   assertNotReservedKey,
   assertReal,
@@ -493,7 +502,7 @@ export async function writeMaterialized(user, record, files) {
       if (entry.c100) {
         await fsp.writeFile(path.join(dir, `${stem}${COARSE_EXT}`), entry.c100);
       } else {
-        const raw = Buffer.from(decodeTickz(entry.tickz));
+        const raw = Buffer.from(await decodeTickzAsync(entry.tickz));
         await fsp.writeFile(
           path.join(dir, `${stem}${COARSE_EXT}`),
           Buffer.from(sliceStride(raw, COARSE_STRIDE))
@@ -713,6 +722,43 @@ export async function usage(user, { fresh = false } = {}) {
 }
 
 /**
+ * Bytes admitted through the quota gate whose files are not on disk yet, per
+ * library. This is what lets checkQuota read the CACHED usage number: two
+ * uploads arriving together each see the other's reservation, so they cannot
+ * both be admitted against the same headroom — which was the only race the
+ * old `fresh: true` walk actually protected against, at the price of a full
+ * stat of the rounds directory (hundreds of thousands of files at library
+ * scale) on every single upload request. Two upload tabs at once made that
+ * walk the thing every other request queued behind.
+ *
+ * @type {Map<string, number>}
+ */
+const reservedUploadBytes = new Map();
+
+/**
+ * Reserve `bytes` of quota headroom. Returns a release function that is safe
+ * to call more than once; the caller (or the ingest batch it hands off to)
+ * MUST call it, or the headroom stays spoken for until the process restarts.
+ */
+export function reserveQuotaBytes(user, bytes) {
+  const key = userKey(user);
+  const n = Math.max(0, Number(bytes) || 0);
+  if (n > 0) reservedUploadBytes.set(key, (reservedUploadBytes.get(key) || 0) + n);
+  let released = false;
+  return () => {
+    if (released || n === 0) return;
+    released = true;
+    const left = (reservedUploadBytes.get(key) || 0) - n;
+    if (left > 0) reservedUploadBytes.set(key, left);
+    else reservedUploadBytes.delete(key);
+  };
+}
+
+function quotaBytesReserved(user) {
+  return reservedUploadBytes.get(userKey(user)) || 0;
+}
+
+/**
  * Check an upload against the per-upload cap and the library quota before a
  * byte is written. `incoming` is the declared Content-Length; the writer
  * enforces both again while streaming, so a lying or absent header cannot
@@ -720,11 +766,19 @@ export async function usage(user, { fresh = false } = {}) {
  *
  * `allowed` is what the caller must cap the stream at: the smaller of what is
  * left in the library and what one upload may be.
+ *
+ * Reads the cached usage plus live reservations, NOT a fresh walk. The cache
+ * is at most 15 s stale and every write path invalidates it, so the exposure
+ * is bounded by what can land on disk in 15 s — while the walk it replaces
+ * was O(library) work per upload request, on the request path, made worse by
+ * exactly the things (ingest, another tab's upload) that make the library
+ * grow. `reserve: true` holds the declared size until released.
  */
-export async function checkQuota(user, incoming = 0) {
-  // Fresh: this is the gate that protects the disk, so it must not admit an
-  // upload on the strength of a byte count from fifteen seconds ago.
-  const u = await usage(user, { fresh: true });
+export async function checkQuota(user, incoming = 0, { reserve = false } = {}) {
+  const u = await usage(user);
+  const reserved = quotaBytesReserved(user);
+  const held = u.bytes + reserved;
+  const bytesLeft = Math.max(0, MAX_BYTES - held);
   const gb = (n) => (n / 1024 ** 3).toFixed(n >= 1024 ** 3 ? 0 : 1);
 
   if (incoming > MAX_UPLOAD_BYTES) {
@@ -734,14 +788,21 @@ export async function checkQuota(user, incoming = 0) {
       usage: u
     };
   }
-  if (incoming > 0 && u.bytes + incoming > MAX_BYTES) {
+  if (incoming > 0 && held + incoming > MAX_BYTES) {
     return {
       ok: false,
       error: `Not enough shared storage. The server holds ${gb(MAX_BYTES)} GB total.`,
       usage: u
     };
   }
-  return { ok: true, usage: u, allowed: Math.min(u.bytesLeft, MAX_UPLOAD_BYTES) };
+  return {
+    ok: true,
+    usage: u,
+    allowed: Math.min(bytesLeft, MAX_UPLOAD_BYTES),
+    // Declared-size reservation only: a stream with no Content-Length is still
+    // capped by `allowed` while it writes, it just cannot pre-claim headroom.
+    release: reserve ? reserveQuotaBytes(user, incoming) : null
+  };
 }
 
 /**
@@ -959,10 +1020,30 @@ export async function listRoundNames(user) {
 /**
  * The collector: filter a whole library by name, fast, then hand back just
  * the matches for the client to load lazily.
+ *
+ * Chunked, because "fast" stopped being true at library scale: collectRounds
+ * is pure string parsing per name, and one pass over a six-figure rounds
+ * directory was a measured ~60-90 ms with the loop held the whole way — per
+ * request, on an endpoint the demo browser hits on every filter change. The
+ * slices keep the same names order and the same limit semantics; the yields
+ * between them are where every other request gets to run.
  */
+const COLLECT_CHUNK = 15_000;
+
 export async function findRounds(user, query = {}, opts = {}) {
   const names = await listRoundNames(user);
-  return sortRounds(collectRounds(names, query, opts));
+  const limit = opts.limit ?? Infinity;
+  const out = [];
+  for (let i = 0; i < names.length && out.length < limit; i += COLLECT_CHUNK) {
+    out.push(
+      ...collectRounds(names.slice(i, i + COLLECT_CHUNK), query, {
+        ...opts,
+        limit: limit - out.length
+      })
+    );
+    if (i + COLLECT_CHUNK < names.length) await new Promise(setImmediate);
+  }
+  return sortRounds(out);
 }
 
 export async function readRoundMeta(user, file) {
@@ -971,8 +1052,11 @@ export async function readRoundMeta(user, file) {
   for (const ext of META_EXTS) {
     const raw = await readIfPresent(path.join(dir, `${stem}${ext}`));
     if (!raw) continue;
+    // Threadpool zstd, not sync: a round meta is ~27 KB compressed and this
+    // runs per round on the viewer, packs and stats paths — the sync form was
+    // main-loop time multiplied by whatever batch size the caller used.
     const meta = JSON.parse(
-      ext.endsWith('.zst') ? zlib.zstdDecompressSync(raw) : raw.toString('utf8')
+      ext.endsWith('.zst') ? await zstdDecompress(raw) : raw.toString('utf8')
     );
     // The second firewall check (12.1), the one that travels with the file.
     // The key check above cannot help once a round has been copied into a
@@ -1016,8 +1100,13 @@ export async function readRoundTicks(user, file, stride = 1) {
     if (coarse) return asArrayBuffer(coarse);
   }
 
+  // Async decode: the zstd runs on the threadpool. This function is on the
+  // request path of the viewer, the packs route and the stats builders, and
+  // the sync form was a loop stall per round read.
   const tickz = await readIfPresent(path.join(dir, `${stem}${TICKZ_EXT}`));
-  if (tickz) return step === 1 ? decodeTickz(tickz) : decodeTickzStride(tickz, step);
+  if (tickz) {
+    return step === 1 ? decodeTickzAsync(tickz) : decodeTickzStrideAsync(tickz, step);
+  }
 
   // Not compacted yet: the original fixed-width file, read exactly as before.
   const buf = await readIfPresent(path.join(dir, `${stem}.bin`));

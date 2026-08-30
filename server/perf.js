@@ -24,6 +24,8 @@
 // here is a metric anyone should page on; it is a window on one process.
 // ---------------------------------------------------------------------------
 
+import { monitorEventLoopDelay } from 'node:perf_hooks';
+
 /** Samples kept per route. 200 is enough for a stable p95 and costs ~1.6 kB. */
 const SAMPLES = 200;
 /** Hard cap on tracked routes, so an attacker cannot grow this map with 404s. */
@@ -34,6 +36,17 @@ const bakes = new Map();
 const startedAt = Date.now();
 let requests = 0;
 let slowest = null;
+
+/**
+ * Event-loop delay, the metric this file was missing. Route percentiles rising
+ * TOGETHER is what a blocked loop looks like from the outside, and without
+ * this histogram it is indistinguishable from a slow disk. The p99/max here is
+ * the direct reading: how long the loop sat unable to run anything — sync
+ * zstd, a JSON.parse of a big index, a stat storm — which is exactly the
+ * failure mode behind "uploads break when anything else is happening".
+ */
+const loopDelay = monitorEventLoopDelay({ resolution: 20 });
+loopDelay.enable();
 
 /**
  * Collapse a concrete path to a route shape.
@@ -157,6 +170,14 @@ export function snapshot() {
         null
     },
     slowest,
+    // Nanoseconds from the histogram; milliseconds with one decimal for the
+    // panel. ~10 ms p99 is a healthy loop; hundreds means requests are queuing
+    // behind synchronous work regardless of what any single route reports.
+    eventLoop: {
+      p50Ms: Math.round(loopDelay.percentile(50) / 1e5) / 10,
+      p99Ms: Math.round(loopDelay.percentile(99) / 1e5) / 10,
+      maxMs: Math.round(loopDelay.max / 1e5) / 10
+    },
     routes: rows,
     bakes: bakeRows,
     bakeTotals: { count: bakeRows.length, bytes: bakeBytes, parseMs: bakeMs }
@@ -169,4 +190,5 @@ export function resetPerf() {
   bakes.clear();
   requests = 0;
   slowest = null;
+  loopDelay.reset();
 }

@@ -393,6 +393,10 @@ export function createTimelineViewer({
           </div>
           <div class="rv-loading" id="rv-loading"></div>
           <div class="rv-transport-anchor">
+            <div class="rv-spectating" id="rv-spectating" hidden>
+              <span class="rv-spectating-label">Spectating</span>
+              <span class="rv-spectating-name" id="rv-spectating-name"></span>
+            </div>
             <div class="rv-tools rv-tools-draw" id="rv-draw-tools" hidden>
               <button type="button" class="rv-tool" id="rv-erase" title="Eraser: drag over a line to remove it">${icon(eraseIcon)}</button>
               <span class="rv-tool-sep"></span>
@@ -473,6 +477,7 @@ export function createTimelineViewer({
   const mapEl = el.querySelector('.rv-map');
   const keysEl = el.querySelector('#rv-keys');
   const clockEl = el.querySelector('#rv-clock');
+  const clockRowEl = el.querySelector('#rv-clock-row');
   const scoreLeftEl = el.querySelector('#rv-score-left');
   const scoreRightEl = el.querySelector('#rv-score-right');
   const oddsLeftEl = el.querySelector('#rv-odds-left');
@@ -490,6 +495,8 @@ export function createTimelineViewer({
   const handleEl = el.querySelector('#rv-scrub-handle');
   const playBtn = el.querySelector('#rv-play');
   const speedBtn = el.querySelector('#rv-speed');
+  const spectatingEl = el.querySelector('#rv-spectating');
+  const spectatingNameEl = el.querySelector('#rv-spectating-name');
   const fwdBtn = el.querySelector('#rv-fwd');
   const backBtn = el.querySelector('#rv-back');
   const team1El = el.querySelector('.rv-team-1');
@@ -980,8 +987,20 @@ export function createTimelineViewer({
     el.classList.toggle('is-3d-immerse', mode3d && immerse3d);
     view3d?.setImmerse?.(mode3d && immerse3d);
     if (!mode3d) setRadarOverview(false);
+    syncSpectating();
     syncPovHighlight();
     syncPovBtn();
+  }
+
+  /**
+   * Whose eyes the 3D view is borrowing, above the playback buttons. Immerse
+   * (V) follow modes only: free roam is nobody's POV, the regular 3D chrome
+   * already highlights the player in the roster, and 2D has its own highlight.
+   */
+  function syncSpectating() {
+    const name = mode3d && immerse3d && view3d && !view3d.isFree ? view3d.povName : null;
+    spectatingEl.hidden = !name;
+    if (name) spectatingNameEl.textContent = name;
   }
 
   async function setMode3d(on) {
@@ -1584,8 +1603,12 @@ export function createTimelineViewer({
     if (zonesOn || chartOn) await refreshZonePresence();
     else if (duelsOn) await ensureZoneNetwork();
     if (chartOn) {
-      mapControlCache.delete(file);
-      coachCache.delete(file);
+      // No cache purge here any more. It existed so a series built during the
+      // holding paint (fallback meta) could not survive as this round's chart
+      // — but coachFor / mapControlFor now refuse to CACHE such a build at
+      // all, so the purge only did one thing in practice: throw away a good
+      // series and recompute the win chart from the full track on every
+      // revisit of a round already watched.
       syncWinChart();
     }
     if (coachOn) {
@@ -4196,7 +4219,13 @@ export function createTimelineViewer({
     const file = files[index];
     if (!file) return null;
     if (coachCache.has(file)) return coachCache.get(file);
-    const roundMeta = meta || (index === activeIndex ? activeMeta : null);
+    // The resolved meta from metaFor when it has landed, else whatever the
+    // caller vouches for. activeMeta alone is NOT trusted for caching below:
+    // during a first visit it can still be fallbackMeta (summary fields, maybe
+    // players) while the full track is already warm, and an analysis built
+    // from that pair must not be remembered as this round's answer.
+    const real = peekMeta(file);
+    const roundMeta = meta || real || (index === activeIndex ? activeMeta : null);
     if (!roundMeta?.players?.length) return null;
     // Full ticks only — never analyse against a missing / coarse buffer.
     const track = store.get(file)?.full || null;
@@ -4219,7 +4248,11 @@ export function createTimelineViewer({
     } catch {
       return null;
     }
-    coachCache.set(file, result);
+    // Cache only an analysis built from authoritative meta (the caller's, per
+    // the contract above, or the resolved one). This is what lets selectRound
+    // KEEP the cache across revisits — the win chart used to be recomputed
+    // from the full track on every switch back to a round already watched.
+    if (meta || real) coachCache.set(file, result);
     return result;
   }
 
@@ -4593,7 +4626,13 @@ export function createTimelineViewer({
     const file = files[index];
     if (!file) return null;
     if (mapControlCache.has(file)) return mapControlCache.get(file);
-    const roundMeta = index === activeIndex ? activeMeta : null;
+    // Same trust rule as coachFor: prefer the resolved meta, and only a series
+    // built from it is cached further down. Cone-casting the whole track is
+    // the most expensive thing a round switch can trigger, so the cache must
+    // survive revisits — and it can only do that safely if a fallback-meta
+    // build can never be mistaken for the real one.
+    const real = peekMeta(file);
+    const roundMeta = real || (index === activeIndex ? activeMeta : null);
     if (!roundMeta?.players?.length) return null;
     const track = store.get(file)?.full || null;
     if (!track) return null;
@@ -4619,7 +4658,7 @@ export function createTimelineViewer({
     } catch {
       return null;
     }
-    if (series?.length) mapControlCache.set(file, series);
+    if (series?.length && real) mapControlCache.set(file, series);
     return series;
   }
 
@@ -5739,9 +5778,16 @@ export function createTimelineViewer({
   window.addEventListener('keydown', onKey);
 
   // The round strip and scrubber own their own row under the map now, so the
-  // chrome no longer eats into the radar. What still overlays it is the
-  // floating transport cluster in the bottom-left corner, and the radar is
-  // inset by that much so a player standing there is never under a button.
+  // chrome no longer eats into the radar. What still floats OVER it is the
+  // transport cluster in the bottom-left corner and the score/clock bar across
+  // the top, and the radar is inset by both so a player standing at either
+  // edge is never under them.
+  //
+  // Both, not just the bottom: the map is centred in what the insets leave, so
+  // reserving the transport's band alone centred it in the upper part of the
+  // stage — the whole map rode too high and its top edge ran under the score
+  // bar. The top band restores the symmetry, which is what puts the map back
+  // in the middle of the space that is actually clear.
   //
   // The height is still published as --rv-chrome-h: the stacked layout puts
   // the rosters under the map and sizes the docked panels off it.
@@ -5750,14 +5796,26 @@ export function createTimelineViewer({
     el.style.setProperty('--rv-chrome-h', `${chromeH}px`);
     const transportH = el.querySelector('.rv-transport')?.offsetHeight || 0;
     const overlap = transportH ? transportH + 20 : 0;
+    // The score bar is absolutely placed inside .rv-map, so its distance from
+    // the top of the stage is part of the band it occupies — measured rather
+    // than assumed, because team names wrap it to a second line on narrow
+    // windows and it is hidden entirely in immersive 3D.
+    const clockH = clockRowEl && !clockRowEl.hidden ? clockRowEl.offsetHeight : 0;
+    const topBand = clockH ? clockRowEl.offsetTop + clockH + 8 : 0;
     // Keep the hotkey legend clear of the floating transport and the 3D
     // free-look button, both of which sit on that bottom band of the map.
     el.style.setProperty('--rv-keys-inset', `${overlap + 12}px`);
-    if (!mode3d && renderer.viewInset.bottom !== overlap) {
+    if (mode3d) return false;
+    let changed = false;
+    if (renderer.viewInset.bottom !== overlap) {
       renderer.viewInset.bottom = overlap;
-      return true;
+      changed = true;
     }
-    return false;
+    if (renderer.viewInset.top !== topBand) {
+      renderer.viewInset.top = topBand;
+      changed = true;
+    }
+    return changed;
   }
 
   const onStackedChange = () => {
@@ -5776,6 +5834,10 @@ export function createTimelineViewer({
         })
       : null;
   chromeObserver?.observe(chromeEl);
+  // The score bar too: it is the map's top inset, and it grows a line taller
+  // when long team names wrap. Measured at boot it is still empty, so without
+  // this the map keeps a stale band until the next window resize.
+  if (clockRowEl) chromeObserver?.observe(clockRowEl);
 
   const onResize = () => {
     syncChromeInset();

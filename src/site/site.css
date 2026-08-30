@@ -5173,3 +5173,27 @@ body.deck-mode .site-main {
   color: var(--accent) !important;
   font-weight: 600;
 }
+
+/* ---------------------------------------------------------------------------
+   /terms and /privacy — same reading rhythm as the docs page.
+--------------------------------------------------------------------------- */
+.legal-page section {
+  margin-bottom: 30px;
+  scroll-margin-top: 16px;
+}
+
+.legal-page h2 {
+  margin: 0 0 10px;
+  font-size: 19px;
+}
+
+.legal-page p {
+  margin: 0 0 10px;
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--text);
+}
+
+.legal-page a {
+  color: var(--accent);
+}

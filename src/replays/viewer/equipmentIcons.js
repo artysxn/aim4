@@ -450,6 +450,18 @@ export function isDefuser(name) {
 }
 
 /**
+ * A tick record's held-weapon display name as the weapons-pack key.
+ *
+ * Grenades must go through `normalizeGrenadeType`, not `bareWeapon`: the
+ * dictionary stores demoparser display names, and `bareWeapon` only collapses
+ * whitespace — "HE Grenade" became `he_grenade`, which matches no pack entry,
+ * so the viewmodel fell back to a knife whenever a player held utility.
+ */
+export function viewModelWeaponName(name) {
+  return isGrenade(name) ? normalizeGrenadeType(name) : bareWeapon(name);
+}
+
+/**
  * Loadout strings from the parser → bare item ids (keeps duplicates for nades).
  *
  * Must go through `inventoryItemId`, not `bareWeapon`: the `inventory` prop

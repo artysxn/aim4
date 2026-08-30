@@ -61,6 +61,7 @@ const RING = [
 const _proj = new THREE.Vector3();
 const _view = new THREE.Vector3();
 const _size = new THREE.Vector2();
+const _viewMat = new THREE.Matrix4();
 
 /**
  * Smallest on-screen body height (NDC) that still gets a nameplate. Below this
@@ -351,6 +352,10 @@ export function createXrayPass({ renderer, scene, parent }) {
     }
     labels.hidden = false;
     camera.updateMatrixWorld();
+    // Inverted here rather than read off the camera: the renderer only stamps
+    // `matrixWorldInverse` during render, and labels update before it — a POV
+    // that turned this frame would cull tags against last frame's view.
+    _viewMat.copy(camera.matrixWorld).invert();
     const rect = parent.getBoundingClientRect();
     const w = Math.max(1, rect.width);
     const h = Math.max(1, rect.height);
@@ -363,7 +368,7 @@ export function createXrayPass({ renderer, scene, parent }) {
       const duck = s.duck ?? 0;
       _proj.set(0, xrayHeadOffset(duck), 0);
       s.object.localToWorld(_proj);
-      _view.copy(_proj).applyMatrix4(camera.matrixWorldInverse);
+      _view.copy(_proj).applyMatrix4(_viewMat);
       _proj.copy(_view).applyMatrix4(camera.projectionMatrix);
       if (!xrayLabelVisible(_view.z, _proj.x, _proj.y, _proj.z, projY)) {
         const el = tags.get(id);

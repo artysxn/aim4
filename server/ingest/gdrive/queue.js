@@ -488,7 +488,14 @@ function defaultImport(buf, filename) {
 }
 
 /** The probe's forked parse, with the child tracked for Stop. */
-function packageDemoForked(demoFile, outPath, meta) {
+async function packageDemoForked(demoFile, outPath, meta) {
+  // Same ranking as the HLTV crawl (replays/parseGate.js): user uploads first.
+  // This queue lives IN the API process, so it can ask the parse queue
+  // directly instead of going through the marker file.
+  const { parseQueueBusy } = await import('../../replays/jobs.js');
+  while (parseQueueBusy()) {
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+  }
   return new Promise((resolve, reject) => {
     const payload = JSON.stringify({ file: demoFile, outPath, meta });
     const child = fork(PARSE_WORKER, [payload], {

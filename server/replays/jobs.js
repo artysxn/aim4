@@ -38,6 +38,7 @@ import {
   readRoundMeta,
   readRoundTicks,
   uploadsDir,
+  usage,
   userDir
 } from './demoStore.js';
 import { unpackUpload } from './archive.js';
@@ -45,6 +46,7 @@ import { getZones } from '../zonesStore.js';
 import { getCoachSmokes } from '../coachSmokesStore.js';
 import { deriveBatchTicks } from './hostMemory.js';
 import { scheduleStatsIndex } from './statsIndex.js';
+import { clearUserParseActive, markUserParseActive } from './parseGate.js';
 import { CAP } from '../../shared/entitlements/keys.js';
 import { checkLimit } from '../entitlements/enforce.js';
 import { discardDuplicateUpload } from './dupeScan.js';
@@ -420,7 +422,11 @@ export function startIngest({
   sizeBytes,
   allowedBytes,
   owner = null,
-  reserved = 0
+  reserved = 0,
+  // Byte-quota reservation from checkQuota, owned here for the same lifetime
+  // as `reserved` above: released once the extracted files are on disk where
+  // the usage walk can count them for itself.
+  releaseQuota = null
 }) {
   const batch = {
     id: crypto.randomBytes(8).toString('hex'),
@@ -570,6 +576,11 @@ export function startIngest({
       // and there is nothing to count. Held any longer, a failed upload would
       // keep a place in the cap until the process restarted.
       releaseUploads(owner?.uploaderId, reserved);
+      releaseQuota?.();
+      // Converge the byte meter now that the extracted files are countable —
+      // in the background, ONCE per upload, which is the walk the quota gate
+      // no longer does per request.
+      usage(user, { fresh: true }).catch(() => {});
     }
   })();
 
@@ -624,9 +635,17 @@ export function enqueueParse({
 }
 
 function pump() {
-  if (running || !queue.length) return;
+  if (running || !queue.length) {
+    // Queue truly drained: tell ingest (parseGate) it may parse again.
+    if (!running && !queue.length) clearUserParseActive();
+    return;
+  }
   const job = queue.shift();
   running = job;
+  // Cross-process signal, not just the in-memory flag: the HLTV ingest child
+  // polls this before starting its own parse, so user work never shares the
+  // box's memory with an ingest parse it cannot see.
+  markUserParseActive();
   job.state = 'running';
   job.stage = 'starting';
   job.startedAt = Date.now();

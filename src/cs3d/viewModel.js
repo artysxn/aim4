@@ -369,23 +369,35 @@ export class ViewModelAssets {
     const key = String(name || '').replace(/^weapon_/, '');
     if (this.models.has(key)) return Promise.resolve(this.models.get(key));
     if (this._pending.has(key)) return this._pending.get(key);
-    const w = this.stats(key);
-    if (!w?.file) return Promise.resolve(null);
-    const job = this._fetch(w.file)
-      .then((gltf) => {
-        gltf.scene.traverse((o) => {
-          if (!o.isMesh) return;
-          o.frustumCulled = false;
-          o.castShadow = true;
-          o.receiveShadow = true;
+    // Behind the manifest, not ahead of it: a caller that asked while the pack
+    // was still downloading used to get an authoritative null — which is why a
+    // grenade thrown in the first seconds of a replay flew as its stand-in
+    // blip (the grey/orange ball) for that whole flight.
+    const job = Promise.resolve(this._loading || this.load())
+      .then(() => {
+        const w = this.stats(key);
+        if (!w?.file) {
+          // The pack genuinely has no such weapon; that answer is permanent.
+          this.models.set(key, null);
+          this._pending.delete(key);
+          return null;
+        }
+        return this._fetch(w.file).then((gltf) => {
+          gltf.scene.traverse((o) => {
+            if (!o.isMesh) return;
+            o.frustumCulled = false;
+            o.castShadow = true;
+            o.receiveShadow = true;
+          });
+          this.models.set(key, gltf.scene);
+          this._pending.delete(key);
+          return gltf.scene;
         });
-        this.models.set(key, gltf.scene);
-        this._pending.delete(key);
-        return gltf.scene;
       })
       .catch((e) => {
         console.warn(`cs3d: weapon model ${key} failed`, e);
-        this.models.set(key, null);
+        // NOT cached as null: one flaky fetch permanently blipped every later
+        // flight of this grenade type. The next asker retries.
         this._pending.delete(key);
         return null;
       });
@@ -775,8 +787,13 @@ export class ViewModel {
     // `performance.now()/1000` passed it — about one second after the page
     // loaded — so every draw after that was interruptible on the first click.
     this.nextAttack = draw ? performance.now() / 1000 + (stats.deploy || 0) : 0;
-    if (draw) this._play('draw', { loop: false });
-    else this._play('idle', { loop: true });
+    // Fade 0, same reasoning as setSide: stopAllAction/uncacheRoot above left
+    // nothing to cross-fade from, and a fade-in needs mixer TIME to reach
+    // weight 1 — a paused demo hands update() dt 0 forever, so the 0.06 fade
+    // never arrived and a POV switch to another weapon rendered the gun with
+    // the arms stuck in the bind pose, off both edges of the frame.
+    if (draw) this._play('draw', { loop: false, fade: 0 });
+    else this._play('idle', { loop: true, fade: 0 });
   }
 
   /**

@@ -255,6 +255,21 @@ export function createMatchHud({ root, map, match, hooks = {} }) {
     return bits.join('');
   }
 
+  /**
+   * One square per player: lit while alive, the spectated one outlined even
+   * when dead. The demo viewer passes these; the count-based `squares` above
+   * stays for practice mode, where only the local player is a real person.
+   */
+  function squaresFromList(list) {
+    return list
+      .map((e) => `<i class="${e.on ? 'is-on' : ''}${e.self ? ' is-self' : ''}"></i>`)
+      .join('');
+  }
+
+  function squaresKey(list) {
+    return (list || []).map((e) => `${e.on ? 1 : 0}${e.self ? 's' : ''}`).join('');
+  }
+
   function syncStatic(snap, extra) {
     node.money.textContent = `$${snap.money}`;
     node.hp.textContent = String(snap.hp);
@@ -267,8 +282,12 @@ export function createMatchHud({ root, map, match, hooks = {} }) {
     node.scoreT.textContent = String(extra.scoreT ?? snap.scoreT);
     const ctAlive = extra.ctAlive ?? (snap.side === 'CT' && !snap.dead ? 1 : 0);
     const tAlive = extra.tAlive ?? (snap.side === 'T' && !snap.dead ? 1 : 0);
-    node['lives-ct'].innerHTML = squares(ctAlive, snap.side === 'CT');
-    node['lives-t'].innerHTML = squares(tAlive, snap.side === 'T');
+    node['lives-ct'].innerHTML = extra.ctSquares
+      ? squaresFromList(extra.ctSquares)
+      : squares(ctAlive, snap.side === 'CT');
+    node['lives-t'].innerHTML = extra.tSquares
+      ? squaresFromList(extra.tSquares)
+      : squares(tAlive, snap.side === 'T');
     node['lives-ct'].dataset.count = String(ctAlive);
     node['lives-t'].dataset.count = String(tAlive);
 
@@ -628,7 +647,8 @@ export function createMatchHud({ root, map, match, hooks = {} }) {
         node.clock.textContent = clock;
       }
       const overlayKey = frame.overlay
-        ? `${snap.hp}|${snap.held}|${snap.primary}|${snap.pistol}|${snap.money}|${snap.dead}|${snap.side}|${(snap.nades || []).join(',')}|${snap.roundKills}|${(snap.kills || []).length}`
+        ? `${snap.hp}|${snap.held}|${snap.primary}|${snap.pistol}|${snap.money}|${snap.dead}|${snap.side}|${(snap.nades || []).join(',')}|${snap.roundKills}|${(snap.kills || []).length}` +
+          `|${frame.ctAlive ?? ''}|${frame.tAlive ?? ''}|${squaresKey(frame.ctSquares)}|${squaresKey(frame.tSquares)}`
         : '';
       if (snap.gen !== lastGen || overlayKey !== lastOverlayKey) {
         lastGen = snap.gen;

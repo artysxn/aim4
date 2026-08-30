@@ -42,6 +42,15 @@ export const accountApi = {
       })
     ),
 
+  /** Drop the server's cached identity for this account. */
+  refreshIdentity: async () =>
+    asJson(
+      await fetch(`${API_BASE}/api/account/identity/refresh`, {
+        method: 'POST',
+        headers: await headers()
+      })
+    ),
+
   /** Change the display name. Empty clears it back to the tag. */
   setDisplayName: async (displayName) =>
     asJson(

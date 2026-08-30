@@ -14,7 +14,10 @@
 import path from 'node:path';
 import { parseDemo } from '../../demoparser/index.js';
 import { ingestDemo } from '../../replays/ingest.js';
-import { writeRecord } from '../../replays/demoStore.js';
+import { readRoundMeta, readRoundTicks, userDir, writeRecord } from '../../replays/demoStore.js';
+import { demoIndex } from '../../replays/statsIndex.js';
+import { getZones } from '../../zonesStore.js';
+import { getCoachSmokes } from '../../coachSmokesStore.js';
 import { INGEST_UPLOADER } from '../../replays/identity.js';
 import { applyHltvTeams, teamsFromDemoFilename } from './teamNames.js';
 import { findLibraryDuplicate, fingerprintDemo } from './duplicates.js';
@@ -142,6 +145,22 @@ async function run() {
     namedFromHltv: naming.applied
   };
   await writeRecord(library, record);
+
+  // Index in the worker, same as the user path's parseWorker.js. Ingested
+  // demos used to land with NO stats index at all, so the API's hot store
+  // noticed new records every cache TTL and paid for a heal that had to build
+  // the missing index on its own main loop — the drip statsHotService.js's
+  // header describes. With the index already on disk, that heal is an append.
+  send({ type: 'progress', stage: 'stats', round: 0, total: demo.rounds?.length || 0 });
+  try {
+    await demoIndex(
+      { userDir, readRoundMeta, readRoundTicks, getZones, getCoachUtilities: getCoachSmokes },
+      library,
+      record
+    );
+  } catch (err) {
+    console.warn(`[parse] stats index in worker failed for ${targetId}: ${err?.message || err}`);
+  }
 
   send({
     type: 'done',

@@ -18,6 +18,8 @@ const SECTIONS = [
   { id: 'team', label: 'Team tools' },
   { id: 'practice', label: 'Practice' },
   { id: 'plans', label: 'Plans and storage' },
+  { id: 'terms', label: 'Terms of service' },
+  { id: 'privacy', label: 'Privacy' },
   { id: 'help', label: 'Getting help' }
 ];
 
@@ -109,6 +111,16 @@ export function initDocsView(host, { escapeHtml }) {
           <section id="plans">
             <h2>Plans and storage</h2>
             <p>Free covers watching, browsing, and trying the tools. Paid plans raise upload limits, unlock full analytics, and add the team toolkit — the full feature matrix lives on <a href="/account/subscription">Account → Subscription</a>. When a plan lapses, nothing is deleted: over-limit demos lock and you choose what to keep.</p>
+          </section>
+
+          <section id="terms">
+            <h2>Terms of service</h2>
+            <p>The short version of the <a href="/terms">terms</a>: accounts are <strong>personal</strong> — one account, one person, and sharing is detected automatically (an account used from another country on different same-type hardware within hours gets a warning; a repeat means probation, where premium features pause until it is reviewed). Content you upload stays yours; you must have the right to upload it, which for voice recordings means everyone recorded agreed. Cancelling a plan keeps access to the end of the period, and a lapsed plan locks over-limit content rather than deleting it — with 90 days to export or trim. The full text is a five-minute read at <a href="/terms">aim4.io/terms</a>.</p>
+          </section>
+
+          <section id="privacy">
+            <h2>Privacy</h2>
+            <p>The short version of the <a href="/privacy">privacy page</a>: no ads, no third-party analytics, no selling data. aim4 keeps your account details, your content, and per-sign-in security data (IP, country, device) used only for the sharing checks — the country is looked up locally, so your IP never goes to a third party. Voice recordings are made and transcribed on <em>your</em> machine and only uploaded when you choose. Export everything or delete your account yourself under <a href="/account/data">Account → Data</a> — deletion has a 14-day grace window, cancelled by signing back in. Details at <a href="/privacy">aim4.io/privacy</a>.</p>
           </section>
 
           <section id="help">

@@ -13,6 +13,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { unpackUpload } from '../../replays/archive.js';
 import { newDemoId } from '../../replays/demoStore.js';
+import { waitForUserParseIdle } from '../../replays/parseGate.js';
 import { describeArchive, isOverpassFilename, parseDemoFilename } from './hltvNames.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -176,6 +177,17 @@ export async function parseAndIngest({ library, row, demos, concurrency = 1, onP
           mapNumber
         });
         continue;
+      }
+
+      // User uploads outrank the crawl (see replays/parseGate.js). Waiting
+      // HERE, per map, keeps the overlap worst-case at one demo: an archive's
+      // remaining maps queue up behind whatever a user is parsing right now.
+      const heldMs = await waitForUserParseIdle({
+        onWait: () =>
+          console.log(`[parse] holding ${label}: a user upload is parsing on the API`)
+      });
+      if (heldMs > 0) {
+        console.log(`[parse] resuming ${label} after ${Math.round(heldMs / 1000)}s hold`);
       }
 
       onProgress?.({ stage: 'parse', map: label, mapNumber });

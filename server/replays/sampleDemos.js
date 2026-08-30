@@ -11,11 +11,14 @@
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import zlib from 'node:zlib';
+import { promisify } from 'node:util';
+
+const zstdDecompress = promisify(zlib.zstdDecompress);
 import { fileURLToPath } from 'node:url';
 
 import { decodeReplayPackage, PACKAGE_EXT } from '../../src/replays/shared/replayPackage.js';
 import { sliceStride } from '../../src/replays/shared/tickFormat.js';
-import { decodeTickz, decodeTickzStride, isTickz } from './tickCodec.js';
+import { decodeTickzAsync, decodeTickzStrideAsync, isTickz } from './tickCodec.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_SAMPLE_DIR = path.join(__dirname, '../../sampledemos');
@@ -176,7 +179,9 @@ export async function getSampleRoundMeta(file) {
   const plain = packGet(item.pack, stem, '.json');
   if (!zst && !plain) return null;
   return JSON.parse(
-    zst ? zlib.zstdDecompressSync(Buffer.from(zst)).toString('utf8') : new TextDecoder().decode(plain)
+    zst
+      ? (await zstdDecompress(Buffer.from(zst))).toString('utf8')
+      : new TextDecoder().decode(plain)
   );
 }
 
@@ -197,7 +202,8 @@ export async function getSampleRoundTicks(file, stride = 1) {
   const raw = tickz || bin;
   if (!raw) return null;
   if (tickz || isTickz(raw)) {
-    return step === 1 ? decodeTickz(raw) : decodeTickzStride(raw, step);
+    // Request path (sample library overlay): threadpool decode like demoStore.
+    return step === 1 ? decodeTickzAsync(raw) : decodeTickzStrideAsync(raw, step);
   }
   const buf = asArrayBuffer(raw);
   return step === 1 ? buf : sliceStride(buf, step);

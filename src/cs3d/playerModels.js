@@ -875,6 +875,18 @@ export class PlayerBody {
     if (!this._wasAlive) {
       this._stopDeath();
       this._stopRagdoll();
+      // A ragdoll death stopped EVERY cached action (`_beginRagdoll`'s
+      // stopAllAction), and a stopped action ignores the weights `_blend`
+      // writes — so a body revived by a round switch or a scrub back slid
+      // around frozen in its restored pose. Re-activate the loops; `_blend`
+      // re-zeros and reweights them every frame anyway.
+      for (const a of this.actions.values()) {
+        if (a.timeScale === 0) {
+          a.paused = false;
+          a.enabled = true;
+          a.play();
+        }
+      }
       this._flinch[0] = this._flinch[1] = this._flinch[2] = 0;
     }
     this._wasAlive = true;

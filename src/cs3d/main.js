@@ -78,6 +78,7 @@ import { bindImportRound, gameLabel } from './practiceImport.js';
 import { nextCamMode, cycleLive, spectateTargetId, parseSpectateTarget } from './practiceCam.js';
 import { fetchDemos, fetchDemoPackage, fetchDemo, fetchRoundMeta, fetchRoundTicks } from '../replays/api.js';
 import { createXrayPass, xrayIconList } from './xray.js';
+import { viewModelWeaponName } from '../replays/viewer/equipmentIcons.js';
 import { EntitlementManager } from '../lib/entitlements.js';
 import { CAP } from '../../shared/entitlements/keys.js';
 import { PLAN_NAMES } from '../../shared/entitlements/catalogue.js';
@@ -1797,7 +1798,13 @@ function updateViewModel(dt, inThird) {
     // A recorded POV: the weapon, the speed and the view are the demo's, and
     // the gun kicks on the ticks the demo says that player pulled the trigger.
     if (pov.side) viewModel.setSide(pov.side);
-    if (pov.weapon) viewModel.setWeapon(pov.weapon, { draw: false });
+    if (pov.weapon) {
+      // Dictionary names are demoparser display strings; "HE Grenade" is
+      // `hegrenade` to the pack, and an unresolvable name silently kept the
+      // PREVIOUS weapon in hand.
+      const held = viewModelWeaponName(pov.weapon);
+      viewModel.setWeapon(vmAssets.stats?.(held) ? held : 'knife', { draw: false });
+    }
     // A real clock, not 0: `attack` is a rate gate that stores `now + cycle`,
     // so a literal 0 makes the first shot set nextAttack to the cycle time and
     // every later one fail `0 < cycle`. The gun then kicks once per weapon and

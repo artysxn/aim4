@@ -1196,11 +1196,12 @@ body {
   display: flex;
   gap: 3px;
 }
+/* Team colours match the site palette (--rv-ct / --rv-t), not GOTV pastels. */
 .c3-mh-lives[data-side='CT'] i {
-  --on: #6ea2f0;
+  --on: #5b9fd4;
 }
 .c3-mh-lives[data-side='T'] i {
-  --on: #e0b15a;
+  --on: #e60611;
 }
 .c3-mh-lives i {
   width: 20px;
@@ -1425,6 +1426,11 @@ body {
   align-items: center;
   pointer-events: none;
   will-change: transform;
+}
+/* display:flex above outranks the UA [hidden] rule; without this a tag culled
+   for being behind the camera or too far away stayed painted at its last spot. */
+.c3-xray-tag[hidden] {
+  display: none;
 }
 .c3-xray-icons {
   display: flex;

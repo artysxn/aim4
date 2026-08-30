@@ -18,7 +18,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { parseDemo } from '../demoparser/index.js';
 import { ingestDemo } from './ingest.js';
-import { ROOT } from './demoStore.js';
+import { ROOT, readRoundMeta, readRoundTicks, userDir } from './demoStore.js';
+import { demoIndex } from './statsIndex.js';
+import { getZones } from '../zonesStore.js';
+import { getCoachSmokes } from '../coachSmokesStore.js';
 
 const send = (msg) => {
   try {
@@ -93,6 +96,26 @@ async function run() {
   const demo = await parseDemo(file, { onProgress });
   onProgress({ stage: 'store', round: 0, total: demo.rounds.length });
   const record = await ingestDemo(user, demoId, demo, meta, onProgress);
+
+  // Build the stats index HERE, in the child, from the rounds this process
+  // just wrote. It used to run on the API's main event loop after the parse
+  // (scheduleStatsIndex), where reading every round meta back — synchronous
+  // zstd per file — stalled every live request for seconds per demo; a bulk
+  // zip made that a stall per demo, interleaved with the next parse. The
+  // parent still calls scheduleStatsIndex afterwards, but against the entry
+  // persisted here that is one stored-index read, not a build. Failure is
+  // deliberately non-fatal: an unindexed demo is watchable, and the admin's
+  // "Recalculate all statistics" covers stragglers.
+  onProgress({ stage: 'stats', round: 0, total: demo.rounds.length });
+  try {
+    await demoIndex(
+      { userDir, readRoundMeta, readRoundTicks, getZones, getCoachUtilities: getCoachSmokes },
+      user,
+      record
+    );
+  } catch (err) {
+    console.warn(`[parse] stats index in worker failed for ${demoId}: ${err?.message || err}`);
+  }
   enter('done');
 
   trace({

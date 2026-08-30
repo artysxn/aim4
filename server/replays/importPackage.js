@@ -9,7 +9,10 @@
 // ---------------------------------------------------------------------------
 
 import zlib from 'node:zlib';
+import { promisify } from 'node:util';
 import { decodeReplayPackage } from '../../src/replays/shared/replayPackage.js';
+
+const zstdDecompress = promisify(zlib.zstdDecompress);
 import { isRoundId, parseRoundId } from '../../src/replays/shared/roundId.js';
 import { checkQuota, readRecord, writeMaterialized } from './demoStore.js';
 import { TICKZ_EXT } from './tickCodec.js';
@@ -78,7 +81,9 @@ export async function importReplayPackage(user, buf, meta = {}) {
     let metaJson;
     try {
       if (hasCompact) {
-        const raw = zlib.zstdDecompressSync(Buffer.from(files.get(zstJson)));
+        // Threadpool, not sync: imports run on the request path and a package
+        // holds a whole match of round metas.
+        const raw = await zstdDecompress(Buffer.from(files.get(zstJson)));
         metaJson = JSON.parse(raw.toString('utf8'));
       } else {
         metaJson = JSON.parse(new TextDecoder().decode(files.get(plainJson)));

@@ -44,6 +44,16 @@ export class WeaponController {
    * the mode is to be the game, and a leaderboard split between two different
    * spray patterns would be worse than one that moved once.
    *
+   * **A scenario that turns bloom off is.** `weaponBloom === false` is a
+   * clicking mode (gridshot and friends) declaring that raw aim is the whole
+   * score — but this flag only zeroed the trainer's own cone, while the CS2
+   * model kept baking USP spread and recoil into the shot direction and
+   * capping clicks at the game's 170 ms cycle instead of the trainer's 90 ms.
+   * A mode that says "no bloom" gets the trainer model, where straight
+   * pistol shots actually exist; the game-faithful modes (deathmatch, doors,
+   * range, duels) never set the flag and keep CS2. Both presets of a mode see
+   * the same model, so no leaderboard is split by this either.
+   *
    * **Multiplayer is.** The server re-derives every bullet from the aim, the
    * shooter's stance and a spread seed (`server/lobby.js` `_shoot` →
    * `resolveShotDirection`) using the TRAINER's cone, and validates the hit
@@ -56,6 +66,7 @@ export class WeaponController {
   get useCS2() {
     if (this.settings.activeSettings().weapon?.cs2Ballistics === false) return false;
     if (this.sceneManager.current?.isMultiplayer) return false;
+    if (this.sceneManager.current?.weaponBloom === false) return false;
     return this.cs2.ready;
   }
 

@@ -9,7 +9,7 @@ import { SHARED_CS3D_PACKS } from './server/cs3d/routes.js';
 // Paths the game-route fallback must never touch: backend proxies, the site
 // shell's own views (/tools, /training, /leaderboards, /football), tool pages
 // and Vite internals/assets.
-const GAME_FALLBACK_SKIP = /^\/(api|ws|football|training|leaderboards|replays|tools|assets|fonts|maps|map-practice|src|public|node_modules|@|demos|playlists|database|charts|patterns|performance|uploads|routines|achievements|replay-viewer|team|account|admin|i|s2|icons)(\/|$)/;
+const GAME_FALLBACK_SKIP = /^\/(api|ws|football|training|leaderboards|replays|tools|assets|fonts|maps|map-practice|src|public|node_modules|@|demos|playlists|database|charts|patterns|performance|uploads|routines|achievements|replay-viewer|team|account|admin|i|s2|d|icons|changelog|docs|contact|player|sim|terms|privacy)(\/|$)/;
 
 // Dev-server twin of the vercel.json rewrites: the landing owns "/" and
 // "/tools", the 3D map explorer owns /<map> (e.g. /dust2, /de_nuke), every

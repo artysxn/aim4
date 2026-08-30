@@ -116,12 +116,20 @@ export function overviewTab(state, { reload, auth }) {
     const steamNotice = steamReturnNotice();
     if (steamNotice) root.appendChild(steamNotice);
 
+    // Two sources, deliberately. /api/me is authoritative but is served from a
+    // 60s identity cache keyed by the access token, and linkIdentity does not
+    // rotate that token: for a minute after linking, the server still says the
+    // provider is not connected. The browser's own session was refreshed on
+    // the way back in, so it already knows. Believe whichever says "connected".
+    const fresh = auth?.linkedProviders || [];
+    const hasFresh = (...ids) => ids.some((id) => fresh.includes(id));
+
     const PROVIDERS = [
       {
         key: 'google',
         name: 'Google',
         svg: logoGoogle,
-        connected: Boolean(linked.google),
+        connected: Boolean(linked.google) || hasFresh('google'),
         connect: () => auth?.linkProvider?.('google'),
         unlink: () => auth?.unlinkProvider?.('google')
       },
@@ -129,6 +137,7 @@ export function overviewTab(state, { reload, auth }) {
         key: 'steam',
         name: 'Steam',
         svg: logoSteam,
+        // Steam is not a Supabase identity, so only the server knows.
         connected: Boolean(linked.steam),
         connect: async () => {
           const res = await accountApi.steamStart();
@@ -140,7 +149,7 @@ export function overviewTab(state, { reload, auth }) {
         key: 'discord',
         name: 'Discord',
         svg: logoDiscord,
-        connected: Boolean(linked.discord),
+        connected: Boolean(linked.discord) || hasFresh('discord'),
         connect: () => auth?.linkProvider?.('discord'),
         unlink: () => auth?.unlinkProvider?.('discord')
       },
@@ -148,11 +157,20 @@ export function overviewTab(state, { reload, auth }) {
         key: 'x',
         name: 'X',
         svg: logoX,
-        connected: Boolean(linked.x),
+        connected: Boolean(linked.x) || hasFresh('x', 'twitter'),
         connect: () => auth?.linkProvider?.('x'),
         unlink: () => auth?.unlinkProvider?.('x')
       }
     ];
+
+    // When the browser can see an identity the server just denied, the cache
+    // is stale -- and the upload gate reads that same cache, so a fresh Google
+    // link would leave uploads blocked. Fire and forget: the display above is
+    // already right, this only corrects the server.
+    const serverBehind = PROVIDERS.some(
+      (p) => p.key !== 'steam' && p.connected && !linked[p.key]
+    );
+    if (serverBehind) accountApi.refreshIdentity().catch(() => {});
 
     const row = el('div', 'account-conn-icons');
     for (const p of PROVIDERS) {

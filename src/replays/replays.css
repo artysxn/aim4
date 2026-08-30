@@ -3199,6 +3199,34 @@ body.rv-open:has(.side-collapsed) .rv-side-show {
   z-index: 6;
 }
 
+/* Whose eyes the 3D POV is borrowing, just above the playback buttons. */
+.rv-spectating {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 7px;
+  margin-bottom: 8px;
+  padding: 5px 10px;
+  border-radius: var(--radius-sm);
+  background: rgba(12, 12, 12, 0.94);
+}
+.rv-spectating[hidden] {
+  display: none;
+}
+.rv-spectating-label {
+  font: 600 10px/1 var(--font-body, sans-serif);
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: rgba(240, 240, 240, 0.55);
+}
+.rv-spectating-name {
+  font: 700 13px/1.1 var(--font-body, sans-serif);
+  color: #ffffff;
+  white-space: nowrap;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .rv-timeline .rv-transport {
   display: flex;
   align-items: center;

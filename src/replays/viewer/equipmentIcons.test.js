@@ -8,7 +8,7 @@
 // matched by luck, which is what made the symptom look like "only shows the
 // grenades a player has held".
 
-import { inventoryAt, normalizeLoadout, hudLoadout } from './equipmentIcons.js';
+import { inventoryAt, normalizeLoadout, hudLoadout, viewModelWeaponName } from './equipmentIcons.js';
 
 function assert(cond, msg) {
   if (!cond) throw new Error(msg || 'assert failed');
@@ -151,6 +151,23 @@ const FULL_T_BUY = [
   assert(slots.primary === 'ak47', 'rifle stays in the rifle slot');
   assert(slots.pistol === 'glock', 'glock stays in the pistol slot');
   assert(slots.held === 'ak47', 'held is the rifle');
+}
+
+{
+  // Held-weapon dictionary names → weapons-pack keys. Grenade display names
+  // must land on the pack stems, not on bareWeapon's underscored leftovers —
+  // "HE Grenade" as `he_grenade` is how the 3D viewmodel showed a knife
+  // whenever a player pulled out utility.
+  assert(viewModelWeaponName('HE Grenade') === 'hegrenade', 'HE Grenade → hegrenade');
+  assert(viewModelWeaponName('Smoke Grenade') === 'smokegrenade', 'Smoke Grenade → smokegrenade');
+  assert(viewModelWeaponName('Incendiary Grenade') === 'incgrenade', 'Incendiary Grenade → incgrenade');
+  assert(viewModelWeaponName('Decoy Grenade') === 'decoy', 'Decoy Grenade → decoy');
+  assert(viewModelWeaponName('Flashbang') === 'flashbang', 'Flashbang → flashbang');
+  assert(viewModelWeaponName('Molotov') === 'molotov', 'Molotov → molotov');
+  assert(viewModelWeaponName('weapon_smokegrenade') === 'smokegrenade', 'weapon_ stem still resolves');
+  assert(viewModelWeaponName('AK-47') === 'ak47', 'guns keep the bareWeapon path');
+  assert(viewModelWeaponName('M4A1-S') === 'm4a1_silencer', 'silenced M4 keeps its pack key');
+  assert(viewModelWeaponName('Zeus x27') === 'taser', 'zeus resolves to taser');
 }
 
 console.log('equipmentIcons: all assertions passed');
