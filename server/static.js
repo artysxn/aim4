@@ -78,6 +78,7 @@ export const SITE_VIEW_PATHS = new Set([
   '/contact',
   '/terms',
   '/privacy',
+  '/refunds',
   // A player page is shared as /player/<id>; without these two entries the
   // link works only as an in-app navigation and a cold load falls through to
   // the trainer.

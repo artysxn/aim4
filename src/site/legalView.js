@@ -13,6 +13,30 @@
 
 const UPDATED = '30 August 2026';
 
+// ---------------------------------------------------------------------------
+// The refund policy, written once.
+//
+// It appears in two places: section 5 of the terms, and the standalone
+// /refunds page that Paddle's verification form asks for by URL. Two copies
+// would drift, and a refund policy that says different things in different
+// places is worse than one that is hard to find.
+// ---------------------------------------------------------------------------
+const REFUNDS_BODY = `
+    <p>The policy, in full:</p>
+    <ul>
+      <li><strong>14 days, no questions asked</strong>, on a first purchase of any paid plan. Ask within 14 days of the charge and you get the whole amount back, whether or not you used the plan.</li>
+      <li><strong>Renewals</strong> are refundable in full within 14 days of the renewal charge if you have not used any paid feature in that period. A renewal you did use is not refundable, but you can cancel to stop the next one.</li>
+      <li><strong>Trials</strong> never charge. If a trial converted and you did not want it to, that is a first purchase and the 14 days above apply.</li>
+      <li><strong>Cancelling mid-term does not refund the rest of the term</strong>: access simply continues to the end of the period you paid for. Longer terms are discounted on the basis that they are paid up front.</li>
+      <li><strong>If the service is materially broken</strong> for a sustained period and you cannot use what you paid for, ask for a refund regardless of the above. Extended downtime is our problem, not yours.</li>
+    </ul>
+    <p>To request one, open a ticket from the <a href="/contact">contact page</a> with the email you paid with. Refunds are answered within 5 working days and returned to the original payment method. Nothing here limits your statutory rights, including the right of withdrawal you may have as a consumer in the EU, the EEA or the UK; where those rights give you more than this policy, they win.</p>
+    <p>If something looks wrong on a charge, please open a ticket before asking your bank to reverse it. A chargeback locks the account until it is resolved, and a message is almost always faster.</p>
+`;
+
+/** The same policy under an h3, for the billing section of the terms. */
+const REFUNDS_BODY_H3 = `<h3>Refunds</h3>${REFUNDS_BODY}`;
+
 const TERMS_HTML = `
   <header class="page-head-block">
     <h1>Terms of service</h1>
@@ -47,17 +71,7 @@ const TERMS_HTML = `
     <p>The free tier covers watching demos, browsing the database, and trying the tools. Paid plans raise limits and unlock features as described on <a href="/account/subscription">Account → Subscription</a>. Trials (normally 7 days) are one per account and can be cancelled at any time without charge.</p>
     <p>You can cancel a paid plan whenever you like; access continues to the end of the paid period and no further charges are made. When a plan lapses, <strong>nothing is deleted</strong>: content over the free tier's limits locks, and you have 90 days to choose what to keep or export before over-limit content may be removed.</p>
     <p>Payments are taken by Paddle, our merchant of record: Paddle acts as the seller of record for the transaction, collects any tax due, and issues your invoice. Card details never reach aim4's servers. Prices are shown in euros; any tax due is determined by the country you buy from and is shown before you confirm.</p>
-    <h3>Refunds</h3>
-    <p>The policy, in full:</p>
-    <ul>
-      <li><strong>14 days, no questions asked</strong>, on a first purchase of any paid plan. Ask within 14 days of the charge and you get the whole amount back, whether or not you used the plan.</li>
-      <li><strong>Renewals</strong> are refundable in full within 14 days of the renewal charge if you have not used any paid feature in that period. A renewal you did use is not refundable, but you can cancel to stop the next one.</li>
-      <li><strong>Trials</strong> never charge. If a trial converted and you did not want it to, that is a first purchase and the 14 days above apply.</li>
-      <li><strong>Cancelling mid-term does not refund the rest of the term</strong>: access simply continues to the end of the period you paid for. Longer terms are discounted on the basis that they are paid up front.</li>
-      <li><strong>If the service is materially broken</strong> for a sustained period and you cannot use what you paid for, ask for a refund regardless of the above. Extended downtime is our problem, not yours.</li>
-    </ul>
-    <p>To request one, open a ticket from the <a href="/contact">contact page</a> with the email you paid with. Refunds are answered within 5 working days and returned to the original payment method. Nothing here limits your statutory rights, including the right of withdrawal you may have as a consumer in the EU, the EEA or the UK; where those rights give you more than this policy, they win.</p>
-    <p>If something looks wrong on a charge, please open a ticket before asking your bank to reverse it. A chargeback locks the account until it is resolved, and a message is almost always faster.</p>
+${REFUNDS_BODY_H3}
   </section>
 
   <section id="termination">
@@ -150,5 +164,21 @@ function makeLegalView(html) {
   };
 }
 
+
+const REFUNDS_HTML = `
+  <h1>Refund policy</h1>
+  <p class="legal-updated">Part of the <a href="/terms">terms of service</a>. Last updated with them.</p>
+
+  <section id="refunds">
+${REFUNDS_BODY}
+  </section>
+
+  <section id="who-charges">
+    <h2>Who takes the payment</h2>
+    <p>Payments are taken by Paddle, our merchant of record. Paddle acts as the seller of record, collects any tax due, and issues your invoice, so a refund is returned by Paddle to the method you paid with. Asking us is the right first step either way: <a href="/contact">open a ticket</a> and we handle it from there.</p>
+  </section>
+`;
+
 export const initTermsView = makeLegalView(TERMS_HTML);
 export const initPrivacyView = makeLegalView(PRIVACY_HTML);
+export const initRefundsView = makeLegalView(REFUNDS_HTML);

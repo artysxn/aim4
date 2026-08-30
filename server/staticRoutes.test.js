@@ -1,10 +1,15 @@
 // Run: node server/staticRoutes.test.js
 //
-// The two routing tables have to agree. server/static.js decides what the
-// self-hosted server serves from the site shell; vercel.json decides the same
-// thing for aim4.io, and nothing links them. A route added to one and not the
-// other works perfectly on localhost and 404s in production — which is exactly
-// how /tools/pitchdeck and /public-pitch shipped broken.
+// Three routing tables have to agree, and nothing links them.
+//
+//   server/static.js   what the self-hosted server serves from the site shell
+//   vercel.json        the same decision for aim4.io
+//   vite.config.js     the same decision for the dev server, as a skip regex
+//
+// A route added to one and not the others works perfectly in one place and
+// falls through to the trainer in another. That is exactly how /tools/pitchdeck
+// and /public-pitch shipped broken, and how /refunds was briefly a page that
+// loaded a first-person shooter for anyone following the link.
 
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -52,8 +57,24 @@ for (const prefix of SITE_VIEW_PREFIXES) {
   assert.equal(hit.destination, '/index.html', `${p} does not reach the site shell on aim4.io`);
 }
 
+// The dev server has its own copy of this decision: a regex of path heads that
+// must NOT fall through to the trainer. It is a third place to forget.
+const viteConfig = fs.readFileSync(path.join(root, 'vite.config.js'), 'utf8');
+const skipLine = viteConfig.match(/GAME_FALLBACK_SKIP\s*=\s*\/(.+?)\/;/);
+assert.ok(skipLine, 'vite.config.js still declares GAME_FALLBACK_SKIP');
+const skipRe = new RegExp(skipLine[1]);
+for (const p of SITE_VIEW_PATHS) {
+  assert.ok(
+    skipRe.test(p),
+    `${p} is missing from GAME_FALLBACK_SKIP in vite.config.js — it loads the trainer in dev`
+  );
+}
+
 // The catch-all has to stay last, or it swallows the routes above it.
 const catchAllIndex = rewrites.findIndex((r) => r.destination === '/train.html');
 assert.equal(catchAllIndex, rewrites.length - 1, 'the trainer catch-all must be the last rewrite');
 
-console.log(`staticRoutes: ${SITE_VIEW_PATHS.size} paths + ${SITE_VIEW_PREFIXES.length} subtrees routed in production`);
+console.log(
+  `staticRoutes: ${SITE_VIEW_PATHS.size} paths + ${SITE_VIEW_PREFIXES.length} subtrees agree across ` +
+    'server/static.js, vercel.json and vite.config.js'
+);

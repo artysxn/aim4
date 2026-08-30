@@ -29,6 +29,7 @@
     { "source": "/contact", "destination": "/index.html" },
     { "source": "/terms", "destination": "/index.html" },
     { "source": "/privacy", "destination": "/index.html" },
+    { "source": "/refunds", "destination": "/index.html" },
     { "source": "/player", "destination": "/index.html" },
     { "source": "/player/(.*)", "destination": "/index.html" },
     { "source": "/uploads", "destination": "/index.html" },
