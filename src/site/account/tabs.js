@@ -30,7 +30,7 @@ import {
 import { CAP } from '../../../shared/entitlements/keys.js';
 import { bytes, button, date, el, field, input, notice, table } from '../admin/dom.js';
 import { accountApi } from './accountApi.js';
-import { checkoutSuccessUrl, openCheckout } from './paddleCheckout.js';
+import { checkoutSuccessUrl, openCheckout, openCheckoutFromPaymentLink } from './paddleCheckout.js';
 import logoGoogle from '../../icons/logo_google.svg?raw';
 import logoSteam from '../../icons/logo_steam.svg?raw';
 import logoDiscord from '../../icons/logo_discord.svg?raw';
@@ -418,6 +418,13 @@ export function subscriptionTab(state, { reload, billing, openAuth }) {
   // guessing whether their card just worked.
   const returned = checkoutReturnNotice();
   if (returned) root.appendChild(returned);
+
+  // Paddle's emails link here with ?_ptxn=<transaction>, expecting the page to
+  // open a checkout for it. Fire and forget: a failure to open must not stop
+  // the rest of the page rendering, and the notice below reports it.
+  openCheckoutFromPaymentLink({ billing }).catch((err) => {
+    notice(root, err.message || 'Could not open that payment.', 'error');
+  });
 
   // ---- current state ------------------------------------------------------
   // Only for someone who has a plan. Signed out there is nothing to report,

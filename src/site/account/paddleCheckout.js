@@ -90,6 +90,37 @@ export async function openCheckout({ transactionId, billing, successUrl, onClose
 }
 
 /**
+ * Open the checkout named by a `_ptxn` query parameter, if there is one.
+ *
+ * This is how Paddle's own emails work. The default payment link is a plain
+ * URL on our domain, and Paddle appends `?_ptxn=<transaction id>` to it when it
+ * asks a customer to update a card, retry a failed payment, or pay an invoice.
+ * The page is expected to notice the parameter and open a checkout for it.
+ *
+ * Without this the customer follows a link from Paddle asking them to pay,
+ * lands on the pricing page, and is shown nothing at all. It only became
+ * reachable once the default payment link stopped pointing at localhost.
+ *
+ * @returns {Promise<boolean>} true when a checkout was opened.
+ */
+export async function openCheckoutFromPaymentLink({ billing, onClose } = {}) {
+  const params = new URLSearchParams(window.location.search);
+  const transactionId = params.get('_ptxn');
+  if (!transactionId) return false;
+
+  // Drop it from the URL either way. Leaving it behind means a refresh, or a
+  // bookmark, reopens a checkout the customer already dealt with.
+  params.delete('_ptxn');
+  const rest = params.toString();
+  window.history.replaceState({}, '', window.location.pathname + (rest ? `?${rest}` : ''));
+
+  if (!billing?.clientToken || !billing?.environment) return false;
+
+  await openCheckout({ transactionId, billing, successUrl: checkoutSuccessUrl(), onClose });
+  return true;
+}
+
+/**
  * Where a completed checkout lands. Absolute because Paddle requires it, and
  * built from the current origin so it is correct on localhost and in
  * production without a second variable to keep in step.
