@@ -5,6 +5,7 @@
 
 import { accessToken } from '../../replays/api.js';
 import { impersonationTicket } from '../../lib/entitlements.js';
+import { storedReferral } from '../../lib/referral.js';
 
 const API_BASE = (import.meta.env?.VITE_API_URL || '').replace(/\/$/, '');
 
@@ -130,12 +131,20 @@ export const accountApi = {
       })
     ),
 
+  /**
+   * Opens a checkout. `ref` is whatever affiliate link brought this visitor in,
+   * if any, carried from localStorage rather than asked for: the person paying
+   * should not have to remember a code they clicked a fortnight ago.
+   *
+   * The server validates it and decides what it is worth. A stale, unknown or
+   * self-owned code changes nothing about the sale.
+   */
   checkout: async (planId, term) =>
     asJson(
       await fetch(`${API_BASE}/api/billing/checkout`, {
         method: 'POST',
         headers: await headers(),
-        body: JSON.stringify({ planId, term })
+        body: JSON.stringify({ planId, term, ref: storedReferral() || undefined })
       })
     ),
 
@@ -157,6 +166,20 @@ export const accountApi = {
   redeemCode: async (code) =>
     asJson(
       await fetch(`${API_BASE}/api/account/redeem-code`, {
+        method: 'POST',
+        headers: await headers(),
+        body: JSON.stringify({ code })
+      })
+    ),
+
+  /** This account's affiliate code, what it has earned, and recent payments. */
+  affiliate: async () =>
+    asJson(await fetch(`${API_BASE}/api/account/affiliate`, { headers: await headers() })),
+
+  /** Claim a code. One per account, and it cannot be changed afterwards. */
+  claimAffiliateCode: async (code) =>
+    asJson(
+      await fetch(`${API_BASE}/api/account/affiliate`, {
         method: 'POST',
         headers: await headers(),
         body: JSON.stringify({ code })

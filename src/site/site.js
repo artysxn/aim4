@@ -68,6 +68,7 @@ import { upgradePrompt } from './upgradeGate.js';
 import { accountApi } from './account/accountApi.js';
 import { PLAN_NAMES } from '../../shared/entitlements/catalogue.js';
 import { initIngestReminder } from './ingestReminder.js';
+import { captureReferral } from '../lib/referral.js';
 import {
   isMobileSite,
   isPhoneDevice,
@@ -117,6 +118,12 @@ function lazyController(factory) {
 // from the device and the saved preference, and set <html data-mobile="1">,
 // by the time modules run.
 const IS_MOBILE = isMobileSite();
+
+// Before anything else reads the URL: ?ref=CODE is taken off the address bar
+// and remembered, so an affiliate link still counts at a checkout days later.
+// First touch wins and the parameter is stripped, so it does not ride along
+// into every link copied from this page.
+captureReferral();
 
 // Brand logos — Vite hashes these into /assets so Vercel serves them (the
 // catch-all rewrite used to send /icons/* to train.html).
@@ -745,6 +752,7 @@ const ROUTES = {
     shell: 'account'
   },
   'account-teams': { title: 'Teams', path: '/account/teams', shell: 'account' },
+  'account-affiliate': { title: 'Affiliate', path: '/account/affiliate', shell: 'account' },
   'account-data': { title: 'Data', path: '/account/data', shell: 'account' },
   'account-security': { title: 'Security', path: '/account/security', shell: 'account' },
   // The panel itself refuses to render until /api/admin/me returns 200, and the
