@@ -78,6 +78,7 @@ import { cpuProbe, memorySnapshot } from './hostMemory.js';
 import { forgetDemoIndex, loadStoredEntry, refreshLibraryStats, scheduleStatsIndex, STATS_LIBRARY_PAGE, statsPayload } from './statsIndex.js';
 import { ColumnContractError, resolveColumns } from '../../src/replays/shared/statsColumns.js';
 import { getRoster, scopeRoster } from './rosterCatalogue.js';
+import { demoActivityFor } from './demoActivity.js';
 import {
   aimScanPending,
   aimScanStatus,
@@ -1843,6 +1844,33 @@ export async function handleReplayRequest(req, res, url) {
     });
     const roster = allowedIds.size === ready.length ? full : scopeRoster(full, allowedIds);
     await jsonBig(res, 200, roster, req, { 'Cache-Control': 'private, max-age=60' });
+    return true;
+  }
+
+  // ---- activity calendar ---------------------------------------------------
+  // When a player was in a match, and for how long. Public per account: the
+  // library's demos are already readable by whoever may read them, and this is
+  // strictly less than the per-match table already shows. The visibility mask
+  // still applies, so a private demo contributes nothing to a stranger's view.
+  if (req.method === 'GET' && p === '/api/replays/activity') {
+    const playerId = String(url.searchParams.get('player') || '').trim();
+    if (!playerId) {
+      json(res, 400, { error: 'A player id is required.' });
+      return true;
+    }
+    const days = Math.max(1, Math.min(400, Number(url.searchParams.get('days')) || 90));
+    const { allowed } = await readable();
+    // `allowed`, not the whole library: an activity square is still evidence a
+    // match exists, so it obeys the same gate the demo itself does.
+    const matches = demoActivityFor(allowed, playerId, {
+      sinceMs: Date.now() - days * 24 * 60 * 60 * 1000
+    });
+    json(
+      res,
+      200,
+      { player: playerId, days, matches },
+      { 'Cache-Control': 'private, max-age=120' }
+    );
     return true;
   }
 

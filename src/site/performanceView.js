@@ -76,6 +76,9 @@ import {
 import { iconImgHtml } from '../replays/viewer/equipmentIcons.js';
 import { setSpinnerLabel, spinnerHtml, statsProgressLabel } from '../lib/spinner.js';
 import { getEntitlements } from '../lib/entitlements.js';
+import { buildCalendar } from '../lib/activityCalendar.js';
+import { fetchActivity } from '../lib/activityFeed.js';
+import { activityCalendarHtml } from './activityCalendarView.js';
 import { upgradePrompt } from './upgradeGate.js';
 import { CAP } from '../../shared/entitlements/keys.js';
 import { PLAN_NAMES } from '../../shared/entitlements/catalogue.js';
@@ -961,7 +964,44 @@ export function initPerformanceView({ auth, escapeHtml }) {
     if (aimWaiting(stats)) {
       return `${filtersHtml()}<div id="pf-stats">${aimScanningHtml(aimProgress, spinnerHtml)}</div>`;
     }
-    return `${filtersHtml()}<div id="pf-stats">${aimChapterHtml(aimModel(stats), escapeHtml)}</div>`;
+    return (
+      `${filtersHtml()}<div id="pf-stats">${aimChapterHtml(aimModel(stats), escapeHtml)}</div>` +
+      // Filled in by paintActivity once both backends answer. A slot rather
+      // than an await: the chapter should paint on the data it already has and
+      // not wait on a calendar.
+      `<div id="pf-activity" class="pf-activity"></div>`
+    );
+  }
+
+  /**
+   * The activity calendar under the Aim chapter.
+   *
+   * Public per account by construction: trainer runs come from a publicly
+   * readable table and demo matches from the replay API under the same
+   * visibility the library uses, so opening someone else's Performance page
+   * shows their calendar, not an empty one.
+   */
+  async function paintActivity(who) {
+    const slot = document.getElementById('pf-activity');
+    if (!slot || !who) return;
+    try {
+      const days = await fetchActivity({
+        playerId: who,
+        userId: auth?.user?.id && who === playerId ? auth.user.id : null,
+        days: 90
+      });
+      // The chapter may have been swapped while the fetch was in flight.
+      const still = document.getElementById('pf-activity');
+      if (!still || playerId !== who) return;
+      const cal = buildCalendar({ days, window: 90 });
+      still.innerHTML = activityCalendarHtml(cal, escapeHtml, {
+        title: 'Recent activity',
+        subtitle: 'Last 90 days',
+        empty: 'No matches or trainer runs in the last 90 days.'
+      });
+    } catch {
+      /* a calendar that will not load is not worth breaking the chapter for */
+    }
   }
 
   /**
@@ -1185,6 +1225,9 @@ export function initPerformanceView({ auth, escapeHtml }) {
     bindChrome();
     paintSuggest();
     writeUrl();
+    // Not awaited: the calendar is two network round trips and the chapter has
+    // already painted everything it holds.
+    if (chapter === 'aim' && playerId && !paintedLock) paintActivity(playerId);
     if (!playerId && !teamKey) {
       document.querySelector('[data-pf-search]')?.focus();
     }

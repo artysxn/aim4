@@ -48,6 +48,9 @@ import {
 } from '../lib/aim4Ratings.js';
 import { fetchAimRuns } from '../lib/aimStats.js';
 import { coachNoteFor } from '../lib/coachNotes.js';
+import { buildCalendar } from '../lib/activityCalendar.js';
+import { fetchActivity } from '../lib/activityFeed.js';
+import { activityCalendarHtml } from './activityCalendarView.js';
 
 const DEFAULT_MINUTES = 20;
 const DEFAULT_WEAK_COUNT = 5;
@@ -194,6 +197,10 @@ export function initRoutinesView({ auth, escapeHtml }) {
   function render() {
     host.innerHTML = `
       <div class="rt-page">
+        <section class="rt-card" id="rt-activity-card" hidden>
+          <div id="rt-activity"></div>
+        </section>
+
         <section class="rt-card">
           <h2>Find Recommended Routine</h2>
           <div class="rt-controls">
@@ -272,6 +279,33 @@ export function initRoutinesView({ auth, escapeHtml }) {
       </details>`
       )
       .join('');
+  }
+
+  /**
+   * The activity calendar at the top of the page.
+   *
+   * Here it answers a different question than on Performance: not "how good is
+   * this player" but "have I actually been showing up". A routine is a
+   * commitment, and the calendar is the honest record of whether it was kept.
+   */
+  async function paintActivity() {
+    const card = host.querySelector('#rt-activity-card');
+    const slot = host.querySelector('#rt-activity');
+    if (!card || !slot) return;
+    const userId = auth?.user?.id || null;
+    if (!userId) return;
+    try {
+      const days = await fetchActivity({ userId, days: 90 });
+      if (!days.size) return;
+      const cal = buildCalendar({ days, window: 90 });
+      slot.innerHTML = activityCalendarHtml(cal, escapeHtml, {
+        title: 'Your training',
+        subtitle: 'Last 90 days'
+      });
+      card.hidden = false;
+    } catch {
+      /* the page is a routine builder first; the calendar is a bonus */
+    }
   }
 
   // ---- behaviour ------------------------------------------------------------
@@ -400,6 +434,7 @@ export function initRoutinesView({ auth, escapeHtml }) {
       } else {
         repaintSaved();
       }
+      paintActivity();
       // Preselect the five weakest once per visit, without blocking the paint.
       if (!picked.size) {
         const weakest = await detectWeaknesses();
