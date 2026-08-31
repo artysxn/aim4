@@ -809,11 +809,31 @@ export const AIM_V2_WEIGHTS = Object.freeze({
 /** Minimum sample per motion component. Below it the component is dropped. */
 export const AIM_V2_MIN_SAMPLE = Object.freeze({
   precision: 25,
-  speed: 25,
+  /**
+   * Speed and tension are 15 where precision is 25, and the two reasons
+   * compound.
+   *
+   * They share `speedN`, which is a strict SUBSET of precision's `closeN`: a
+   * flick counts here only if the view actually travelled (>= MIN_PATH_DEG)
+   * and took time, on top of the same "started off the target" test precision
+   * uses. Flicks where the player was already settled and simply fired have no
+   * travel to measure the speed of, so they drop out. On real data that is a
+   * quarter to a third of the flicks precision keeps, which meant these two
+   * axes went unscored while the other five were fine off the same demos.
+   *
+   * And they need less. Both are POOLED ratios — total travel over total time,
+   * total travel over total direct distance — so every flick contributes in
+   * proportion to its size and one small odd flick barely moves them.
+   * Precision is an unweighted mean of per-flick percentages, where one
+   * three-degree flick counts exactly as much as a ninety-degree one, and that
+   * needs more samples to settle. Holding the stabler estimator to the
+   * stricter denominator at the same threshold had it backwards.
+   */
+  speed: 15,
   flicks: 25,
   adjustments: 10,
   reaction: 15,
-  tension: 25,
+  tension: 15,
   tracking: 200
 });
 

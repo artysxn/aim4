@@ -10,8 +10,9 @@
 
 import { writeHeader, writeRecord, HEADER_BYTES, TICK_BYTES, FLAG_ALIVE } from './tickFormat.js';
 import {
-  AIM_MOTION_FIELDS,
   AIM_MOTION_BENCH,
+  AIM_MOTION_FIELDS,
+  AIM_V2_MIN_SAMPLE,
   addMotion,
   aimRating,
   aimRatingV2,
@@ -348,3 +349,49 @@ function flickFixture({
 }
 
 console.log('aimMotion tests passed');
+
+// ---------------------------------------------------------------------------
+{
+  // Speed and tension share a denominator that is a strict subset of the one
+  // precision uses, so gating them at precision's threshold left them unscored
+  // on demos where every other axis was fine. A player with 18 measured flicks
+  // reported "18 of 25 samples" on those two rows and nothing else.
+  assert(
+    AIM_V2_MIN_SAMPLE.speed === AIM_V2_MIN_SAMPLE.tension,
+    'the two axes off one denominator gate together'
+  );
+  assert(
+    AIM_V2_MIN_SAMPLE.speed < AIM_V2_MIN_SAMPLE.precision,
+    'and lower than precision, whose denominator is strictly larger'
+  );
+
+  // The counters behind that screenshot: 18 flicks with travel, 26 with a gap
+  // worth closing. Everything scores.
+  const motion = emptyMotion();
+  const set = (key, v) => {
+    motion[AIM_MOTION_FIELDS.indexOf(key)] = v;
+  };
+  set('speedN', 18);
+  set('pathDeg', 18 * 40);
+  set('flickMs', 18 * 340);
+  set('directDeg', 18 * 31);
+  set('closeN', 26);
+  set('closeSum', 26 * 33.4);
+  set('flickHit', 18);
+  set('flickOver', 4);
+  set('flickUnder', 4);
+
+  const tele = aimTelemetry(motion);
+  assert(tele.sample.speed === 18, `speed sample is speedN, got ${tele.sample.speed}`);
+  assert(tele.sample.tension === 18, 'tension shares it');
+  assert(
+    tele.sample.speed >= AIM_V2_MIN_SAMPLE.speed,
+    '18 measured flicks is enough to score speed'
+  );
+  assert(
+    tele.sample.tension >= AIM_V2_MIN_SAMPLE.tension,
+    '18 measured flicks is enough to score tension'
+  );
+  assert(Number.isFinite(tele.raw.speed), 'and there is a speed to score');
+  assert(Number.isFinite(tele.raw.tension), 'and a tension');
+}
