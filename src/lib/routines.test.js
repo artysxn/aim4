@@ -19,6 +19,8 @@ import {
   weakestMechanics
 } from './routines.js';
 import { SCENARIO_META, isChallengeMode } from './gamemodeCatalog.js';
+import { AIM_V2_MOTION_KEYS } from '../replays/shared/aimMetrics.js';
+import { AIM_OUTCOME_KEYS } from '../replays/performance/aimChapter.js';
 
 test('every mechanic a tag claims to help is a real mechanic', () => {
   for (const [tag, list] of Object.entries(TAG_HELPS)) {
@@ -120,4 +122,37 @@ test('switch overhead is accounted, not imagined', () => {
     runSeconds + routine.items.length * SWITCH_SECONDS,
     'estimate = runs + switches'
   );
+});
+
+test('a mechanic and an aim component are the same thing, by the same name', () => {
+  // The Routines page preselects the five weakest straight off the player row
+  // Performance's Aim chapter is built from, with no translation table in
+  // between: `weakestMechanics(row.aimComponents)`. That only works while the
+  // two vocabularies are identical, and it fails SILENTLY when they are not,
+  // because an unknown key is simply skipped and the page preselects four
+  // mechanics, or three, and says nothing. Rename either side and this fails
+  // here instead of in front of a player.
+  const chapter = [
+    ...AIM_V2_MOTION_KEYS.map((k) => k.key),
+    ...AIM_OUTCOME_KEYS.map((k) => k.key)
+  ];
+  const mechanics = [...MECHANIC_KEYS];
+  assert.deepEqual(
+    [...mechanics].sort(),
+    [...chapter].sort(),
+    'every mechanic is scored by the Aim chapter, and every score is a mechanic'
+  );
+});
+
+test('the weakest five come off an aim row untranslated', () => {
+  // The shape the page actually receives: a `derivePlayers` row's components,
+  // 0 to 100, some of them null where the sample was too thin to score.
+  const row = {
+    precision: 71, speed: 44, flicks: 66, adjustments: 58, reaction: 39,
+    tension: null, tracking: 22, crosshairError: 51, readyRate: 63,
+    accuracy: 48, firstBullet: 35, overflick: 69, underflick: 57
+  };
+  const weakest = weakestMechanics(row, 5);
+  assert.deepEqual(weakest, ['tracking', 'firstBullet', 'reaction', 'speed', 'accuracy']);
+  assert.ok(!weakest.includes('tension'), 'an unscored category is not a weakness');
 });

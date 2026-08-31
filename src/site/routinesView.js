@@ -2,10 +2,10 @@
 // site/routinesView.js
 // Routines: build a training playlist from what you are worst at.
 //
-// Two ways in. "Find Recommended Routine" takes how long you have and which
-// mechanics you want to train (defaulted to your five weakest, measured from
-// your own trainer runs) and picks the modes whose tags cover them - the
-// mapping lives in lib/routines.js. The manual builder underneath is the
+// Two ways in. "Find routine" takes how long you have and which mechanics you
+// want to train (defaulted to your five weakest, read off your demos where the
+// library knows you and off your trainer runs otherwise) and picks the modes
+// whose tags cover them - the mapping lives in lib/routines.js. The manual builder underneath is the
 // trainer's playlist editor brought to the site: pick modes, give each a
 // duration, order them, save.
 //
@@ -46,6 +46,9 @@ import {
   syncBaselinesFromServer
 } from '../lib/aim4Ratings.js';
 import { fetchAimRuns } from '../lib/aimStats.js';
+import { fetchAggregate, fetchRoster } from '../replays/api.js';
+import { demosForPlayer, rosterPlayers } from '../replays/shared/rosterQuery.js';
+import { findPlayerByUsername } from '../replays/performance/performanceMath.js';
 import { coachNoteFor } from '../lib/coachNotes.js';
 import { buildCalendar } from '../lib/activityCalendar.js';
 import { fetchActivity } from '../lib/activityFeed.js';
@@ -86,20 +89,63 @@ export function initRoutinesView({ auth, escapeHtml }) {
   /** One quiet status line: where the preselect came from, or what just happened. */
   let weaknessNote = '';
   let painted = false;
+  /** The demo catalogue, once per visit. It is the same one Performance reads. */
+  let roster = null;
 
   // ---- weakness detection ---------------------------------------------------
 
   /**
-   * The player's weakest mechanics, from their own trainer runs.
+   * The player's weakest mechanics, preferring their demos.
    *
-   * Trainer telemetry scores the seven motion mechanics (0 to 2, per mode);
-   * averaging across rated modes and taking the lowest is exactly how the
-   * trainer's own radar reads. The six demo-side mechanics (placement,
-   * readiness, first bullet...) have no trainer measurement, so they are never
-   * auto-picked - they are there to pick by hand for anyone who read their
-   * demo aim panel.
+   * Performance's Aim chapter already scores all THIRTEEN against the library,
+   * and those are the numbers the player has read and is being ranked on, so
+   * the preselect should agree with them rather than quietly measure something
+   * else. The row comes from the same `derivePlayers` the chapter ends in, off
+   * one request scoped to this player's own matches, so the components here
+   * are the components there.
+   *
+   * The trainer is the fallback, not the second opinion: it only measures the
+   * seven motion mechanics, so on trainer data alone the six demo-side ones
+   * (placement, readiness, first bullet...) can never be picked at all.
    */
   async function detectWeaknesses() {
+    return (await demoWeaknesses()) || (await trainerWeaknesses());
+  }
+
+  /**
+   * Who the signed-in account is in the demo library, resolved the same way
+   * Performance resolves it: exact in-game name against the account username.
+   * Anything else would preselect one player's weaknesses on another's page.
+   */
+  async function demoWeaknesses() {
+    const uname = auth?.username || auth?.displayName || '';
+    if (!uname) return null;
+    try {
+      if (!roster) roster = await fetchRoster();
+      const me = findPlayerByUsername(rosterPlayers(roster, '', Infinity), uname);
+      if (!me) return null;
+      const demos = demosForPlayer(roster, me.id);
+      if (!demos.length) return null;
+      // Scoped to this player's matches: unscoped, the table is the library's
+      // top hundred by rating and this account is very unlikely to be in it.
+      const agg = await fetchAggregate({}, { demos, tables: 'players', limit: 5000 });
+      const row = (agg?.players || []).find((p) => String(p.id) === String(me.id));
+      const scores = row?.aimComponents;
+      if (!scores) return null;
+      const weakest = weakestMechanics(scores, DEFAULT_WEAK_COUNT);
+      return weakest.length ? { weakest, from: 'your demos' } : null;
+    } catch {
+      // No library, no identity, no aim yet: the trainer still has an answer.
+      return null;
+    }
+  }
+
+  /**
+   * The trainer's own reading: seven motion mechanics scored 0 to 2 per mode,
+   * averaged across rated modes, which is exactly how the trainer's own radar
+   * reads them.
+   */
+  async function trainerWeaknesses() {
     const userId = auth?.user?.id;
     if (!userId) return null;
     try {
@@ -123,7 +169,7 @@ export function initRoutinesView({ auth, escapeHtml }) {
         if (Number.isFinite(averaged[trainerKey])) scores[mechanic] = averaged[trainerKey];
       }
       const weakest = weakestMechanics(scores, DEFAULT_WEAK_COUNT);
-      return weakest.length ? weakest : null;
+      return weakest.length ? { weakest, from: 'your trainer runs' } : null;
     } catch {
       return null;
     }
@@ -466,10 +512,10 @@ export function initRoutinesView({ auth, escapeHtml }) {
       paintActivity();
       // Preselect the five weakest once per visit, without blocking the paint.
       if (!picked.size) {
-        const weakest = await detectWeaknesses();
-        if (weakest) {
-          picked = new Set(weakest);
-          note(`Preselected: your ${weakest.length} weakest, from your trainer runs.`);
+        const found = await detectWeaknesses();
+        if (found) {
+          picked = new Set(found.weakest);
+          note(`Preselected: your ${found.weakest.length} weakest, from ${found.from}.`);
           const cells = host.querySelector('#rt-mechs');
           if (cells) cells.innerHTML = MECHANICS.map(mechHtml).join('');
           repaintCoachNotes();
