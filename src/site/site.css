@@ -5622,15 +5622,21 @@ button.rt-cell:disabled {
 }
 
 /* ---- Activity calendar -------------------------------------------------- */
-/* Fixed cell size, not a stretched one: the panel is a footnote on both pages
-   it appears on, and a grid that grows with the container turns 90 squares
-   into a wall. 11px keeps 14 weeks under 200px, so the two calendars sit side
-   by side on any reasonable width. */
+/* Fluid, not fixed: week columns are fractions of the container and a day is a
+   square by aspect ratio, so the pair sizes itself to whatever column it is
+   dropped into. The cap is what keeps that from becoming a wall on a wide one:
+   the panel is a footnote on both pages it appears on. */
 
 .ac-pair-wrap {
-  --ac-cell: 11px;
   --ac-gap: 3px;
-  margin-top: 18px;
+  /* The widest a day may get. Everything below this shrinks to fit. Sized so
+     the pair roughly fills the column it sits in, and so a single day is a
+     target worth pointing at: every square carries its own breakdown. */
+  --ac-cell-max: 16px;
+  --ac-label: 16px;
+  --ac-body-gap: 4px;
+  --ac-pad-x: 12px;
+  margin-top: 14px;
 }
 
 .ac-pair-head {
@@ -5642,28 +5648,39 @@ button.rt-cell:disabled {
 
 .ac-pair-title {
   margin: 0;
-  font-size: 14px;
+  font-size: 13px;
 }
 
 .ac-pair {
   display: flex;
   flex-wrap: wrap;
+  align-items: flex-start;
   gap: 10px;
 }
 
 .ac {
-  flex: 0 1 auto;
+  /* Share the row evenly and stop at the width the cap says a 90 day grid is
+     worth. The floor is what makes the pair STACK in a narrow column instead
+     of squeezing on: two 150px calendars side by side are unreadable, and
+     unreadable is worse than scrolled past. */
+  flex: 1 1 240px;
+  min-width: min(240px, 100%);
+  max-width: calc(
+    var(--ac-pad-x) * 2 + var(--ac-label) + var(--ac-body-gap) +
+    var(--ac-weeks, 14) * (var(--ac-cell-max) + var(--ac-gap)) - var(--ac-gap)
+  );
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: 10px 12px;
+  padding: 10px var(--ac-pad-x);
 }
 
 .ac-head {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: 10px;
+  flex-wrap: wrap;
+  gap: 2px 10px;
   margin-bottom: 8px;
 }
 
@@ -5674,20 +5691,25 @@ button.rt-cell:disabled {
   white-space: nowrap;
 }
 
+/* Wraps under the title rather than pushing the box wider than its column. */
 .ac-sub {
   color: var(--muted);
   font-size: 11px;
   white-space: nowrap;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .ac-grid-wrap {
-  overflow-x: auto;
+  min-width: 0;
 }
 
 .ac-months {
   display: grid;
+  grid-template-columns: repeat(var(--ac-weeks, 14), minmax(0, 1fr));
   gap: var(--ac-gap);
-  margin-left: 20px;
+  margin-left: calc(var(--ac-label) + var(--ac-body-gap));
   margin-bottom: 3px;
 }
 
@@ -5700,40 +5722,64 @@ button.rt-cell:disabled {
 
 .ac-body {
   display: flex;
-  gap: 4px;
+  align-items: stretch;
+  gap: var(--ac-body-gap);
+  min-width: 0;
 }
 
+/* Seven equal rows, stretched to whatever height the squares work out to. */
 .ac-weekdays {
   display: grid;
-  grid-template-rows: repeat(7, var(--ac-cell));
+  grid-template-rows: repeat(7, 1fr);
   gap: var(--ac-gap);
-  width: 16px;
+  width: var(--ac-label);
   flex-shrink: 0;
 }
 
 .ac-wd {
+  display: flex;
+  align-items: center;
   color: var(--muted);
   font-size: 9px;
-  line-height: var(--ac-cell);
+  line-height: 1;
 }
 
 .ac-weeks {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(var(--ac-weeks, 14), minmax(0, 1fr));
   gap: var(--ac-gap);
+  flex: 1;
+  min-width: 0;
 }
 
 .ac-week {
   display: grid;
-  grid-template-rows: repeat(7, var(--ac-cell));
+  grid-template-rows: repeat(7, auto);
   gap: var(--ac-gap);
+  min-width: 0;
+  /* Spare height is left at the bottom rather than fed back into the rows,
+     which would make the squares in a short column grow. */
+  align-content: start;
 }
 
 .ac-day {
   display: block;
-  width: var(--ac-cell);
-  height: var(--ac-cell);
+  width: 100%;
+  /* The square. Height follows the column width, which is what makes the whole
+     grid scale without a single fixed dimension in it. */
+  aspect-ratio: 1;
   border-radius: 2px;
   background: rgba(255, 255, 255, 0.04);
+}
+
+.ac-day[data-ac-tip] {
+  cursor: default;
+}
+
+/* A day past the end of the window. It holds the column's shape and says
+   nothing: not a day with no activity, a day that has not happened. */
+.ac-blank {
+  background: none;
 }
 
 /* Mechanics reads red (the site's own accent); demos read blue, so the two
@@ -5748,6 +5794,11 @@ button.rt-cell:disabled {
 .ac[data-metric='demo'] .ac-day[data-level='3'] { background: rgba(56, 132, 255, 0.74); }
 .ac[data-metric='demo'] .ac-day[data-level='4'] { background: #3884ff; }
 
+/* A day lights up under the pointer, so the tooltip is obviously about it. */
+.ac-day[data-ac-tip]:hover {
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.55);
+}
+
 .ac-legend {
   display: flex;
   align-items: center;
@@ -5761,13 +5812,51 @@ button.rt-cell:disabled {
   gap: 2px;
 }
 
-.ac-key {
+/* The key is a fixed sample, not part of the fluid grid. */
+.ac-day.ac-key {
   width: 9px;
   height: 9px;
+  aspect-ratio: auto;
+  flex-shrink: 0;
 }
 
 .ac-empty {
   color: var(--muted);
   font-size: 12px;
   margin: 0;
+}
+
+/* The hover breakdown for one day.
+   Lighter than the panel it floats over: at --surface it would be the same
+   black as the box under it and read as loose text rather than as a tooltip. */
+.ac-tip {
+  position: fixed;
+  z-index: 200;
+  padding: 7px 10px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: #17171a;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.1),
+    0 10px 26px rgba(0, 0, 0, 0.7);
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.ac-tip-day {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.ac-tip-line {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.45;
+  font-variant-numeric: tabular-nums;
+}
+
+.ac-tip[hidden] {
+  display: none;
 }

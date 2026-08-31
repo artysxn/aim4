@@ -363,6 +363,12 @@ export function aimChapterHtml(model, escapeHtml) {
   const motionFoot = model.scanned
     ? ''
     : 'Not measured for these matches yet.';
+  // The activity calendars, filled in by the page once the feeds answer.
+  //
+  // In this column rather than under the whole chapter: the radar's column is
+  // fixed and short, so a full width panel below both left a band of nothing
+  // beside it. Under the tables the panel sizes itself to the column it is in,
+  // and the chapter ends on one edge instead of two.
   const halves = `<div class="pf-aim-halves">
     ${halfHtml('Motion', model.motion, escapeHtml, {
       engineScale: true,
@@ -370,6 +376,7 @@ export function aimChapterHtml(model, escapeHtml) {
       bench: model.benchmarks
     })}
     ${halfHtml('Outcome', model.outcome, escapeHtml, { bench: model.benchmarks })}
+    <div id="pf-activity" class="pf-aim-activity"></div>
   </div>`;
 
   return `${hero}<div class="pf-aim-grid">${radar}${halves}</div>`;

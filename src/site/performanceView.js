@@ -78,7 +78,7 @@ import { setSpinnerLabel, spinnerHtml, statsProgressLabel } from '../lib/spinner
 import { getEntitlements } from '../lib/entitlements.js';
 import { buildCalendar } from '../lib/activityCalendar.js';
 import { fetchActivity } from '../lib/activityFeed.js';
-import { activityPairHtml } from './activityCalendarView.js';
+import { activityPairHtml, attachActivityTips } from './activityCalendarView.js';
 import { upgradePrompt } from './upgradeGate.js';
 import { CAP } from '../../shared/entitlements/keys.js';
 import { PLAN_NAMES } from '../../shared/entitlements/catalogue.js';
@@ -964,13 +964,11 @@ export function initPerformanceView({ auth, escapeHtml }) {
     if (aimWaiting(stats)) {
       return `${filtersHtml()}<div id="pf-stats">${aimScanningHtml(aimProgress, spinnerHtml)}</div>`;
     }
-    return (
-      `${filtersHtml()}<div id="pf-stats">${aimChapterHtml(aimModel(stats), escapeHtml)}</div>` +
-      // Filled in by paintActivity once both backends answer. A slot rather
-      // than an await: the chapter should paint on the data it already has and
-      // not wait on a calendar.
-      `<div id="pf-activity" class="pf-activity"></div>`
-    );
+    // The `#pf-activity` slot is inside the chapter now (aimChapter.js puts it
+    // at the foot of the right column). paintActivity fills it once the feeds
+    // answer; the chapter paints on the data it already has and never waits on
+    // a calendar.
+    return `${filtersHtml()}<div id="pf-stats">${aimChapterHtml(aimModel(stats), escapeHtml)}</div>`;
   }
 
   /**
@@ -981,9 +979,33 @@ export function initPerformanceView({ auth, escapeHtml }) {
    * visibility the library uses, so opening someone else's Performance page
    * shows their calendar, not an empty one.
    */
+  /** The days last fetched, and who for. */
+  let activityDays = null;
+  let activityFor = '';
+
+  function drawActivity(days) {
+    const slot = document.getElementById('pf-activity');
+    if (!slot || !days) return;
+    slot.innerHTML = activityPairHtml(
+      days,
+      (args) => buildCalendar({ window: 90, ...args }),
+      escapeHtml,
+      { heading: 'Recent activity' }
+    );
+    attachActivityTips(slot);
+  }
+
   async function paintActivity(who) {
     const slot = document.getElementById('pf-activity');
     if (!slot || !who) return;
+    // Held between paints. The slot is inside #pf-stats, so every filter change
+    // and every scan poll wipes it, and a calendar of the last 90 days does not
+    // depend on any filter: refetching it on each of those would be two round
+    // trips to redraw the same squares.
+    if (activityFor === who && activityDays) {
+      drawActivity(activityDays);
+      return;
+    }
     try {
       const days = await fetchActivity({
         playerId: who,
@@ -991,14 +1013,10 @@ export function initPerformanceView({ auth, escapeHtml }) {
         days: 90
       });
       // The chapter may have been swapped while the fetch was in flight.
-      const still = document.getElementById('pf-activity');
-      if (!still || playerId !== who) return;
-      still.innerHTML = activityPairHtml(
-        days,
-        (args) => buildCalendar({ window: 90, ...args }),
-        escapeHtml,
-        { heading: 'Recent activity' }
-      );
+      if (playerId !== who) return;
+      activityDays = days;
+      activityFor = who;
+      drawActivity(days);
     } catch {
       /* a calendar that will not load is not worth breaking the chapter for */
     }
@@ -1190,6 +1208,8 @@ export function initPerformanceView({ auth, escapeHtml }) {
       slot.innerHTML = aimWaiting(stats)
         ? aimScanningHtml(aimProgress, spinnerHtml)
         : aimChapterHtml(aimModel(stats), escapeHtml);
+      // The chapter carries the calendar slot, so repainting it empties one.
+      if (playerId && !chapterLocked('aim')) paintActivity(playerId);
     } else if (chapter === 'summary') {
       const { players, demos } = maps();
       const stats = playerStats(payload, playerId, ui, players, demos);

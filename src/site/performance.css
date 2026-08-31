@@ -672,6 +672,16 @@ a.pf-rt-go:hover {
   min-width: 0;
 }
 
+/* The calendars close this column. Empty until the feeds answer, and it must
+   take no space until then: the chapter paints first and the panel arrives. */
+.pf-aim-activity:empty {
+  display: none;
+}
+
+.pf-aim-activity {
+  min-width: 0;
+}
+
 .pf-aim-half {
   min-width: 0;
 }

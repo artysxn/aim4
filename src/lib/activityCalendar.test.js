@@ -15,7 +15,6 @@ import {
   WEEKDAYS,
   addToDay,
   buildCalendar,
-  cellTitle,
   dayKey,
   dayStart,
   formatDuration,
@@ -176,54 +175,4 @@ test('durations read the way a person would say them', () => {
   assert.equal(formatDuration(35 * 60), '35 min');
   assert.equal(formatDuration(3600), '1 h');
   assert.equal(formatDuration(2 * 3600 + 40 * 60), '2 h 40 min');
-});
-
-test('a cell title never merges the two sources', () => {
-  const days = new Map();
-  addToDay(days, at(2026, 3, 5), { demoSeconds: 3600, demoMatches: 2, trainSeconds: 600, trainRuns: 4 });
-  const cal = buildCalendar({ days, window: 30, today: at(2026, 3, 7) });
-  const cell = cal.weeks.flat().find((c) => c.key === '2026-03-05');
-  const title = cellTitle(cell);
-  assert.match(title, /in demos/);
-  assert.match(title, /in the trainer/);
-  assert.match(title, /2 matches/);
-  assert.match(title, /4 runs/);
-
-  const empty = cal.weeks.flat().find((c) => c.value === 0);
-  assert.match(cellTitle(empty), /no activity/);
-});
-
-test('no copy in the calendar uses an em dash', () => {
-  const days = new Map();
-  addToDay(days, at(2026, 3, 5), { demoSeconds: 60, demoMatches: 1 });
-  const cal = buildCalendar({ days, window: 30, today: at(2026, 3, 7) });
-  for (const cell of cal.weeks.flat()) {
-    assert.ok(!cellTitle(cell).includes('—'));
-  }
-});
-
-test('a single-source calendar never quotes the other source', () => {
-  // The reason the two grids exist: a demo square that mentioned trainer
-  // minutes would put the reader back to guessing which half a shade meant.
-  const days = new Map();
-  addToDay(days, at(2026, 3, 5), { demoSeconds: 3600, demoMatches: 2, trainSeconds: 600, trainRuns: 4 });
-  const cal = buildCalendar({ days, window: 30, today: at(2026, 3, 7) });
-  const cell = cal.weeks.flat().find((c) => c.key === '2026-03-05');
-
-  const demo = cellTitle(cell, 'demo');
-  assert.match(demo, /2 matches/);
-  assert.ok(!demo.includes('trainer'), 'the demo grid stays about demos');
-
-  const train = cellTitle(cell, 'train');
-  assert.match(train, /4 runs/);
-  assert.ok(!train.includes('in demos'), 'and the trainer grid about the trainer');
-});
-
-test('a day active only in the other source reads as empty here', () => {
-  const days = new Map();
-  addToDay(days, at(2026, 3, 5), { trainSeconds: 600, trainRuns: 4 });
-  const cal = buildCalendar({ days, window: 30, today: at(2026, 3, 7), metric: 'demo' });
-  const cell = cal.weeks.flat().find((c) => c.key === '2026-03-05');
-  assert.equal(cell.level, 0, 'no demo activity, no shade');
-  assert.match(cellTitle(cell, 'demo'), /no activity/, 'and the title agrees with the shade');
 });

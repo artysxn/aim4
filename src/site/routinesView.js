@@ -49,7 +49,7 @@ import { fetchAimRuns } from '../lib/aimStats.js';
 import { coachNoteFor } from '../lib/coachNotes.js';
 import { buildCalendar } from '../lib/activityCalendar.js';
 import { fetchActivity } from '../lib/activityFeed.js';
-import { activityPairHtml } from './activityCalendarView.js';
+import { activityPairHtml, attachActivityTips } from './activityCalendarView.js';
 import { SCENARIO_ICONS } from '../aim4/icons.js';
 
 /* Row action glyphs. Inline so they inherit currentColor. */
@@ -329,6 +329,7 @@ export function initRoutinesView({ auth, escapeHtml }) {
         escapeHtml,
         { heading: 'Your activity' }
       );
+      attachActivityTips(slot);
       card.hidden = false;
     } catch {
       /* the page is a routine builder first; the calendar is a bonus */
