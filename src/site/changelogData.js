@@ -14,6 +14,63 @@
 
 export const CHANGELOG = Object.freeze([
   {
+    date: '2026-08-31',
+    title: 'See which keys a player is holding',
+    tag: 'new',
+    points: [
+      'A new button in the 3D viewer shows the keys of the player you are watching: W, A, S, D, Ctrl, Shift, Space and both mouse buttons, lit red while they are down. It appears in 3D only, and hides in free roam, where you are nobody.',
+      'A demo does not record keypresses. Crouch, walk, scope, jumps and shots come straight from what it does store, and the movement keys are worked back out of the motion using the same equations CS2 uses to turn a key into speed. Counter-strafing shows the key that is braking, not the direction the player is still sliding.',
+      'Scored against the game movement code with known inputs: the movement keys are right 95.7% of the time counting every single tick, and 98.1% while a key is being held. Some inputs leave no trace at all, such as holding a direction through a jump without turning, and those are carried from before the jump rather than guessed at.',
+      'Included with every subscription.'
+    ]
+  },
+  {
+    date: '2026-08-31',
+    title: 'Routines, adaptive difficulty, and a coach',
+    tag: 'new',
+    points: [
+      'A Routines page that builds a training playlist for you. Tell it how long you have, and Find routine picks the modes that cover the mechanics you are worst at, measured from your own runs. You can also build one by hand, and anything you save is already in the trainer under Playlists.',
+      'Adaptive is a third way to play every gamemode, next to Training and Competitive. It uses competitive rules at your level: target size, speed and tracking duration shift slightly with how you performed, and each mode keeps its own rating starting at 1000. Adjustments are 10 to 50 points a run, so the targets never become a different game.',
+      'Leaderboards are split into Standard and Adaptive, so a normalized run is never ranked against a tuned one.',
+      'When a mechanic you are training scores worse than your last run on the same mode, the post-game screen says so and gives you something to do about it, with a graph of that category over time.',
+      'An activity calendar on the Routines and Performance pages, with a grid for training and a separate one for demos. Hovering a day tells you what you did on it. It is public on every account.'
+    ]
+  },
+  {
+    date: '2026-08-31',
+    title: 'Aim ratings on a real curve, and CS-exact sensitivity',
+    tag: 'improved',
+    points: [
+      'Aim ratings are recalibrated against the library instead of against fixed guesses. 1.00 is now the average of everyone measured, 2.00 the top 3%, and 0.10 the bottom 3%, on a bell curve. Component scores follow the same shape at 50, 100 and 0. The averages recompute themselves as the library grows.',
+      'The Database and a player profile now agree. The Database was serving an older outcome-only rating for players whose motion had since been measured.',
+      'Speed and Tension are no longer dropped from demos that every other category could score. They needed more samples than a normal match provides.',
+      'The aim trainer now turns exactly as CS2 does, from the game movement code rather than an approximation. Your existing sensitivity was converted rather than reinterpreted, so the number in the settings box has changed but your aim has not. 800 CPI at 1.0 is 51.95 cm for a full turn, as it is in game.',
+      'Time spent in the Timeline and Analyzer counts toward your activity. It only counts while the tab is in front and you are actually doing something.'
+    ]
+  },
+  {
+    date: '2026-08-31',
+    title: 'A cleaner trainer, and a tidier performance page',
+    tag: 'improved',
+    points: [
+      'The in-run HUD is one strip with icons instead of six labelled boxes, and the end-of-run stats now match it. Pausing gives you Resume with Restart and Quit on one row.',
+      'The Play page and the in-game gamemode list read the same way: icon, name, then the launch buttons flush against each other. Tag pills and mode counts are gone, and Adaptive is on the website too, showing your level for a mode once it has moved off 1000.',
+      'The Routines page uses proper switches for mechanics and icons for row actions, with the duplicate headings and captions removed.',
+      'On the Aim chapter, the explanation of what a number means and what average is has moved onto hover, so the table is a table. A category still short of samples keeps its count on screen, because that is something to act on.',
+      'The activity calendars sit under the Aim tables rather than across the whole page, and scale to whatever width they are given instead of wrapping into a tall stack.'
+    ]
+  },
+  {
+    date: '2026-08-30',
+    title: 'Affiliate codes, bigger libraries, faster uploads',
+    tag: 'new',
+    points: [
+      'Account has an Affiliate tab. Share your code, and you earn 20% of what anyone who signs up with it pays, on their first payment and every renewal after it. The tab shows what is pending, what is approved and what has been paid. Commission is worked out on what actually reaches us after payment fees, and is held for 30 days before it becomes payable, in case of a refund.',
+      'Paid demo limits are four times larger. Solo Lite holds 100 demos, Solo Premium 300, Team Tier 3 holds 400, and Solo Elite, Team Tier 2 and Team Tier 1 are unlimited.',
+      'Uploading a batch no longer means waiting for the whole batch. Each demo starts parsing the moment it finishes uploading, while the rest are still on their way, and when several people upload at once everyone gets a turn instead of the largest drop taking the queue.'
+    ]
+  },
+  {
     date: '2026-08-30',
     title: 'Rename one demo, name the rest',
     tag: 'improved',
