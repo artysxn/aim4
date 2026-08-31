@@ -13,6 +13,14 @@
 
 import { buyBucket, econHasAwp } from './roundId.js';
 import { addAim, addMotion, aimRatingV2, emptyMotion } from './aimMetrics.js';
+import { BELL_SCORE } from './aimCalibration.js';
+
+/**
+ * What an average aimer scores, and therefore the point at which the Aim term
+ * contributes nothing to A4R. Read off the scale rather than written down, so
+ * the two cannot disagree.
+ */
+const AIM_NEUTRAL_SCORE = BELL_SCORE.mid;
 import { AKPR_HOLD_SECONDS } from './awpHold.js';
 import { addUtility, utilityAverages } from './utilityMetrics.js';
 import {
@@ -390,7 +398,12 @@ export function aim4RatingBreakdown({
   const oa = Number.isFinite(opatt) ? opatt : 0.185;
   const orPct = Number.isFinite(openingRate) ? openingRate : 50;
   const readyPct = Number.isFinite(ready) ? ready : 68.8;
-  const aimScore = Number.isFinite(aim) ? aim : 63.1;
+  // The average aimer, by construction: the Aim scale is anchored so the median
+  // player scores 50 (see aimCalibration.js). It used to be 63.1, which was the
+  // centre of the old hand-picked anchors. Both this default and the neutral
+  // point in the term below have to move with the scale, or recalibrating aim
+  // would silently shift every A4R in the library by about 0.7.
+  const aimScore = Number.isFinite(aim) ? aim : AIM_NEUTRAL_SCORE;
   const pfoVal = Number.isFinite(pfo) ? pfo : 1.04;
   const pfwPct = Number.isFinite(pfw) ? pfw : 45.54;
   const swWon = Number.isFinite(swingWon) ? swingWon : 10.2;
@@ -431,7 +444,7 @@ export function aim4RatingBreakdown({
       key: 'aim',
       label: 'Aim',
       input: aimScore,
-      contrib: (aimScore / 100 - 0.631) * 5.4
+      contrib: (aimScore / 100 - AIM_NEUTRAL_SCORE / 100) * 5.4
     },
     { key: 'pfo', label: 'PFO', input: pfoVal, contrib: (pfoVal - 1.04) / 5 },
     { key: 'pfw', label: 'PFW', input: pfwPct, contrib: (pfwPct - 45.54) / 6 }
@@ -733,7 +746,7 @@ export function accumulatePlayers(acc, rows, players, filter = {}, demos = null)
 }
 
 /** Turn pooled counters into table rows. Safe to call once per query. */
-export function derivePlayers(acc) {
+export function derivePlayers(acc, benchmarks = null) {
   const out = [];
   for (const s of acc.values()) {
     if (!s.all.rounds) continue;
@@ -759,7 +772,7 @@ export function derivePlayers(acc) {
         : null;
     const a4or = aim4OpeningRating({ opkd, swing, opatt });
     // Divided once, here, over exactly the rounds that passed the filter.
-    const aim = aimRatingV2(s.aim, s.motion);
+    const aim = aimRatingV2(s.aim, s.motion, { benchmarks });
     const utilAvg = utilityAverages({ ...s.util, rounds: s.utilRounds });
     const teams = [...s.teamRounds.values()].sort(
       (a, b) => b.rounds - a.rounds || a.name.localeCompare(b.name)
@@ -942,9 +955,10 @@ export function derivePlayers(acc) {
  * One table row per player, pooled across demos. Unchanged behaviour: the
  * accumulate/derive split above is an internal seam, not a new contract.
  */
-export function aggregatePlayers(rows, players, filter = {}, demos = null) {
+export function aggregatePlayers(rows, players, filter = {}, demos = null, benchmarks = null) {
   return derivePlayers(
-    accumulatePlayers(createPlayerAccumulator(), rows, players, filter, demos)
+    accumulatePlayers(createPlayerAccumulator(), rows, players, filter, demos),
+    benchmarks
   );
 }
 

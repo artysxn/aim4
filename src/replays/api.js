@@ -9,6 +9,7 @@
 // ---------------------------------------------------------------------------
 
 import { decodePacked, isPacked } from './shared/tickPacked.js';
+import { setActiveBenchmarks } from './shared/aimMetrics.js';
 import { isReplayPackage } from './shared/replayPackage.js';
 import { decodeRoundPacks } from './shared/roundPackWire.js';
 
@@ -407,18 +408,34 @@ export async function fetchAimProgress(playerId, { promote = true } = {}) {
  */
 const AGGREGATE_POST_FILES = 200;
 
+/**
+ * Adopt the scale the server measured, so anything aggregated in the browser
+ * is scored against the same population the server scored against.
+ *
+ * Without this the Database (server-aggregated) and the Performance page
+ * (browser-aggregated over the same demos) would quote two different ratings
+ * for one player, which is the exact class of bug this whole calibration was
+ * meant to remove.
+ */
+function adoptAimBenchmarks(payload) {
+  if (payload?.aimBenchmarks) setActiveBenchmarks(payload.aimBenchmarks);
+  return payload;
+}
+
 export async function fetchAggregate(filter = {}, opts = {}) {
   const files = Array.isArray(filter.files) ? filter.files.filter(Boolean) : [];
   if (files.length > AGGREGATE_POST_FILES) {
-    return asJson(
-      await safeFetch(`${API_BASE}/api/replays/aggregate`, {
-        method: 'POST',
-        headers: await headers({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({
-          ...aggregateBody(filter, opts),
-          files
+    return adoptAimBenchmarks(
+      await asJson(
+        await safeFetch(`${API_BASE}/api/replays/aggregate`, {
+          method: 'POST',
+          headers: await headers({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({
+            ...aggregateBody(filter, opts),
+            files
+          })
         })
-      })
+      )
     );
   }
   const params = new URLSearchParams();
@@ -457,10 +474,12 @@ export async function fetchAggregate(filter = {}, opts = {}) {
   if (Number.isFinite(opts.limit)) params.set('limit', String(opts.limit));
   if (Number.isFinite(opts.offset) && opts.offset > 0) params.set('offset', String(opts.offset));
   const q = params.toString();
-  return asJson(
-    await safeFetch(`${API_BASE}/api/replays/aggregate${q ? `?${q}` : ''}`, {
-      headers: await headers()
-    })
+  return adoptAimBenchmarks(
+    await asJson(
+      await safeFetch(`${API_BASE}/api/replays/aggregate${q ? `?${q}` : ''}`, {
+        headers: await headers()
+      })
+    )
   );
 }
 

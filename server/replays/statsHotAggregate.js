@@ -164,7 +164,7 @@ function roundTagsPass(q, store, r, ownIsT) {
  *   separate store per access level.
  * @returns {Array} rows, identical in shape to aggregatePlayers
  */
-export function aggregateHot(store, filter = {}, allowDemo = null) {
+export function aggregateHot(store, filter = {}, allowDemo = null, benchmarks = null) {
   const {
     nRounds, seatsPerRound, duelStride,
     rDemo, rMap, rSide1, rEcon1, rEcon2, rWinner, rOkSeat, rOdSeat, rHasDuel, rHasCore, rFileIdx,
@@ -467,7 +467,11 @@ export function aggregateHot(store, filter = {}, allowDemo = null) {
     out.set(id, state);
   }
 
-  return derivePlayers(out);
+  // Passed in rather than looked up here: measuring the benchmarks calls this
+  // function, so a lookup would recurse. The calibration pass reads raw
+  // statistics and never the ratings, so running it against the defaults is
+  // harmless.
+  return derivePlayers(out, benchmarks);
 }
 
 // ---------------------------------------------------------------------------

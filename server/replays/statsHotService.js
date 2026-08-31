@@ -13,7 +13,9 @@ import {
   attachRolesHot,
   filterRolesHot
 } from './statsHotAggregate.js';
-import { loadStoredEntry } from './statsIndex.js';
+import { STATS_VERSION, loadStoredEntry } from './statsIndex.js';
+import { AIM_MOTION_VERSION } from '../../src/replays/shared/aimMotion.js';
+import { benchmarksFor } from './aimBenchmarks.js';
 import { attachExpectedRatings } from '../../src/replays/shared/expectedRating.js';
 
 /**
@@ -90,6 +92,16 @@ function recordKey(r) {
   };
   feed(`${r.team1?.name || ''}|${r.team2?.name || ''}`);
   feed(`|${r.parser?.revision ?? ''}:${r.parser?.version || ''}`);
+  // The stats index format, not just the parse.
+  //
+  // Without this the store survived a change to what the index CONTAINS. The
+  // aim rescan wrote motion counters into indexes that already existed, which
+  // touches no demo record and no round id, so every key here stayed identical
+  // and the resident store kept serving arrays packed before motion existed.
+  // The Database then showed the outcome-only Aim rating while the Performance
+  // page, which reads the index files directly, showed the full one — the same
+  // player, two numbers, neither obviously wrong.
+  feed(`|sv${STATS_VERSION}:am${AIM_MOTION_VERSION}`);
   if (Array.isArray(r.rounds) && r.rounds.length) {
     for (const round of r.rounds) feed(`|${round?.id || ''}`);
   } else {
@@ -613,7 +625,23 @@ function startBuild(io, user, records, opts = {}) {
 export async function hotPlayers(io, user, records, filter = {}, opts = {}) {
   const store = await getHotStore(io, user, records, opts);
   if (!store) return null;
-  return aggregateHot(store, filter, visibilityMask(store, opts.allowedIds || null));
+  // The scale comes from the whole library, never from the filter: a player
+  // who is average overall must not become elite because the Database is
+  // showing one map. Measured once per store build and cached.
+  const bench = benchmarksFor(user, store);
+  return aggregateHot(
+    store,
+    filter,
+    visibilityMask(store, opts.allowedIds || null),
+    bench.anchors
+  );
+}
+
+/** The benchmarks this library's ratings are scored against. */
+export async function hotBenchmarks(io, user, records, opts = {}) {
+  const store = await getHotStore(io, user, records, opts);
+  if (!store) return null;
+  return benchmarksFor(user, store);
 }
 
 /**
@@ -666,7 +694,12 @@ export async function hotTables(io, user, records, filter = {}, opts = {}) {
   if (!store) return null;
   await yieldEventLoop();
   const allow = visibilityMask(store, opts.allowedIds || null);
-  let players = aggregateHot(store, filter, allow);
+  // Same scale as every other surface. This is the Database's path, and it is
+  // the one that showed the outcome-only rating while the Performance page
+  // showed the full one; scoring it against anything but the measured
+  // benchmarks would reintroduce that disagreement in a subtler form.
+  const bench = benchmarksFor(user, store);
+  let players = aggregateHot(store, filter, allow, bench.anchors);
   // Roles ride along whenever the caller asked for them or is filtering on
   // them. Teams are built from the UNFILTERED player rows on purpose: a team's
   // numbers are the whole side's, and narrowing to one role would quietly turn

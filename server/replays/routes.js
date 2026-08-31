@@ -91,6 +91,7 @@ import {
   hotRefreshing,
   hotStoreStatus,
   hotMatches,
+  hotBenchmarks,
   hotTables
 } from './statsHotService.js';
 import { isAcceptedUpload, rarSupport } from './archive.js';
@@ -1999,6 +2000,10 @@ export async function handleReplayRequest(req, res, url) {
     }
 
     const { players, teams, maps } = tables;
+    // Already computed and cached by the aggregate above; this is a map read.
+    const aimBench = await hotBenchmarks(statsIo, user, ready, { requireWarm: true }).catch(
+      () => null
+    );
 
     // The Database hides players under its minimum-rounds bar, and that bar
     // hides MOST of the library: thousands of one-match names against a few
@@ -2041,6 +2046,11 @@ export async function handleReplayRequest(req, res, url) {
         ...(wantTeams ? { teams: page(teams), teamsTotal: teams.length } : {}),
         maps,
         offset,
+        // The scale these ratings were measured against. Sent so the browser
+        // scores anything it aggregates itself the same way the server did,
+        // and so the Aim chapter can say what a 1.00 actually is on this
+        // library rather than quoting a constant nobody is scored on.
+        aimBenchmarks: aimBench?.anchors || undefined,
         ...(refreshing ? { refreshing } : {})
       }),
       req
@@ -2150,6 +2160,35 @@ export async function handleReplayRequest(req, res, url) {
       return true;
     }
     json(res, 200, hotStoreStatus());
+    return true;
+  }
+
+  // ---- the aim scale -------------------------------------------------------
+  // What every Aim rating on the site is measured against: the 3rd percentile,
+  // the average and the 97th, per statistic, taken from this library's own
+  // players. Read-only, and there is no recompute button because there is
+  // nothing to schedule: the numbers are measured once per hot-store build and
+  // cached, which costs one aggregate pass over data already in memory.
+  if (req.method === 'GET' && p === '/api/replays/aim-benchmarks') {
+    if (!me.admin) {
+      json(res, 403, { error: 'Only site admins can read the aim scale.' });
+      return true;
+    }
+    const { records: allRecords } = await readable();
+    const ready = allRecords.filter((r) => (r.status || 'ready') === 'ready');
+    const bench = await hotBenchmarks(statsIo, user, ready, { requireWarm: true }).catch(
+      () => null
+    );
+    if (!bench) {
+      json(res, 503, { error: 'Statistics are still loading.', building: true });
+      return true;
+    }
+    json(res, 200, {
+      players: bench.players,
+      measuredFrom: bench.n,
+      usingDefaultsFor: bench.skipped,
+      benchmarks: bench.anchors
+    });
     return true;
   }
 

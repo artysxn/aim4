@@ -17,7 +17,8 @@
 // ---------------------------------------------------------------------------
 
 import {
-  AIM_V2_BASELINES,
+  AIM_BENCH,
+  activeBenchmarks,
   AIM_V2_MIN_SAMPLE,
   AIM_V2_MOTION_KEYS,
   AIM_V2_WEIGHTS
@@ -47,38 +48,51 @@ export const MOTION_READOUT = Object.freeze({
   precision: {
     unit: (v) => `${f1(v)}%`,
     what: 'of the gap closed per flick',
-    baseline: () => '88% is a 1.00'
+    baseline: (b) => `${f0(b.precision?.mid)}% is a 1.00`
   },
   speed: {
     unit: (v) => `${f0(v)}°/s`,
     what: 'view travel while flicking',
-    baseline: () => `${AIM_V2_BASELINES.speed}°/s is a 1.00`
+    baseline: (b) => `${f0(b.speed?.mid)}°/s is a 1.00`
   },
   flicks: {
     unit: (v) => `${f1(v)}%`,
     what: 'of flicks finish on the target',
-    baseline: () => `${AIM_V2_BASELINES.flicks_hit_percent}% is a 1.00`
+    baseline: (b) => `${f0(b.flicks?.mid)}% is a 1.00`
   },
   adjustments: {
     unit: (v) => f2(v),
     what: 'motions per target killed',
-    baseline: () => `${AIM_V2_BASELINES.adjustments} is a 1.00`
+    baseline: (b) => `${f2(b.adjustments?.mid)} is a 1.00`
   },
   reaction: {
     unit: (v) => `${f0(v)} ms`,
     what: 'to see, and to commit',
-    baseline: () => `${AIM_V2_BASELINES.reaction_time_ms} ms is a 1.00`
+    baseline: (b) => `${f0(b.reaction?.mid)} ms is a 1.00`
   },
   tension: {
     unit: (v) => `${f0(v)}%`,
     what: 'longer than the direct path',
-    baseline: () => `${AIM_V2_BASELINES.tension_percent}% is a 1.00`
+    baseline: (b) => `${f0(b.tension?.mid)}% is a 1.00`
   },
   tracking: {
     unit: (v) => pct1(v),
     what: 'of the fight on the hull',
-    baseline: () => `${Math.round(AIM_V2_BASELINES.tracking * 100)}% is a 1.00`
+    baseline: (b) => `${f0((b.tracking?.mid || 0) * 100)}% is a 1.00`
   }
+});
+
+/**
+ * What each outcome statistic's average is, so a score of 50 is readable as
+ * "this is the middle of the library" rather than as an arbitrary number.
+ */
+const OUTCOME_BASELINE = Object.freeze({
+  readyRate: (b) => `${f0((b.readyRate?.mid || 0) * 100)}% is a 50`,
+  crosshairError: (b) => `${f1(b.crosshairError?.mid)}° is a 50`,
+  accuracy: (b) => `${f0((b.accuracy?.mid || 0) * 100)}% is a 50`,
+  firstBullet: (b) => `${f0((b.firstBullet?.mid || 0) * 100)}% is a 50`,
+  overflick: (b) => `${f1((b.overflick?.mid || 0) * 100)}% is a 50`,
+  underflick: (b) => `${f1((b.underflick?.mid || 0) * 100)}% is a 50`
 });
 
 /** What each outcome statistic reads as. */
@@ -124,10 +138,18 @@ export function aimModel(stats) {
     raw: raw[key] ?? null,
     sample: sample[key] || 0,
     weight: AIM_V2_WEIGHTS[key],
-    readout: OUTCOME_READOUT[key]
+    readout: OUTCOME_READOUT[key],
+    baseline: OUTCOME_BASELINE[key]
   }));
 
   return {
+    /**
+     * What these scores were measured against. Carried on the model rather
+     * than imported, because the server recalibrates them from the library and
+     * a page showing "265 ms is a 1.00" against a stale constant would be
+     * describing a scale nobody is being scored on.
+     */
+    benchmarks: stats.aimBenchmarks || activeBenchmarks(),
     rating: Number.isFinite(stats.a4aim) ? stats.a4aim : null,
     v1: Number.isFinite(stats.a4aimV1) ? stats.a4aimV1 : null,
     scanned: Boolean(stats.aimHasMotion),
@@ -250,11 +272,12 @@ export function aimRadarSvg(model, { size = 320 } = {}) {
  * carries the 0 to 100 the Aim rating is assembled from. The bar underneath
  * both is the 0 to 100, so the shapes stay comparable however the number reads.
  */
-function componentRowHtml(c, escapeHtml, { engineScale = false } = {}) {
+function componentRowHtml(c, escapeHtml, { engineScale = false, bench = AIM_BENCH } = {}) {
   const enough = Number.isFinite(c.score);
   const width = enough ? Math.max(1, Math.min(100, c.score)) : 0;
   const value = c.readout && (enough || c.raw != null) ? c.readout.unit(c.raw) : '—';
-  const baseline = enough && c.readout?.baseline ? ` · ${c.readout.baseline()}` : '';
+  const baselineFn = c.readout?.baseline || c.baseline;
+  const baseline = enough && baselineFn ? ` · ${baselineFn(bench)}` : '';
   const note = enough
     ? `${c.readout?.what || ''}${baseline}`
     : `${c.sample} of ${c.need ?? c.sample} samples`;
@@ -274,7 +297,7 @@ function componentRowHtml(c, escapeHtml, { engineScale = false } = {}) {
   </tr>`;
 }
 
-function halfHtml(title, rows, escapeHtml, { engineScale = false, foot = '' } = {}) {
+function halfHtml(title, rows, escapeHtml, { engineScale = false, foot = '', bench } = {}) {
   return `<section class="pf-aim-half">
     <h3 class="pf-aim-title">${escapeHtml(title)}</h3>
     <table class="pf-aim-table">
@@ -284,7 +307,7 @@ function halfHtml(title, rows, escapeHtml, { engineScale = false, foot = '' } = 
           <th scope="col" class="pf-aim-score">${engineScale ? 'Rating' : 'Score'}</th>
         </tr>
       </thead>
-      <tbody>${rows.map((c) => componentRowHtml(c, escapeHtml, { engineScale })).join('')}</tbody>
+      <tbody>${rows.map((c) => componentRowHtml(c, escapeHtml, { engineScale, bench })).join('')}</tbody>
     </table>
     ${foot ? `<p class="pf-aim-foot">${escapeHtml(foot)}</p>` : ''}
   </section>`;
@@ -336,8 +359,12 @@ export function aimChapterHtml(model, escapeHtml) {
     ? ''
     : 'Not measured for these matches yet.';
   const halves = `<div class="pf-aim-halves">
-    ${halfHtml('Motion', model.motion, escapeHtml, { engineScale: true, foot: motionFoot })}
-    ${halfHtml('Outcome', model.outcome, escapeHtml)}
+    ${halfHtml('Motion', model.motion, escapeHtml, {
+      engineScale: true,
+      foot: motionFoot,
+      bench: model.benchmarks
+    })}
+    ${halfHtml('Outcome', model.outcome, escapeHtml, { bench: model.benchmarks })}
   </div>`;
 
   return `${hero}<div class="pf-aim-grid">${radar}${halves}</div>`;

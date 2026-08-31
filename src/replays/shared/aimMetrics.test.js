@@ -7,7 +7,7 @@
 // without a fixture that knows what the answer should be.
 
 import { writeHeader, writeRecord, HEADER_BYTES, TICK_BYTES, FLAG_ALIVE } from './tickFormat.js';
-import { aimFromRound, aimRating, addAim, yawDeltaDeg, signedYawDelta, classifyFlickMiss, FIRST_BULLET_CONE_DEG } from './aimMetrics.js';
+import { aimFromRound, aimRating, addAim, yawDeltaDeg, signedYawDelta, classifyFlickMiss, FIRST_BULLET_CONE_DEG, AIM_OUTCOME_BENCH } from './aimMetrics.js';
 import { utilityFromRound, utilityAverages } from './utilityMetrics.js';
 import { segmentCrossesVision } from '../zones/visionLayers.js';
 
@@ -370,50 +370,50 @@ function twoPlayerMeta(events) {
   assert(thin.components.crosshairError === null, 'thin sample is not scored');
   assert(thin.components.accuracy === null, 'thin accuracy is not scored');
 
-  const full = aimRating({
-    engagements: 400,
-    crosshairErrorSum: 400 * 15, // at the "best" anchor
-    fightsReady: 300,
-    fightsUnaware: 100, // 0.75, the best anchor
-    shots: 300,
-    hits: 126, // 0.42, the best anchor
-    firstBullets: 100,
-    firstBulletHits: 52, // 0.52, the best anchor
-    overflicks: 5, // 0.05, the best anchor
-    underflicks: 5
-  });
-  assert(full.rating === 100, `all components at best anchors is 100, got ${full.rating}`);
+  /**
+   * Counters that produce exactly these raw values.
+   *
+   * Built from the benchmarks rather than from copied numbers: recalibrating
+   * against the library is an expected change (see aimCalibration.js), and a
+   * test holding the old anchors would fail for the wrong reason every time it
+   * happened. What is being pinned is the SHAPE of the scale — the good tail
+   * is 100, the bad tail is 0, the average is 50 — which is the part that must
+   * not drift.
+   */
+  const totalsFor = (pick) => {
+    const b = AIM_OUTCOME_BENCH;
+    const N = 1000;
+    const ready = pick(b.readyRate);
+    return {
+      engagements: 400,
+      crosshairErrorSum: 400 * pick(b.crosshairError),
+      fightsReady: Math.round(400 * ready),
+      fightsUnaware: 400 - Math.round(400 * ready),
+      shots: N,
+      hits: Math.round(N * pick(b.accuracy)),
+      firstBullets: N,
+      firstBulletHits: Math.round(N * pick(b.firstBullet)),
+      overflicks: Math.round(N * pick(b.overflick)),
+      underflicks: Math.round(N * pick(b.underflick))
+    };
+  };
 
-  const worst = aimRating({
-    engagements: 400,
-    crosshairErrorSum: 400 * 55,
-    fightsReady: 220,
-    fightsUnaware: 180, // 0.55, the worst anchor
-    shots: 300,
-    hits: 36, // 0.12
-    firstBullets: 100,
-    firstBulletHits: 12,
-    overflicks: 28, // 0.28, the worst anchor
-    underflicks: 28
-  });
-  assert(worst.rating === 0, `all components at worst anchors is 0, got ${worst.rating}`);
-
-  // Average-ish values should land near the middle of the scale.
-  const average = aimRating({
-    engagements: 400,
-    crosshairErrorSum: 400 * 30, // ~library mean
-    fightsReady: 260,
-    fightsUnaware: 140, // 0.65
-    shots: 300,
-    hits: 81, // 0.27
-    firstBullets: 100,
-    firstBulletHits: 32, // 0.32
-    overflicks: 16, // ~0.16 mid
-    underflicks: 16
-  });
+  const full = aimRating(totalsFor((a) => a.good));
   assert(
-    average.rating != null && average.rating > 35 && average.rating < 70,
-    `average-ish corpus should score mid-scale, got ${average.rating}`
+    Math.abs(full.rating - 100) < 1,
+    `every component at the 97th percentile is 100, got ${full.rating}`
+  );
+
+  const worst = aimRating(totalsFor((a) => a.bad));
+  assert(
+    Math.abs(worst.rating - 0) < 1,
+    `every component at the 3rd percentile is 0, got ${worst.rating}`
+  );
+
+  const average = aimRating(totalsFor((a) => a.mid));
+  assert(
+    Math.abs(average.rating - 50) < 1,
+    `every component at the average is 50, got ${average.rating}`
   );
 
   // Values beyond the anchors clamp rather than running off the scale.

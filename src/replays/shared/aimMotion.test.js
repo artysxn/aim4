@@ -11,8 +11,7 @@
 import { writeHeader, writeRecord, HEADER_BYTES, TICK_BYTES, FLAG_ALIVE } from './tickFormat.js';
 import {
   AIM_MOTION_FIELDS,
-  AIM_V2_BASELINES,
-  AIM_V2_PRECISION_PIVOT,
+  AIM_MOTION_BENCH,
   addMotion,
   aimRating,
   aimRatingV2,
@@ -255,28 +254,38 @@ function flickFixture({
 
 // ---------------------------------------------------------------------------
 {
-  // The engine scales: a baseline value scores 1.00, which is 63 on the aim
-  // scale — the same place the outcome half puts a typical player. That is the
-  // property the whole v2 blend rests on, so it is pinned here.
-  assert(close(engineToHundred(1), 63, 1), `baseline maps to 63, got ${engineToHundred(1)}`);
-  assert(engineToHundred(0.4) === 0, 'the worst anchor is 0');
-  assert(engineToHundred(1.35) === 100, 'the best anchor is 100');
+  // The scales: an average value scores 1.00, which is 50 on the aim scale —
+  // the same place the outcome half now puts a typical player. That is the
+  // property the whole v2 blend rests on, so it is pinned here. It used to be
+  // 63, which was the centre of the old hand-picked anchors; both halves moved
+  // together to the measured middle (see aimCalibration.js).
+  assert(close(engineToHundred(1), 50, 0.001), `average maps to 50, got ${engineToHundred(1)}`);
+  assert(close(engineToHundred(2), 100, 0.001), 'the top anchor is 100');
+  assert(close(engineToHundred(0.1), 0, 0.001), 'the bottom anchor is 0');
   assert(engineToHundred(null) === null, 'no score, no number');
 
-  // Read from the constants, not copied from them: recalibrating the baselines
-  // against the library is an expected change, and a test that pinned the old
-  // numbers would fail for the wrong reason when it happens.
-  const scores = motionEngineScores({
-    precision: AIM_V2_PRECISION_PIVOT,
-    speed: AIM_V2_BASELINES.speed,
-    flicks: AIM_V2_BASELINES.flicks_hit_percent,
-    adjustments: AIM_V2_BASELINES.adjustments,
-    reaction: AIM_V2_BASELINES.reaction_time_ms,
-    tension: AIM_V2_BASELINES.tension_percent,
-    tracking: AIM_V2_BASELINES.tracking
-  });
+  // Read from the benchmarks, not copied from them: recalibrating against the
+  // library is an expected change, and a test that pinned the old numbers
+  // would fail for the wrong reason when it happens.
+  const mids = {};
+  for (const [key, b] of Object.entries(AIM_MOTION_BENCH)) mids[key] = b.mid;
+  const scores = motionEngineScores(mids);
   for (const [key, v] of Object.entries(scores)) {
-    assert(close(v, 1, 0.06), `${key} at baseline should score 1.00, got ${v}`);
+    assert(close(v, 1, 0.001), `${key} at its average should score 1.00, got ${v}`);
+  }
+
+  // And the tails land where the specification says they do.
+  const good = {};
+  const bad = {};
+  for (const [key, b] of Object.entries(AIM_MOTION_BENCH)) {
+    good[key] = b.good;
+    bad[key] = b.bad;
+  }
+  for (const [key, v] of Object.entries(motionEngineScores(good))) {
+    assert(close(v, 2, 0.001), `${key} at the 97th percentile should be 2.00, got ${v}`);
+  }
+  for (const [key, v] of Object.entries(motionEngineScores(bad))) {
+    assert(close(v, 0.1, 0.001), `${key} at the 3rd percentile should be 0.10, got ${v}`);
   }
 }
 

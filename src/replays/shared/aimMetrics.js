@@ -23,6 +23,7 @@
 
 import { FLAG_ALIVE, readHeader, readRecord } from './tickFormat.js';
 import { segmentCrossesVision } from '../zones/visionLayers.js';
+import { calibrate, ratingFor, scoreFor, unitPosition } from './aimCalibration.js';
 import {
   adjustmentsScore,
   higherIsBetter,
@@ -477,22 +478,46 @@ export function addAim(into, from) {
  *   first bullet ≈ 15–50% (wide)
  *   over/underflick ≈ 5–28% of first-bullet cone shots (lower better)
  */
-export const AIM_ANCHORS = Object.freeze({
-  /** Mean yaw error, degrees, when an enemy engages you. Lower is better. */
-  crosshairError: { worst: 55, best: 15, invert: true },
-  /**
-   * Share of engagements where you were already within the cone.
-   * Typical band is ~60–70%; the span is tight so a few points move the score.
-   */
-  readyRate: { worst: 0.55, best: 0.75, invert: false },
-  /** Hits per shot, smoke shots excluded. High variance across roles/weapons. */
-  accuracy: { worst: 0.12, best: 0.42, invert: false },
-  /** First bullet of a burst connecting when an enemy was in the cone. */
-  firstBullet: { worst: 0.12, best: 0.52, invert: false },
-  /** Share of first-bullet cone shots that overflicked. Lower is better. */
-  overflick: { worst: 0.28, best: 0.05, invert: true },
-  /** Share of first-bullet cone shots that underflicked. Lower is better. */
-  underflick: { worst: 0.28, best: 0.05, invert: true }
+/**
+ * The outcome half's benchmarks: bad (3rd percentile), mid (average), good
+ * (97th). See aimCalibration.js for what the three points mean and why there
+ * are three of them.
+ *
+ * PROVISIONAL. These are estimates, and the point of the whole mechanism is
+ * that they get replaced by measured ones: `calibrateBenchmarks` below turns a
+ * population into the real numbers, and the server recomputes them from the
+ * library (server/replays/aimBenchmarks.js). They are kept only so a fresh
+ * install with too few demos still scores something sane.
+ *
+ * The previous hand-picked pair is why this exists at all. Its BEST crosshair
+ * placement was 15°, and real players came in at 13°, so every competent
+ * player scored a flat 100 on it. Same for readiness (best 75%, real 84%) and
+ * accuracy (best 42%, real 45%). Three of the six outcome scores were pinned
+ * to the ceiling and had stopped saying anything.
+ */
+export const AIM_OUTCOME_BENCH = Object.freeze({
+  /** Mean yaw error in degrees when a fight starts. Lower is better. */
+  crosshairError: { bad: 38, mid: 22, good: 12 },
+  /** Share of engagements already inside the cone. */
+  readyRate: { bad: 0.55, mid: 0.72, good: 0.87 },
+  /** Hits per shot, smoke and wall shots excluded. */
+  accuracy: { bad: 0.22, mid: 0.35, good: 0.48 },
+  /** First bullet of a burst connecting with an enemy in the cone. */
+  firstBullet: { bad: 0.25, mid: 0.42, good: 0.58 },
+  /** Share of first bullets that went past. Lower is better. */
+  overflick: { bad: 0.14, mid: 0.07, good: 0.025 },
+  /** Share of first bullets that stopped short. Lower is better. */
+  underflick: { bad: 0.34, mid: 0.22, good: 0.12 }
+});
+
+/** Which way is better, per outcome statistic. The one place direction is named. */
+export const AIM_OUTCOME_DIRECTION = Object.freeze({
+  crosshairError: false,
+  readyRate: true,
+  accuracy: true,
+  firstBullet: true,
+  overflick: false,
+  underflick: false
 });
 
 /**
@@ -521,11 +546,9 @@ export const AIM_MIN_SAMPLE = Object.freeze({
   underflick: 15
 });
 
-function scoreComponent(value, anchor) {
-  if (!Number.isFinite(value)) return null;
-  const { worst, best } = anchor;
-  const t = (value - worst) / (best - worst);
-  return Math.max(0, Math.min(100, t * 100));
+/** One outcome statistic against its benchmark, as 0-100 with 50 the average. */
+function scoreComponent(value, bench) {
+  return scoreFor(value, bench);
 }
 
 /**
@@ -537,7 +560,8 @@ function scoreComponent(value, anchor) {
  *
  * @returns {{rating: number|null, components: object, sample: object}}
  */
-export function aimRating(totals) {
+export function aimRating(totals, benchmarks = null) {
+  const bench = { ...AIM_OUTCOME_BENCH, ...(benchmarks || {}) };
   const div = (a, b) => (b > 0 ? a / b : null);
 
   const firstBullets = totals.firstBullets || 0;
@@ -568,9 +592,9 @@ export function aimRating(totals) {
   let weighted = 0;
   let weightUsed = 0;
 
-  for (const key of Object.keys(AIM_ANCHORS)) {
+  for (const key of Object.keys(AIM_OUTCOME_BENCH)) {
     const enough = sample[key] >= AIM_MIN_SAMPLE[key];
-    const score = enough ? scoreComponent(raw[key], AIM_ANCHORS[key]) : null;
+    const score = enough ? scoreComponent(raw[key], bench[key]) : null;
     components[key] = score;
     if (score != null) {
       weighted += score * AIM_WEIGHTS[key];
@@ -584,35 +608,6 @@ export function aimRating(totals) {
     raw,
     sample
   };
-}
-
-/**
- * Re-anchor the scale from a real population.
- *
- * Takes the per-player raw values across the library and returns anchors at the
- * 5th and 95th percentile of each, which is what makes 0-100 mean "worst to
- * best of the players we actually have" rather than a guess. Run it once there
- * are enough demos indexed, then paste the result over AIM_ANCHORS.
- *
- * @param {Array<Record<string, number|null>>} population  raw values per player
- */
-export function calibrateAnchors(population) {
-  const out = {};
-  for (const key of Object.keys(AIM_ANCHORS)) {
-    const values = population
-      .map((p) => p?.[key])
-      .filter((v) => Number.isFinite(v))
-      .sort((x, y) => x - y);
-    if (values.length < 20) {
-      out[key] = { ...AIM_ANCHORS[key], note: 'too few samples, kept default' };
-      continue;
-    }
-    const at = (q) => values[Math.floor(q * (values.length - 1))];
-    const lo = at(0.05);
-    const hi = at(0.95);
-    out[key] = AIM_ANCHORS[key].invert ? { worst: hi, best: lo, invert: true } : { worst: lo, best: hi, invert: false };
-  }
-  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -712,56 +707,84 @@ export function motionHasSample(vec) {
 // ---------------------------------------------------------------------------
 
 /**
- * B = a 1.00 engine rating, per axis, on CS2 demo data.
+ * The motion half's benchmarks, in the same bad / mid / good shape as the
+ * outcome half. Average is 1.00, the 97th percentile 2.00, the 3rd 0.10.
  *
- * PROVISIONAL until run over the library: these are plausible mid-table values,
- * not measured ones. `calibrateMotionBaselines` below turns a population of raw
- * values into the real thing — run it once the rescan has covered the library
- * and paste the result over this.
+ * These replace the aim trainer's engine curves for demo ratings, and the
+ * reason is that the trainer's curves are the wrong shape for this data. They
+ * are anchored on one baseline each and fan out from it with a hand-chosen
+ * exponent: a sqrt for speed, an exponential decay for reaction, a squared
+ * term above the precision pivot. Those shapes were tuned against trainer
+ * scenarios, where the target is a small sphere and the player is trying to go
+ * fast. In a demo the same statistics have completely different spreads, and
+ * feeding them through the trainer's curves put Precision at 0.42 for a value
+ * that is perfectly normal in a real match, while Adjustments collapsed to
+ * 0.31. The radar had two axes pinned near zero for most of the library.
+ *
+ * The trainer keeps its own engines and its own baselines (lib/aim4Ratings.js)
+ * — a Gridshot run and a CS2 match are not the same measurement and should not
+ * share a scale. This is the demo half only.
+ *
+ * PROVISIONAL, and replaced by measured numbers the same way the outcome half
+ * is; see calibrateBenchmarks.
  */
-export const AIM_V2_BASELINES = Object.freeze({
+export const AIM_MOTION_BENCH = Object.freeze({
+  /** Mean % of the start-to-target gap one flick closed. */
+  precision: { bad: 22, mid: 34, good: 48 },
   /** Degrees of view travel per second while flicking. */
-  speed: 250,
-  /** Share of the engagement with the crosshair on the hull. */
-  tracking: 0.35,
-  /**
-   * Share of flicks that finished on the target.
-   *
-   * Higher than the first-bullet HIT rate it looks like, and not the same
-   * statistic: a flick counts as landed when the crosshair finished on the
-   * hull, whether or not spread and recoil put the bullet there.
-   */
-  flicks_hit_percent: 55,
-  /** Motion segments per target killed. 1.0 is one clean flick per kill. */
-  adjustments: 2.2,
-  /** Visible→moving and on-target→click, blended 50/50, in ms. */
-  reaction_time_ms: 250,
-  /** Path length over the direct angular distance, as a % excess. */
-  tension_percent: 45
+  speed: { bad: 70, mid: 120, good: 200 },
+  /** Share of flicks that finished on the target, as a percent. */
+  flicks: { bad: 52, mid: 63, good: 74 },
+  /** Motion segments per target killed. Lower is better. */
+  adjustments: { bad: 6, mid: 3.4, good: 2 },
+  /** Visible-to-moving and on-target-to-click, blended, in ms. Lower is better. */
+  reaction: { bad: 380, mid: 265, good: 180 },
+  /** Path length over the direct distance, as a % excess. Lower is better. */
+  tension: { bad: 95, mid: 58, good: 32 },
+  /** Share of engagement ticks with the crosshair on the hull. */
+  tracking: { bad: 0.22, mid: 0.33, good: 0.45 }
 });
 
-/**
- * Closeness that scores 1.00 for a demo flick.
- *
- * Much higher than the trainer's 62.5: a trainer target is a small sphere and
- * closing 62% of the gap to it is respectable, while a demo flick ends on a
- * player-sized hull and a competent one closes most of the way there. Scoring
- * demo flicks on the trainer's pivot would put the whole library at the top of
- * the curve, which is a scale that has stopped distinguishing anybody.
- */
-export const AIM_V2_PRECISION_PIVOT = 88;
+/** Which way is better, per motion statistic. */
+export const AIM_MOTION_DIRECTION = Object.freeze({
+  precision: true,
+  speed: true,
+  flicks: true,
+  adjustments: false,
+  reaction: false,
+  tension: false,
+  tracking: true
+});
+
+/** Every benchmark the demo rating uses, outcome and motion together. */
+export const AIM_BENCH = Object.freeze({ ...AIM_OUTCOME_BENCH, ...AIM_MOTION_BENCH });
 
 /**
- * Where an engine score (0.00–2.00) lands on the 0–100 aim scale.
+ * The benchmarks in force right now, for callers that have no way to thread
+ * them through.
  *
- * Chosen so a baseline 1.00 scores 63, which is where the outcome half already
- * puts a typical player (see AIM_ANCHORS). That is not cosmetic: the Aim column
- * feeds the A4R composite against a fixed 0.631 constant, so a motion half
- * centred anywhere else would move every rating in the library the day v2
- * shipped, and the move would be an artefact of the scale rather than anything
- * anybody's aim did.
+ * The browser has exactly one library open at a time, so it sets this once
+ * from the API payload and every rating drawn afterwards is scored against the
+ * measured numbers. The SERVER never uses it: it serves several libraries from
+ * one process, and a shared mutable scale there would score one library's
+ * players against another library's population. Server code passes benchmarks
+ * explicitly, which is why `derivePlayers` takes them as an argument.
  */
-export const AIM_V2_ENGINE_ANCHOR = Object.freeze({ worst: 0.4, best: 1.35 });
+let ACTIVE_BENCH = AIM_BENCH;
+
+export function setActiveBenchmarks(benchmarks) {
+  ACTIVE_BENCH = benchmarks ? Object.freeze({ ...AIM_BENCH, ...benchmarks }) : AIM_BENCH;
+  return ACTIVE_BENCH;
+}
+
+export function activeBenchmarks() {
+  return ACTIVE_BENCH;
+}
+/** Every direction, likewise. */
+export const AIM_DIRECTION = Object.freeze({
+  ...AIM_OUTCOME_DIRECTION,
+  ...AIM_MOTION_DIRECTION
+});
 
 /** Weight of each v2 component. Outcome half and motion half, 50/50. */
 export const AIM_V2_WEIGHTS = Object.freeze({
@@ -861,26 +884,39 @@ export function aimTelemetry(totals) {
   return { raw, sample, totals: m, flicks };
 }
 
-/** Raw motion statistics → the trainer engine's 0.00–2.00 score, per axis. */
-export function motionEngineScores(raw, baselines = AIM_V2_BASELINES) {
-  const B = { ...AIM_V2_BASELINES, ...(baselines || {}) };
-  const at = (v, fn) => (Number.isFinite(v) ? fn(v) : null);
-  return {
-    precision: at(raw.precision, (v) => precisionScore(v, AIM_V2_PRECISION_PIVOT)),
-    speed: at(raw.speed, (v) => speedScore(v, B.speed)),
-    flicks: at(raw.flicks, (v) => higherIsBetter(v, B.flicks_hit_percent)),
-    adjustments: at(raw.adjustments, (v) => adjustmentsScore(v, B.adjustments)),
-    reaction: at(raw.reaction, (v) => reactionScore(v, B.reaction_time_ms)),
-    tension: at(raw.tension, (v) => lowerIsBetter(v, B.tension_percent)),
-    tracking: at(raw.tracking, (v) => higherIsBetter(v, B.tracking))
-  };
+/**
+ * Raw motion statistics → the 0.00-2.00 rating, per axis.
+ *
+ * 1.00 is the average player, 2.00 the 97th percentile, 0.10 the 3rd. The name
+ * is kept from when these went through the trainer's engines; what they go
+ * through now is the shared bell scale.
+ */
+export function motionEngineScores(raw, benchmarks = null) {
+  const bench = { ...AIM_MOTION_BENCH, ...(benchmarks || {}) };
+  const out = {};
+  for (const { key } of AIM_V2_MOTION_KEYS) out[key] = ratingFor(raw?.[key], bench[key]);
+  return out;
 }
 
-/** Engine score (0–2) onto the 0–100 aim scale. */
+/** The same axes as unit positions, which is what the composite is built from. */
+export function motionUnits(raw, benchmarks = null) {
+  const bench = { ...AIM_MOTION_BENCH, ...(benchmarks || {}) };
+  const out = {};
+  for (const { key } of AIM_V2_MOTION_KEYS) out[key] = unitPosition(raw?.[key], bench[key]);
+  return out;
+}
+
+/**
+ * A 0.00-2.00 axis rating onto the 0-100 scale the composite adds up.
+ *
+ * Exact rather than approximate, because both scales are straight lines in the
+ * same unit position: 0.10 and 0 are the same point, 1.00 and 50 are, 2.00 and
+ * 100 are. The two branches are the two slopes below and above the average.
+ */
 export function engineToHundred(score) {
   if (!Number.isFinite(score)) return null;
-  const { worst, best } = AIM_V2_ENGINE_ANCHOR;
-  return Math.max(0, Math.min(100, ((score - worst) / (best - worst)) * 100));
+  const u = score >= 1 ? score / 2 : (score - 0.1) / 1.8;
+  return Math.max(0, Math.min(100, u * 100));
 }
 
 /**
@@ -897,9 +933,11 @@ export function engineToHundred(score) {
  * @param {{ baselines?: object }} [opts]
  */
 export function aimRatingV2(totals, motion = null, opts = {}) {
-  const base = aimRating(totals || {});
+  const bench = { ...ACTIVE_BENCH, ...(opts.benchmarks || {}) };
+  const base = aimRating(totals || {}, bench);
   const tele = aimTelemetry(motion || []);
-  const engines = motionEngineScores(tele.raw, opts.baselines);
+  const engines = motionEngineScores(tele.raw, bench);
+  const units = motionUnits(tele.raw, bench);
 
   /** @type {Record<string, number|null>} */
   const components = {};
@@ -912,10 +950,12 @@ export function aimRatingV2(totals, motion = null, opts = {}) {
     weightUsed += AIM_V2_WEIGHTS[key];
   };
 
-  for (const key of Object.keys(AIM_ANCHORS)) add(key, base.components[key]);
+  for (const key of Object.keys(AIM_OUTCOME_BENCH)) add(key, base.components[key]);
   for (const { key } of AIM_V2_MOTION_KEYS) {
     const enough = (tele.sample[key] || 0) >= AIM_V2_MIN_SAMPLE[key];
-    add(key, enough ? engineToHundred(engines[key]) : null);
+    // Straight from the unit position rather than via the 0-2 rating and back:
+    // both are the same line, and one conversion is one fewer place to drift.
+    add(key, enough && units[key] != null ? units[key] * 100 : null);
   }
 
   const hasMotion = AIM_V2_MOTION_KEYS.some(({ key }) => components[key] != null);
@@ -928,41 +968,24 @@ export function aimRatingV2(totals, motion = null, opts = {}) {
     raw: { ...base.raw, ...tele.raw },
     sample: { ...base.sample, ...tele.sample },
     engines,
+    /** What the scores were measured against, so the page can say what a 1.00 is. */
+    benchmarks: bench,
     motion: tele.totals
   };
 }
 
 /**
- * Re-anchor the motion baselines from a real population, the same way
- * `calibrateAnchors` re-anchors the outcome half.
+ * Measure the benchmarks from a real population.
  *
- * A baseline is the MEDIAN raw value, not a percentile edge: the engines are
- * curves around B = 1.00, so B has to be the middle of the population for the
- * curve either side of it to mean anything.
+ * This is the operation that makes every rating on the site mean something
+ * relative to the people actually in the library, and it is deliberately
+ * cheap: one pass over per-player raw statistics that have already been
+ * aggregated, no demo is reparsed and no round is re-read.
  *
- * @param {Array<Record<string, number|null>>} population raw values per player
+ * @param {Array<Record<string, number|null>>} population one entry per player,
+ *   each holding that player's raw value for every statistic in AIM_BENCH
+ * @returns {{anchors: object, skipped: string[], n: number}}
  */
-export function calibrateMotionBaselines(population) {
-  const median = (key) => {
-    const values = (population || [])
-      .map((p) => p?.[key])
-      .filter((v) => Number.isFinite(v))
-      .sort((a, b) => a - b);
-    if (values.length < 20) return null;
-    return values[Math.floor(values.length / 2)];
-  };
-  const out = { ...AIM_V2_BASELINES };
-  const map = {
-    speed: 'speed',
-    tracking: 'tracking',
-    flicks_hit_percent: 'flicks',
-    adjustments: 'adjustments',
-    reaction_time_ms: 'reaction',
-    tension_percent: 'tension'
-  };
-  for (const [baselineKey, rawKey] of Object.entries(map)) {
-    const m = median(rawKey);
-    if (m != null && m > 0) out[baselineKey] = Math.round(m * 1000) / 1000;
-  }
-  return out;
+export function calibrateBenchmarks(population) {
+  return calibrate(population, AIM_DIRECTION, AIM_BENCH);
 }
