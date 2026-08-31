@@ -12,14 +12,17 @@
 //   speed 1000, movement 1500  ->  a Speed + Movement mode is played at 1250
 //
 // What comes back from a run is then split by ordinary Elo, against that same
-// 1250 as the opponent. The 1000 was not expected to beat a 1250 and gains a
-// lot for doing it; the 1500 was expected to and gains little:
+// 1250 as the opponent, and SHARED between the mechanics rather than paid to
+// each in full. The 1000 was not expected to beat a 1250 and takes most of the
+// win; the 1500 was expected to and takes little:
 //
-//   speed     expected 0.19,  wins  ->  +32
-//   movement  expected 0.81,  wins  ->  +8
+//   speed     expected 0.19,  wins  ->  +16
+//   movement  expected 0.81,  wins  ->  +4
 //
 // which is the whole point. A mode you are lopsided at pulls hardest on the
-// half that is behind, and playing to your strength stops paying.
+// half that is behind, and playing to your strength stops paying. The share is
+// what keeps one run worth one run: a mode testing three mechanics says less
+// about each of them than a mode testing one, and moves each of them less.
 //
 // It also means a run that goes exactly as expected still moves both: the
 // weaker mechanic up, the stronger one down, both toward the difficulty the
@@ -50,11 +53,15 @@ import { SCENARIO_META } from './gamemodeCatalog.js';
 
 export const DEFAULT_ELO = 1000;
 /**
- * The most one run can move one mechanic, at even odds half that.
+ * The most one RUN can move the ratings it touches, in total.
  *
- * Chosen against the old fixed step it replaces: a decisive run used to move a
- * rating 50 points and a marginal one 10. Here a decisive win costs the
- * favourite 8 and pays the underdog 32, and an even matchup pays 20.
+ * Shared between the mode's mechanics rather than paid to each, so this is the
+ * budget for the run and not the budget per mechanic. On a one mechanic mode a
+ * decisive win moves it the full 20 at even odds; on a two mechanic mode the
+ * same win is split, and a lopsided pair splits it unevenly by design.
+ *
+ * Chosen against the fixed step it replaces, where a decisive run moved a
+ * rating 50 points and a marginal one 10.
  */
 export const K_FACTOR = 40;
 /**
@@ -264,7 +271,9 @@ export function eloFor(mode, store = null) {
  * Every mechanic of the mode is rated against the difficulty the mode was
  * played at, so the split falls out of Elo rather than being apportioned by
  * hand: a mechanic below the difficulty gains most of the win, one above it
- * gains little, and one exactly at it gains half.
+ * gains little, and one exactly at it gains half. The whole is then divided
+ * by how many mechanics shared it, so one run is worth one run however many
+ * things the mode was testing.
  *
  * @param {string} mode
  * @param {number} score the run's leaderboard-relevant value (score or kills)
@@ -284,10 +293,16 @@ export function recordAdaptiveRun(mode, score) {
 
   const moved = [];
   if (outcome !== null) {
+    // Split across the mechanics the mode tests, not applied whole to each.
+    // One run is one result: a mode that tests three things at once is weaker
+    // evidence about any one of them than a mode that tests one, and without
+    // the division a three tag mode would move a rating three times as fast
+    // per run as a one tag mode for saying less about it.
+    const share = 1 / cats.length;
     for (const cat of cats) {
       const from = categoryElo(cat, store);
       const expected = expectedScore(from, prevElo);
-      const to = clamp(from + K_FACTOR * (outcome - expected), ELO_FLOOR, ELO_CEIL);
+      const to = clamp(from + K_FACTOR * (outcome - expected) * share, ELO_FLOOR, ELO_CEIL);
       store.cats[cat] = to;
       moved.push({
         category: cat,

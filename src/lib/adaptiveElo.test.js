@@ -104,8 +104,9 @@ test('a win pays the mechanic that was behind far more than the one ahead', () =
   const acc = res.categories.find((c) => c.category === 'Accuracy');
   assert.ok(speed.delta > 0 && acc.delta > 0, 'a win moves both up');
   assert.ok(speed.delta > acc.delta * 3, `behind gained ${speed.delta}, ahead ${acc.delta}`);
-  assert.equal(speed.delta, Math.round(K_FACTOR * (1 - expectedScore(1000, 1250))));
-  assert.equal(acc.delta, Math.round(K_FACTOR * (1 - expectedScore(1500, 1250))));
+  // Halved, because two mechanics shared this one result.
+  assert.equal(speed.delta, Math.round((K_FACTOR * (1 - expectedScore(1000, 1250))) / 2));
+  assert.equal(acc.delta, Math.round((K_FACTOR * (1 - expectedScore(1500, 1250))) / 2));
 });
 
 test('a loss costs the mechanic that was ahead far more than the one behind', () => {
@@ -126,7 +127,7 @@ test('an even matchup splits a result evenly', () => {
   const res = recordAdaptiveRun('gridshot', 500 * (1 + DECISIVE));
   const [a, b] = res.categories;
   assert.equal(a.delta, b.delta, 'nothing to tell them apart');
-  assert.equal(a.delta, Math.round(K_FACTOR * 0.5));
+  assert.equal(a.delta, Math.round((K_FACTOR * 0.5) / 2), 'half each, not the whole to both');
 });
 
 test('a draw still converges a lopsided pair', () => {
@@ -288,5 +289,46 @@ test('junk in storage cannot take the rating with it', () => {
     store.clear();
     store.set(KEY, junk);
     assert.equal(eloFor('gridshot'), DEFAULT_ELO, `survived ${junk}`);
+  }
+});
+
+test('one run is worth one run, however many mechanics it tested', () => {
+  // The result is SHARED between the mode's mechanics, not paid to each in
+  // full. Without the division a three tag mode would move a rating three
+  // times as fast per run as a one tag mode, for saying less about it.
+  store.clear();
+  recordAdaptiveRun('tracking', 100); // Accuracy alone
+  const solo = recordAdaptiveRun('tracking', 200);
+
+  store.clear();
+  recordAdaptiveRun('gridshot', 100); // Speed + Accuracy
+  const pair = recordAdaptiveRun('gridshot', 200);
+
+  const soloMove = solo.categories[0].delta;
+  const pairMove = pair.categories[0].delta;
+  assert.equal(pair.categories.length, 2);
+  assert.equal(solo.categories.length, 1);
+  assert.equal(pairMove, Math.round(soloMove / 2), `solo ${soloMove}, shared ${pairMove}`);
+});
+
+test('the gap between two mechanics closes however the runs go', () => {
+  // A consequence worth knowing rather than a promise: the difficulty is the
+  // MIDPOINT of the pair, so each is always the same distance from it, and the
+  // result cancels out of the difference. d(A - B) = K/2 * (E_b - E_a), which
+  // has no S in it. Mixed evidence moves a pair up or down together and can
+  // never separate them; only a mode that isolates one can do that.
+  const gapAfterOneRun = (gap, outcome) => {
+    const a = 1250 + gap / 2;
+    const b = 1250 - gap / 2;
+    const move = (r) => r + (K_FACTOR * (outcome - expectedScore(r, 1250))) / 2;
+    return move(a) - move(b);
+  };
+  for (const gap of [500, 200, 50]) {
+    const won = gapAfterOneRun(gap, 1);
+    const lost = gapAfterOneRun(gap, 0);
+    const drew = gapAfterOneRun(gap, 0.5);
+    assert.ok(Math.abs(won - lost) < 1e-9, `gap ${gap} closed differently on a loss`);
+    assert.ok(Math.abs(won - drew) < 1e-9, `gap ${gap} closed differently on a draw`);
+    assert.ok(won < gap, `gap ${gap} did not close`);
   }
 });
