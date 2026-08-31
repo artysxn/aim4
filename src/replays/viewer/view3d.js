@@ -80,6 +80,7 @@ import {
   scaledCameraPunch
 } from '../../cs3d/demoHits.js';
 import { canSpectateSlot, DEATH_FOLLOW_SECONDS, deathFollowShouldSnap, nextCamMode, nextFollowSlot } from './view3dFollow.js';
+import { keysAt } from './keypresses.js';
 
 const DEG = Math.PI / 180;
 const RAD = 180 / Math.PI;
@@ -224,6 +225,105 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange }) {
   let _flashShown = 0;
   let demoFireWeapon = '';
   let shotShooterSlot = -1;
+
+  // ---- keypress overlay -----------------------------------------------------
+  //
+  // DOM over the canvas, like the flash overlay: it is text and key caps, and
+  // per-frame class toggles are cheaper and crisper than drawing them into
+  // the scene. Follows whoever the camera follows; free roam is nobody's
+  // hands, so it hides there.
+  let keysOn = false;
+  let keysEl = null;
+  /** key name -> element, filled when the overlay is built. */
+  let keyEls = null;
+  /** key name -> last demo tick it was genuinely down, for de-flicker. */
+  let keyLit = {};
+  let keysTick = null;
+  let keysSlot = -1;
+  let keysRound = '';
+  const KEYS_SCRATCH = {};
+  const KEY_NAMES = ['w', 'a', 's', 'd', 'ctrl', 'shift', 'space', 'm1', 'm2'];
+  /** A key that drops out for under this long stays lit (seconds). */
+  const KEY_STICKY = 0.09;
+
+  function buildKeysOverlay(container) {
+    keysEl = document.createElement('div');
+    keysEl.className = 'c3-keys';
+    keysEl.hidden = true;
+    keysEl.innerHTML = `
+      <div class="c3-keys-mods">
+        <span class="c3-key c3-key-wide" data-key="shift">SHIFT</span>
+        <span class="c3-key c3-key-wide" data-key="ctrl">CTRL</span>
+      </div>
+      <div class="c3-keys-move">
+        <span class="c3-key" data-key="w">W</span>
+        <div class="c3-keys-row">
+          <span class="c3-key" data-key="a">A</span>
+          <span class="c3-key" data-key="s">S</span>
+          <span class="c3-key" data-key="d">D</span>
+        </div>
+        <span class="c3-key c3-key-space" data-key="space" aria-label="Space"></span>
+      </div>
+      <svg class="c3-keys-mouse" viewBox="0 0 44 64" aria-hidden="true">
+        <path data-key="m1" d="M20.5 4.5 V26 H4.5 V19 A16 15 0 0 1 20.5 4.5 Z" />
+        <path data-key="m2" d="M23.5 4.5 V26 H39.5 V19 A16 15 0 0 0 23.5 4.5 Z" />
+        <rect class="c3-mouse-body" x="4.5" y="4.5" width="35" height="55" rx="15" />
+        <line class="c3-mouse-line" x1="22" y1="4.5" x2="22" y2="26" />
+        <line class="c3-mouse-line" x1="4.5" y1="26" x2="39.5" y2="26" />
+      </svg>`;
+    container.appendChild(keysEl);
+    keyEls = {};
+    for (const name of KEY_NAMES) keyEls[name] = keysEl.querySelector(`[data-key="${name}"]`);
+  }
+
+  function updateKeypresses() {
+    if (!keysEl) return;
+    const follow = mode === 'pov' || mode === 'third';
+    const show = keysOn && visible && follow && povSlot >= 0 && !!frame;
+    keysEl.hidden = !show;
+    if (!show) return;
+
+    const tick = frame.tick;
+    const rate = frame.tickRate || 64;
+    // A seek, a rewind, another player or another round: the sticky memory
+    // describes a moment that no longer precedes this one.
+    if (
+      keysSlot !== povSlot ||
+      keysRound !== (frame.roundKey || '') ||
+      keysTick === null ||
+      tick < keysTick
+    ) {
+      keyLit = {};
+    }
+    keysSlot = povSlot;
+    keysRound = frame.roundKey || '';
+    keysTick = tick;
+
+    const range = tickRange?.() || null;
+    const state = frame.states?.[povSlot];
+    const who = (frame.players || []).find((x) => x.slot === povSlot);
+    const held = bareWeapon(frame.weapons?.[state?.weapon] || '');
+    const k = keysAt({
+      at: tick,
+      rate,
+      stride: range?.stride || 1,
+      firstTick: range?.first || 0,
+      sample: (t, out) => (sampleSlot ? sampleSlot(povSlot, t, out) : null),
+      shots: frame.events?.shots || null,
+      playerId: who?.id,
+      weaponName: held,
+      out: KEYS_SCRATCH
+    });
+
+    for (const name of KEY_NAMES) {
+      let down = !!k[name];
+      if (down) keyLit[name] = tick;
+      // Sector-edge flicker on the inferred keys would strobe at 64 Hz;
+      // a sub-tenth-of-a-second gap keeps the cap lit instead.
+      else if (keyLit[name] != null && tick - keyLit[name] < KEY_STICKY * rate) down = true;
+      keyEls[name].classList.toggle('is-down', down);
+    }
+  }
   let nadeRound = null;
   let dropSig = '';
   const dropPosCache = new Map();
@@ -1299,6 +1399,7 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange }) {
     applyNades();
     applyDrops();
     applyInteractives();
+    updateKeypresses();
   }
 
   function posAtEvent(playerId, tick) {
@@ -1498,6 +1599,15 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange }) {
       hudOn = !!on;
       if (matchHud) matchHud.el.hidden = !hudOn || !visible;
     },
+
+    /** The keypress overlay over the followed player. */
+    setKeypresses(on) {
+      keysOn = !!on;
+      updateKeypresses();
+    },
+    get keypresses() {
+      return keysOn;
+    },
     get povName() {
       if (povSlot < 0 || !frame) return null;
       const p = (frame.players || []).find((x) => x.slot === povSlot);
@@ -1519,6 +1629,7 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange }) {
         match: hudMatchStub()
       });
       matchHud.el.hidden = !hudOn;
+      buildKeysOverlay(container);
       const mounted = mountCrosshair(container, { scaleToResolution: false });
       crosshair = mounted.canvas;
       crosshairXh = mounted.crosshair;
@@ -1675,6 +1786,8 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange }) {
       for (const b of bodies) b.model?.dispose();
       xray?.dispose();
       matchHud?.el?.remove();
+      keysEl?.remove();
+      keysEl = null;
       canvas.parentElement?.classList.remove('is-match');
       viewModel.dispose();
       demoNades?.dispose();

@@ -13,6 +13,7 @@ export const CAP = Object.freeze({
   DEMOS_VIEWER: 'demos.viewer',
   DEMOS_ADS_FREE: 'demos.ads_free',
   DEMOS_FULL_RECENT_ACCESS: 'demos.full_recent_access',
+  DEMOS_KEYPRESS_OVERLAY: 'demos.keypress_overlay',
   DEMOS_MACRO_VIEWER: 'demos.macro_viewer',
   DEMOS_UPLOAD_LIMIT: 'demos.upload_limit',
   DEMOS_MAP_CONTROL: 'demos.map_control',

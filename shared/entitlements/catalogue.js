@@ -356,6 +356,13 @@ export const CAPABILITIES = Object.freeze({
     // Free accounts see only the first half of demos under a month old.
     values: paidOnly(false, true)
   },
+  'demos.keypress_overlay': {
+    shape: BOOL,
+    label: 'Keypress overlay',
+    // Reconstructed per tick in the 3D viewer: movement keys, duck, walk,
+    // jump and both mouse buttons over the followed player.
+    values: paidOnly(false, true)
+  },
   'demos.macro_viewer': {
     shape: QUOTA,
     // Named for the button the user actually clicks, so the 402 names

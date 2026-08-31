@@ -1474,3 +1474,102 @@ body {
 .c3-xray-tag.is-ct .c3-xray-ptr {
   border-top-color: #5b9fd4;
 }
+
+/* ---- Keypress overlay (3D demo viewer) ---------------------------------- */
+/* The followed player's hands: movement and modifier caps left and centre,
+   the mouse to the right. Pressed reads red, idle reads as translucent gray
+   furniture. Sits above the transport cluster, below the crosshair line. */
+
+.c3-keys {
+  position: absolute;
+  left: 50%;
+  bottom: 84px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  z-index: 6;
+  pointer-events: none;
+  user-select: none;
+  font-family: var(--font-body, sans-serif);
+}
+
+.c3-keys[hidden] {
+  display: none;
+}
+
+/* The immerse HUD owns the bottom centre; clear it. */
+.is-match .c3-keys {
+  bottom: 150px;
+}
+
+.c3-keys-mods {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-end;
+}
+
+.c3-keys-move {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: center;
+}
+
+.c3-keys-row {
+  display: flex;
+  gap: 6px;
+}
+
+.c3-key {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 34px;
+  height: 34px;
+  padding: 0 10px;
+  border-radius: 8px;
+  background: rgba(18, 18, 20, 0.45);
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+  transition: background 60ms linear, color 60ms linear;
+}
+
+.c3-key.is-down {
+  background: rgba(230, 6, 17, 0.88);
+  color: #fff;
+}
+
+.c3-key-space {
+  width: 122px;
+  padding: 0;
+}
+
+.c3-keys-mouse {
+  width: 40px;
+  height: 58px;
+}
+
+.c3-keys-mouse [data-key] {
+  fill: rgba(18, 18, 20, 0.45);
+  transition: fill 60ms linear;
+}
+
+.c3-keys-mouse [data-key].is-down {
+  fill: rgba(230, 6, 17, 0.92);
+}
+
+.c3-mouse-body {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.5);
+  stroke-width: 2.5;
+}
+
+.c3-mouse-line {
+  stroke: rgba(255, 255, 255, 0.5);
+  stroke-width: 2;
+}

@@ -23,7 +23,7 @@ import {
 import { fetchRoster } from '../api.js';
 import { demosForPlayer } from '../shared/rosterQuery.js';
 import { teamNameKey } from '../shared/statsMath.js';
-import { useMeteredFeature } from '../../lib/meteredFeature.js';
+import { showUpgradeDialog, useMeteredFeature } from '../../lib/meteredFeature.js';
 import { getEntitlements } from '../../lib/entitlements.js';
 import { CAP } from '../../../shared/entitlements/keys.js';
 import { aggregatePlayers, allRows, indexMaps } from '../shared/statsMath.js';
@@ -69,6 +69,7 @@ import chartIcon from '../../icons/demos_chart.svg?raw';
 import zonesIcon from '../../icons/demos_zones.svg?raw';
 import duelsIcon from '../../icons/demos_duels.svg?raw';
 import povIcon from '../../icons/demo_pov.svg?raw';
+import mechanicsIcon from '../../icons/demo_mechanics.svg?raw';
 import commsIcon from '../../icons/sideicons/sideicon_comms.svg?raw';
 import { commsSidebarHtml, commsSidebarKey, createCommsController } from './commsOverlay.js';
 import { createPovVision, povDuelOverlay, povZonePaint } from './teamPov.js';
@@ -421,6 +422,8 @@ export function createTimelineViewer({
                 <button type="button" class="rv-speed" id="rv-speed">1X</button>
                 <button type="button" class="rv-tool rv-draw-btn" id="rv-draw"
                   title="Draw (right click always draws)">${icon(pencilIcon)}</button>
+                <button type="button" class="rv-tool rv-mech-btn" id="rv-mechanics" hidden
+                  title="Keypresses">${icon(mechanicsIcon)}</button>
               </div>
             </div>
           </div>
@@ -859,6 +862,9 @@ export function createTimelineViewer({
   const toggle3dBtn = el.querySelector('#rv-toggle3d');
   const icon3dEl = el.querySelector('#rv-3d-icon');
   const exploreBtn = el.querySelector('#rv-explore');
+  const mechBtn = el.querySelector('#rv-mechanics');
+  /** Keypress overlay over the followed 3D player. Off until asked for. */
+  let mechanicsOn = false;
   const note3dEl = el.querySelector('#rv-3d-note');
   let view3d = null;
   let mode3d = false;
@@ -974,6 +980,10 @@ export function createTimelineViewer({
 
     viewmodeEl.hidden = !mode3d;
     exploreBtn.hidden = !mode3d;
+    if (mechBtn) {
+      mechBtn.hidden = !mode3d;
+      mechBtn.classList.toggle('active', mode3d && mechanicsOn);
+    }
     exploreBtn.classList.toggle('is-on', mode3d && view3d?.isFree);
     exploreBtn.title = view3d?.isFree
       ? view3d.mode === 'walk'
@@ -1034,6 +1044,7 @@ export function createTimelineViewer({
             }
           });
           const starting = view3d.start(mapEl);
+          view3d.setKeypresses(mechanicsOn);
           view3d.show();
           sync3dButtons();
           await starting;
@@ -1073,6 +1084,29 @@ export function createTimelineViewer({
     e.stopPropagation();
     if (!mode3d || !view3d) return;
     view3d.toggleFree();
+    sync3dButtons();
+  });
+  mechBtn?.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    if (!mode3d) return;
+    if (!mechanicsOn) {
+      const ents = getEntitlements();
+      await ents?.ready?.();
+      if (destroyed) return;
+      if (ents && !ents.can(CAP.DEMOS_KEYPRESS_OVERLAY)) {
+        showUpgradeDialog(
+          {
+            error: 'upgrade_required',
+            message: 'The keypress overlay is part of every subscription.',
+            requiredTier: ents.requiredPlan(CAP.DEMOS_KEYPRESS_OVERLAY)
+          },
+          { host: el }
+        );
+        return;
+      }
+    }
+    mechanicsOn = !mechanicsOn;
+    view3d?.setKeypresses?.(mechanicsOn);
     sync3dButtons();
   });
 
