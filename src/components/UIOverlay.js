@@ -111,9 +111,9 @@ import { assignRanks } from '../lib/aimRanks.js';
 /**
  * Rows a leaderboard is pulled over.
  *
- * Every board carries a rank now, and a rank is a position in a POPULATION:
- * ranking a screenful would tell the tenth best player on a board of hundreds
- * that they are Iron 1. Pull the board, rank it, draw the top of it.
+ * Every board carries a rank now, and ranks are cut between the worst and the
+ * best score on it: rank a screenful and the tenth best score becomes the
+ * floor of the ladder. Pull the board, rank it, draw the top of it.
  */
 const LB_RANK_OVER = 500;
 

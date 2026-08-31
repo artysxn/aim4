@@ -87,9 +87,12 @@ test('two players are the bottom and the top, and one is neither', () => {
   assert.deepEqual(assignRanks([]), []);
 });
 
-test('a full board follows the designed shares', () => {
-  // Ten thousand players, all different: each rank should hold about the
-  // share the ladder gives it.
+test('a board of evenly spread scores follows the designed shares', () => {
+  // Ten thousand players spread evenly across the range: each rank holds about
+  // the share the ladder gives it. Evenly spread is the condition, not a
+  // guarantee about every board. Ranks are cut by DISTANCE, so a board where
+  // everyone is bunched together is a board where everyone shares a rung, and
+  // that is the intended reading rather than a flaw in it.
   const values = Array.from({ length: 10000 }, (_, i) => i);
   const ranks = assignRanks(values);
   const held = new Map();
@@ -149,3 +152,52 @@ test('a rank can be read back from its key', () => {
 });
 
 console.log('aimRanks.test.js: ladder shape, boundaries, ties and small boards all pass');
+
+test('the ladder is cut by distance, not by finishing order', () => {
+  // Five ELOs, four of them within two points of each other. Ordered, they
+  // would be one rung apart each and 1000 would be the middle of the board.
+  // They are not evenly spaced, and the ladder says so: 1100 is halfway up the
+  // range and takes the middle rung, and the three at the bottom of the range
+  // are all at the bottom of the ladder.
+  const board = [1200, 1100, 1000, 999, 998];
+  assert.deepEqual(
+    assignRanks(board).map((r) => r.name),
+    ['Legend', 'Gold 2', 'Iron 2', 'Iron 1', 'Iron 1']
+  );
+});
+
+test('halfway up the range is the middle rung, wherever you placed', () => {
+  // Second of five and five hundred and first of a thousand, both exactly
+  // halfway between the worst and best score on their board.
+  assert.equal(assignRanks([0, 50, 100]).map((r) => r.name)[1], 'Gold 2');
+  const many = [0, 100, ...Array.from({ length: 900 }, () => 90), 50];
+  assert.equal(assignRanks(many)[many.length - 1].name, 'Gold 2', 'the 50 in a board of 90s');
+});
+
+test('a runaway leader pulls the whole board down, and that is the point', () => {
+  // One player far above the rest stretches the scale, so everyone else lands
+  // near the floor. That is what "relative to the best player" means: they are
+  // near the floor, relative to that player.
+  const tight = assignRanks([10, 11, 12, 13]);
+  assert.equal(tight[3].name, 'Legend', 'best of a tight board is still top');
+  assert.equal(tight[0].name, 'Iron 1');
+  assert.equal(tight[1].name, 'Silver 3', 'and the spread inside it is readable');
+
+  const runaway = assignRanks([10, 11, 12, 13, 1000]);
+  assert.equal(runaway[4].name, 'Legend');
+  for (let i = 0; i < 4; i++) {
+    assert.equal(runaway[i].name, 'Iron 1', `${[10, 11, 12, 13][i]} against a 1000`);
+  }
+});
+
+test('the two ends of a board are always the two ends of the ladder', () => {
+  for (const board of [[3, 9], [1, 2, 3], [500, 500.5, 501], [-40, 0, 40]]) {
+    const ranks = assignRanks(board);
+    assert.equal(ranks[0].name, 'Iron 1', `worst of ${board}`);
+    assert.equal(ranks[ranks.length - 1].name, 'Legend', `best of ${board}`);
+  }
+  // And with a lower score winning, the ends swap over rather than vanish.
+  const timed = assignRanks([180, 250, 400], { higherIsBetter: false });
+  assert.equal(timed[0].name, 'Legend');
+  assert.equal(timed[2].name, 'Iron 1');
+});

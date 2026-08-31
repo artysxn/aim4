@@ -2,10 +2,17 @@
 // lib/aimRanks.js
 // The rank ladder, and who is on which rung.
 //
-// Ranks are a POSITION, not a score. Nobody is Legend because they passed a
-// number; they are Legend because nobody else on that board is above them.
-// So the ladder is defined as a share of players per rank, the shares add to
-// exactly 100, and a board is cut up by them.
+// Ranks are RELATIVE, not absolute. Nobody is Legend because they passed a
+// number; they are Legend because nobody on that board is above them. So the
+// ladder is defined as a share of players per rank, the shares add to exactly
+// 100, and a board is cut up by them.
+//
+// What decides the cut is DISTANCE, not order. The worst player on a board is
+// at the bottom of the ladder and the best is at the top, and everyone else
+// sits where their score falls between those two. Five players on 1200, 1100,
+// 1000, 999 and 998 are not one rung apart each: 1100 is halfway up the range
+// and takes the middle rung, while the three within two points of the floor
+// are all near the bottom of the ladder, because that is where they are.
 //
 // The shape is a bell with a long right tail: half of everyone sits between
 // Silver 1 and Gold 2, the bottom falls away fast (Iron is 4% of players, all
@@ -85,8 +92,8 @@ export function rankByKey(key) {
 }
 
 /**
- * The rank at a percentile, counted FROM THE BOTTOM: 0 is the worst player on
- * the board, 1 is the best.
+ * The rank at a percentile, counted FROM THE BOTTOM: 0 is the worst score on
+ * the board, 1 is the best, and 0.5 is exactly halfway between them.
  *
  * Bands are half open, [from, to), so a player exactly on a boundary takes the
  * higher rank. 0.5 is Gold 2 and not Gold 1, which is the same rule that makes
@@ -106,19 +113,20 @@ export function rankAtPercentile(p) {
 /**
  * Rank every entry on one board.
  *
- * The array IS the population. Handing this the top ten of a board of ten
- * thousand would rank the tenth best player in the world as Iron 1, so a
- * caller with a page rather than a board must not use this on it.
+ * The array IS the population. It sets both ends of the scale, so handing this
+ * the top ten of a board of thousands does not just mislabel the tail: the
+ * tenth best score becomes the floor, and every rank on the board is measured
+ * from the wrong place.
  *
- * Position is spread across the FULL ladder rather than sampled from it, which
- * is what makes a small board still say something: with three players the
- * worst is Iron 1, the middle is Gold 2 and the best is Legend, because with
- * three players those are genuinely the bottom, the middle and the top. As the
- * board grows the same formula converges on the designed shares.
+ * Position on the ladder is where a score falls between the worst and the best
+ * on the board, so the two extremes always occupy the two ends of the ladder
+ * and everyone else is placed by how far they are from them. A cluster of near
+ * identical scores sits together, because they ARE together; a score halfway up
+ * the range takes the middle rung whether it is second of five or five
+ * hundredth of a thousand.
  *
- * Equal values share a rank, taken at the middle of their run, so a board
- * where everyone is tied is one rank rather than a ladder built out of the
- * order the rows happened to arrive in.
+ * Equal scores get equal ranks for free: the same number is the same distance
+ * along the same scale.
  *
  * @param {number[]} values one number per entry, in any order
  * @param {{higherIsBetter?: boolean}} [opts] false for boards where a lower
@@ -127,6 +135,7 @@ export function rankAtPercentile(p) {
  */
 export function assignRanks(values, { higherIsBetter = true } = {}) {
   const list = Array.isArray(values) ? values : [];
+  const out = new Array(list.length).fill(null);
   const scored = [];
   for (let i = 0; i < list.length; i++) {
     const raw = list[i];
@@ -136,26 +145,27 @@ export function assignRanks(values, { higherIsBetter = true } = {}) {
     const v = Number(raw);
     if (Number.isFinite(v)) scored.push({ i, v });
   }
-  const out = new Array(list.length).fill(null);
   if (!scored.length) return out;
 
-  // Alone on a board you are at once the best player on it and the worst, and
-  // neither is a fact about your aim. The middle rung claims nothing.
-  if (scored.length === 1) {
-    out[scored[0].i] = MEDIAN;
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (const { v } of scored) {
+    if (v < lo) lo = v;
+    if (v > hi) hi = v;
+  }
+
+  // One score, or every score the same: there is no spread to place anybody
+  // in. Alone on a board you are at once the best player on it and the worst,
+  // and neither is a fact about your aim; a board where nobody is separated is
+  // one rank rather than a ladder. The middle rung claims nothing.
+  if (hi === lo) {
+    for (const { i } of scored) out[i] = MEDIAN;
     return out;
   }
 
-  scored.sort((a, b) => (higherIsBetter ? a.v - b.v : b.v - a.v));
-  const last = scored.length - 1;
-  for (let i = 0; i < scored.length; ) {
-    let j = i;
-    while (j + 1 < scored.length && scored[j + 1].v === scored[i].v) j++;
-    // The middle of the tied run, so a tie is one rank and not a coin toss.
-    const pos = (i + j) / 2;
-    const rank = rankAtPercentile(pos / last);
-    for (let k = i; k <= j; k++) out[scored[k].i] = rank;
-    i = j + 1;
+  const span = hi - lo;
+  for (const { i, v } of scored) {
+    out[i] = rankAtPercentile(higherIsBetter ? (v - lo) / span : (hi - v) / span);
   }
   return out;
 }

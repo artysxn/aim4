@@ -41,10 +41,11 @@ function boardValue(row, scenario) {
 /**
  * How many rows a board is ranked over, and how many it shows.
  *
- * These are different numbers on purpose. A rank is a position in a
- * POPULATION, so ranking the ten rows on screen would tell the tenth best
- * player on a board of hundreds that they are Iron 1. The whole board is
- * pulled, cut into ranks, and then the top of it is drawn.
+ * These are different numbers on purpose. Ranks are cut between the worst and
+ * the best score on the board, so the board sets BOTH ends of the scale: rank
+ * the ten rows on screen and the tenth best score becomes the floor, which
+ * puts every rank on the board in the wrong place. The whole board is pulled,
+ * cut into ranks, and then the top of it is drawn.
  *
  * Past RANK_OVER players a board stops fitting in one read and the ranks below
  * the cut drift low. Moving the percentile to the server is the fix; until a
