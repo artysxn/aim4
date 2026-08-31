@@ -17,7 +17,11 @@ const DEFAULT_BOUNDS_SCALE_X = 2;
 
 export class StarsScenario extends GridshotScenario {
   constructor(opts) {
-    const variant = opts.config?.variant === 'competitive' ? 'competitive' : 'practice';
+    // Adaptive counts as competitive here: this pre-super read only picks the
+    // preset LAYOUT (bounds), which adaptive scaling never touches.
+    const variant = ['competitive', 'adaptive'].includes(opts.config?.variant)
+      ? 'competitive'
+      : 'practice';
     const preset = variant === 'competitive' ? competitivePresetFor('stars') : null;
     const s = variant === 'competitive' ? DEFAULTS.stars : (opts.settings?.data?.stars ?? {});
     const boundsScaleX =

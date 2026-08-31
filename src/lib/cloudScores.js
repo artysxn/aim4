@@ -157,9 +157,15 @@ export async function submitScore(userId, results) {
 
   const kills = Math.round(finiteNum(results.kills));
   const timePlayed = finiteNum(results.timePlayed);
-  const score = isKillLeaderboardScenario(results.scenario)
-    ? kills
-    : Math.round(finiteNum(results.score));
+  // `forceScore` overrides the ranking value outright. Adaptive runs use it to
+  // rank by the ELO the run left you on: raw scores at different difficulties
+  // are not comparable, and for kill modes the kill-count substitution below
+  // would silently clobber the ELO with the run's kills.
+  const score = Number.isFinite(results.forceScore)
+    ? Math.round(results.forceScore)
+    : isKillLeaderboardScenario(results.scenario)
+      ? kills
+      : Math.round(finiteNum(results.score));
 
   const full = {
     user_id: uid,

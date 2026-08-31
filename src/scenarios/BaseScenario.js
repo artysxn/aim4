@@ -12,7 +12,8 @@
 import * as THREE from 'three';
 import { spreadRng, applySpreadToDir } from '../utils/shotAccuracy.js';
 import { viewPunchImpulse } from '../weapons/ak47.js';
-import { isLeaderboardEligible } from './rankedScenarios.js';
+import { ADAPTIVE_CONFIG_KEY, isLeaderboardEligible } from './rankedScenarios.js';
+import { setAdaptivePresetContext } from './competitivePresets.js';
 import { isBulletDecalSurface, worldImpactNormal } from '../utils/bulletImpact.js';
 import { DEFAULTS } from '../core/SettingsManager.js';
 import { applyTargetGlow, refreshScenarioTargetGlow, restoreTargetEmissive } from '../utils/targetGlow.js';
@@ -109,10 +110,16 @@ export class BaseScenario {
     this._lastImpactNormal = new THREE.Vector3();
   }
 
-  /** Practice vs Competitive — set from config.variant at load time. */
+  /** Practice vs Competitive vs Adaptive — set from config.variant at load time. */
   _initVariant() {
-    this.variant = this.config.variant === 'competitive' ? 'competitive' : 'practice';
-    this.competitive = this.variant === 'competitive';
+    const v = this.config.variant;
+    this.variant = v === 'competitive' ? 'competitive' : v === 'adaptive' ? 'adaptive' : 'practice';
+    // Adaptive IS competitive to every scenario: fixed rules, preset settings,
+    // no live gear edits. What differs is the preset itself, which
+    // competitivePresetFor scales once the context below is set.
+    this.competitive = this.variant !== 'practice';
+    this.adaptive = this.variant === 'adaptive';
+    setAdaptivePresetContext(this.adaptive ? this.config.adaptiveElo : null);
   }
 
   _runMeta() {
@@ -423,7 +430,9 @@ export class BaseScenario {
     const timePlayed = this.elapsed;
     return {
       scenario: this.name,
-      configKey: this.configKey(),
+      // Adaptive runs all land on one board per mode; the per-scenario key
+      // logic only knows practice and competitive and must not have to.
+      configKey: this.adaptive ? ADAPTIVE_CONFIG_KEY : this.configKey(),
       score: Math.round(this.score),
       accuracy: this.accuracy,
       critRatio: this.critRatio,

@@ -104,7 +104,8 @@ import { SCENARIO_ICONS, MATCHMAKING_ICON, TRAINING_ICON, PLAYLISTS_ICON as PLAY
 import { ARENAS } from '../scenarios/DuelsScenario.js';
 import { duelsArenaSelectOptions } from '../scenarios/duelsArenas.js';
 import { dmMapSelectOptions } from '../maps/dmMaps.js';
-import { isKillLeaderboardScenario, isLowerScoreLeaderboardScenario } from '../scenarios/leaderboardConfig.js';
+import { ADAPTIVE_CONFIG_KEY, isKillLeaderboardScenario, isLowerScoreLeaderboardScenario, isRankedScenario } from '../scenarios/leaderboardConfig.js';
+import { eloFor, recordAdaptiveRun } from '../lib/adaptiveElo.js';
 import { SCENARIO_META, TRAINING_CATEGORIES } from '../lib/gamemodeCatalog.js';
 
 /** Scenarios with practice-only tuning (gear on training card). */
@@ -478,6 +479,7 @@ export class UIOverlay {
           ${numField('set-dur', 'Run duration (s)', '1')}
           <label class="field-check"><input type="checkbox" id="set-raw" /> Raw input (no OS acceleration)</label>
           <label class="field-check"><input type="checkbox" id="set-pace-bar" /> High score pace bar</label>
+          <label class="field-check"><input type="checkbox" id="set-adaptive-difficulty" /> Adaptive difficulty in routines</label>
           <div class="field field-plain">
             <div class="field-top"><span class="field-label">Pace bar style</span></div>
             <select id="set-pace-bar-style">
@@ -1704,6 +1706,10 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
             <select id="lb-mode-select" class="config-code-input" aria-label="Gamemode leaderboard">
               ${scenarioOptionsHtml()}
             </select>
+            <select id="lb-variant-select" class="config-code-input" aria-label="Board">
+              <option value="competitive">Competitive</option>
+              <option value="adaptive">Adaptive ELO</option>
+            </select>
           </div>
         </div>
         <div class="menu-panel-body menu-panel-scroll lb-body-wrap">
@@ -2134,7 +2140,8 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     const hasSettings = SCENARIO_SETTING_IDS.has(key);
     const playBtns = meta.dualPlay
       ? `<button type="button" class="btn training-row-play" data-play="${key}" data-variant="practice">Training</button>
-    <button type="button" class="btn training-row-play" data-play="${key}" data-variant="competitive">Competitive</button>`
+    <button type="button" class="btn training-row-play" data-play="${key}" data-variant="competitive">Competitive</button>
+    <button type="button" class="btn training-row-play" data-play="${key}" data-variant="adaptive" title="Competitive rules at your level. The mode rates you per run.">Adaptive (${eloFor(key)})</button>`
       : `<button type="button" class="btn training-row-play" data-play="${key}"${meta.challenge ? ' data-variant="competitive"' : ''} aria-label="Play ${meta.title}">Play</button>`;
     const lbBtn = `<button type="button" class="training-row-lb" data-training-lb="${key}" aria-label="${meta.title} leaderboard"><img src="${LEADERBOARD_ICON}" alt="" class="aim4-icon" width="16" height="16" /></button>`;
     const gearBtn = hasSettings
@@ -2798,6 +2805,9 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     });
     $('#set-pace-bar')?.addEventListener('change', (e) => {
       draft((d) => { d.paceBar = e.target.checked; });
+    });
+    $('#set-adaptive-difficulty')?.addEventListener('change', (e) => {
+      draft((d) => { d.adaptiveDifficulty = e.target.checked; });
     });
     $('#set-pace-bar-style')?.addEventListener('change', (e) => {
       draft((d) => { d.paceBarStyle = e.target.value; });
@@ -3765,7 +3775,20 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     this.settings.beginModeOverride(item.scenario, cfg);
     try {
       const runCfg = structuredClone(cfg);
-      delete runCfg.variant; // playlist items always run as practice
+      delete runCfg.variant;
+      // Routine gamemodes run as Adaptive when the setting allows: competitive
+      // rules at the player's per-mode level, rated per run. The item's own
+      // duration survives (SceneManager honours config.duration for adaptive),
+      // so the routine still fits the time it promised. With the setting off,
+      // items run as plain practice with whatever they were authored with.
+      if (
+        this.settings.data.adaptiveDifficulty !== false &&
+        isRankedScenario(item.scenario) &&
+        !isChallengeMode(item.scenario)
+      ) {
+        runCfg.variant = 'adaptive';
+        runCfg.adaptiveElo = eloFor(item.scenario);
+      }
       this.play(item.scenario, runCfg);
     } finally {
       this.settings.endModeOverride();
@@ -3792,6 +3815,8 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     this.state = 'results';
     this.input.exitLock();
     this.replayRecorder?.cancel();
+    // Each adaptive routine item rates its own mode, exactly like a card run.
+    this._recordAdaptive(results);
     const run = this._playlistRun;
     run.results.push(results);
     if (this.auth?.isLoggedIn && results.timePlayed > 0) {
@@ -3849,6 +3874,10 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     const run = this._playlistRun;
     const playlist = run.playlist;
     const combined = combinePlaylistResults(playlist, run.results);
+    // A combined score built from adaptive items was earned at THIS player's
+    // difficulty and ranks against nobody honestly. Personal run, no board.
+    const ranAdaptive = run.results.some((r) => r?.variant === 'adaptive');
+    if (ranAdaptive) combined.leaderboardEligible = false;
     const $ = (id) => this.root.querySelector(id);
 
     if ($('#pl-res-title')) $('#pl-res-title').textContent = `${playlist.name} — complete`;
@@ -3874,7 +3903,9 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     this._playlistRun = null;
 
     let note = '';
-    if (this.auth?.isLoggedIn) {
+    if (ranAdaptive) {
+      note = 'Adaptive difficulty run. Scored at your level, not ranked.';
+    } else if (this.auth?.isLoggedIn) {
       try {
         await this.auth.ensureProfileReady();
       } catch (e) {
@@ -6154,6 +6185,8 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     $('#set-dur').value = s.runDuration;
     $('#set-raw').checked = s.rawInput;
     $('#set-pace-bar').checked = s.paceBar !== false;
+    const adaptiveCheck = $('#set-adaptive-difficulty');
+    if (adaptiveCheck) adaptiveCheck.checked = s.adaptiveDifficulty !== false;
     const paceStyle = this.root.querySelector('#set-pace-bar-style');
     if (paceStyle) paceStyle.value = s.paceBarStyle === 'compact' ? 'compact' : 'expanded';
     this._setRange('set-pace-bar-width', s.paceBarCompactWidth ?? 200);
@@ -6746,7 +6779,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
 
   /** Singleplayer competitive runs wait briefly before the timer starts. */
   _isCompetitiveRun() {
-    return this.scenarioConfig?.variant === 'competitive';
+    return ['competitive', 'adaptive'].includes(this.scenarioConfig?.variant);
   }
 
   _startCountdown() {
@@ -6816,6 +6849,13 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
   }
 
   play(name, config = {}) {
+    // An adaptive run needs to know what level it is being played at, and the
+    // scenario reads it off config (BaseScenario sets the preset context from
+    // it). Stamped here so every launch path - mode card, deep link, routine -
+    // carries it without each knowing about the store.
+    if (config.variant === 'adaptive' && !Number.isFinite(config.adaptiveElo)) {
+      config = { ...config, adaptiveElo: eloFor(name) };
+    }
     this._countdownRemaining = 0;
     this._hideCountdownOverlay();
     if (this.settings.draft) this.settings.confirmDraft();
@@ -6911,12 +6951,29 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     }
   }
 
+  /**
+   * Fold an adaptive run into the mode's ELO, and rank it by that ELO.
+   *
+   * `forceScore` is what the leaderboard sorts on: raw scores at different
+   * difficulties are not comparable, and the ELO already is the comparison.
+   * The board therefore shows peak rating, the same way chess sites do.
+   */
+  _recordAdaptive(results) {
+    if (results?.variant !== 'adaptive') return null;
+    const value = isKillLeaderboardScenario(results.scenario) ? results.kills : results.score;
+    const adaptive = recordAdaptiveRun(results.scenario, value);
+    results.adaptive = adaptive;
+    results.forceScore = adaptive.elo;
+    return adaptive;
+  }
+
   async _onFinish(results) {
     if (this._playlistRun) {
       this._onPlaylistModeFinish(results);
       return;
     }
     updatePracticeBest(results);
+    this._recordAdaptive(results);
     this.engine.clearRunEffects();
     this.crosshair.resetRunState();
     this.state = 'results';
@@ -7696,6 +7753,10 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
       this._setLeaderboardView(scenario);
       this._renderLeaderboard(scenario);
     });
+    this.root.querySelector('#lb-variant-select')?.addEventListener('change', () => {
+      const scenario = this.root.querySelector('#lb-mode-select')?.value;
+      if (scenario) this._renderLeaderboard(scenario);
+    });
     this.root.querySelector('#lb-body')?.addEventListener('click', (e) => {
       const btn = e.target.closest('[data-lb-user-id]');
       if (!btn) return;
@@ -7733,6 +7794,8 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     eloTab?.classList.remove('active');
     aimTab?.classList.remove('active');
     selWrap?.removeAttribute('hidden');
+    const variantSel = this.root.querySelector('#lb-variant-select');
+    if (variantSel) variantSel.hidden = !isRankedScenario(scenario) || isChallengeMode(scenario);
     if (sel && SCENARIOS[scenario]) sel.value = scenario;
   }
 
@@ -7972,7 +8035,12 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
         return { list: [], error: e.message || 'Failed to load aim rating leaderboard.', configKey: null };
       }
     }
-    const key = configKeyOverride ?? this._configKeyFor(scenario);
+    const wantsAdaptive =
+      this.root.querySelector('#lb-variant-select')?.value === 'adaptive' &&
+      isRankedScenario(scenario) &&
+      !isChallengeMode(scenario);
+    const key =
+      configKeyOverride ?? (wantsAdaptive ? ADAPTIVE_CONFIG_KEY : this._configKeyFor(scenario));
     const cacheKey = `${scenario}:${key}`;
     const { list, error } = await fetchLeaderboardWithMeta(scenario, key, 10);
     this._lbCache[cacheKey] = list;
@@ -8061,14 +8129,21 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
       stat('Average', `${results.score} ms`) +
       (results.reactionTimes || []).map((ms, i) => stat(`Attempt ${i + 1}`, `${Math.round(ms)} ms`)).join('') +
       stat('Time', this._formatTimePlayed(results.timePlayed));
+    const adaptiveStat = results.adaptive
+      ? stat(
+          'Adaptive ELO',
+          `${results.adaptive.elo} (${results.adaptive.delta >= 0 ? '+' : ''}${results.adaptive.delta})`
+        )
+      : '';
     this.root.querySelector('#res-stats').innerHTML =
-      isKillLeaderboardScenario(results.scenario)
+      adaptiveStat +
+      (isKillLeaderboardScenario(results.scenario)
         ? killStats
         : results.scenario === 'tracking' || results.scenario === 'rapidtrack'
           ? trackingStats
           : results.scenario === 'reactiontime'
             ? reactionStats
-            : defaultStats;
+            : defaultStats);
 
     const { list, error } = await this._fetchLeaderboard(
       results.scenario,

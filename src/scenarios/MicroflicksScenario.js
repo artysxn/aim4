@@ -22,7 +22,11 @@ const NEAR_SPREAD_MAX = 7.2;
 
 export class MicroflicksScenario extends StarsScenario {
   constructor(opts) {
-    const variant = opts.config?.variant === 'competitive' ? 'competitive' : 'practice';
+    // Adaptive counts as competitive here: this pre-super read only picks the
+    // preset LAYOUT (bounds), which adaptive scaling never touches.
+    const variant = ['competitive', 'adaptive'].includes(opts.config?.variant)
+      ? 'competitive'
+      : 'practice';
     const preset = variant === 'competitive' ? competitivePresetFor('microflicks') : null;
     const m = variant === 'competitive' ? DEFAULTS.microflicks : (opts.settings?.data?.microflicks ?? {});
     const boundsScaleX =

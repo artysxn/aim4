@@ -32,11 +32,14 @@ export function parseGamemodePath(pathname = window.location.pathname) {
   if (!parts.length) return null;
 
   let variant = 'practice';
-  const competitiveIdx = parts.indexOf('competitive');
-  if (competitiveIdx >= 0) {
-    variant = 'competitive';
-    parts.splice(competitiveIdx, 1);
-    if (!parts.length) return null;
+  for (const v of ['competitive', 'adaptive']) {
+    const idx = parts.indexOf(v);
+    if (idx >= 0) {
+      variant = v;
+      parts.splice(idx, 1);
+      if (!parts.length) return null;
+      break;
+    }
   }
 
   const scenario = parts[parts.length - 1];
@@ -48,7 +51,7 @@ export function parseGamemodePath(pathname = window.location.pathname) {
 /** Build the canonical URL path for a running gamemode. */
 export function gamemodePath(scenario, variant = 'practice') {
   if (!SCENARIOS[scenario]) return TRAINER_PATH;
-  if (variant === 'competitive') return `/${scenario}/competitive`;
+  if (variant === 'competitive' || variant === 'adaptive') return `/${scenario}/${variant}`;
   return `/${scenario}`;
 }
 

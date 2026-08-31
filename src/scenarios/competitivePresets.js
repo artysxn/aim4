@@ -372,6 +372,29 @@ export const COMPETITIVE_PRESETS = {
   }
 };
 
+// ---- adaptive difficulty ----------------------------------------------------
+// An adaptive run is a competitive run whose preset has been sharpened or
+// blunted for the player's per-mode ELO (lib/adaptiveElo.js). The scaling is
+// applied HERE, at the one place every scenario already reads its preset from,
+// so thirty scenario constructors stay untouched.
+//
+// The context is set by BaseScenario's constructor, which runs before any
+// subclass body (super() first), so by the time a scenario asks for its preset
+// the context always describes the run being constructed. It is overwritten on
+// every construction rather than cleared, which keeps the invariant without
+// needing an end-of-constructor hook that does not exist.
+
+import { DEFAULT_ELO, applyAdaptiveDifficulty } from '../lib/adaptiveElo.js';
+
+let _adaptiveElo = null;
+
+/** BaseScenario only. `null` for anything that is not an adaptive run. */
+export function setAdaptivePresetContext(elo) {
+  _adaptiveElo = Number.isFinite(Number(elo)) ? Number(elo) : elo == null ? null : DEFAULT_ELO;
+}
+
 export function competitivePresetFor(scenarioName) {
-  return COMPETITIVE_PRESETS[scenarioName] ?? null;
+  const preset = COMPETITIVE_PRESETS[scenarioName] ?? null;
+  if (!preset || _adaptiveElo == null) return preset;
+  return applyAdaptiveDifficulty(preset, _adaptiveElo);
 }

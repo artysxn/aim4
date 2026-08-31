@@ -79,6 +79,10 @@ export const DEFAULTS = {
     flickAccuracy: false // avg first-click placement along start→target
   },
   runDuration: 60, // seconds
+  // Routine (playlist) gamemodes run as Adaptive: competitive rules with the
+  // targets sized to your per-mode ELO. Off runs them with your own practice
+  // settings instead. Direct Adaptive play from a mode card ignores this.
+  adaptiveDifficulty: true,
   paceBar: true, // KovaaK's-style PB pacing strip during timed runs
   paceBarStyle: 'expanded', // expanded | compact
   paceBarCompactWidth: 200,

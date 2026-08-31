@@ -1121,6 +1121,10 @@ viewControllers.performance = lazyController(async () => {
   const { initPerformanceView } = await import('./performanceView.js');
   return initPerformanceView({ auth, escapeHtml });
 });
+viewControllers.routines = lazyController(async () => {
+  const { initRoutinesView } = await import('./routinesView.js');
+  return initRoutinesView({ auth, escapeHtml });
+});
 
 // 404 / 403. One shell, two routes; the route decides the wording. The wrong
 // URL stays in the address bar on a 404 so the reader can see the typo.

@@ -168,11 +168,18 @@ export class SceneManager {
    */
   _applyDuration(name, config) {
     const sc = this.current;
-    if (sc.competitive || !DURATION_MODES.includes(name)) {
+    if ((sc.competitive && !sc.adaptive) || !DURATION_MODES.includes(name)) {
       this.duration = sc.runDuration ?? this.settings.data.runDuration;
       return;
     }
     const cd = config?.duration;
+    // Adaptive without an explicit duration (the mode card) runs the preset's
+    // competitive length, so every run the ELO compares was the same length.
+    // A routine item carries its own duration and keeps it.
+    if (sc.adaptive && !(cd && Number(cd.value) > 0)) {
+      this.duration = sc.runDuration ?? this.settings.data.runDuration;
+      return;
+    }
     const dur = (cd && (cd.type === 'time' || cd.type === 'kills') && Number(cd.value) > 0)
       ? { type: cd.type, value: Number(cd.value) }
       : resolveModeDuration(this.settings.data?.[name], this.settings.data.runDuration);

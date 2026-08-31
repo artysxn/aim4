@@ -2,6 +2,10 @@
 
 export const COMPETITIVE_CONFIG_KEY = 'competitive';
 export const CHALLENGE_CONFIG_KEY = 'challenge';
+// Adaptive runs share one board per mode, ranked by the ELO the run left you
+// on rather than by the run's own score: scores at different difficulties are
+// not comparable, and the ELO is the thing that already normalises them.
+export const ADAPTIVE_CONFIG_KEY = 'adaptive';
 
 /** Fixed-rule challenge modes (always ranked; config key is `challenge`). */
 export const CHALLENGE_SCENARIOS = new Set([
@@ -113,7 +117,7 @@ export function isChallengeScenario(scenario) {
 
 export function isLeaderboardEligible(scenario, variant) {
   if (CHALLENGE_SCENARIOS.has(scenario)) return true;
-  return variant === 'competitive' && isRankedScenario(scenario);
+  return (variant === 'competitive' || variant === 'adaptive') && isRankedScenario(scenario);
 }
 
 export function isKillLeaderboardScenario(scenario) {

@@ -20,7 +20,11 @@ const DEFAULT_BOUNDS_SCALE_Y = 2; // twice as tall as Stars' board
 
 export class ThreeshotScenario extends StarsScenario {
   constructor(opts) {
-    const variant = opts.config?.variant === 'competitive' ? 'competitive' : 'practice';
+    // Adaptive counts as competitive here: this pre-super read only picks the
+    // preset LAYOUT (bounds), which adaptive scaling never touches.
+    const variant = ['competitive', 'adaptive'].includes(opts.config?.variant)
+      ? 'competitive'
+      : 'practice';
     const preset = variant === 'competitive' ? competitivePresetFor('threeshot') : null;
     const t = variant === 'competitive' ? DEFAULTS.threeshot : (opts.settings?.data?.threeshot ?? {});
     const boundsScaleX =
