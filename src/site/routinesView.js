@@ -50,7 +50,7 @@ import { fetchAimRuns } from '../lib/aimStats.js';
 import { coachNoteFor } from '../lib/coachNotes.js';
 import { buildCalendar } from '../lib/activityCalendar.js';
 import { fetchActivity } from '../lib/activityFeed.js';
-import { activityCalendarHtml } from './activityCalendarView.js';
+import { activityPairHtml } from './activityCalendarView.js';
 
 const DEFAULT_MINUTES = 20;
 const DEFAULT_WEAK_COUNT = 5;
@@ -297,11 +297,12 @@ export function initRoutinesView({ auth, escapeHtml }) {
     try {
       const days = await fetchActivity({ userId, days: 90 });
       if (!days.size) return;
-      const cal = buildCalendar({ days, window: 90 });
-      slot.innerHTML = activityCalendarHtml(cal, escapeHtml, {
-        title: 'Your training',
-        subtitle: 'Last 90 days'
-      });
+      slot.innerHTML = activityPairHtml(
+        days,
+        (args) => buildCalendar({ window: 90, ...args }),
+        escapeHtml,
+        { heading: 'Your activity' }
+      );
       card.hidden = false;
     } catch {
       /* the page is a routine builder first; the calendar is a bonus */

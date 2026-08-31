@@ -199,24 +199,33 @@ export function formatDuration(seconds) {
   return m ? `${h} h ${String(m).padStart(2, '0')} min` : `${h} h`;
 }
 
-/** The hover text for one cell. Says which half is which, always. */
-export function cellTitle(cell) {
+/**
+ * The hover text for one cell.
+ *
+ * `metric` narrows it to the half the calendar is about, so a demo square
+ * never quotes trainer minutes. On 'total' both halves are named separately;
+ * they are never added together.
+ */
+export function cellTitle(cell, metric = 'total') {
   const when = cell.date.toDateString();
   if (!cell.totals || cell.value <= 0) return `${when}: no activity`;
   const parts = [];
-  if (cell.totals.demoSeconds > 0) {
+  const wantDemo = metric === 'total' || metric === 'demo';
+  const wantTrain = metric === 'total' || metric === 'train';
+  if (wantDemo && cell.totals.demoSeconds > 0) {
     parts.push(
       `${formatDuration(cell.totals.demoSeconds)} in demos (${cell.totals.demoMatches} ${
         cell.totals.demoMatches === 1 ? 'match' : 'matches'
       })`
     );
   }
-  if (cell.totals.trainSeconds > 0) {
+  if (wantTrain && cell.totals.trainSeconds > 0) {
     parts.push(
       `${formatDuration(cell.totals.trainSeconds)} in the trainer (${cell.totals.trainRuns} ${
         cell.totals.trainRuns === 1 ? 'run' : 'runs'
       })`
     );
   }
+  if (!parts.length) return `${when}: no activity`;
   return `${when}: ${parts.join(', ')}`;
 }

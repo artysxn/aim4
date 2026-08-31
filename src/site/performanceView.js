@@ -78,7 +78,7 @@ import { setSpinnerLabel, spinnerHtml, statsProgressLabel } from '../lib/spinner
 import { getEntitlements } from '../lib/entitlements.js';
 import { buildCalendar } from '../lib/activityCalendar.js';
 import { fetchActivity } from '../lib/activityFeed.js';
-import { activityCalendarHtml } from './activityCalendarView.js';
+import { activityPairHtml } from './activityCalendarView.js';
 import { upgradePrompt } from './upgradeGate.js';
 import { CAP } from '../../shared/entitlements/keys.js';
 import { PLAN_NAMES } from '../../shared/entitlements/catalogue.js';
@@ -993,12 +993,12 @@ export function initPerformanceView({ auth, escapeHtml }) {
       // The chapter may have been swapped while the fetch was in flight.
       const still = document.getElementById('pf-activity');
       if (!still || playerId !== who) return;
-      const cal = buildCalendar({ days, window: 90 });
-      still.innerHTML = activityCalendarHtml(cal, escapeHtml, {
-        title: 'Recent activity',
-        subtitle: 'Last 90 days',
-        empty: 'No matches or trainer runs in the last 90 days.'
-      });
+      still.innerHTML = activityPairHtml(
+        days,
+        (args) => buildCalendar({ window: 90, ...args }),
+        escapeHtml,
+        { heading: 'Recent activity' }
+      );
     } catch {
       /* a calendar that will not load is not worth breaking the chapter for */
     }
