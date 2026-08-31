@@ -3315,3 +3315,117 @@ input[type='checkbox'] {
   flex-wrap: wrap;
   justify-content: flex-end;
 }
+
+/* ---- Post-game coach --------------------------------------------------- */
+
+.res-coach-callouts {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 10px 0;
+  text-align: left;
+}
+
+.coach-line {
+  margin: 0;
+  font-size: 14px;
+  color: #f2f2f2;
+}
+
+.coach-line-encourage {
+  color: #9c9ca2;
+}
+
+.coach-line-good {
+  color: #35e06a;
+}
+
+.coach-callout {
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid #181818;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.coach-tip {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: #9c9ca2;
+}
+
+.res-coach-trends {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 6px;
+  margin: 10px 0;
+}
+
+.coach-trend {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid #181818;
+  border-radius: 6px;
+  color: #9c9ca2;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.coach-trend:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: #f2f2f2;
+}
+
+.coach-trend.is-down .coach-trend-label {
+  color: #f52525;
+}
+
+.coach-trend-label {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.coach-trend-last {
+  min-width: 34px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.coach-spark {
+  flex-shrink: 0;
+}
+
+.coach-spark-empty {
+  width: 96px;
+  height: 24px;
+}
+
+.res-coach-note {
+  margin: 10px 0 0;
+  padding: 12px 14px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid #181818;
+  border-radius: 8px;
+  text-align: left;
+}
+
+.res-coach-note h4 {
+  margin: 0 0 6px;
+  font-size: 14px;
+  color: #f2f2f2;
+}
+
+.res-coach-note p {
+  margin: 6px 0 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: #9c9ca2;
+}

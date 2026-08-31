@@ -106,6 +106,9 @@ import { duelsArenaSelectOptions } from '../scenarios/duelsArenas.js';
 import { dmMapSelectOptions } from '../maps/dmMaps.js';
 import { ADAPTIVE_CONFIG_KEY, isKillLeaderboardScenario, isLowerScoreLeaderboardScenario, isRankedScenario } from '../scenarios/leaderboardConfig.js';
 import { eloFor, recordAdaptiveRun } from '../lib/adaptiveElo.js';
+import { coachRegressions, coachRunsFor, coachSeries, recordCoachRun } from '../lib/coachHistory.js';
+import { coachNoteFor, encouragementLine } from '../lib/coachNotes.js';
+import { mechanicLabel } from '../lib/routines.js';
 import { SCENARIO_META, TRAINING_CATEGORIES } from '../lib/gamemodeCatalog.js';
 
 /** Scenarios with practice-only tuning (gear on training card). */
@@ -1854,6 +1857,11 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
             <div id="res-history-chart" class="res-history-canvas"></div>
             <div id="res-history-legend" class="account-rating-legend"></div>
           </div>
+          <div id="res-coach-panel" class="res-info-panel" hidden>
+            <div id="res-coach-callouts" class="res-coach-callouts"></div>
+            <div id="res-coach-trends" class="res-coach-trends"></div>
+            <div id="res-coach-note" class="res-coach-note" hidden></div>
+          </div>
         </section>
         <div id="res-lb" class="lb-body"></div>
         </div>
@@ -1873,6 +1881,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
         <div class="menu-panel-body menu-panel-scroll">
         <p class="readout muted" id="pl-res-progress"></p>
         <div id="pl-res-stats" class="res-stats"></div>
+        <div id="pl-res-coach" class="res-coach-callouts"></div>
         <div id="pl-res-lb" class="lb-body"></div>
         </div>
         <div class="menu-actions">
@@ -3814,6 +3823,9 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
   _onPlaylistModeFinish(results) {
     this.state = 'results';
     this.input.exitLock();
+    // The recorder was running for this item; fold it into coach history
+    // instead of discarding it. Nothing is uploaded, this is local coaching.
+    const coachAnalytics = this._playlistItemAnalytics();
     this.replayRecorder?.cancel();
     // Each adaptive routine item rates its own mode, exactly like a card run.
     this._recordAdaptive(results);
@@ -3830,6 +3842,38 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     } else {
       this._showPlaylistIntermission(results);
     }
+    // After the screen paints: record the run and fill the coach line in.
+    this._coachPlaylistItem(run.playlist, results, coachAnalytics);
+  }
+
+  /**
+   * The between-modes coach line: if a mechanic this ROUTINE targets came in
+   * lower than the previous run on the same gamemode, encourage first, then
+   * one concrete tip. An untargeted dip stays quiet here; the full picture
+   * lives on the solo results Coach page and this screen is a breather.
+   */
+  async _coachPlaylistItem(playlist, results, analytics) {
+    const slot = this.root.querySelector('#pl-res-coach');
+    if (slot) slot.innerHTML = '';
+    await this._recordCoachHistory(results, analytics);
+    if (!slot) return;
+    const targets = Array.isArray(playlist?.mechanics) && playlist.mechanics.length
+      ? playlist.mechanics
+      : null;
+    const regressions = coachRegressions(results.scenario, targets);
+    if (!regressions.length) return;
+    const runs = coachRunsFor(results.scenario);
+    const tips = regressions
+      .slice(0, 2)
+      .map((r) => {
+        const note = coachNoteFor(r.mechanic);
+        return `<p class="coach-tip"><strong>${this._esc(mechanicLabel(r.mechanic))}:</strong> ${this._esc(note?.short || '')}</p>`;
+      })
+      .join('');
+    slot.innerHTML = `<div class="coach-callout">
+      <p class="coach-line coach-line-encourage">${this._esc(encouragementLine(runs.length))}</p>
+      ${tips}
+    </div>`;
   }
 
   _modeStatHtml(results) {
@@ -4810,14 +4854,17 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     const nextBtn = this.root.querySelector('#res-info-next');
     const ratingPanel = this.root.querySelector('#res-rating-panel');
     const historyPanel = this.root.querySelector('#res-history-panel');
+    const coachPanel = this.root.querySelector('#res-coach-panel');
     const showNav = panels.length > 1;
     if (prevBtn) prevBtn.hidden = !showNav;
     if (nextBtn) nextBtn.hidden = !showNav;
     if (titleEl) {
-      titleEl.textContent = cur === 'history' ? 'Results history' : 'Aim4 Rating';
+      titleEl.textContent =
+        cur === 'history' ? 'Results history' : cur === 'coach' ? 'Coach' : 'Aim4 Rating';
     }
     if (ratingPanel) ratingPanel.hidden = cur !== 'rating';
     if (historyPanel) historyPanel.hidden = cur !== 'history';
+    if (coachPanel) coachPanel.hidden = cur !== 'coach';
   }
 
   async _renderResultsInfographics(results, analytics) {
@@ -4827,9 +4874,12 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     this._resInfoPanels = [];
     const ratingOk = analytics && RATED_GAMEMODES.includes(results.scenario);
     const historyOk = !!(this.auth?.isLoggedIn && supabaseConfigured());
+    // The Coach page needs at least a previous run to say anything about.
+    const coachOk = ratingOk && coachRunsFor(results.scenario).length >= 1;
 
     if (ratingOk) this._resInfoPanels.push('rating');
     if (historyOk) this._resInfoPanels.push('history');
+    if (coachOk) this._resInfoPanels.push('coach');
 
     if (!this._resInfoPanels.length) {
       wrap.hidden = true;
@@ -4851,7 +4901,114 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
       if (hp) hp.hidden = true;
     }
 
+    if (coachOk) this._renderCoachPanel(results);
+
     this._syncResInfographicsPanel();
+  }
+
+  // ---- Coach page -----------------------------------------------------------
+  // The post-game coach: which mechanics dipped against the run before, how
+  // each one has trended over recent runs on this mode, and the full note for
+  // whichever one the player opens. Everything it reads was recorded by
+  // _recordCoachHistory below, so it works signed out and offline.
+
+  /** Tiny inline sparkline for one mechanic's recent runs, 0..2 scale. */
+  _coachSparklineSvg(values, regressed) {
+    if (!values || values.length < 2) {
+      return '<span class="coach-spark coach-spark-empty"></span>';
+    }
+    const w = 96;
+    const h = 24;
+    const pad = 2;
+    const step = (w - pad * 2) / (values.length - 1);
+    const y = (v) => h - pad - (Math.max(0, Math.min(2, v)) / 2) * (h - pad * 2);
+    const points = values.map((v, i) => `${(pad + i * step).toFixed(1)},${y(v).toFixed(1)}`);
+    const last = points[points.length - 1].split(',');
+    return `<svg class="coach-spark" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" aria-hidden="true">
+      <polyline points="${points.join(' ')}" fill="none" stroke="${regressed ? '#f52525' : '#35e06a'}" stroke-width="1.5" />
+      <circle cx="${last[0]}" cy="${last[1]}" r="2" fill="${regressed ? '#f52525' : '#35e06a'}" />
+    </svg>`;
+  }
+
+  _renderCoachPanel(results) {
+    const callouts = this.root.querySelector('#res-coach-callouts');
+    const trends = this.root.querySelector('#res-coach-trends');
+    const noteEl = this.root.querySelector('#res-coach-note');
+    if (!callouts || !trends || !noteEl) return;
+
+    const scenario = results.scenario;
+    const runs = coachRunsFor(scenario);
+    // Solo runs compare every measured mechanic. Routine runs get their
+    // targeted-only version on the intermission screen instead.
+    const targets = null;
+    const regressions = coachRegressions(scenario, targets);
+    const regressedKeys = new Set(regressions.map((r) => r.mechanic));
+
+    if (!regressions.length) {
+      callouts.innerHTML = `<p class="coach-line coach-line-good">${
+        runs.length < 2
+          ? 'First measured run on this mode. The coach compares your next one against it.'
+          : targets
+            ? 'No targeted mechanic dropped against your previous run. Keep going.'
+            : 'Nothing dropped against your previous run. Keep going.'
+      }</p>`;
+    } else {
+      const items = regressions
+        .slice(0, 3)
+        .map((r) => {
+          const note = coachNoteFor(r.mechanic);
+          return `<div class="coach-callout" data-coach-note="${r.mechanic}">
+            <p class="coach-line"><strong>${this._esc(mechanicLabel(r.mechanic))}</strong> ${r.prev.toFixed(2)} to ${r.last.toFixed(2)} this run.</p>
+            <p class="coach-tip">${this._esc(note?.short || '')}</p>
+          </div>`;
+        })
+        .join('');
+      callouts.innerHTML =
+        `<p class="coach-line coach-line-encourage">${this._esc(encouragementLine(runs.length))}</p>` +
+        items;
+    }
+
+    // One trend row per mechanic this mode has ever measured.
+    const measured = [...new Set(runs.flatMap((r) => Object.keys(r.r || {})))];
+    trends.innerHTML = measured
+      .map((key) => {
+        const series = coachSeries(scenario, key);
+        const last = series[series.length - 1];
+        return `<button type="button" class="coach-trend${regressedKeys.has(key) ? ' is-down' : ''}" data-coach-note="${key}">
+          <span class="coach-trend-label">${this._esc(mechanicLabel(key))}</span>
+          ${this._coachSparklineSvg(series, regressedKeys.has(key))}
+          <span class="coach-trend-last">${Number.isFinite(last) ? last.toFixed(2) : ''}</span>
+        </button>`;
+      })
+      .join('');
+
+    noteEl.hidden = true;
+    noteEl.innerHTML = '';
+    const panel = this.root.querySelector('#res-coach-panel');
+    if (panel && !panel._coachBound) {
+      panel._coachBound = true;
+      panel.addEventListener('click', (e) => {
+        const btn = e.target.closest('[data-coach-note]');
+        if (!btn) return;
+        const note = coachNoteFor(btn.dataset.coachNote);
+        if (!note) return;
+        noteEl.hidden = false;
+        noteEl.innerHTML =
+          `<h4>${this._esc(note.title)}</h4>` +
+          note.full.map((par) => `<p>${this._esc(par)}</p>`).join('');
+      });
+    }
+    // Open the biggest regression's note by default: the page exists to say
+    // what to do about it, not to make the player click first.
+    if (regressions.length) {
+      const note = coachNoteFor(regressions[0].mechanic);
+      if (note) {
+        noteEl.hidden = false;
+        noteEl.innerHTML =
+          `<h4>${this._esc(note.title)}</h4>` +
+          note.full.map((par) => `<p>${this._esc(par)}</p>`).join('');
+      }
+    }
   }
 
   async _renderResultsHistory(results) {
@@ -6967,6 +7124,42 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     return adaptive;
   }
 
+  /**
+   * Remember this run's per-mechanic ratings so the Coach page has a memory.
+   *
+   * Ratings are filtered to the categories this mode actually measures
+   * (radarCategoriesForView), so a hold-fire mode never records a zero flick
+   * rating that a graph would then dutifully draw. Failures are swallowed
+   * whole: coaching must never be the reason a results screen breaks.
+   */
+  async _recordCoachHistory(results, analytics) {
+    if (!analytics || !RATED_GAMEMODES.includes(results?.scenario)) return;
+    try {
+      await syncBaselinesFromServer();
+      const baselines = baselinesForGamemode(results.scenario, loadBaselines());
+      const rating = calculateAim4Ratings(telemetryFromRunAnalytics(analytics), { baselines });
+      const keep = {};
+      for (const key of radarCategoriesForView(results.scenario, rating)) {
+        if (Number.isFinite(rating[key])) keep[key] = rating[key];
+      }
+      recordCoachRun(results.scenario, keep);
+    } catch (e) {
+      console.warn('[coach] run not recorded', e);
+    }
+  }
+
+  /** Aggregate a playlist item's aim analytics locally, without saving. */
+  _playlistItemAnalytics() {
+    if (!this.replayRecorder?.active) return null;
+    const recording = this.replayRecorder.finish();
+    if (!recording) return null;
+    try {
+      return new ReplayAnalytics(localDecode(recording)).aggregate();
+    } catch {
+      return null;
+    }
+  }
+
   async _onFinish(results) {
     if (this._playlistRun) {
       this._onPlaylistModeFinish(results);
@@ -6985,6 +7178,9 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     }
     this.showScreen('results');
     const replayRes = await this._finalizeRecording(results);
+    // Before rendering, so the Coach page compares against the run BEFORE this
+    // one and its trend lines already include this run.
+    await this._recordCoachHistory(results, replayRes?.analytics);
     await this._saveAndRenderResults(results, replayRes);
     if (this.auth?.isLoggedIn && results.timePlayed > 0) {
       incrementPlayTime(this.auth.user.id, results.timePlayed).catch((e) =>

@@ -44,6 +44,22 @@ export function mechanicLabel(key) {
 }
 
 /**
+ * Trainer telemetry keys onto mechanic keys. The trainer names its axes after
+ * the raw statistic (flicks_hit_percent); routines, the coach and the aim
+ * panel name the mechanic (flicks). Same seven things, two dialects, one
+ * dictionary.
+ */
+export const TRAINER_TO_MECHANIC = Object.freeze({
+  precision_accuracy_percent: 'precision',
+  speed: 'speed',
+  flicks_hit_percent: 'flicks',
+  adjustments: 'adjustments',
+  reaction_time_ms: 'reaction',
+  tension_percent: 'tension',
+  tracking: 'tracking'
+});
+
+/**
  * What each gamemode tag trains. This is the product decision the whole
  * recommender rests on, stated once as data.
  */

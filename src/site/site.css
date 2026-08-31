@@ -5393,3 +5393,27 @@ body.deck-mode .site-main {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+.rt-coach {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.03);
+  padding: 8px 12px;
+}
+
+.rt-coach + .rt-coach {
+  margin-top: 8px;
+}
+
+.rt-coach summary {
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.rt-coach p {
+  margin: 8px 0 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--muted);
+}

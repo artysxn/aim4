@@ -17,6 +17,7 @@
 
 import {
   MECHANICS,
+  TRAINER_TO_MECHANIC,
   estimateLabel,
   mechanicLabel,
   recommendRoutine,
@@ -46,24 +47,11 @@ import {
   syncBaselinesFromServer
 } from '../lib/aim4Ratings.js';
 import { fetchAimRuns } from '../lib/aimStats.js';
+import { coachNoteFor } from '../lib/coachNotes.js';
 
 const DEFAULT_MINUTES = 20;
 const DEFAULT_WEAK_COUNT = 5;
 
-/**
- * Trainer telemetry keys onto mechanic keys. The trainer names its axes after
- * the raw statistic (flicks_hit_percent); routines and the aim panel name the
- * mechanic (flicks). Same seven things, two dialects.
- */
-const TRAINER_TO_MECHANIC = Object.freeze({
-  precision_accuracy_percent: 'precision',
-  speed: 'speed',
-  flicks_hit_percent: 'flicks',
-  adjustments: 'adjustments',
-  reaction_time_ms: 'reaction',
-  tension_percent: 'tension',
-  tracking: 'tracking'
-});
 
 export function initRoutinesView({ auth, escapeHtml }) {
   const host = document.querySelector('.view[data-view="routines"] .view-pad');
@@ -218,6 +206,11 @@ export function initRoutinesView({ auth, escapeHtml }) {
           <div id="rt-preview-slot">${previewHtml()}</div>
         </section>
 
+        <section class="rt-card" id="rt-coach-card" hidden>
+          <h2>Coach notes</h2>
+          <div id="rt-coach-notes"></div>
+        </section>
+
         <section class="rt-card">
           <h2>Build your own</h2>
           <div class="rt-controls">
@@ -260,6 +253,27 @@ export function initRoutinesView({ auth, escapeHtml }) {
     if (el) el.textContent = text;
   }
 
+  /**
+   * The full coach note for every picked mechanic, one collapsible each.
+   * The first is open: the card should read as advice on arrival, not as a
+   * wall of closed drawers.
+   */
+  function repaintCoachNotes() {
+    const card = host.querySelector('#rt-coach-card');
+    const slot = host.querySelector('#rt-coach-notes');
+    if (!card || !slot) return;
+    const notes = [...picked].map(coachNoteFor).filter(Boolean);
+    card.hidden = !notes.length;
+    slot.innerHTML = notes
+      .map(
+        (n, i) => `<details class="rt-coach"${i === 0 ? ' open' : ''}>
+        <summary>${esc(n.title)}</summary>
+        ${n.full.map((par) => `<p>${esc(par)}</p>`).join('')}
+      </details>`
+      )
+      .join('');
+  }
+
   // ---- behaviour ------------------------------------------------------------
 
   function bind() {
@@ -271,6 +285,7 @@ export function initRoutinesView({ auth, escapeHtml }) {
       else picked.add(key);
       chip.classList.toggle('primary', picked.has(key));
       chip.setAttribute('aria-pressed', String(picked.has(key)));
+      repaintCoachNotes();
     });
 
     host.querySelector('#rt-find')?.addEventListener('click', () => {
@@ -395,6 +410,7 @@ export function initRoutinesView({ auth, escapeHtml }) {
             .join(', ')}.`);
           const chips = host.querySelector('#rt-chips');
           if (chips) chips.innerHTML = MECHANICS.map(chipHtml).join('');
+          repaintCoachNotes();
         } else if (auth?.user?.id) {
           note('No rated trainer runs yet. Pick the mechanics to train.');
         } else {
