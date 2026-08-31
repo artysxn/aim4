@@ -1,35 +1,73 @@
 // ---------------------------------------------------------------------------
 // lib/adaptiveElo.js
-// Adaptive difficulty: a per-gamemode rating, and what it does to the targets.
+// Adaptive difficulty: a rating per MECHANIC, and what it does to the targets.
 //
-// Every gamemode has an ELO, starting at 1000. An adaptive run compares your
-// score against the median of your own recent adaptive runs on that mode and
-// moves the ELO by ±10 to ±50: match yourself and it barely moves, blow your
-// usual score away and it climbs the full step. The ELO then leans on the
-// COMPETITIVE preset - never on practice settings - by scaling exactly three
-// families of knob: target size (smaller is harder), movement speed (faster is
-// harder) and tracking hold time (longer is harder).
+// The rating is not per gamemode. Gamemodes are made of the same handful of
+// mechanics in different mixtures (Gridshot is Speed and Accuracy, Microflicks
+// is Accuracy and Reactions), and a rating per gamemode learns each mixture
+// from scratch: getting faster in one mode teaches the other twelve speed
+// modes nothing. So there is one rating per mechanic, and a gamemode's
+// difficulty is the mean of the ones it is made of.
+//
+//   speed 1000, movement 1500  ->  a Speed + Movement mode is played at 1250
+//
+// What comes back from a run is then split by ordinary Elo, against that same
+// 1250 as the opponent. The 1000 was not expected to beat a 1250 and gains a
+// lot for doing it; the 1500 was expected to and gains little:
+//
+//   speed     expected 0.19,  wins  ->  +32
+//   movement  expected 0.81,  wins  ->  +8
+//
+// which is the whole point. A mode you are lopsided at pulls hardest on the
+// half that is behind, and playing to your strength stops paying.
+//
+// It also means a run that goes exactly as expected still moves both: the
+// weaker mechanic up, the stronger one down, both toward the difficulty the
+// evidence supports. That convergence is not a bug to damp out. A player who
+// only ever plays one mixture has no evidence separating its halves, and the
+// honest reading of no evidence is that they are the same. Playing a mode that
+// isolates one of them is what separates them again.
+//
+// The ELO then leans on the COMPETITIVE preset - never on practice settings -
+// by scaling exactly three families of knob: target size (smaller is harder),
+// movement speed (faster is harder) and tracking hold time (longer is harder).
 //
 // The scaling is deliberately timid. A full climb from 1000 to 1500 moves the
 // knobs by under a fifth; 200 ELO is a few percent, not a different game. Two
 // reasons. First, scores stay roughly comparable between neighbouring ELOs,
-// which the ±10..50 update quietly depends on - it compares raw scores across
-// runs at different difficulty. Second, difficulty that changes noticeably
-// between two runs teaches the player about the difficulty system, not about
-// aiming.
+// which the update quietly depends on: it compares raw scores across runs at
+// different difficulty. Second, difficulty that changes noticeably between two
+// runs teaches the player about the difficulty system, not about aiming.
 //
 // The stable point is an oscillation, not a rest: at your true level you beat
-// your median about half the time, so the ELO breathes ±10 around it. That is
+// your median about half the time, so the rating breathes around it. That is
 // by design - a rating that can sit still is a rating that has stopped
 // listening.
 // ---------------------------------------------------------------------------
 
 import * as Storage from '../utils/Storage.js';
+import { SCENARIO_META } from './gamemodeCatalog.js';
 
 export const DEFAULT_ELO = 1000;
-/** One run can move the rating this much, and never less than MIN_STEP. */
-export const MIN_STEP = 10;
-export const MAX_STEP = 50;
+/**
+ * The most one run can move one mechanic, at even odds half that.
+ *
+ * Chosen against the old fixed step it replaces: a decisive run used to move a
+ * rating 50 points and a marginal one 10. Here a decisive win costs the
+ * favourite 8 and pays the underdog 32, and an even matchup pays 20.
+ */
+export const K_FACTOR = 40;
+/**
+ * The classic Elo scale: 400 points is ten to one odds. Kept at the standard
+ * value because every intuition anyone has about Elo numbers assumes it.
+ */
+export const ELO_SPREAD = 400;
+/**
+ * How far above your own median counts as a decisive win, and how far below a
+ * decisive loss. Inherited from the step ramp this replaces, so a run that
+ * used to earn the full 50 still counts as a clean win.
+ */
+export const DECISIVE = 0.16;
 /** Runs remembered per mode. The median of these is "your usual score". */
 const HISTORY = 10;
 /** Hard bounds, so corrupted storage cannot ask for absurd geometry. */
@@ -37,8 +75,11 @@ const ELO_FLOOR = 200;
 const ELO_CEIL = 3000;
 
 const STORAGE_KEY = 'adaptiveElo';
+const STORAGE_VERSION = 2;
 
 // ---- the update -------------------------------------------------------------
+
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
 function median(list) {
   const sorted = [...list].sort((a, b) => a - b);
@@ -47,34 +88,42 @@ function median(list) {
 }
 
 /**
- * How far one run moves the ELO.
+ * Elo's expected score: the chance `rating` beats `opponent`.
  *
- * r is the run over the median of the previous runs. The magnitude ramps from
- * MIN_STEP at "matched yourself" to MAX_STEP at ±16% or more; the 250 is just
- * that slope. Every run with history moves the rating at least MIN_STEP - a
- * rating that can decide a run changed nothing invites grinding for the run
- * that does.
- *
- * @param {number} score  this run's leaderboard-relevant value
- * @param {number[]} history previous runs' values, oldest first
- * @returns {number} signed delta, 0 only when there is no history yet
+ * 0.5 at equal ratings, and 0.09 at 400 points down. This is the whole of the
+ * split: a mechanic's share of a result is exactly the part that was not
+ * already expected of it.
  */
-export function eloDeltaFor(score, history) {
+export function expectedScore(rating, opponent) {
+  return 1 / (1 + 10 ** ((Number(opponent) - Number(rating)) / ELO_SPREAD));
+}
+
+/**
+ * The result of a run, as a score in [0, 1]: 1 a clean win, 0.5 a draw, 0 a
+ * clean loss.
+ *
+ * The opponent is the difficulty, and the evidence is the run against the
+ * median of your own recent runs at that mode. Matching your median is a draw,
+ * which is right: the difficulty was set from your rating, so performing
+ * exactly to it says the rating was correct.
+ *
+ * @param {number} score this run's leaderboard-relevant value
+ * @param {number[]} history previous runs' values
+ * @returns {number|null} null when there is nothing to compare against yet
+ */
+export function outcomeFor(score, history) {
   const prev = (history || []).filter((v) => Number.isFinite(v));
-  if (!prev.length) return 0;
+  if (!prev.length) return null;
   const med = median(prev);
   const s = Number(score) || 0;
   // A zero median cannot make a ratio. Scoring anything beats it; scoring
-  // nothing again is a mild step down rather than a judgment.
-  if (med <= 0) return s > 0 ? 25 : -MIN_STEP;
+  // nothing again is a mild loss rather than a judgment.
+  if (med <= 0) return s > 0 ? 1 : 0.35;
   const r = s / med;
-  const magnitude = Math.min(MAX_STEP, MIN_STEP + Math.round(Math.abs(r - 1) * 250));
-  return r >= 1 ? magnitude : -magnitude;
+  return clamp(0.5 + ((r - 1) / DECISIVE) * 0.5, 0, 1);
 }
 
 // ---- what an ELO does to the game -------------------------------------------
-
-const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
 /**
  * The three multipliers for an ELO. Per 100 points: sizes shrink ~3.5%, speeds
@@ -127,40 +176,133 @@ export function applyAdaptiveDifficulty(preset, elo) {
 }
 
 // ---- storage ----------------------------------------------------------------
+//
+// One rating per mechanic, and the recent scores per mode that the result is
+// judged against. Runs stay keyed by MODE because "your usual score" is only
+// meaningful within one mode; ratings are keyed by MECHANIC because that is
+// what is actually being rated.
 
-function loadAll() {
-  const raw = Storage.read(STORAGE_KEY, {});
-  return raw && typeof raw === 'object' ? raw : {};
-}
-
-/** Current adaptive ELO for a mode. */
-export function eloFor(mode) {
-  const entry = loadAll()[mode];
-  const elo = Number(entry?.elo);
-  return Number.isFinite(elo) ? clamp(elo, ELO_FLOOR, ELO_CEIL) : DEFAULT_ELO;
+function blank() {
+  return { v: STORAGE_VERSION, cats: {}, runs: {} };
 }
 
 /**
- * Fold one finished adaptive run into the mode's rating.
+ * Read the store, migrating a per-gamemode one on the way.
+ *
+ * v1 held `{ [mode]: { elo, runs } }`. Each mechanic is seeded with the mean
+ * rating of the modes that trained it, which is the closest thing to what the
+ * old numbers were evidence for; a mechanic no mode had rated starts fresh.
+ * Throwing the old ratings away instead would silently reset everybody who had
+ * played adaptive, and they would have no way to tell that is what happened.
+ */
+function loadAll() {
+  const raw = Storage.read(STORAGE_KEY, null);
+  if (!raw || typeof raw !== 'object') return blank();
+  if (raw.v === STORAGE_VERSION && raw.cats) {
+    return { v: STORAGE_VERSION, cats: { ...raw.cats }, runs: { ...(raw.runs || {}) } };
+  }
+
+  const out = blank();
+  const seed = new Map();
+  for (const [mode, entry] of Object.entries(raw)) {
+    if (!entry || typeof entry !== 'object') continue;
+    if (Array.isArray(entry.runs)) out.runs[mode] = entry.runs.filter((v) => Number.isFinite(v));
+    const elo = Number(entry.elo);
+    if (!Number.isFinite(elo)) continue;
+    for (const cat of categoriesFor(mode)) {
+      const bucket = seed.get(cat) || [];
+      bucket.push(elo);
+      seed.set(cat, bucket);
+    }
+  }
+  for (const [cat, list] of seed) {
+    out.cats[cat] = clamp(list.reduce((a, b) => a + b, 0) / list.length, ELO_FLOOR, ELO_CEIL);
+  }
+  return out;
+}
+
+/** The mechanics a gamemode is made of, from its tags. */
+export function categoriesFor(mode) {
+  const tags = SCENARIO_META[mode]?.tags;
+  return Array.isArray(tags) && tags.length ? [...tags] : [];
+}
+
+/** One mechanic's rating. */
+export function categoryElo(category, store = null) {
+  const cats = (store || loadAll()).cats || {};
+  const v = Number(cats[category]);
+  return Number.isFinite(v) ? clamp(v, ELO_FLOOR, ELO_CEIL) : DEFAULT_ELO;
+}
+
+/** Every mechanic that has a rating, plus the ones this build knows about. */
+export function allCategoryElos() {
+  const store = loadAll();
+  const out = {};
+  for (const key of Object.keys(SCENARIO_META)) {
+    for (const cat of categoriesFor(key)) out[cat] = categoryElo(cat, store);
+  }
+  return out;
+}
+
+/**
+ * The difficulty a mode is played at: the mean of its mechanics' ratings.
+ *
+ * A mode with no tags at all cannot be composed, so it plays at the default
+ * rather than at nothing.
+ */
+export function eloFor(mode, store = null) {
+  const cats = categoriesFor(mode);
+  if (!cats.length) return DEFAULT_ELO;
+  const s = store || loadAll();
+  const sum = cats.reduce((a, c) => a + categoryElo(c, s), 0);
+  return Math.round(clamp(sum / cats.length, ELO_FLOOR, ELO_CEIL));
+}
+
+/**
+ * Fold one finished adaptive run into the mechanics it exercised.
+ *
+ * Every mechanic of the mode is rated against the difficulty the mode was
+ * played at, so the split falls out of Elo rather than being apportioned by
+ * hand: a mechanic below the difficulty gains most of the win, one above it
+ * gains little, and one exactly at it gains half.
  *
  * @param {string} mode
  * @param {number} score the run's leaderboard-relevant value (score or kills)
- * @returns {{prevElo: number, elo: number, delta: number, runs: number}}
+ * @returns {{prevElo: number, elo: number, delta: number, runs: number,
+ *   outcome: number|null, categories: Array<{category: string, from: number,
+ *   to: number, delta: number, expected: number}>}}
  */
 export function recordAdaptiveRun(mode, score) {
-  const all = loadAll();
-  const entry = all[mode] && typeof all[mode] === 'object' ? all[mode] : {};
-  const prevElo = Number.isFinite(Number(entry.elo))
-    ? clamp(Number(entry.elo), ELO_FLOOR, ELO_CEIL)
-    : DEFAULT_ELO;
-  const runs = Array.isArray(entry.runs) ? entry.runs.filter((v) => Number.isFinite(v)) : [];
+  const store = loadAll();
+  const cats = categoriesFor(mode);
+  const runs = Array.isArray(store.runs[mode])
+    ? store.runs[mode].filter((v) => Number.isFinite(v))
+    : [];
 
-  const delta = eloDeltaFor(score, runs);
-  const elo = clamp(prevElo + delta, ELO_FLOOR, ELO_CEIL);
+  const prevElo = eloFor(mode, store);
+  const outcome = outcomeFor(score, runs);
+
+  const moved = [];
+  if (outcome !== null) {
+    for (const cat of cats) {
+      const from = categoryElo(cat, store);
+      const expected = expectedScore(from, prevElo);
+      const to = clamp(from + K_FACTOR * (outcome - expected), ELO_FLOOR, ELO_CEIL);
+      store.cats[cat] = to;
+      moved.push({
+        category: cat,
+        from: Math.round(from),
+        to: Math.round(to),
+        delta: Math.round(to - from),
+        expected: Math.round(expected * 100) / 100
+      });
+    }
+  }
 
   runs.push(Number(score) || 0);
-  all[mode] = { elo, runs: runs.slice(-HISTORY) };
-  Storage.write(STORAGE_KEY, all);
+  store.runs[mode] = runs.slice(-HISTORY);
+  Storage.write(STORAGE_KEY, store);
 
-  return { prevElo, elo, delta, runs: runs.length };
+  const elo = eloFor(mode, store);
+  return { prevElo, elo, delta: elo - prevElo, runs: runs.length, outcome, categories: moved };
 }
