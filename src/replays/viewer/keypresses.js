@@ -112,11 +112,42 @@ export const HYSTERESIS_ROWS = 6;
 export const STILL_SPEED = 8;
 
 /**
- * The same floor in the air, where there is no friction to cancel and
- * sv_air_max_wishspeed caps what a key can be worth at ~360 u/s². Air reads
- * are the weakest thing here and are meant to be.
+ * The floor for a strafe read in the air.
+ *
+ * Air accel is capped by sv_air_max_wishspeed at 30 u/s of wish speed, so the
+ * most a key can be worth up there is AIR_ACCEL × 30 ≈ 360 u/s², and only
+ * ACROSS the motion: Accelerate() gives nothing at all once the player is
+ * already going faster than 30 along the direction they are asking for. That
+ * is why holding W through a jump is invisible in the data and why the reader
+ * carries the ground read instead of inventing one (see AIR_CARRY_ROWS).
  */
-export const AIR_INPUT_MIN = 150;
+export const AIR_INPUT_MIN = 120;
+
+/**
+ * Stencil half-width used while airborne, in rows.
+ *
+ * Wider than the ground one, and it has to be. Up there the true acceleration
+ * of a player who is merely holding a key is exactly zero, so the whole
+ * reading is quantization: at the ground stencil that noise measures 161 u/s²
+ * on a diagonal, against an air input that can never exceed ~360, and it
+ * ALTERNATES direction tick to tick. Read at that width a jumping player is
+ * shown the opposite diagonal to the one they are holding, half the time.
+ *
+ * Noise falls with the square of the span, so doubling it takes the floor to
+ * about 40 and leaves a real air-strafe (~190 u/s², measured off the sim) at
+ * five times the noise. Air time is ~55 ticks, so a ±6 window still fits
+ * inside a jump, and the input barely changes across it anyway.
+ */
+export const AIR_STENCIL = 6;
+
+/**
+ * How far back to look for the last grounded row while airborne.
+ *
+ * A jump is about 55 ticks of hang time, so a second of rows covers one with
+ * room to spare. Past that the player is falling off something long enough
+ * that the keys they took off with are no longer evidence of anything.
+ */
+export const AIR_CARRY_ROWS = 64;
 
 /**
  * Half-width, in stored rows, of the stencil the derivatives are taken over.
@@ -158,10 +189,10 @@ const OFF = Object.freeze({
  * `mag` is what Accelerate() was spending: ~0 with nothing held, and up to
  * ACCEL × wishspeed with a key down. `x`/`y` point along the keys.
  */
-export function inputAt(T, { h, hz, sample, a = {}, s0 = {}, sp = {}, sn = {} }) {
+export function inputAt(T, { h, hz, sample, stencil = STENCIL, a = {}, s0 = {}, sp = {}, sn = {} }) {
   const now = sample(T, s0);
   if (!now) return null;
-  const H = STENCIL * h;
+  const H = stencil * h;
   const prev = sample(T - H, sp);
   const next = sample(T + H, sn);
   const span = H / hz;
@@ -205,6 +236,10 @@ const SN2 = {};
 const SE = {};
 const IN0 = {};
 const INK = {};
+const ING = {};
+const GS0 = {};
+const GSP = {};
+const GSN = {};
 const HS0 = {};
 const HSP = {};
 const HSN = {};
@@ -217,6 +252,8 @@ const HSN = {};
  * @param {number} args.rate      demo ticks per second
  * @param {number} [args.stride]  ticks between stored rows (1 when full)
  * @param {number} [args.firstTick] tick of row 0, to snap `at` onto rows
+ * @param {number} [args.lastTick]  last tick the buffer holds, so the stencil
+ *   is never taken across the end of it
  * @param {(tick: number, out: object) => object|null} args.sample
  *        one player's state at a tick (tickFormat readRecord shape)
  * @param {Array<{tick: number, player?: string}>} [args.shots]
@@ -230,6 +267,7 @@ export function keysAt({
   rate,
   stride = 1,
   firstTick = 0,
+  lastTick = Infinity,
   sample,
   shots = null,
   playerId = undefined,
@@ -243,34 +281,104 @@ export function keysAt({
 
   const s0 = sample(T, S0);
   if (!s0 || !s0.alive) return Object.assign(out, OFF);
+  // The stencil has to fit inside the buffer. A sampler clamps past the ends,
+  // which makes the far side of the difference the same row as the near one
+  // and turns a steady run into a phantom brake pointing backwards. There are
+  // only a few such ticks a round and they are freezetime and post-round, so
+  // they read as no keys rather than as wrong ones.
+  if (T - STENCIL * h < firstTick || T + STENCIL * h > lastTick) {
+    return Object.assign(out, OFF);
+  }
 
   const ctx = { h, hz, sample, a: IN0, s0: S0, sp: SP, sn: SN };
   const now = inputAt(T, ctx);
   const speed = now.speed;
   const airborne = now.airborne;
 
+  // The vector the keys are read off, and the row it belongs to.
+  //
+  // On the ground that is this row. In the air it usually is NOT: air accel
+  // is capped at sv_air_max_wishspeed, so a player already moving faster than
+  // 30 u/s along the key they are holding gets no acceleration from it at
+  // all. Holding W through a jump leaves no trace to find. What does leave
+  // one is a strafe ACROSS the motion, so a clear sideways input up there is
+  // read normally, and everything else carries the last grounded row: the
+  // keys somebody took off with are the best evidence of the keys they are
+  // still holding, and far better evidence than a shrug.
+  let read = now;
+  let ground = true;
+  if (airborne) {
+    // The most recent evidence in this jump, wherever it came from.
+    //
+    // Air accel only happens while the velocity has not yet caught up with
+    // the wish direction, so a real strafe shows itself in a burst of a few
+    // ticks and then goes silent with the key still held. Carrying the last
+    // reading that was ABOVE the floor keeps that burst on screen for the
+    // rest of the jump; walking back to the ground row is the fallback for a
+    // jump that never showed anything, which is most of them.
+    read = null;
+    for (let k = 0; k <= AIR_CARRY_ROWS; k++) {
+      const at = T - k * h;
+      const st = k === 0 ? S0 : sample(at, SE);
+      if (!st) break;
+      if (!(st.flags & FLAG_AIRBORNE)) {
+        // Back on the ground: read that row the ordinary way.
+        if (at - STENCIL * h >= firstTick) {
+          read = inputAt(at, { h, hz, sample, a: ING, s0: GS0, sp: GSP, sn: GSN });
+          ground = true;
+        }
+        break;
+      }
+      if (at - AIR_STENCIL * h >= firstTick && at + AIR_STENCIL * h <= lastTick) {
+        const wide = inputAt(at, {
+          h,
+          hz,
+          sample,
+          stencil: AIR_STENCIL,
+          a: ING,
+          s0: GS0,
+          sp: GSP,
+          sn: GSN
+        });
+        if (wide && wide.mag >= AIR_INPUT_MIN) {
+          read = wide;
+          ground = false;
+          break;
+        }
+      }
+    }
+    if (!read) return Object.assign(out, OFF);
+  }
+
   // On/off with hysteresis. A key that was clearly down within the last few
   // rows may stay down through a dip, which is what stops the quantization
   // steps in `mag` from strobing a held key. Bounded and backward-looking
   // only, so this is still a pure function of T: no playback state, and
   // scrubbing to a tick gives the same answer however it was reached.
-  const floor = speed < STILL_SPEED ? INPUT_ON * 2 : INPUT_ON;
-  let down = now.mag >= floor;
-  if (!down && !airborne && speed >= STILL_SPEED && now.mag >= INPUT_OFF) {
-    for (let k = 1; k <= HYSTERESIS_ROWS; k++) {
-      const back = inputAt(T - k * h, { h, hz, sample, a: INK, s0: HS0, sp: HSP, sn: HSN });
-      if (!back) break;
-      if (back.mag >= INPUT_ON) {
-        down = true;
-        break;
+  let down;
+  if (!ground) {
+    down = read.mag >= AIR_INPUT_MIN;
+  } else {
+    const floor = read.speed < STILL_SPEED ? INPUT_ON * 2 : INPUT_ON;
+    down = read.mag >= floor;
+    if (!down && read.speed >= STILL_SPEED && read.mag >= INPUT_OFF) {
+      for (let k = 1; k <= HYSTERESIS_ROWS; k++) {
+        const back = inputAt(T - k * h, { h, hz, sample, a: INK, s0: HS0, sp: HSP, sn: HSN });
+        if (!back) break;
+        if (back.mag >= INPUT_ON) {
+          down = true;
+          break;
+        }
+        if (back.mag < INPUT_OFF) break;
       }
-      if (back.mag < INPUT_OFF) break;
     }
   }
-  if (airborne) down = now.mag >= AIR_INPUT_MIN;
 
-  // View basis. Source yaw: 0 = +X, counter-clockwise, degrees.
-  const yawRad = (S0.yaw || 0) * (Math.PI / 180);
+  // View basis, from the row the keys are being read at: a carried ground read
+  // has to be resolved against the yaw of that row, not of now, or a player
+  // who turns in the air comes down holding the wrong keys.
+  const readYaw = read === now ? S0.yaw || 0 : GS0.yaw || 0;
+  const yawRad = readYaw * (Math.PI / 180);
   const fx = Math.cos(yawRad);
   const fy = Math.sin(yawRad);
   const rx = fy;
@@ -281,9 +389,9 @@ export function keysAt({
   let s = false;
   let d = false;
 
-  if (down && now.mag > 0) {
-    const f = (now.x * fx + now.y * fy) / now.mag;
-    const r = (now.x * rx + now.y * ry) / now.mag;
+  if (down && read.mag > 0) {
+    const f = (read.x * fx + read.y * fy) / read.mag;
+    const r = (read.x * rx + read.y * ry) / read.mag;
     w = f > SECTOR;
     s = f < -SECTOR;
     d = r > SECTOR;

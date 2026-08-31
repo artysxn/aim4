@@ -308,6 +308,7 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange }) {
       rate,
       stride: range?.stride || 1,
       firstTick: range?.first || 0,
+      lastTick: range?.last ?? Infinity,
       sample: (t, out) => (sampleSlot ? sampleSlot(povSlot, t, out) : null),
       shots: frame.events?.shots || null,
       playerId: who?.id,
