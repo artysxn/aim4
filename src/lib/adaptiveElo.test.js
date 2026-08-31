@@ -243,8 +243,23 @@ test('runs are counted per mode, ratings per mechanic', () => {
 
 test('history is bounded, so one mode cannot grow storage forever', () => {
   store.clear();
-  for (let i = 0; i < 40; i++) recordAdaptiveRun('gridshot', 100 + i);
-  assert.ok(read().runs.gridshot.length <= 10, `kept ${read().runs.gridshot.length} runs`);
+  for (let i = 0; i < 400; i++) recordAdaptiveRun('gridshot', 100 + i);
+  assert.ok(read().runs.gridshot.length <= 50, `kept ${read().runs.gridshot.length} runs`);
+});
+
+test('the window is long enough that improving is not immediately absorbed', () => {
+  // The run is judged against the median of the window, so a window that
+  // catches up as fast as the player does reports no progress. Climbing
+  // steadily has to keep beating it for a long stretch, not for two runs.
+  store.clear();
+  for (let i = 0; i < 60; i++) recordAdaptiveRun('gridshot', 1000 + i * 10);
+  const climbed = eloFor('gridshot');
+  assert.ok(climbed > DEFAULT_ELO + 40, `steady improvement only reached ${climbed}`);
+
+  // And a flat player is not carried up by the same window.
+  store.clear();
+  for (let i = 0; i < 60; i++) recordAdaptiveRun('tracking', 1000);
+  assert.ok(Math.abs(eloFor('tracking') - DEFAULT_ELO) <= 5, `flat drifted to ${eloFor('tracking')}`);
 });
 
 test('a rating cannot run away, however many wins in a row', () => {
