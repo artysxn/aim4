@@ -275,7 +275,10 @@ export async function fetchEloLeaderboardWithMeta(limit = 50) {
   }
 
   const sb = getSupabase();
-  const cap = Math.max(1, Math.min(limit, 100));
+  // 500, not 100: the leaderboard page cuts this board into ranks, and a rank
+  // is a position in the whole population. Capped at a hundred, the hundredth
+  // account was shown as the bottom of the ladder however many were below it.
+  const cap = Math.max(1, Math.min(limit, 500));
 
   const { data: rpcData, error: rpcError } = await sb.rpc('get_elo_leaderboard_top', {
     p_limit: cap

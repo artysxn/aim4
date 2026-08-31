@@ -106,6 +106,20 @@ import { duelsArenaSelectOptions } from '../scenarios/duelsArenas.js';
 import { dmMapSelectOptions } from '../maps/dmMaps.js';
 import { ADAPTIVE_CONFIG_KEY, isKillLeaderboardScenario, isLowerScoreLeaderboardScenario, isRankedScenario } from '../scenarios/leaderboardConfig.js';
 import { DEFAULT_ELO, eloFor, recordAdaptiveRun } from '../lib/adaptiveElo.js';
+import { assignRanks } from '../lib/aimRanks.js';
+
+/**
+ * Rows a leaderboard is pulled over.
+ *
+ * Every board carries a rank now, and a rank is a position in a POPULATION:
+ * ranking a screenful would tell the tenth best player on a board of hundreds
+ * that they are Iron 1. Pull the board, rank it, draw the top of it.
+ */
+const LB_RANK_OVER = 500;
+
+/** Rows actually drawn, which is what these boards showed before ranks. */
+const LB_SHOW_ROWS = (scenario) =>
+  scenario === 'elo' || scenario === 'aim-rating' ? 50 : 10;
 import { coachRegressions, coachRunsFor, coachSeries, recordCoachRun } from '../lib/coachHistory.js';
 import { coachNoteFor, encouragementLine } from '../lib/coachNotes.js';
 import { mechanicLabel } from '../lib/routines.js';
@@ -8079,6 +8093,33 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     return `${get('hour')}.${get('minute')} ${get('timeZoneName')}, ${get('day')}.${get('month')}.${get('year')}`;
   }
 
+  /** The number a board ranks on: the same one its Score column shows. */
+  _lbValue(row, scenario) {
+    if (scenario === 'elo') return row.elo;
+    if (scenario === 'aim-rating') return row.overall_aim_rating;
+    if (isKillLeaderboardScenario(scenario)) return row.kills ?? row.score;
+    return row.score;
+  }
+
+  /**
+   * Ranks for a board, over every row of it.
+   *
+   * A rank is a position in a population, so this has to see the whole board.
+   * _fetchLeaderboard pulls it; drawing fewer rows than that is fine, ranking
+   * fewer is not.
+   */
+  _lbRanks(list, scenario) {
+    return assignRanks(
+      list.map((r) => this._lbValue(r, scenario)),
+      { higherIsBetter: !isLowerScoreLeaderboardScenario(scenario) }
+    );
+  }
+
+  _lbRankCell(rank) {
+    if (!rank) return '<td class="lb-rank">—</td>';
+    return `<td class="lb-rank"><span class="lb-rank-badge" data-tier="${rank.tier}" title="Top ${rank.top}%">${rank.name}</span></td>`;
+  }
+
   _leaderboardRowsHtml(list, scenario, highlightUserId = null, fetchError = null) {
     if (!supabaseConfigured()) {
       return `<p class="center lb-hint">Account leaderboards are not configured.</p>`;
@@ -8101,6 +8142,11 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
       return `<p class="center lb-hint">${hint}</p>`;
     }
 
+    // Ranked over the whole board, drawn for the top of it. Slicing first
+    // would rank the page instead of the population.
+    const ranks = this._lbRanks(list, scenario).slice(0, LB_SHOW_ROWS(scenario));
+    list = list.slice(0, LB_SHOW_ROWS(scenario));
+
     if (scenario === 'aim-rating') {
       const rows = list
         .map((r, i) => {
@@ -8110,13 +8156,13 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
             : '—';
           return `<tr${hl}>
           <td>${i + 1}</td>
-          ${this._lbPlayerCell(r)}
+          ${this._lbPlayerCell(r)}${this._lbRankCell(ranks[i])}
           <td class="score">${rating}</td>
         </tr>`;
         })
         .join('');
       return `<table class="lb-table">
-      <thead><tr><th>#</th><th>Player</th><th>Aim Rating</th></tr></thead>
+      <thead><tr><th>#</th><th>Player</th><th>Rank</th><th>Aim Rating</th></tr></thead>
       <tbody>${rows}</tbody></table>`;
     }
 
@@ -8134,7 +8180,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
               : '—');
           return `<tr${hl}>
           <td>${i + 1}</td>
-          ${this._lbPlayerCell(r)}
+          ${this._lbPlayerCell(r)}${this._lbRankCell(ranks[i])}
           <td class="score">${Number(r.elo ?? 1000).toLocaleString()}</td>
           <td>${games}</td>
           <td>${wl}</td>
@@ -8145,7 +8191,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
         })
         .join('');
       return `<table class="lb-table">
-      <thead><tr><th>#</th><th>Player</th><th>ELO</th><th>Games</th><th>W–L</th><th>K/D</th><th>Acc</th><th>HS%</th></tr></thead>
+      <thead><tr><th>#</th><th>Player</th><th>Rank</th><th>ELO</th><th>Games</th><th>W–L</th><th>K/D</th><th>Acc</th><th>HS%</th></tr></thead>
       <tbody>${rows}</tbody></table>`;
     }
 
@@ -8157,7 +8203,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
           const date = this._formatLbRunWhen(r.achieved_at);
           return `<tr${hl}>
           <td>${i + 1}</td>
-          ${this._lbPlayerCell(r)}
+          ${this._lbPlayerCell(r)}${this._lbRankCell(ranks[i])}
           <td class="score">${Number(kills).toLocaleString()}</td>
           <td>${Math.round((r.accuracy || 0) * 100)}%</td>
           <td>${this._formatTimePlayed(r.time_played)}</td>
@@ -8166,7 +8212,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
         })
         .join('');
       return `<table class="lb-table">
-      <thead><tr><th>#</th><th>Player</th><th>Kills</th><th>Acc</th><th>Time</th><th>When</th></tr></thead>
+      <thead><tr><th>#</th><th>Player</th><th>Rank</th><th>Kills</th><th>Acc</th><th>Time</th><th>When</th></tr></thead>
       <tbody>${rows}</tbody></table>`;
     }
 
@@ -8178,7 +8224,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
           const date = this._formatLbRunWhen(r.achieved_at);
           return `<tr${hl}>
           <td>${i + 1}</td>
-          ${this._lbPlayerCell(r)}
+          ${this._lbPlayerCell(r)}${this._lbRankCell(ranks[i])}
           <td class="score">${Number(ms).toLocaleString()} ms</td>
           <td>${Math.round((r.accuracy || 0) * 100)}%</td>
           <td class="lb-when">${date}</td>
@@ -8186,7 +8232,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
         })
         .join('');
       return `<table class="lb-table">
-      <thead><tr><th>#</th><th>Player</th><th>Avg</th><th>Acc</th><th>When</th></tr></thead>
+      <thead><tr><th>#</th><th>Player</th><th>Rank</th><th>Avg</th><th>Acc</th><th>When</th></tr></thead>
       <tbody>${rows}</tbody></table>`;
     }
 
@@ -8199,7 +8245,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
         const date = this._formatLbRunWhen(r.achieved_at);
         return `<tr${hl}>
           <td>${i + 1}</td>
-          ${this._lbPlayerCell(r)}
+          ${this._lbPlayerCell(r)}${this._lbRankCell(ranks[i])}
           <td class="score">${Number(r.score).toLocaleString()}</td>
           <td>${Math.round((r.accuracy || 0) * 100)}%</td>
           ${crit}
@@ -8209,13 +8255,13 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
       })
       .join('');
     return `<table class="lb-table">
-      <thead><tr><th>#</th><th>Player</th><th>Score</th><th>Acc</th><th>Crit</th><th>Kills</th><th>When</th></tr></thead>
+      <thead><tr><th>#</th><th>Player</th><th>Rank</th><th>Score</th><th>Acc</th><th>Crit</th><th>Kills</th><th>When</th></tr></thead>
       <tbody>${rows}</tbody></table>`;
   }
 
   async _fetchLeaderboard(scenario, configKeyOverride = null) {
     if (scenario === 'elo') {
-      const { list, error } = await fetchEloLeaderboardWithMeta(50);
+      const { list, error } = await fetchEloLeaderboardWithMeta(LB_RANK_OVER);
       this._lbCache.elo = list;
       return { list, error, configKey: null };
     }
@@ -8226,7 +8272,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
         if (this.auth?.isLoggedIn) {
           await syncOverallAimRating(this.auth.user.id).catch(() => {});
         }
-        const list = await fetchAimRatingLeaderboard(50);
+        const list = await fetchAimRatingLeaderboard(LB_RANK_OVER);
         this._lbCache['aim-rating'] = list;
         return { list, error: null, configKey: null };
       } catch (e) {
@@ -8240,7 +8286,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     const key =
       configKeyOverride ?? (wantsAdaptive ? ADAPTIVE_CONFIG_KEY : this._configKeyFor(scenario));
     const cacheKey = `${scenario}:${key}`;
-    const { list, error } = await fetchLeaderboardWithMeta(scenario, key, 10);
+    const { list, error } = await fetchLeaderboardWithMeta(scenario, key, LB_RANK_OVER);
     this._lbCache[cacheKey] = list;
     return { list, error, configKey: key };
   }
