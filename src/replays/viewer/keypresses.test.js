@@ -11,13 +11,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import {
-  keysAt,
-  walkCap,
-  MOVE_MIN,
-  SPACE_HOLD,
-  M1_HOLD
-} from './keypresses.js';
+import { keysAt, walkCap, SPACE_HOLD, M1_HOLD } from './keypresses.js';
+import { ACCEL, FRICTION, STOP_SPEED } from '../../../shared/sim3d/constants.js';
 import { FLAG_ALIVE, FLAG_AIRBORNE, FLAG_DUCKING, FLAG_SCOPED } from '../shared/tickFormat.js';
 
 const RATE = 64;
@@ -45,6 +40,30 @@ function track(gen) {
 const keys = (over = {}) =>
   keysAt({ at: 100, rate: RATE, sample: track(() => ({})), ...over });
 
+/**
+ * Positions from a per-tick speed function, so every fixture below obeys the
+ * movement code the reader inverts. A track that could not happen in CS2
+ * proves nothing about a reader built on CS2's own equations.
+ */
+function fromSpeeds(speedAt, { dirX = 1, dirY = 0, from = 0, to = 300 } = {}) {
+  const pos = new Map();
+  let x = 0;
+  let y = 0;
+  for (let t = from; t <= to; t++) {
+    pos.set(t, { x, y });
+    const v = speedAt(t);
+    x += dirX * v * DT;
+    y += dirY * v * DT;
+  }
+  return pos;
+}
+
+/** Speed after one tick of Source friction with no key held. */
+const coastStep = (v) => Math.max(0, v - Math.max(v, STOP_SPEED) * FRICTION * DT);
+
+/** Speed after one tick of Accelerate() toward `wish` from a standstill run-up. */
+const accelStep = (v, wish) => Math.min(wish, v + Math.min(ACCEL * wish * DT, wish - v));
+
 // ---- movement ---------------------------------------------------------------
 
 test('standing still holds nothing', () => {
@@ -56,7 +75,9 @@ test('standing still holds nothing', () => {
 });
 
 test('running straight at the view direction is W and only W', () => {
-  // 250 u/s along +X, facing +X.
+  // 250 u/s along +X, facing +X. Steady speed is not zero input: the engine
+  // is spending exactly the accel that cancels friction, and that is what the
+  // reader recovers.
   const k = keys({ sample: track((t) => ({ x: t * 250 * DT, yaw: 0 })) });
   assert.deepEqual([k.w, k.a, k.s, k.d], [true, false, false, false]);
 });
@@ -77,25 +98,116 @@ test('a diagonal lights both of its keys', () => {
   assert.deepEqual([k.w, k.a, k.s, k.d], [true, true, false, false]);
 });
 
-test('drifting slower than MOVE_MIN reads as no keys', () => {
-  const k = keys({ sample: track((t) => ({ x: t * (MOVE_MIN / 2) * DT })) });
-  assert.equal(k.w || k.a || k.s || k.d, false);
+test('coasting on friction with nothing held shows nothing', () => {
+  // The case a velocity-direction reading cannot get right: the player let go
+  // at tick 100 and is still sliding forward at speed. Friction is doing all
+  // of it, so the input left over is zero and no key may light.
+  let v = 250;
+  const pos = fromSpeeds((t) => {
+    if (t < 100) return 250;
+    v = coastStep(v);
+    return v;
+  });
+  const sample = track((t) => pos.get(t) || { x: 0, y: 0 });
+  for (const at of [104, 108, 112, 116]) {
+    const k = keysAt({ at, rate: RATE, sample });
+    assert.equal(
+      k.w || k.a || k.s || k.d,
+      false,
+      `tick ${at} of the slide still shows a key`
+    );
+  }
+  // And before the release, W is lit: holding a sprint IS spending accel.
+  assert.equal(keysAt({ at: 90, rate: RATE, sample }).w, true, 'the sprint before it');
 });
 
-test('a counter-strafe brake shows the opposing key', () => {
-  // Sprint +X at 250, then a hard brake: speed collapses to 0 in ~4 ticks.
-  // While braking the velocity still points at +X (W), but the held key is S.
-  const BRAKE = 96; // tick the brake starts
-  const speedAt = (t) => (t < BRAKE ? 250 : Math.max(0, 250 - (t - BRAKE) * 62));
-  let pos = 0;
-  const xs = new Map();
-  for (let t = 0; t <= 200; t++) {
-    xs.set(t, pos);
-    pos += speedAt(t) * DT;
+test('a key press lights within a couple of ticks of the press', () => {
+  // Standing still, then W at tick 100. The stencil is centred, so the edge
+  // is not late; it is blurred by the half-width either way.
+  let v = 0;
+  const pos = fromSpeeds((t) => {
+    if (t < 100) return 0;
+    v = accelStep(v, 250);
+    return v;
+  });
+  const sample = track((t) => pos.get(t) || { x: 0, y: 0 });
+  assert.equal(keysAt({ at: 96, rate: RATE, sample }).w, false, 'before the press');
+  assert.equal(keysAt({ at: 102, rate: RATE, sample }).w, true, 'just after it');
+});
+
+test('a counter-strafe shows the brake key, not the direction of travel', () => {
+  // Sprint +X, then S at tick 100: friction AND accelerate both pull back, so
+  // the speed collapses far faster than a coast while the player is still
+  // moving forward. Velocity says W the whole way down; the input says S.
+  let v = 250;
+  const pos = fromSpeeds((t) => {
+    if (t < 100) return 250;
+    v = Math.max(0, coastStep(v) - ACCEL * 250 * DT);
+    return v;
+  });
+  const sample = track((t) => pos.get(t) || { x: 0, y: 0 });
+  for (const at of [102, 104]) {
+    const k = keysAt({ at, rate: RATE, sample });
+    assert.equal(k.s, true, `tick ${at}: the brake key`);
+    assert.equal(k.w, false, `tick ${at}: not the direction of travel`);
   }
-  const k = keysAt({ at: BRAKE + 2, rate: RATE, sample: track((t) => ({ x: xs.get(t) ?? 0, yaw: 0 })) });
-  assert.equal(k.s, true, 'the brake key');
-  assert.equal(k.w, false, 'not the direction of travel');
+});
+
+test('a counter-strafe and a release do not look alike', () => {
+  // Both slow the player from a sprint while still sliding forward. Only one
+  // of them has a key down, and the difference is the whole reason the reader
+  // works off input rather than off velocity.
+  const brake = (() => {
+    let v = 250;
+    return fromSpeeds((t) => (t < 100 ? 250 : (v = Math.max(0, coastStep(v) - ACCEL * 250 * DT))));
+  })();
+  const release = (() => {
+    let v = 250;
+    return fromSpeeds((t) => (t < 100 ? 250 : (v = coastStep(v))));
+  })();
+  const kb = keysAt({ at: 103, rate: RATE, sample: track((t) => brake.get(t) || { x: 0, y: 0 }) });
+  const kr = keysAt({ at: 103, rate: RATE, sample: track((t) => release.get(t) || { x: 0, y: 0 }) });
+  assert.equal(kb.s, true, 'the brake is a key');
+  assert.equal(kr.s || kr.w || kr.a || kr.d, false, 'the release is not');
+});
+
+test('quantization jitter at a standstill lights nothing', () => {
+  // Real positions arrive in quarter units, so a stationary player's stored
+  // track wobbles by a quantum and the second difference of that is hundreds
+  // of u/s². The standstill floor is what it has to clear, and cannot.
+  const Q = 0.25;
+  const sample = track((t) => ({
+    x: Math.round(Math.sin(t * 1.7) * 0.6) * Q,
+    y: Math.round(Math.cos(t * 2.3) * 0.6) * Q
+  }));
+  for (let at = 100; at < 130; at++) {
+    const k = keysAt({ at, rate: RATE, sample });
+    assert.equal(k.w || k.a || k.s || k.d, false, `tick ${at} invented a key`);
+  }
+});
+
+test('a real press from a standstill still clears that floor', () => {
+  // The floor is doubled at rest, so check the thing it must not break:
+  // starting to move spends ACCEL × wishspeed, which is well past it.
+  let v = 0;
+  const pos = fromSpeeds((t) => (t < 100 ? 0 : (v = accelStep(v, 250))));
+  const sample = track((t) => pos.get(t) || { x: 0, y: 0 });
+  assert.equal(keysAt({ at: 102, rate: RATE, sample }).w, true);
+});
+
+test('a held key survives a dip below the on threshold', () => {
+  // Hysteresis. A steady sprint sits near the line once quantization is in
+  // play, and a key that strobes every other tick is worse than no overlay.
+  const pos = fromSpeeds((t) => (t < 100 ? 0 : 250));
+  const raw = track((t) => pos.get(t) || { x: 0, y: 0 });
+  // Same track, but one row nudged back a quantum: a single-tick dip.
+  const dipped = (t, out = {}) => {
+    const r = raw(t, out);
+    if (t === 120) r.x -= 0.25;
+    return r;
+  };
+  assert.equal(keysAt({ at: 120, rate: RATE, sample: raw }).w, true, 'the clean track');
+  assert.equal(keysAt({ at: 120, rate: RATE, sample: dipped }).w, true, 'and through the dip');
 });
 
 // ---- shift ------------------------------------------------------------------
@@ -111,17 +223,11 @@ test('a sustained walk-capped speed is Shift', () => {
 });
 
 test('sprinting through the walk band is not Shift', () => {
-  // 0 to 250 at CS-like accel (~21 u/s per tick): the band is crossed in a
-  // few ticks and the window either side of any moment inside it is faster.
+  // 0 to 250 on the real Accelerate() curve: the walk band is crossed in a
+  // few ticks and the speed a tenth of a second later is well past any cap.
   let v = 0;
-  let pos = 0;
-  const xs = new Map();
-  for (let t = 0; t <= 300; t++) {
-    xs.set(t, pos);
-    v = Math.min(250, t >= 100 ? v + 21.5 : 0);
-    pos += v * DT;
-  }
-  const sample = track((t) => ({ x: xs.get(t) ?? 0, yaw: 0 }));
+  const pos = fromSpeeds((t) => (t < 100 ? 0 : (v = accelStep(v, 250))));
+  const sample = track((t) => pos.get(t) || { x: 0, y: 0 });
   // No tick of the run-up may read as Shift.
   for (let at = 100; at <= 120; at++) {
     const k = keysAt({ at, rate: RATE, sample, weaponName: 'ak47' });
