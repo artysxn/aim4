@@ -34,6 +34,19 @@ export class AffiliateError extends Error {
 export const DEFAULT_COMMISSION_PCT = Number(process.env.AIM4_AFFILIATE_PCT || 10);
 
 /**
+ * Months of a referred customer's life that earn commission.
+ *
+ * Twelve, not forever. Uncapped, the top rate is a permanent 20% cut of every
+ * renewal for as long as that customer stays, which is a share of the business
+ * rather than a cost of winning it. Capped at a year it costs about 10% of a
+ * two year customer and 7% of a three year one, which is what an UNCAPPED 10%
+ * would have cost, while the affiliate still earns the full 20% on everything
+ * they are paid for. The headline stays worth recruiting on and the tail stops
+ * being expensive.
+ */
+export const DEFAULT_MAX_MONTHS = Number(process.env.AIM4_AFFILIATE_MAX_MONTHS || 12);
+
+/**
  * Codes nobody may claim.
  *
  * Two kinds. Words that would make a stranger's code look like it came from us
@@ -139,6 +152,7 @@ export async function claimCode({ userId, code, req = null }) {
         code: wanted,
         commission_pct: DEFAULT_COMMISSION_PCT,
         recurring: true,
+        max_months: DEFAULT_MAX_MONTHS,
         status: 'active'
       }
     ]);

@@ -248,7 +248,7 @@ test('a suggestion is always usable as a code', () => {
 // The buyer's half of the deal
 // ---------------------------------------------------------------------------
 
-const { AFFILIATE_OFFER, TERM_IDS, affiliatePriceForTerm, priceForTerm } = await import(
+const { AFFILIATE_OFFER, AFFILIATE_OFFER_RECURS, TERM_IDS, affiliatePriceForTerm, priceForTerm } = await import(
   '../../shared/entitlements/catalogue.js'
 );
 
@@ -300,4 +300,43 @@ test('no offer can take a term below nothing', () => {
       assert.ok(p.codeOffCents <= p.totalCents, `${plan} ${term} discounted past the price`);
     }
   }
+});
+
+test('every buyer offer is the first payment only', () => {
+  // The one that used to be different was the monthly 10%, and a recurring
+  // discount there would have been a permanent price cut sitting under a
+  // commission for the life of the customer. All four are one-time now, and
+  // the labels have to say so or the page promises something else.
+  assert.equal(AFFILIATE_OFFER_RECURS, false);
+  for (const term of TERM_IDS) {
+    const offer = AFFILIATE_OFFER[term];
+    assert.equal(offer.months, 1, `${term} discounts more than one month`);
+    assert.ok(
+      /first month|One month free/.test(offer.label),
+      `${term} label does not say it is one-off: "${offer.label}"`
+    );
+  }
+});
+
+test('commission stops after the capped window, and never on the first payment', () => {
+  const affiliate = { status: 'active', recurring: true, max_months: 12, user_id: 'aff' };
+  const referral = { user_id: 'buyer', attributed_at: '2026-01-15T00:00:00.000Z' };
+  const at = (iso) =>
+    commissionEligibility({ affiliate, referral, payerUserId: 'buyer', isRenewal: true, occurredAt: iso });
+
+  assert.equal(at('2026-06-01T00:00:00.000Z').ok, true, 'inside the window');
+  assert.equal(at('2027-01-14T00:00:00.000Z').ok, true, 'a day short of a year');
+  assert.equal(at('2027-01-15T00:00:00.000Z').ok, false, 'exactly a year is past it');
+  assert.equal(at('2027-01-15T00:00:00.000Z').reason, 'past_max_months');
+  assert.equal(at('2030-01-01T00:00:00.000Z').ok, false, 'and long after');
+
+  // The cap is on RENEWALS. A first payment always pays, whenever it lands.
+  const first = commissionEligibility({
+    affiliate,
+    referral,
+    payerUserId: 'buyer',
+    isRenewal: false,
+    occurredAt: '2030-01-01T00:00:00.000Z'
+  });
+  assert.equal(first.ok, true, 'the sale itself is always earned');
 });

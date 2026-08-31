@@ -232,14 +232,26 @@ export function priceForTerm(planId, term = 'month') {
  * the term the discount covers and `off` is how much of each of those months
  * comes off, so "half of one month" and "all of one month" are the same shape.
  *
+ * EVERY ONE OF THESE IS THE FIRST PAYMENT ONLY. Renewals are full price. That
+ * is what makes a code an acquisition cost rather than a permanent price cut:
+ * a recurring 10% on the monthly term would be the only offer here that never
+ * ends, and it would sit under the commission for the life of the customer.
+ *
+ * The enforcement is NOT in this file. The discount reaches Paddle as a
+ * discount id (server/billing/routes.js) and Paddle decides whether it recurs,
+ * so a discount created there with `recur: true` would quietly contradict
+ * everything written here. Create them one-time.
+ *
  * Deliberately near-flat in value: every term lands within about a point of
  * 10% off the term total (see affiliatePriceForTerm). The term discounts
  * already do the work of pulling a buyer toward a longer commitment, and
  * stacking a second, steeper incentive on top of those would be paying twice
  * for the same decision.
  */
+export const AFFILIATE_OFFER_RECURS = false;
+
 export const AFFILIATE_OFFER = Object.freeze({
-  month: Object.freeze({ months: 1, off: 0.1, label: '10% off' }),
+  month: Object.freeze({ months: 1, off: 0.1, label: '10% off your first month' }),
   quarter: Object.freeze({ months: 1, off: 0.25, label: '25% off your first month' }),
   halfyear: Object.freeze({ months: 1, off: 0.5, label: '50% off your first month' }),
   year: Object.freeze({ months: 1, off: 1, label: 'One month free' })

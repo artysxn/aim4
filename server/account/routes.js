@@ -37,6 +37,7 @@ import { redeemCode as redeemTrialCode } from '../entitlements/codes.js';
 import { DEFAULT_COMMISSION_PCT, affiliateForUser, claimCode, suggestCode } from '../affiliates/codes.js';
 import { HOLD_DAYS, affiliateStats, listCommissions, standingFor } from '../affiliates/commissions.js';
 import { LEVELS } from '../affiliates/levels.js';
+import { DEFAULT_MAX_MONTHS } from '../affiliates/codes.js';
 import { db } from '../entitlements/service.js';
 import { clientIp } from '../entitlements/audit.js';
 import { ackWarning, integrityState, recordSession } from './integrity.js';
@@ -479,6 +480,7 @@ async function route(req, res, url, me) {
         // promise a rate the server is not paying.
         defaultPct: LEVELS[0].rate,
         levels: LEVELS,
+        maxMonths: DEFAULT_MAX_MONTHS,
         holdDays: HOLD_DAYS
       });
       return true;

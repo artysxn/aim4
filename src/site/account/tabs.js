@@ -1296,7 +1296,9 @@ function termsText(affiliate) {
   const level = affiliate.level ? ` (${affiliate.level.name})` : '';
   const pct = `${Number(affiliate.commissionPct)}% of each payment${level}`;
   if (!affiliate.recurring) return `${pct}, first payment only`;
-  if (affiliate.maxMonths) return `${pct}, renewals included for ${affiliate.maxMonths} months`;
+  if (affiliate.maxMonths) {
+    return `${pct}, renewals included for the first ${affiliate.maxMonths} months of each customer`;
+  }
   return `${pct}, renewals included`;
 }
 
@@ -1402,6 +1404,9 @@ function renderClaim(body, data, reload) {
   // The terms, and the one thing that is not undoable about this form.
   body.appendChild(metaRow('Rate', `${data.defaultPct ?? 10}% of each payment, rising with what you sell`));
   levelRows(body, data);
+  if (data.maxMonths) {
+    body.appendChild(metaRow('Paid for', `The first ${data.maxMonths} months of each customer`));
+  }
   body.appendChild(metaRow('Code', 'Permanent once created'));
 }
 
