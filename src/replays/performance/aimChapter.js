@@ -277,16 +277,21 @@ function componentRowHtml(c, escapeHtml, { engineScale = false, bench = AIM_BENC
   const width = enough ? Math.max(1, Math.min(100, c.score)) : 0;
   const value = c.readout && (enough || c.raw != null) ? c.readout.unit(c.raw) : '—';
   const baselineFn = c.readout?.baseline || c.baseline;
-  const baseline = enough && baselineFn ? ` · ${baselineFn(bench)}` : '';
-  const note = enough
-    ? `${c.readout?.what || ''}${baseline}`
-    : `${c.sample} of ${c.need ?? c.sample} samples`;
+  // What the number means and what average is live on hover, not in a column
+  // of prose beside every row. A starved row keeps its count visible, because
+  // "18 of 25 samples" is a state to act on rather than an explanation.
+  const tip = enough
+    ? [`${value} ${c.readout?.what || ''}`.trim(), baselineFn ? baselineFn(bench) : '']
+        .filter(Boolean)
+        .join(' · ')
+    : '';
+  const note = enough ? '' : `${c.sample} of ${c.need ?? c.sample} samples`;
   const score = !enough
     ? '—'
     : engineScale && Number.isFinite(c.engine)
       ? f2(c.engine)
       : f0(c.score);
-  return `<tr class="pf-aim-row${enough ? '' : ' thin'}">
+  return `<tr class="pf-aim-row${enough ? '' : ' thin'}"${tip ? ` title="${escapeHtml(tip)}"` : ''}>
     <th scope="row">${escapeHtml(c.label)}</th>
     <td class="pf-aim-value">${escapeHtml(value)}</td>
     <td class="pf-aim-note">${escapeHtml(note)}</td>

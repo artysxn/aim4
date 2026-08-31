@@ -19,7 +19,6 @@ import {
   MECHANICS,
   TRAINER_TO_MECHANIC,
   estimateLabel,
-  mechanicLabel,
   recommendRoutine,
   weakestMechanics,
   SWITCH_SECONDS
@@ -51,6 +50,23 @@ import { coachNoteFor } from '../lib/coachNotes.js';
 import { buildCalendar } from '../lib/activityCalendar.js';
 import { fetchActivity } from '../lib/activityFeed.js';
 import { activityPairHtml } from './activityCalendarView.js';
+import { SCENARIO_ICONS } from '../aim4/icons.js';
+
+/* Row action glyphs. Inline so they inherit currentColor. */
+const I_ADD = '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z"/></svg>';
+const I_UP = '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 8.6 18 14.6 16.6 16 12 11.4 7.4 16 6 14.6z"/></svg>';
+const I_DOWN = '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 15.4 6 9.4 7.4 8 12 12.6 16.6 8 18 9.4z"/></svg>';
+const I_CLOSE = '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="m6.4 5 5.6 5.6L17.6 5 19 6.4 13.4 12l5.6 5.6-1.4 1.4-5.6-5.6L6.4 19 5 17.6 10.6 12 5 6.4z"/></svg>';
+const I_COPY = '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M8 4h11a1 1 0 0 1 1 1v11h-2V6H8zM5 8h10a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1m1 2v8h8v-8z"/></svg>';
+const I_CHECK = '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="m9.6 16.2-4-4L4.2 13.6l5.4 5.4L20 8.6 18.6 7.2z"/></svg>';
+const I_TRASH = '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M9 3h6l1 2h4v2H4V5h4zM6 8h12l-1 13H7zm4 3v7h1.5v-7zm3 0v7h1.5v-7z"/></svg>';
+const I_PLAY = '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M8 5.5 19 12 8 18.5z"/></svg>';
+
+/** Mode glyph, in a fixed slot so titles line up whether or not one exists. */
+function modeIconHtml(key) {
+  const icon = SCENARIO_ICONS[key];
+  return `<span class="rt-row-icon">${icon ? `<img src="${icon}" alt="" width="18" height="18" />` : ''}</span>`;
+}
 
 const DEFAULT_MINUTES = 20;
 const DEFAULT_WEAK_COUNT = 5;
@@ -67,8 +83,8 @@ export function initRoutinesView({ auth, escapeHtml }) {
   /** Draft items in the manual builder: [{ scenario, seconds }]. */
   let draft = [];
   let draftName = '';
-  /** Where the default selection came from, for the line under the chips. */
-  let weaknessNote = 'Pick the mechanics to train.';
+  /** One quiet status line: where the preselect came from, or what just happened. */
+  let weaknessNote = '';
   let painted = false;
 
   // ---- weakness detection ---------------------------------------------------
@@ -117,9 +133,9 @@ export function initRoutinesView({ auth, escapeHtml }) {
 
   const esc = escapeHtml;
 
-  function chipHtml(m) {
+  function mechHtml(m) {
     const on = picked.has(m.key);
-    return `<button type="button" class="btn btn-sm rt-chip${on ? ' primary' : ''}" data-mechanic="${m.key}" aria-pressed="${on}">${esc(m.label)}</button>`;
+    return `<button type="button" class="rt-mech${on ? ' on' : ''}" data-mechanic="${m.key}" aria-pressed="${on}">${esc(m.label)}</button>`;
   }
 
   function previewHtml() {
@@ -127,22 +143,22 @@ export function initRoutinesView({ auth, escapeHtml }) {
     const rows = preview.items
       .map(
         (it) => `<div class="rt-row">
-        <span class="rt-row-title">${esc(gamemodeTitle(it.scenario))}</span>
-        <span class="rt-row-tags">${(SCENARIO_META[it.scenario]?.tags || [])
-          .map((t) => `<span class="training-row-tag">${esc(t)}</span>`)
-          .join('')}</span>
-        <span class="rt-row-time">${Math.round(it.config.duration.value)}s</span>
+        <div class="rt-row-main">
+          ${modeIconHtml(it.scenario)}
+          <span class="rt-row-title">${esc(gamemodeTitle(it.scenario))}</span>
+        </div>
+        <span class="rt-cell rt-cell-time">${Math.round(it.config.duration.value)}s</span>
       </div>`
       )
       .join('');
     return `<div class="rt-preview">
       <div class="rt-preview-head">
         <strong>${esc(preview.name)}</strong>
-        <span class="rt-row-time">${esc(estimateLabel(preview.estimatedSeconds))}</span>
+        <span class="rt-time-note">${esc(estimateLabel(preview.estimatedSeconds))}</span>
       </div>
-      ${rows}
+      <div class="rt-rows">${rows}</div>
       <div class="rt-actions">
-        <button type="button" class="btn primary" id="rt-save-preview">Save routine</button>
+        <button type="button" class="btn primary btn-sm" id="rt-save-preview">Save routine</button>
       </div>
     </div>`;
   }
@@ -152,40 +168,45 @@ export function initRoutinesView({ auth, escapeHtml }) {
     if (!list.length) {
       return '<p class="view-empty">No routines saved yet.</p>';
     }
-    return list
+    return `<div class="rt-rows">${list
       .map((pl) => {
         const seconds = (pl.items || []).reduce(
           (s, it) => s + (Number(it.config?.duration?.value) || 60) + SWITCH_SECONDS,
           0
         );
         const modes = (pl.items || []).map((it) => gamemodeTitle(it.scenario)).join(', ');
-        return `<div class="rt-saved" data-routine="${esc(pl.id)}">
-          <div class="rt-saved-main">
-            <strong>${esc(pl.name)}</strong>
-            <span class="rt-saved-modes">${esc(modes)}</span>
+        return `<div class="rt-row rt-saved" data-routine="${esc(pl.id)}">
+          <div class="rt-row-main">
+            <div class="rt-saved-text">
+              <strong>${esc(pl.name)}</strong>
+              <span class="rt-saved-modes">${esc(modes)}</span>
+            </div>
           </div>
-          <span class="rt-row-time">${esc(estimateLabel(seconds))}</span>
-          <a class="btn btn-sm" href="/train">Open trainer</a>
-          <button type="button" class="btn btn-sm" data-rt-share="${esc(pl.id)}">Copy code</button>
-          <button type="button" class="btn btn-sm" data-rt-delete="${esc(pl.id)}">Delete</button>
+          <span class="rt-cell rt-cell-time">${esc(estimateLabel(seconds))}</span>
+          <a class="rt-cell rt-cell-icon" href="/train" title="Open in the trainer" aria-label="Open ${esc(pl.name)} in the trainer">${I_PLAY}</a>
+          <button type="button" class="rt-cell rt-cell-icon" data-rt-share="${esc(pl.id)}" title="Copy code" aria-label="Copy ${esc(pl.name)} code">${I_COPY}</button>
+          <button type="button" class="rt-cell rt-cell-icon" data-rt-delete="${esc(pl.id)}" title="Delete" aria-label="Delete ${esc(pl.name)}">${I_TRASH}</button>
         </div>`;
       })
-      .join('');
+      .join('')}</div>`;
   }
 
   function draftHtml() {
     if (!draft.length) return '<p class="view-empty">No modes added yet.</p>';
-    return draft
+    return `<div class="rt-rows">${draft
       .map(
         (it, i) => `<div class="rt-row" data-draft-index="${i}">
-        <span class="rt-row-title">${esc(gamemodeTitle(it.scenario))}</span>
-        <input type="number" class="rt-seconds" data-draft-seconds="${i}" min="15" max="600" step="15" value="${it.seconds}" aria-label="Seconds" />
-        <button type="button" class="btn btn-sm" data-draft-up="${i}" ${i === 0 ? 'disabled' : ''}>Up</button>
-        <button type="button" class="btn btn-sm" data-draft-down="${i}" ${i === draft.length - 1 ? 'disabled' : ''}>Down</button>
-        <button type="button" class="btn btn-sm" data-draft-remove="${i}">Remove</button>
+        <div class="rt-row-main">
+          ${modeIconHtml(it.scenario)}
+          <span class="rt-row-title">${esc(gamemodeTitle(it.scenario))}</span>
+        </div>
+        <span class="rt-cell rt-cell-seconds"><input type="number" class="rt-seconds" data-draft-seconds="${i}" min="15" max="600" step="15" value="${it.seconds}" aria-label="Seconds" /><span class="rt-unit">s</span></span>
+        <button type="button" class="rt-cell rt-cell-icon" data-draft-up="${i}" ${i === 0 ? 'disabled' : ''} title="Move up" aria-label="Move up">${I_UP}</button>
+        <button type="button" class="rt-cell rt-cell-icon" data-draft-down="${i}" ${i === draft.length - 1 ? 'disabled' : ''} title="Move down" aria-label="Move down">${I_DOWN}</button>
+        <button type="button" class="rt-cell rt-cell-icon" data-draft-remove="${i}" title="Remove" aria-label="Remove">${I_CLOSE}</button>
       </div>`
       )
-      .join('');
+      .join('')}</div>`;
   }
 
   function modeOptions() {
@@ -202,14 +223,15 @@ export function initRoutinesView({ auth, escapeHtml }) {
         </section>
 
         <section class="rt-card">
-          <h2>Find Recommended Routine</h2>
-          <div class="rt-controls">
-            <input type="number" id="rt-minutes" class="rt-minutes" min="3" max="180" step="1" value="${DEFAULT_MINUTES}" aria-label="Minutes" />
-            <span class="rt-unit">minutes</span>
-            <button type="button" class="btn primary" id="rt-find">Find Recommended Routine</button>
+          <div class="rt-head">
+            <h2>Recommended routine</h2>
+            <div class="rt-head-controls">
+              <span class="rt-field rt-field-minutes"><input type="number" id="rt-minutes" class="rt-minutes" min="3" max="180" step="1" value="${DEFAULT_MINUTES}" aria-label="Minutes" /><span class="rt-unit">min</span></span>
+              <button type="button" class="btn primary btn-sm rt-btn" id="rt-find">Find routine</button>
+            </div>
           </div>
-          <div class="rt-chips" id="rt-chips">${MECHANICS.map(chipHtml).join('')}</div>
-          <p class="rt-note" id="rt-note">${esc(weaknessNote)}</p>
+          <div class="rt-mechs" id="rt-mechs">${MECHANICS.map(mechHtml).join('')}</div>
+          <p class="rt-note" id="rt-note"${weaknessNote ? '' : ' hidden'}>${esc(weaknessNote)}</p>
           <div id="rt-preview-slot">${previewHtml()}</div>
         </section>
 
@@ -219,15 +241,17 @@ export function initRoutinesView({ auth, escapeHtml }) {
         </section>
 
         <section class="rt-card">
-          <h2>Build your own</h2>
+          <div class="rt-head">
+            <h2>Build your own</h2>
+          </div>
           <div class="rt-controls">
             <input type="text" id="rt-name" class="rt-name" maxlength="60" placeholder="Routine name" value="${esc(draftName)}" spellcheck="false" autocomplete="off" />
             <select id="rt-add-mode" class="rt-mode-select" aria-label="Gamemode">${modeOptions()}</select>
-            <button type="button" class="btn" id="rt-add">Add mode</button>
+            <button type="button" class="rt-icon-btn" id="rt-add" title="Add mode" aria-label="Add mode">${I_ADD}</button>
           </div>
           <div id="rt-draft">${draftHtml()}</div>
           <div class="rt-actions">
-            <button type="button" class="btn primary" id="rt-save-draft">Save routine</button>
+            <button type="button" class="btn primary btn-sm rt-btn" id="rt-save-draft">Save routine</button>
           </div>
         </section>
 
@@ -255,9 +279,11 @@ export function initRoutinesView({ auth, escapeHtml }) {
   }
 
   function note(text) {
-    weaknessNote = text;
+    weaknessNote = text || '';
     const el = host.querySelector('#rt-note');
-    if (el) el.textContent = text;
+    if (!el) return;
+    el.textContent = weaknessNote;
+    el.hidden = !weaknessNote;
   }
 
   /**
@@ -312,14 +338,14 @@ export function initRoutinesView({ auth, escapeHtml }) {
   // ---- behaviour ------------------------------------------------------------
 
   function bind() {
-    host.querySelector('#rt-chips')?.addEventListener('click', (e) => {
-      const chip = e.target.closest('[data-mechanic]');
-      if (!chip) return;
-      const key = chip.dataset.mechanic;
+    host.querySelector('#rt-mechs')?.addEventListener('click', (e) => {
+      const cell = e.target.closest('[data-mechanic]');
+      if (!cell) return;
+      const key = cell.dataset.mechanic;
       if (picked.has(key)) picked.delete(key);
       else picked.add(key);
-      chip.classList.toggle('primary', picked.has(key));
-      chip.setAttribute('aria-pressed', String(picked.has(key)));
+      cell.classList.toggle('on', picked.has(key));
+      cell.setAttribute('aria-pressed', String(picked.has(key)));
       repaintCoachNotes();
     });
 
@@ -330,10 +356,9 @@ export function initRoutinesView({ auth, escapeHtml }) {
         note('Pick at least one mechanic first.');
         preview = null;
       } else {
+        // The preview says everything the note would; one copy is enough.
         preview = routine;
-        note(
-          `${routine.items.length} modes, about ${estimateLabel(routine.estimatedSeconds)}.`
-        );
+        note('');
       }
       repaintPreview();
     });
@@ -413,9 +438,11 @@ export function initRoutinesView({ auth, escapeHtml }) {
         if (!pl) return;
         try {
           await navigator.clipboard.writeText(encodePlaylist(pl));
-          share.textContent = 'Copied';
+          share.innerHTML = I_CHECK;
+          share.title = 'Copied';
           setTimeout(() => {
-            share.textContent = 'Copy code';
+            share.innerHTML = I_COPY;
+            share.title = 'Copy code';
           }, 1500);
         } catch {
           /* clipboard blocked: the trainer can still see the routine */
@@ -441,16 +468,12 @@ export function initRoutinesView({ auth, escapeHtml }) {
         const weakest = await detectWeaknesses();
         if (weakest) {
           picked = new Set(weakest);
-          note(`Your ${weakest.length} weakest, from your trainer runs: ${weakest
-            .map(mechanicLabel)
-            .join(', ')}.`);
-          const chips = host.querySelector('#rt-chips');
-          if (chips) chips.innerHTML = MECHANICS.map(chipHtml).join('');
+          note(`Preselected: your ${weakest.length} weakest, from your trainer runs.`);
+          const cells = host.querySelector('#rt-mechs');
+          if (cells) cells.innerHTML = MECHANICS.map(mechHtml).join('');
           repaintCoachNotes();
-        } else if (auth?.user?.id) {
-          note('No rated trainer runs yet. Pick the mechanics to train.');
-        } else {
-          note('Sign in to score your weaknesses, or pick the mechanics to train.');
+        } else if (!auth?.user?.id) {
+          note('Sign in to preselect your weakest.');
         }
       }
     },

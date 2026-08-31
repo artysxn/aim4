@@ -105,7 +105,7 @@ import { ARENAS } from '../scenarios/DuelsScenario.js';
 import { duelsArenaSelectOptions } from '../scenarios/duelsArenas.js';
 import { dmMapSelectOptions } from '../maps/dmMaps.js';
 import { ADAPTIVE_CONFIG_KEY, isKillLeaderboardScenario, isLowerScoreLeaderboardScenario, isRankedScenario } from '../scenarios/leaderboardConfig.js';
-import { eloFor, recordAdaptiveRun } from '../lib/adaptiveElo.js';
+import { DEFAULT_ELO, eloFor, recordAdaptiveRun } from '../lib/adaptiveElo.js';
 import { coachRegressions, coachRunsFor, coachSeries, recordCoachRun } from '../lib/coachHistory.js';
 import { coachNoteFor, encouragementLine } from '../lib/coachNotes.js';
 import { mechanicLabel } from '../lib/routines.js';
@@ -226,11 +226,16 @@ function trainingCategoryModes(id) {
   return sortModesByTitle([...cat.modes.filter((m) => SCENARIOS[m]), ...strays]);
 }
 
-function modeCountLabel(n) {
-  return `${n} mode${n === 1 ? '' : 's'}`;
-}
-
 const GEAR_ICON = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 15.5A3.5 3.5 0 0 1 8.5 12 3.5 3.5 0 0 1 12 8.5a3.5 3.5 0 0 1 3.5 3.5 3.5 3.5 0 0 1-3.5 3.5m7.43-2.53c.04-.32.07-.64.07-.97 0-.33-.03-.66-.07-1l2.11-1.63c.19-.15.24-.42.12-.64l-2-3.46c-.12-.22-.39-.31-.61-.22l-2.49 1c-.52-.39-1.06-.73-1.69-.98l-.37-2.65A.506.506 0 0 0 14 2h-4c-.25 0-.46.18-.5.42l-.37 2.65c-.63.25-1.17.59-1.69.98l-2.49-1c-.22-.09-.49 0-.61.22l-2 3.46c-.13.22-.07.49.12.64L4.57 11c-.04.34-.07.67-.07 1 0 .33.03.65.07.97l-2.11 1.66c-.19.15-.25.42-.12.64l2 3.46c.12.22.39.3.61.22l2.49-1.01c.52.4 1.06.74 1.69.99l.37 2.65c.04.24.25.42.5.42h4c.25 0 .46-.18.5-.42l.37-2.65c.63-.26 1.17-.59 1.69-.99l2.49 1.01c.22.08.49 0 .61-.22l2-3.46c.12-.22.07-.49-.12-.64l-2.11-1.66z"/></svg>`;
+
+/** In-run HUD glyphs. Each cell reads as icon + number; no word labels. */
+const HUD_ICONS = {
+  time: `<svg class="hud-ico" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 4a8 8 0 1 1 0 16 8 8 0 0 1 0-16m0 2a6 6 0 1 0 0 12 6 6 0 0 0 0-12m1 2v4.2l3 1.8-.8 1.4L11 13V8z"/></svg>`,
+  acc: `<svg class="hud-ico" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 5a7 7 0 1 1 0 14 7 7 0 0 1 0-14m0 2a5 5 0 1 0 0 10 5 5 0 0 0 0-10m0 3a2 2 0 1 1 0 4 2 2 0 0 1 0-4"/></svg>`,
+  kps: `<svg class="hud-ico" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M13 3 5 13.5h5L9.5 21 18 10h-5.5z"/></svg>`,
+  hits: `<svg class="hud-ico" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M11 3h2v6h-2zm0 12h2v6h-2zM3 11h6v2H3zm12 0h6v2h-6z"/></svg>`,
+  crit: `<svg class="hud-ico" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 3a7 7 0 0 1 7 7c0 2.4-1.2 4.1-2.6 5.3V19a2 2 0 0 1-2 2h-4.8a2 2 0 0 1-2-2v-3.7C6.2 14.1 5 12.4 5 10a7 7 0 0 1 7-7m-2.5 6.2a1.6 1.6 0 1 0 0 3.2 1.6 1.6 0 0 0 0-3.2m5 0a1.6 1.6 0 1 0 0 3.2 1.6 1.6 0 0 0 0-3.2"/></svg>`
+};
 
 const PLAYLIST_ICON = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M3 10h11v2H3zm0-4h11v2H3zm0 8h7v2H3zm13-1v6l5-3z"/></svg>`;
 const TRASH_ICON = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6zM19 4h-3.5l-1-1h-5l-1 1H5v2h14z"/></svg>`;
@@ -1288,16 +1293,16 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
       </div>
     </div>
 
-    <!-- HUD -->
+    <!-- HUD: one strip, hairline splits, glyphs instead of word labels. -->
     <div id="hud" class="hud">
       <div class="hud-stack">
-        <div class="hud-row">
-          <div class="chip"><span class="chip-label">TIME</span><span id="hud-time" class="chip-val">60.0</span></div>
-          <div class="chip big"><span class="chip-label">SCORE</span><span id="hud-score" class="chip-val">0</span></div>
-          <div class="chip"><span class="chip-label">ACC</span><span id="hud-acc" class="chip-val">100%</span></div>
-          <div class="chip"><span class="chip-label">KPS</span><span id="hud-kps" class="chip-val">0.0</span></div>
-          <div class="chip"><span class="chip-label">HITS</span><span id="hud-hits" class="chip-val">0/0</span></div>
-          <div class="chip" id="hud-crit-chip"><span class="chip-label">CRIT</span><span id="hud-crit" class="chip-val">0%</span></div>
+        <div class="hud-bar">
+          <div class="hud-cell" title="Time">${HUD_ICONS.time}<span id="hud-time" class="hud-val">60.0</span></div>
+          <div class="hud-cell hud-cell-score" title="Score"><span id="hud-score" class="hud-val">0</span></div>
+          <div class="hud-cell" title="Accuracy">${HUD_ICONS.acc}<span id="hud-acc" class="hud-val">100%</span></div>
+          <div class="hud-cell" title="Kills per second">${HUD_ICONS.kps}<span id="hud-kps" class="hud-val">0.0</span></div>
+          <div class="hud-cell" title="Hits / shots">${HUD_ICONS.hits}<span id="hud-hits" class="hud-val">0/0</span></div>
+          <div class="hud-cell" id="hud-crit-chip" title="Crit rate">${HUD_ICONS.crit}<span id="hud-crit" class="hud-val">0%</span></div>
         </div>
         <div id="pace-bar-slot-compact" class="pace-bar-slot-compact"></div>
       </div>
@@ -1421,7 +1426,6 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
           <button type="button" class="mode-tile" data-goto="training-categories">
             <img src="${TRAINING_ICON}" alt="" class="mode-tile-icon" width="40" height="40" aria-hidden="true" />
             <span class="mode-tile-title">Training</span>
-            <span class="mode-tile-sub">${modeCountLabel(trainingCategoryModes('all').length)}</span>
           </button>
         </div>
         </div>
@@ -1438,7 +1442,6 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
         <div class="menu-panel-body">
         <div class="menu-modes menu-modes-sub training-cat-tiles">
           ${TRAINING_CATEGORIES.map((cat) => {
-            const modes = trainingCategoryModes(cat.id);
             const catIcons = {
               precision: PRECISION_ICON,
               tracking: SCENARIO_ICONS.tracking, // the previous Control-menu icon
@@ -1453,7 +1456,6 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
           <button type="button" class="mode-tile" data-training-cat="${cat.id}">
             <img src="${catIcons[cat.id]}" alt="" class="mode-tile-icon" width="40" height="40" aria-hidden="true" />
             <span class="mode-tile-title">${cat.title}</span>
-            <span class="mode-tile-sub">${modeCountLabel(modes.length)}</span>
           </button>`;
           }).join('')}
         </div>
@@ -1735,9 +1737,11 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
         <h2 class="text-big pause-title">Paused</h2>
         <div class="menu-actions pause-actions">
           <button type="button" class="btn primary" data-resume>Resume</button>
-          <button type="button" class="btn" id="pause-restart-btn" data-restart>Restart</button>
-          <button type="button" class="btn" id="pause-leave-lobby-btn" hidden>Leave to lobby</button>
-          <button type="button" class="btn" data-quit>Quit to menu</button>
+          <div class="pause-row">
+            <button type="button" class="btn" id="pause-restart-btn" data-restart>Restart</button>
+            <button type="button" class="btn" id="pause-leave-lobby-btn" hidden>Leave to lobby</button>
+            <button type="button" class="btn" data-quit>Quit</button>
+          </div>
         </div>
       </div>
     </div>
@@ -1867,8 +1871,8 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
         </div>
         <div class="menu-actions">
           <button class="btn primary" data-restart>Play again</button>
-          <button class="btn" id="res-watch-replay" hidden>Watch replay</button>
-          <button class="btn" id="res-share-replay" hidden>Share replay</button>
+          <button class="btn" id="res-watch-replay" hidden>Replay</button>
+          <button class="btn" id="res-share-replay" hidden>Share</button>
           <button class="btn" data-quit>Menu</button>
         </div>
       </div>
@@ -2147,18 +2151,17 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
   _trainingRowHtml(key) {
     const meta = SCENARIO_META[key] || { title: key, tags: [] };
     const hasSettings = SCENARIO_SETTING_IDS.has(key);
+    const elo = eloFor(key);
+    const eloHtml = elo === DEFAULT_ELO ? '' : `<span class="training-row-elo">${elo}</span>`;
     const playBtns = meta.dualPlay
       ? `<button type="button" class="btn training-row-play" data-play="${key}" data-variant="practice">Training</button>
     <button type="button" class="btn training-row-play" data-play="${key}" data-variant="competitive">Competitive</button>
-    <button type="button" class="btn training-row-play" data-play="${key}" data-variant="adaptive" title="Competitive rules at your level. The mode rates you per run.">Adaptive (${eloFor(key)})</button>`
+    <button type="button" class="btn training-row-play" data-play="${key}" data-variant="adaptive" title="Competitive rules at your level. The mode rates you per run.">Adaptive${eloHtml}</button>`
       : `<button type="button" class="btn training-row-play" data-play="${key}"${meta.challenge ? ' data-variant="competitive"' : ''} aria-label="Play ${meta.title}">Play</button>`;
     const lbBtn = `<button type="button" class="training-row-lb" data-training-lb="${key}" aria-label="${meta.title} leaderboard"><img src="${LEADERBOARD_ICON}" alt="" class="aim4-icon" width="16" height="16" /></button>`;
     const gearBtn = hasSettings
       ? `<button type="button" class="training-row-gear" data-scenario-settings-open="${key}" aria-label="${meta.title} settings">${GEAR_ICON}</button>`
       : `<span class="training-row-gear-spacer" aria-hidden="true"></span>`;
-    const tagHtml = (meta.tags || [])
-      .map((tag) => `<span class="training-row-tag">${tag}</span>`)
-      .join('');
     return `
   <div class="training-row" data-scenario="${key}">
     <div class="training-row-main">
@@ -2166,7 +2169,6 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
         <img src="${SCENARIO_ICONS[key]}" alt="" class="aim4-icon" width="24" height="24" />
       </div>
       <span class="training-row-title">${meta.title}</span>
-      ${tagHtml ? `<div class="training-row-tags">${tagHtml}</div>` : ''}
     </div>
     <div class="training-row-actions">
       ${playBtns}
@@ -3886,7 +3888,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     return (
       stat(isKill ? 'Kills' : 'Score', scoreVal) +
       stat('Accuracy', Math.round(results.accuracy * 100) + '%') +
-      stat('Hits / Shots', `${results.hits}/${results.shots}`) +
+      stat('Hits', `${results.hits}/${results.shots}`) +
       stat('Time', this._formatTimePlayed(results.timePlayed))
     );
   }
@@ -3935,7 +3937,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
         stat('Total score', combined.score.toLocaleString()) +
         stat('Kills', combined.kills) +
         stat('Accuracy', Math.round(combined.accuracy * 100) + '%') +
-        stat('Hits / Shots', `${combined.hits}/${combined.shots}`) +
+        stat('Hits', `${combined.hits}/${combined.shots}`) +
         stat('Time', this._formatTimePlayed(combined.timePlayed));
     }
     if ($('#pl-res-continue')) $('#pl-res-continue').hidden = true;
@@ -8306,20 +8308,20 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
       stat('Kills', results.kills) +
       stat('Time', this._formatTimePlayed(results.timePlayed)) +
       stat('Accuracy', Math.round(results.accuracy * 100) + '%') +
-      stat('Hits / Shots', `${results.hits}/${results.shots}`) +
+      stat('Hits', `${results.hits}/${results.shots}`) +
       stat('Misses', results.misses);
     const trackingStats =
       stat('Score', results.score.toLocaleString()) +
       stat('Time', this._formatTimePlayed(results.timePlayed)) +
       stat('Accuracy', Math.round(results.accuracy * 100) + '%') +
-      stat('Hits / Shots', `${results.hits}/${results.shots}`) +
-      stat('Headshot %', Math.round(results.critRatio * 100) + '%');
+      stat('Hits', `${results.hits}/${results.shots}`) +
+      stat('Headshots', Math.round(results.critRatio * 100) + '%');
     const defaultStats =
       stat('Score', results.score.toLocaleString()) +
       stat('Accuracy', Math.round(results.accuracy * 100) + '%') +
       stat('Kills', results.kills) +
-      stat('Hits / Shots', `${results.hits}/${results.shots}`) +
-      (showCrit ? stat('Crit ratio', Math.round(results.critRatio * 100) + '%') : '') +
+      stat('Hits', `${results.hits}/${results.shots}`) +
+      (showCrit ? stat('Crit', Math.round(results.critRatio * 100) + '%') : '') +
       stat('Misses', results.misses);
     const reactionStats =
       stat('Average', `${results.score} ms`) +

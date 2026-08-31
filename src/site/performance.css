@@ -739,16 +739,16 @@ a.pf-rt-go:hover {
 }
 
 .pf-aim-note {
-  /* The flexible column. Below this it wraps a short phrase onto four lines,
-     which is harder to read than the number it is explaining. */
-  min-width: 190px;
+  /* Empty on a scored row (the explanation lives in the row tooltip); only a
+     starved row prints its sample count here. */
   padding-right: 14px !important;
   color: var(--muted);
   font: 400 11px/1.35 var(--font-body);
+  white-space: nowrap;
 }
 
 .pf-aim-bar-cell {
-  width: 22%;
+  width: 45%;
   min-width: 64px;
 }
 
