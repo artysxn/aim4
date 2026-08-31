@@ -1706,9 +1706,9 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
             <select id="lb-mode-select" class="config-code-input" aria-label="Gamemode leaderboard">
               ${scenarioOptionsHtml()}
             </select>
-            <select id="lb-variant-select" class="config-code-input" aria-label="Board">
-              <option value="competitive">Competitive</option>
-              <option value="adaptive">Adaptive ELO</option>
+            <select id="lb-variant-select" class="config-code-input" aria-label="Difficulty">
+              <option value="competitive">Standard</option>
+              <option value="adaptive">Adaptive</option>
             </select>
           </div>
         </div>
