@@ -99,9 +99,12 @@ export function overviewTab(state, { reload, auth }) {
 
   const meta = el('div', 'account-meta');
   if (account.email) meta.appendChild(metaRow('Email', account.email));
-  if (account.createdAt) meta.appendChild(metaRow('Member since', date(account.createdAt)));
-  if (state.entitlements?.expiresAt) {
-    meta.appendChild(metaRow('Renews', date(state.entitlements.expiresAt)));
+  const ents = state.entitlements || {};
+  const planName = PLAN_NAMES[ents.tier] || PLAN_NAMES.free;
+  const planLabel = ents.trial ? `${planName}, trial` : planName;
+  meta.appendChild(metaRow('Subscription type', planLabel));
+  if (ents.expiresAt) {
+    meta.appendChild(metaRow('Renews', date(ents.expiresAt)));
   }
   meta.appendChild(metaRow('Account id', account.id || '', true));
   idCol.appendChild(meta);
