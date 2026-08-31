@@ -1293,10 +1293,43 @@ function referralLink(code) {
 
 /** How this affiliate's terms read as one line. */
 function termsText(affiliate) {
-  const pct = `${Number(affiliate.commissionPct)}% of each payment`;
+  const level = affiliate.level ? ` (${affiliate.level.name})` : '';
+  const pct = `${Number(affiliate.commissionPct)}% of each payment${level}`;
   if (!affiliate.recurring) return `${pct}, first payment only`;
   if (affiliate.maxMonths) return `${pct}, renewals included for ${affiliate.maxMonths} months`;
   return `${pct}, renewals included`;
+}
+
+/**
+ * The ladder, and where this affiliate is on it.
+ *
+ * Shown in full rather than as one rate, because the next rung is the reason
+ * to keep sharing the code and a rate on its own does not say there is one.
+ */
+function levelRows(body, data) {
+  const levels = data.levels || [];
+  if (!levels.length) return;
+  const at = data.affiliate?.level?.level || 1;
+  for (const rung of levels) {
+    const how =
+      rung.level === 1
+        ? 'to start'
+        : `${money(rung.minEarned)} earned, or ${rung.minCustomers} customers`;
+    const row = metaRow(`${rung.name}${rung.level === at ? ' (you)' : ''}`, `${rung.rate}% of each payment. ${how}`);
+    if (rung.level === at) row.classList.add('is-current');
+    body.appendChild(row);
+  }
+  const next = data.affiliate?.next;
+  if (next) {
+    body.appendChild(
+      metaRow(
+        'Next',
+        `${money(next.earnedToGo)} or ${next.customersToGo} more ${
+          next.customersToGo === 1 ? 'customer' : 'customers'
+        } for ${next.rate}%`
+      )
+    );
+  }
 }
 
 export function affiliateTab(state, { reload }) {
@@ -1367,7 +1400,8 @@ function renderClaim(body, data, reload) {
   body.appendChild(row);
 
   // The terms, and the one thing that is not undoable about this form.
-  body.appendChild(metaRow('Rate', `${data.defaultPct ?? 20}% of each payment`));
+  body.appendChild(metaRow('Rate', `${data.defaultPct ?? 10}% of each payment, rising with what you sell`));
+  levelRows(body, data);
   body.appendChild(metaRow('Code', 'Permanent once created'));
 }
 
@@ -1405,6 +1439,7 @@ function renderAffiliate(body, data, reload) {
   body.appendChild(linkRow);
 
   body.appendChild(metaRow('Rate', termsText(affiliate)));
+  levelRows(body, data);
   body.appendChild(metaRow('Referrals', String(stats?.referrals ?? 0)));
 
   if (affiliate.status === 'suspended') {

@@ -35,7 +35,8 @@ import { ValidationError } from '../entitlements/grants.js';
 // Aliased: steamAuth.js already exports a redeemCode, for Steam tickets.
 import { redeemCode as redeemTrialCode } from '../entitlements/codes.js';
 import { DEFAULT_COMMISSION_PCT, affiliateForUser, claimCode, suggestCode } from '../affiliates/codes.js';
-import { HOLD_DAYS, affiliateStats, listCommissions } from '../affiliates/commissions.js';
+import { HOLD_DAYS, affiliateStats, listCommissions, standingFor } from '../affiliates/commissions.js';
+import { LEVELS } from '../affiliates/levels.js';
 import { db } from '../entitlements/service.js';
 import { clientIp } from '../entitlements/audit.js';
 import { ackWarning, integrityState, recordSession } from './integrity.js';
@@ -473,28 +474,36 @@ async function route(req, res, url, me) {
         // What to put in the box, so claiming a code is one click for anyone
         // who does not care what it says.
         suggestion: suggestCode(me.username || 'AIM'),
-        // The rate a new code starts on. Sent rather than duplicated in the
-        // browser bundle, so changing AIM4_AFFILIATE_PCT changes what the
-        // page promises without a rebuild.
-        defaultPct: DEFAULT_COMMISSION_PCT,
+        // The rate a new code starts on, and the whole ladder above it. Sent
+        // rather than duplicated in the browser bundle, so the page cannot
+        // promise a rate the server is not paying.
+        defaultPct: LEVELS[0].rate,
+        levels: LEVELS,
         holdDays: HOLD_DAYS
       });
       return true;
     }
-    const [stats, commissions] = await Promise.all([
+    const [stats, commissions, standing] = await Promise.all([
       affiliateStats(affiliate.id),
-      listCommissions({ affiliateId: affiliate.id, limit: 50 })
+      listCommissions({ affiliateId: affiliate.id, limit: 50 }),
+      standingFor(affiliate).catch(() => null)
     ]);
     json(res, 200, {
       affiliate: {
         code: affiliate.code,
-        commissionPct: Number(affiliate.commission_pct),
+        // The rate they are ON, which the ladder decides, not the floor stored
+        // on the row. Showing the row's number would understate what the next
+        // sale actually pays for anyone who has climbed.
+        commissionPct: standing?.rate ?? Number(affiliate.commission_pct),
+        level: standing?.level ?? LEVELS[0],
+        next: standing?.next ?? null,
         recurring: affiliate.recurring,
         maxMonths: affiliate.max_months,
         status: affiliate.status,
         createdAt: affiliate.created_at
       },
       stats,
+      levels: LEVELS,
       holdDays: HOLD_DAYS,
       commissions: commissions.map((c) => ({
         id: c.id,

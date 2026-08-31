@@ -224,6 +224,59 @@ export function priceForTerm(planId, term = 'month') {
   };
 }
 
+/**
+ * What using an affiliate code is worth to the BUYER, per term.
+ *
+ * A code has to be worth typing or nobody types it, and the affiliate cannot
+ * sell what the buyer has no reason to want. `months` is how many months of
+ * the term the discount covers and `off` is how much of each of those months
+ * comes off, so "half of one month" and "all of one month" are the same shape.
+ *
+ * Deliberately near-flat in value: every term lands within about a point of
+ * 10% off the term total (see affiliatePriceForTerm). The term discounts
+ * already do the work of pulling a buyer toward a longer commitment, and
+ * stacking a second, steeper incentive on top of those would be paying twice
+ * for the same decision.
+ */
+export const AFFILIATE_OFFER = Object.freeze({
+  month: Object.freeze({ months: 1, off: 0.1, label: '10% off' }),
+  quarter: Object.freeze({ months: 1, off: 0.25, label: '25% off your first month' }),
+  halfyear: Object.freeze({ months: 1, off: 0.5, label: '50% off your first month' }),
+  year: Object.freeze({ months: 1, off: 1, label: 'One month free' })
+});
+
+/**
+ * A term's price with an affiliate code on it.
+ *
+ * The discount is taken off the ALREADY DISCOUNTED term total, not off the
+ * headline, so a code and a twelve month commitment do not multiply into a
+ * number nobody meant to offer. On the monthly term it is a straight
+ * percentage of the one month being bought; on the prepaid terms it is a share
+ * of one month's list price taken off the whole prepayment.
+ *
+ * @returns the priceForTerm shape plus `codeOffCents`, `codeTotalCents` and
+ *   `codeSavedPct`, the last being what the code is worth against that term.
+ */
+export function affiliatePriceForTerm(planId, term = 'month') {
+  const price = priceForTerm(planId, term);
+  const offer = AFFILIATE_OFFER[term];
+  if (!offer) return { ...price, codeOffCents: 0, codeTotalCents: price.totalCents, codeSavedPct: 0 };
+  const off =
+    term === 'month'
+      ? Math.round(price.totalCents * offer.off)
+      : Math.round(price.monthlyCents * offer.months * offer.off);
+  // Never below zero, and never more than the term itself costs.
+  const codeOffCents = Math.max(0, Math.min(off, price.totalCents));
+  return {
+    ...price,
+    codeOffCents,
+    codeTotalCents: price.totalCents - codeOffCents,
+    codeSavedPct: price.totalCents
+      ? Math.round((1000 * codeOffCents) / price.totalCents) / 10
+      : 0
+  };
+}
+
 /** "€249.99". The one place cents become money on screen. */
 export function euros(cents) {
   return `€${(Number(cents || 0) / 100).toFixed(2)}`;

@@ -243,3 +243,61 @@ test('a suggestion is always usable as a code', () => {
   assert.equal(codeProblem(suggestCode('admin')), null);
   assert.equal(codeProblem(suggestCode('x')), null);
 });
+
+// ---------------------------------------------------------------------------
+// The buyer's half of the deal
+// ---------------------------------------------------------------------------
+
+const { AFFILIATE_OFFER, TERM_IDS, affiliatePriceForTerm, priceForTerm } = await import(
+  '../../shared/entitlements/catalogue.js'
+);
+
+test('an affiliate code is worth about a tenth of every term', () => {
+  // Near-flat on purpose. The term discounts already pull a buyer toward a
+  // longer commitment; a code that ALSO scaled with the term would be paying
+  // twice for the same decision. Anything drifting far from 10% here means
+  // one term quietly became the only one worth using a code on.
+  for (const plan of ['solo_lite', 'solo_premium', 'solo_elite']) {
+    for (const term of TERM_IDS) {
+      const p = affiliatePriceForTerm(plan, term);
+      assert.ok(
+        p.codeSavedPct >= 8.5 && p.codeSavedPct <= 12,
+        `${plan} ${term} saves ${p.codeSavedPct}%`
+      );
+    }
+  }
+});
+
+test('a code never makes a longer term worse value per month', () => {
+  // The one inversion that would be embarrassing: a code turning monthly into
+  // the cheapest way to buy a year.
+  for (const plan of ['solo_lite', 'solo_premium', 'solo_elite']) {
+    let last = Infinity;
+    for (const term of TERM_IDS) {
+      const p = affiliatePriceForTerm(plan, term);
+      const perMonth = p.codeTotalCents / p.months;
+      assert.ok(perMonth < last, `${plan} ${term} is not cheaper per month than the term before`);
+      last = perMonth;
+    }
+  }
+});
+
+test('the code discount comes off the term price, not the headline', () => {
+  // Off the headline, a yearly code would compound with the term discount into
+  // a number nobody meant to offer.
+  const p = affiliatePriceForTerm('solo_elite', 'year');
+  const list = priceForTerm('solo_elite', 'year');
+  assert.equal(p.codeOffCents, Math.round(list.monthlyCents * AFFILIATE_OFFER.year.off));
+  assert.equal(p.codeTotalCents, list.totalCents - p.codeOffCents);
+  assert.ok(p.codeTotalCents > 0);
+});
+
+test('no offer can take a term below nothing', () => {
+  for (const plan of ['free', 'solo_lite', 'team_tier1']) {
+    for (const term of TERM_IDS) {
+      const p = affiliatePriceForTerm(plan, term);
+      assert.ok(p.codeTotalCents >= 0, `${plan} ${term} went negative`);
+      assert.ok(p.codeOffCents <= p.totalCents, `${plan} ${term} discounted past the price`);
+    }
+  }
+});

@@ -23,6 +23,7 @@
 import { db } from '../entitlements/service.js';
 import { writeAudit } from '../entitlements/audit.js';
 import { AffiliateError, affiliateForCode, affiliateForUser, normaliseCode } from './codes.js';
+import { BASE_LEVEL, levelFor, nextLevel } from './levels.js';
 
 /**
  * How long a commission sits at `pending` before it may be paid.
@@ -271,7 +272,12 @@ export async function recordCommission({
   });
   if (!verdict.ok) return { recorded: false, reason: verdict.reason };
 
-  const amount = commissionAmount(money.amount, affiliate.commission_pct);
+  // The rate they have EARNED, not a number sitting on the row from signup.
+  const standing = await standingFor(affiliate).catch(() => ({
+    level: BASE_LEVEL,
+    rate: BASE_LEVEL.rate
+  }));
+  const amount = commissionAmount(money.amount, standing.rate);
   if (amount <= 0) return { recorded: false, reason: 'rounds_to_zero' };
 
   const at = occurredAt || new Date().toISOString();
@@ -289,9 +295,9 @@ export async function recordCommission({
         base_amount: Math.round(money.amount),
         commission_amount: amount,
         currency: money.currency,
-        // Frozen at the rate in force now. A later rate change must not
-        // restate what was already earned.
-        commission_pct: affiliate.commission_pct,
+        // Frozen at the rate in force now. A later promotion pays more from
+        // the next sale and must not restate what was already earned.
+        commission_pct: standing.rate,
         status: 'pending',
         is_renewal: isRenewal,
         occurred_at: at,
@@ -361,11 +367,44 @@ export async function affiliateStats(affiliateId) {
     .select('affiliate_referrals', { select: 'id', affiliate_id: `eq.${affiliateId}`, limit: 10000 })
     .catch(() => []);
 
+  // Distinct customers who have actually paid: first payments, not payments.
+  // A referral who never bought is not a customer, and one customer on a
+  // monthly plan is twelve payments a year, so neither of the other two counts
+  // means what "customers" has to mean for the level ladder to be honest.
+  const customers = (rows || []).filter((r) => !r.is_renewal && r.status !== 'reversed').length;
+
   return {
     currencies: [...byCurrency.values()],
     referrals: referrals?.length || 0,
+    customers,
     payments: rows?.length || 0
   };
+}
+
+/**
+ * The rate this affiliate has earned, and the standing behind it.
+ *
+ * Read at the moment of a sale rather than stored, so a promotion takes effect
+ * on the next payment without anything having to run to grant it. The rate is
+ * then FROZEN onto the row that is written, so it is looked up once per sale
+ * and never restates one already recorded.
+ *
+ * `affiliates.commission_pct` overrides the ladder when it has been set to
+ * something other than the default. That is the campaign deal escape hatch the
+ * column was added for, and an override below the earned rate would be a pay
+ * cut nobody agreed to, so it only ever applies upward.
+ */
+export async function standingFor(affiliate) {
+  const stats = await affiliateStats(affiliate?.id);
+  // Lifetime earnings across currencies, summed as though one. A mixed
+  // currency affiliate is approximated here, and only ever in their favour:
+  // the sum can promote slightly early, never hold a level back.
+  const earned = (stats?.currencies || []).reduce((a, c) => a + (c.total || 0), 0);
+  const customers = stats?.customers ?? stats?.referrals ?? 0;
+  const level = levelFor({ earned, customers });
+  const override = Number(affiliate?.commission_pct);
+  const rate = Number.isFinite(override) && override > level.rate ? override : level.rate;
+  return { level, rate, earned, customers, next: nextLevel({ earned, customers }) };
 }
 
 /** Commission rows for one affiliate, newest first. */

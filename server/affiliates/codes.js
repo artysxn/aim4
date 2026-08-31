@@ -23,7 +23,15 @@ export class AffiliateError extends Error {
 }
 
 /** Percent of earnings a new affiliate starts on. */
-export const DEFAULT_COMMISSION_PCT = Number(process.env.AIM4_AFFILIATE_PCT || 20);
+/**
+ * What a brand new affiliate's row carries.
+ *
+ * The rate that is actually paid comes from the level ladder in levels.js and
+ * is read at the moment of each sale, so this is the FLOOR rather than the
+ * rate: a row is only allowed to override the ladder upward, for a campaign
+ * deal. Set it to the base rate so a fresh affiliate overrides nothing.
+ */
+export const DEFAULT_COMMISSION_PCT = Number(process.env.AIM4_AFFILIATE_PCT || 10);
 
 /**
  * Codes nobody may claim.
