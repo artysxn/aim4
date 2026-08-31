@@ -315,9 +315,11 @@
                   <button type="button" class="seg-tab active" data-lb="elo">Ranked ELO</button>
                   <button type="button" class="seg-tab" data-lb="aim-rating">Aim Rating</button>
                 </div>
+                <select id="lb-cat-select" class="site-select" aria-label="Aim category leaderboard"></select>
                 <select id="lb-mode-select" class="site-select" aria-label="Gamemode leaderboard"></select>
               </div>
               <div id="lb-body" class="lb-body"></div>
+              <div id="lb-pager" class="lb-pager" hidden></div>
             </div>
           </section>
 
@@ -471,7 +473,6 @@
               <h4>Resources</h4>
               <a href="/docs" data-nav="docs">Documentation</a>
               <a href="/changelog" data-nav="changelog">Changelog</a>
-              <a href="/tools/level-editor.html">Level Editor</a>
             </div>
             <div class="foot-col">
               <h4>Support</h4>

@@ -66,6 +66,30 @@ export async function fetchAimRatingLeaderboard(limit = 500) {
   return data || [];
 }
 
+/**
+ * One aiming category's board.
+ *
+ * Same rules as the overall board so nobody appears here under terms they do
+ * not appear there under: best run per gamemode, averaged, three rated
+ * gamemodes minimum. `category` is a RATING_COLUMN value, not a category key.
+ *
+ * Empty on a database that has not had migration 0020 applied: the rows exist
+ * but the function does not, and a missing board is better than a broken page.
+ */
+export async function fetchAimCategoryLeaderboard(category, limit = 500) {
+  if (!supabaseConfigured() || !category) return [];
+  const sb = getSupabase();
+  const { data, error } = await sb.rpc('get_aim_category_leaderboard', {
+    p_category: category,
+    p_limit: limit
+  });
+  if (error) {
+    console.warn(`[aimRating] ${category} leaderboard failed`, error.message);
+    return [];
+  }
+  return data || [];
+}
+
 /** { rank, total, overall_aim_rating } or null */
 export async function fetchAimRatingRank(userId) {
   if (!supabaseConfigured() || !userId) return null;

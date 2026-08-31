@@ -25,6 +25,24 @@ export const RATING_CATEGORIES = [
   'tracking'
 ];
 
+/**
+ * The database column each category's rating is stored in, and the short key
+ * the per-category leaderboard RPC takes.
+ *
+ * Short names because the category keys carry their units (`reaction_time_ms`,
+ * `precision_accuracy_percent`) and a rating is not in those units: it is the
+ * 0 to 2 score derived from them.
+ */
+export const RATING_COLUMN = Object.freeze({
+  precision_accuracy_percent: 'precision',
+  speed: 'speed',
+  flicks_hit_percent: 'flicks',
+  adjustments: 'adjustments',
+  reaction_time_ms: 'reaction',
+  tension_percent: 'tension',
+  tracking: 'tracking'
+});
+
 // Human labels for the radar chart / editor axes.
 export const RATING_LABELS = {
   precision_accuracy_percent: 'Precision',

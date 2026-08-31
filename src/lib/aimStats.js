@@ -12,6 +12,7 @@ import { getSupabase, supabaseConfigured } from './supabase.js';
 import { syncOverallAimRating } from './aimRating.js';
 import {
   RATED_GAMEMODES,
+  RATING_COLUMN,
   loadBaselines,
   syncBaselinesFromServer,
   baselinesForGamemode,
@@ -98,6 +99,13 @@ export async function logAimRun(userId, recording, analytics) {
     );
     const runScore = overallAimScore(rating, recording.scenario);
     if (runScore != null) row.run_overall_rating = runScore;
+    // All seven, not just their average. The per-category boards are built
+    // from these; before they were stored, six of the seven were computed and
+    // thrown away on every run.
+    for (const [key, column] of Object.entries(RATING_COLUMN)) {
+      const v = Number(rating?.[key]);
+      if (Number.isFinite(v)) row[`rating_${column}`] = v;
+    }
   }
   const { error } = await sb.from('aim_run_stats').insert(row);
   if (error) console.warn('[aimStats] log failed', error.message);
