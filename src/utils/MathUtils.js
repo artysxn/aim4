@@ -4,6 +4,14 @@
 // No Three.js dependency so this stays trivially unit-testable.
 // ---------------------------------------------------------------------------
 
+import {
+  M_YAW_DEFAULT,
+  SENSITIVITY_DEFAULT as SOURCE_SENSITIVITY_DEFAULT,
+  countsPer360 as sourceCountsPer360,
+  degreesPerCount,
+  sensitivityForCm360
+} from './sourceMouse.js';
+
 export const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
 export const lerp = (a, b, t) => a + (b - a) * t;
 export const degToRad = (d) => (d * Math.PI) / 180;
@@ -14,9 +22,17 @@ export const randInt = (min, max) => Math.floor(randRange(min, max + 1));
 // 1 inch = 2.54 cm  ->  cm to inches factor.
 const INCH_PER_CM = 0.393701;
 
-/** Reference sensitivity on the unified scale (35 × 1200 CPI equivalent). */
+/**
+ * Reference sensitivity on the OLD unified scale (35 cm/360 at 1200 CPI).
+ *
+ * Kept only for the migration off it. Sensitivity is now the Source engine's
+ * own `sensitivity` ConVar, and the conversion lives in utils/sourceMouse.js;
+ * see LEGACY_UNIFIED_TO_SOURCE below for how a stored value moves across.
+ */
 export const SENSITIVITY_REF = 2.58 / 3;
-export const SENSITIVITY_DEFAULT = 2.5 / 3;
+/** The old default on that scale. Superseded by sourceMouse's 2.5. */
+export const LEGACY_SENSITIVITY_DEFAULT = 2.5 / 3;
+export const SENSITIVITY_DEFAULT = SOURCE_SENSITIVITY_DEFAULT;
 
 /** Legacy calibration: cm/360 × DPI product that maps to {@link SENSITIVITY_REF}. */
 const LEGACY_SENS_PRODUCT = 35 * 1200;
@@ -31,22 +47,43 @@ const RADIANS_PER_COUNT_AT_SENS_1 =
  * Turn speed is linear in sensitivity (half the value → half the speed).
  */
 export function countsPer360FromSensitivity(sensitivity) {
-  if (sensitivity <= 0) return COUNTS_PER_360_AT_REF;
-  return (Math.PI * 2) / (RADIANS_PER_COUNT_AT_SENS_1 * sensitivity);
+  return sourceCountsPer360(sensitivity);
 }
 
 /**
  * Radians of camera rotation per raw mouse count (Pointer Lock movementX/Y).
- * Linear: radiansPerCount(s) = RADIANS_PER_COUNT_AT_SENS_1 × s.
+ *
+ * Now the engine's own relationship: `m_yaw * sensitivity` degrees per count,
+ * so a sensitivity typed here turns exactly as far as the same number in CS2.
+ * See utils/sourceMouse.js for the port and the numbers it is checked against.
  */
 export function radiansPerCountFromSensitivity(sensitivity) {
-  if (sensitivity <= 0) return RADIANS_PER_COUNT_AT_SENS_1 * SENSITIVITY_REF;
-  return RADIANS_PER_COUNT_AT_SENS_1 * sensitivity;
+  return degToRad(degreesPerCount(sensitivity));
+}
+
+/**
+ * A sensitivity stored on the old unified scale, as the Source sensitivity
+ * that turns the view at exactly the same speed.
+ *
+ * The scales were not a constant factor apart by design; the old one was
+ * anchored on 35 cm/360 at 1200 CPI and the new one on `m_yaw`. Converting
+ * rather than renumbering is what keeps a player's muscle memory intact
+ * through the change: the value in the box moves, the feel does not.
+ */
+export const LEGACY_UNIFIED_TO_SOURCE = 0.025315600947515685 / M_YAW_DEFAULT;
+
+export function sourceSensitivityFromUnified(unified) {
+  const u = Number(unified);
+  if (!Number.isFinite(u) || u <= 0) return SOURCE_SENSITIVITY_DEFAULT;
+  return Math.round(u * LEGACY_UNIFIED_TO_SOURCE * 1000) / 1000;
 }
 
 /** Convert saved cm/360 + DPI settings to the unified sensitivity scale. */
-export function sensitivityFromLegacy(cm360, dpi) {
-  return (cm360 * dpi * SENSITIVITY_REF) / LEGACY_SENS_PRODUCT;
+export function sensitivityFromLegacy(cm, dpi) {
+  // Straight to the Source sensitivity that produces this cm/360, rather than
+  // to the old unified scale and then through the migration. One conversion,
+  // and no dependence on the order the migrations happen to run in.
+  return sensitivityForCm360(cm, dpi);
 }
 
 /** CS2 / Source: the FOV slider is horizontal FOV at 4:3 aspect ratio. */

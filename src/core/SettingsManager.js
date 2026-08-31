@@ -9,11 +9,19 @@ import * as Storage from '../utils/Storage.js';
 import {
   SENSITIVITY_DEFAULT,
   radiansPerCountFromSensitivity,
+  sourceSensitivityFromUnified,
   sensitivityFromLegacy
 } from '../utils/MathUtils.js';
+import {
+  ACCEL_EXPONENT_DEFAULT,
+  ACCEL_MAX_DEFAULT,
+  ACCEL_SCALE_DEFAULT,
+  M_PITCH_DEFAULT,
+  M_YAW_DEFAULT
+} from '../utils/sourceMouse.js';
 import { normalizeGraphicsConfig, replayBloomSettingsFrom } from '../utils/graphicsConfig.js';
 
-const SETTINGS_VERSION = 2;
+const SETTINGS_VERSION = 3;
 
 /**
  * Viewmodel FOV bounds, CS2's own for `viewmodel_fov`. Lower is a bigger gun
@@ -61,6 +69,15 @@ export function getResolutionSpec(data) {
 
 export const DEFAULTS = {
   sensitivity: SENSITIVITY_DEFAULT,
+  // The Source mouse ConVars, same names and same defaults. Changing these is
+  // rare, but the trainer claims to behave exactly like the engine and the
+  // engine lets you change them. See utils/sourceMouse.js.
+  mYaw: M_YAW_DEFAULT,
+  mPitch: M_PITCH_DEFAULT,
+  customAccel: 0,
+  accelScale: ACCEL_SCALE_DEFAULT,
+  accelMax: ACCEL_MAX_DEFAULT,
+  accelExponent: ACCEL_EXPONENT_DEFAULT,
   hFov: 90,
   resolution: 'native',
   resolutionWidth: 1920,
@@ -692,12 +709,23 @@ export class SettingsManager {
     delete data.dpi;
 
     const version = data.settingsVersion ?? 0;
-    if (version < SETTINGS_VERSION) {
+    if (version < 2) {
       if (Number.isFinite(data.sensitivity) && data.sensitivity >= 1) {
         data.sensitivity = data.sensitivity / 3;
       }
-      data.settingsVersion = SETTINGS_VERSION;
     }
+    // v3: sensitivity became the Source engine's own `sensitivity` ConVar, so
+    // the number in the box is now the number from the game's console. The
+    // stored value is CONVERTED rather than reinterpreted: the two scales were
+    // anchored on different things, so reading an old value as a new one would
+    // silently change every existing player's turn speed. This keeps the feel
+    // and moves the number.
+    if (version < 3) {
+      if (Number.isFinite(data.sensitivity) && data.sensitivity > 0) {
+        data.sensitivity = sourceSensitivityFromUnified(data.sensitivity);
+      }
+    }
+    if (version < SETTINGS_VERSION) data.settingsVersion = SETTINGS_VERSION;
   }
 
   _deepMerge(base, over) {
@@ -899,6 +927,25 @@ export class SettingsManager {
   /** Radians of yaw/pitch to apply per raw mouse count. */
   get radiansPerCount() {
     return radiansPerCountFromSensitivity(this.data.sensitivity);
+  }
+
+  /**
+   * Everything ScaleMouse and ApplyMouse read, in one object.
+   *
+   * Assembled here rather than in the input handler so the engine's ConVar
+   * defaults stand in for anything a stored settings blob predates.
+   */
+  get mouseConfig() {
+    const d = this.activeSettings?.() ?? this.data;
+    return {
+      sensitivity: d.sensitivity,
+      mYaw: Number.isFinite(d.mYaw) ? d.mYaw : M_YAW_DEFAULT,
+      mPitch: Number.isFinite(d.mPitch) ? d.mPitch : M_PITCH_DEFAULT,
+      customAccel: Number(d.customAccel) || 0,
+      accelScale: Number.isFinite(d.accelScale) ? d.accelScale : ACCEL_SCALE_DEFAULT,
+      accelMax: Number.isFinite(d.accelMax) ? d.accelMax : ACCEL_MAX_DEFAULT,
+      accelExponent: Number.isFinite(d.accelExponent) ? d.accelExponent : ACCEL_EXPONENT_DEFAULT
+    };
   }
 
   reset() {

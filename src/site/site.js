@@ -69,6 +69,7 @@ import { accountApi } from './account/accountApi.js';
 import { PLAN_NAMES } from '../../shared/entitlements/catalogue.js';
 import { initIngestReminder } from './ingestReminder.js';
 import { captureReferral } from '../lib/referral.js';
+import { setWatchUser } from '../lib/demoWatch.js';
 import {
   isMobileSite,
   isPhoneDevice,
@@ -587,6 +588,11 @@ sideAccountBtn.addEventListener('click', () => {
 });
 
 auth.onChange(syncAccountRow);
+// The demo watch clock publishes under whoever is signed in. Set on every auth
+// change, including the first one, so a session that starts signed out and
+// signs in mid-visit still publishes the rest of its watching.
+auth.onChange(() => setWatchUser(auth?.user?.id || null));
+setWatchUser(auth?.user?.id || null);
 syncAccountRow();
 auth.init();
 

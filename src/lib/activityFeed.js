@@ -12,6 +12,7 @@
 import { getSupabase, supabaseConfigured } from './supabase.js';
 import { accessToken } from '../replays/api.js';
 import { addToDay } from './activityCalendar.js';
+import { fetchWatchActivity } from './demoWatch.js';
 
 const API_BASE = (import.meta.env?.VITE_API_URL || '').replace(/\/$/, '');
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -83,9 +84,10 @@ export async function fetchDemoActivity(playerId, days = 90) {
  * @returns {Promise<Map<string, object>>}
  */
 export async function fetchActivity({ userId = null, playerId = null, days = 90 } = {}) {
-  const [trainer, demos] = await Promise.all([
+  const [trainer, demos, watched] = await Promise.all([
     userId ? fetchTrainerActivity(userId, days).catch(() => []) : Promise.resolve([]),
-    playerId ? fetchDemoActivity(playerId, days).catch(() => []) : Promise.resolve([])
+    playerId ? fetchDemoActivity(playerId, days).catch(() => []) : Promise.resolve([]),
+    userId ? fetchWatchActivity(userId, days).catch(() => []) : Promise.resolve([])
   ]);
 
   const map = new Map();
@@ -97,6 +99,12 @@ export async function fetchActivity({ userId = null, playerId = null, days = 90 
       demoSeconds: Math.max(0, Number(match.seconds) || 0),
       demoMatches: 1
     });
+  }
+  // Time spent REVIEWING demos, from the Timeline and the Analyzer. It joins
+  // the demo half's seconds but not its match count: watching is not playing,
+  // and a day of review should not claim matches that were never played.
+  for (const day of watched) {
+    addToDay(map, Number(day.at), { demoSeconds: Math.max(0, Number(day.seconds) || 0) });
   }
   return map;
 }

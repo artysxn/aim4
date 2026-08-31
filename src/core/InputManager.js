@@ -2,13 +2,14 @@
 // InputManager.js
 // Pointer Lock + raw mouse delta handling. Converts movementX/Y into yaw/pitch
 // using the unified sensitivity scale from SettingsManager and writes the result
-// directly onto the camera's Euler angles. Pitch is clamped to ±89°.
+// directly onto the camera's Euler angles, through the engine's own ScaleMouse
+// and ApplyMouse (utils/sourceMouse.js), which is also where pitch is clamped.
 // ---------------------------------------------------------------------------
 
-import { clamp, degToRad } from '../utils/MathUtils.js';
+import { degToRad, radToDeg } from '../utils/MathUtils.js';
+import { applyMouse, scaleMouse } from '../utils/sourceMouse.js';
 import { getShootBind, isKeyboardBind, matchesMouseBind } from '../utils/inputBinds.js';
 
-const MAX_PITCH = degToRad(89);
 
 // Movement / crouch keys we capture (and swallow) while pointer-locked.
 const MOVE_CODES = new Set([
@@ -255,12 +256,36 @@ export class InputManager {
     else this.keys.delete(e.code);
   }
 
+  /**
+   * Pointer Lock deltas into view angles, through the engine's own path.
+   *
+   * ScaleMouse then ApplyMouse, exactly as in_mouse.cpp orders them, so a
+   * sensitivity typed here turns the view as far as the same number does in
+   * CS2. The only adaptation is the sign of pitch: Source counts it positive
+   * downward and the camera counts it positive upward, so it is negated on the
+   * way in and back out and nowhere else.
+   *
+   * `lookScale` is the scoped multiplier, applied to the sensitivity the way
+   * zoom_sensitivity_ratio does rather than to the finished angle, so it
+   * composes with acceleration instead of overriding it.
+   */
   _onMouseMove(e) {
     if (!this.locked) return;
-    const rpc = this.settings.radiansPerCount * (this.lookScale || 1);
-    this.yaw -= e.movementX * rpc;
-    this.pitch -= e.movementY * rpc;
-    this.pitch = clamp(this.pitch, -MAX_PITCH, MAX_PITCH);
+    const cfg = this.settings.mouseConfig;
+    const look = this.lookScale || 1;
+    const scaled = scaleMouse(e.movementX, e.movementY, {
+      ...cfg,
+      sensitivity: cfg.sensitivity * look
+    });
+    const next = applyMouse(
+      radToDeg(this.yaw),
+      -radToDeg(this.pitch),
+      scaled.x,
+      scaled.y,
+      cfg
+    );
+    this.yaw = degToRad(next.yaw);
+    this.pitch = -degToRad(next.pitch);
     this.camera.rotation.y = this.yaw;
     this.camera.rotation.x = this.pitch;
   }

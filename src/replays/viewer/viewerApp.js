@@ -7,6 +7,7 @@
 import { TickStore } from '../tickStore.js';
 import { createTimelineViewer } from './timelineViewer.js';
 import { createAnalyzerViewer } from './analyzerViewer.js';
+import { startWatching, stopWatching } from '../../lib/demoWatch.js';
 import { useMeteredFeature } from '../../lib/meteredFeature.js';
 import { CAP } from '../../../shared/entitlements/keys.js';
 import backIcon from '../../icons/icon_back.svg?raw';
@@ -146,6 +147,9 @@ export function openViewer({
       onBack: close
     });
     if (next === 'analyzer') syncUrl(null);
+    // A demo is on screen from here until close(). Switching modes keeps one
+    // session: the clock is idempotent for a running label.
+    startWatching(next);
     bodyEl.appendChild(current.el);
     // Timeline carries its own header in the collapsible side panel, so the
     // map can start at the top of the window. Analyzer still uses this one.
@@ -162,6 +166,7 @@ export function openViewer({
   });
 
   function close() {
+    stopWatching();
     current?.destroy();
     store.clear();
     document.removeEventListener('keydown', onKey);
