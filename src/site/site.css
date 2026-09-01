@@ -2881,6 +2881,18 @@ body.is-impersonating .site-toast-stack {
   margin-top: 14px;
 }
 
+/* Signing in and choosing a plan are two separate questions, and the card
+   otherwise ends flush against the term buttons. The rule only exists while
+   the sign-in card is above, so every other tab keeps its own top edge. */
+.account-signin {
+  margin-bottom: 28px;
+}
+
+.account-signin + .account-panel {
+  border-top: 1px solid var(--border);
+  padding-top: 28px;
+}
+
 .account-identity {
   display: flex;
   align-items: flex-start;
