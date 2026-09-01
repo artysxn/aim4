@@ -25,10 +25,24 @@
 // sent to it: it is an internal login address, and the site asks for the
 // username. A real address is worth passing when the person may need a
 // password reset later, since that is where the mail would go.
+//
+// Two optional extras, so a test account is one command rather than three:
+//
+//   --plan <id>   open-ended admin subscription on that plan (no period end,
+//                 so the nightly sweep leaves it alone). Same call the admin
+//                 panel makes, so it is audited and recomputed like any other.
+//   --anchor      set profiles.upload_anchored, which lets the account upload
+//                 demos with no Google or Steam link (see migration 0021).
+//
+// Both are privileges. Neither is the default, and --anchor in particular is
+// the thing standing between a free username and the shared library, so it
+// belongs on accounts you can name and not on a batch.
 // ---------------------------------------------------------------------------
 
 import '../server/env.js';
+import { PLAN_IDS } from '../shared/entitlements/catalogue.js';
 import { authAdmin, db, isConfigured } from '../server/entitlements/service.js';
+import { createSubscription } from '../server/entitlements/subscriptions.js';
 
 const USERNAME_RE = /^[a-z0-9_]{3,20}$/;
 /** Login addresses for username-only accounts. Never receives mail. */
@@ -44,6 +58,10 @@ function die(msg) {
   process.exit(1);
 }
 
+function flag(name) {
+  return process.argv.includes(`--${name}`);
+}
+
 const username = arg('username').trim().toLowerCase();
 const password = arg('password') || process.env.AIM4_NEW_ACCOUNT_PASSWORD || '';
 const email = (arg('email') || `${username}@${DEFAULT_EMAIL_DOMAIN}`).trim().toLowerCase();
@@ -56,6 +74,14 @@ if (!password) {
   die('Pass --password <pass>, or set AIM4_NEW_ACCOUNT_PASSWORD.');
 }
 if (password.length < 6) die('Password must be at least 6 characters.');
+
+const plan = arg('plan').trim();
+const anchor = flag('anchor');
+// Checked before the account is made rather than after. A typo'd plan id would
+// otherwise leave a real account behind on a run that reported failure.
+if (plan && !PLAN_IDS.includes(plan)) {
+  die(`Unknown plan "${plan}". One of: ${PLAN_IDS.join(', ')}`);
+}
 
 if (!isConfigured()) {
   die(
@@ -91,10 +117,42 @@ const profile = await db.selectOne('profiles', {
   id: `eq.${user.id}`
 });
 
+// Privileges after the account exists, each reported on its own line so a
+// half-applied run is visible rather than implied by a missing message.
+let planNote = '';
+if (plan) {
+  // periodEnd null is "never expires": the sweep skips it instead of expiring
+  // it every night, which is what an open-ended internal account wants.
+  await createSubscription({
+    userId: user.id,
+    planId: plan,
+    term: 'month',
+    periodEnd: null,
+    source: 'admin',
+    notes: `Created by scripts/create-account.mjs for ${username}.`
+  }).catch((err) => die(`Account ${username} exists, but the plan failed: ${err.message}`));
+  planNote = plan;
+}
+
+let anchorNote = '';
+if (anchor) {
+  await db
+    .update('profiles', { id: `eq.${user.id}` }, { upload_anchored: true }, { returning: false })
+    .catch((err) =>
+      die(
+        `Account ${username} exists, but the upload anchor failed: ${err.message}\n` +
+          '  Has supabase/migrations/0021_upload_anchor.sql been applied?'
+      )
+    );
+  anchorNote = 'yes';
+}
+
 console.log(`\n  Account created.`);
 console.log(`    username  ${profile?.username || '(no profile row)'}`);
 console.log(`    email     ${email}`);
 console.log(`    user id   ${user.id}`);
+if (planNote) console.log(`    plan      ${planNote} (admin, no expiry)`);
+if (anchorNote) console.log(`    uploads   anchored without Google or Steam`);
 if (!profile) {
   console.log(
     '\n  WARNING: no profiles row was created. Check that the\n' +

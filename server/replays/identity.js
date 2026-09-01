@@ -104,7 +104,10 @@ export function demoUploadIdentity(me) {
     me.admin ||
     me.provider === 'google' ||
     providers.includes('google') ||
-    Boolean(me.steamId);
+    Boolean(me.steamId) ||
+    // Vouched for by hand (0021): a test account, or a seat for someone who
+    // can use neither provider. Server-set, never self-set.
+    Boolean(me.uploadAnchored);
   if (anchored) return { ok: true };
   return {
     ok: false,
@@ -149,8 +152,9 @@ async function resolveActor(req) {
         const [admin, entitlements, profile] = await Promise.all([
           isSiteAdmin(id),
           loadEntitlements(id),
-          // The linked Steam identity lives on the profile, not in auth.
-          db.selectOne('profiles', { select: 'steam_id', id: `eq.${id}` }).catch(() => {
+          // The linked Steam identity lives on the profile, not in auth, and
+          // so does the hand-vouched upload flag. One read serves both.
+          db.selectOne('profiles', { select: 'steam_id,upload_anchored', id: `eq.${id}` }).catch(() => {
             profileRead = false;
             return null;
           })
@@ -173,6 +177,7 @@ async function resolveActor(req) {
               .map((p) => String(p))
           ),
           steamId: String(profile?.steam_id || ''),
+          uploadAnchored: Boolean(profile?.upload_anchored),
           createdAt: String(body.created_at || ''),
           signedIn: true,
           admin,
