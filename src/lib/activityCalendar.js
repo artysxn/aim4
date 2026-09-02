@@ -14,6 +14,8 @@
 // calendar, and fixed thresholds would flatten one of them to a single shade.
 // ---------------------------------------------------------------------------
 
+import { monthNames, weekdayNames } from '../i18n/format.js';
+
 /** How many shades a day can be, above zero. */
 export const LEVELS = 4;
 
@@ -100,9 +102,20 @@ export function levelFor(value, thresholds) {
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+/**
+ * Month and weekday names in the interface language.
+ *
+ * These were two hard-coded English arrays. A calendar is one of the few places
+ * where English left in a translated page reads as a mistake rather than a gap:
+ * the row labels are the only words in the widget, so Mon..Sun down the side of
+ * a Finnish page looks like nothing was translated at all.
+ *
+ * Functions rather than frozen arrays, because the language can change without
+ * a reload and a value captured at module load would outlive the choice.
+ */
+const MONTHS = () => monthNames('short');
 /** Rows, Monday first, matching how a week is read. */
-export const WEEKDAYS = Object.freeze(['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']);
+export const WEEKDAYS = () => weekdayNames('short');
 
 /** Monday-first weekday index, 0..6. */
 function weekdayIndex(date) {
@@ -167,7 +180,7 @@ export function buildCalendar({ days, window = 90, today = Date.now(), metric = 
     const m = first.date.getMonth();
     if (m !== lastMonth) {
       lastMonth = m;
-      months.push({ column: i, label: MONTHS[m] });
+      months.push({ column: i, label: MONTHS()[m] });
     }
   });
 

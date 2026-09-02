@@ -30,6 +30,7 @@ import {
 import { CAP } from '../../../shared/entitlements/keys.js';
 import { bytes, button, date, el, field, input, notice, table } from '../admin/dom.js';
 import { accountApi } from './accountApi.js';
+import { languageSelect } from '../../i18n/picker.js';
 import { checkoutSuccessUrl, openCheckout, openCheckoutFromPaymentLink } from './paddleCheckout.js';
 import logoGoogle from '../../icons/logo_google.svg?raw';
 import logoSteam from '../../icons/logo_steam.svg?raw';
@@ -107,6 +108,20 @@ export function overviewTab(state, { reload, auth }) {
     meta.appendChild(metaRow('Renews', date(ents.expiresAt)));
   }
   meta.appendChild(metaRow('Account id', account.id || '', true));
+  // The one setting on this card that is not read-only text. It sits with the
+  // rest of the account's own facts rather than in a settings card of its own,
+  // for the same reason the display name edits in place up top.
+  if (account.signedIn) {
+    const langRow = el('div', 'account-meta-row');
+    langRow.appendChild(el('span', 'account-meta-label', 'Language'));
+    langRow.appendChild(
+      languageSelect({
+        save: (id) => accountApi.setLanguage(id),
+        onError: (err) => notice(card, err.message, 'error')
+      })
+    );
+    meta.appendChild(langRow);
+  }
   idCol.appendChild(meta);
   card.appendChild(idCol);
 

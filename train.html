@@ -21,6 +21,20 @@
           /* detection must never block the trainer */
         }
       })();
+
+      // Language, before paint, for the same reason index.html does it: the
+      // brand faces have no Cyrillic and no CJK, so the type stack depends on
+      // the answer and reading it late means painting twice.
+      (function () {
+        try {
+          var lang = localStorage.getItem('aim4.lang');
+          if (!lang || !/^(ru|zh|pt|es|fr|pl|ja|sv|da|no|fi)$/.test(lang)) return;
+          document.documentElement.setAttribute('data-lang', lang);
+          document.documentElement.setAttribute('lang', lang === 'zh' ? 'zh-Hans' : lang === 'no' ? 'nb' : lang);
+        } catch (e) {
+          /* the trainer is playable in English */
+        }
+      })();
     </script>
     <link rel="stylesheet" href="/src/style.css" />
   </head>

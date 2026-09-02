@@ -15,6 +15,7 @@ import { ECONOMIES, MAPS, economyLabel } from '../shared/roundId.js';
 import { aim4OpeningRating, aim4Rating, impactOf } from '../shared/statsMath.js';
 import { rating3FromCounters } from '../shared/rating3.js';
 import { PHASE_CUTS } from './chartFacts.js';
+import { num } from '../../i18n/format.js';
 
 const div = (a, b) => (b > 0 ? a / b : 0);
 
@@ -26,7 +27,7 @@ export const FORMATS = {
   num3: (v) => v.toFixed(3),
   pct: (v) => `${v.toFixed(2)}%`,
   signedPct: (v) => `${v > 0 ? '+' : ''}${v.toFixed(2)}%`,
-  money: (v) => `$${Math.round(v).toLocaleString('en-US')}`,
+  money: (v) => `$${num(Math.round(v))}`,
   sec: (v) => `${v.toFixed(2)}s`
 };
 

@@ -27,6 +27,7 @@ import {
   requiredPlanFor
 } from '../../shared/entitlements/catalogue.js';
 import { accessToken } from '../replays/api.js';
+import { adoptAccountLanguage } from '../i18n/index.js';
 
 const API_BASE = (import.meta.env?.VITE_API_URL || '').replace(/\/$/, '');
 const TICKET_KEY = 'aim4.impersonate';
@@ -108,6 +109,12 @@ export class EntitlementManager {
         this.state = null;
       }
       this.loading = null;
+      // The account is where the language preference really lives; the
+      // localStorage copy the page booted from is only a guess made before this
+      // request came back. Signing in on a new machine corrects it here.
+      if (this.state?.account?.language) {
+        void adoptAccountLanguage(this.state.account.language);
+      }
       this._emit();
       return this.state;
     })();

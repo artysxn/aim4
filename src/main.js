@@ -21,10 +21,16 @@ import { ReplayRecorder } from './core/ReplayRecorder.js';
 import { ReplayPlayer } from './core/ReplayPlayer.js';
 import { UIOverlay } from './components/UIOverlay.js';
 import { getEntitlements } from './lib/entitlements.js';
+import { initI18n } from './i18n/index.js';
 import { sharedAgentModels, setAgentPaint } from './agents/agentModels.js';
 import { sharedWeaponAssets } from './agents/weaponAssets.js';
 import { BOT_WEAPON } from './bots/buildBotTarget.js';
 import { TRAINER_WEAPONS } from './agents/weaponAssets.js';
+
+// The trainer paints its whole UI from JS, so this only has to run before the
+// overlay mounts. The document attributes are already set by train.html's own
+// bootstrap; this is what loads the catalogue.
+void initI18n();
 
 const settings = new SettingsManager();
 const auth = new AuthManager(settings);

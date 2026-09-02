@@ -122,7 +122,7 @@ export function activityCalendarHtml(cal, escapeHtml, opts = {}) {
     })
     .join('');
 
-  const rows = WEEKDAYS.map(
+  const rows = WEEKDAYS().map(
     (d, i) => `<span class="ac-wd">${LABELLED_ROWS.has(i) ? esc(d) : ''}</span>`
   ).join('');
 

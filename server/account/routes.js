@@ -13,6 +13,10 @@
 // ---------------------------------------------------------------------------
 
 import { CAPABILITIES, PLAN_NAMES, UNLIMITED } from '../../shared/entitlements/catalogue.js';
+// The language list is shared with the browser rather than copied here, so the
+// check constraint in 0022, the picker and this route can never disagree about
+// which languages exist.
+import { LANG_IDS, resolveLang } from '../../src/i18n/langs.js';
 import { guardImpersonation } from '../admin/guard.js';
 import { peek } from '../entitlements/quota.js';
 import { quotaSubjectFor } from '../entitlements/enforce.js';
@@ -319,7 +323,7 @@ async function route(req, res, url, me) {
     // renaming your tag and watching the page keep the old one.
     const profile = me.signedIn
       ? await db
-          .selectOne('profiles', { select: 'username, display_name', id: `eq.${me.id}` })
+          .selectOne('profiles', { select: 'username, display_name, language', id: `eq.${me.id}` })
           .catch(() => null)
       : null;
 
@@ -332,6 +336,10 @@ async function route(req, res, url, me) {
         // What they call themselves. Cosmetic, may repeat, may have spaces.
         // Empty means "no choice made", and the UI falls back to the tag.
         displayName: String(profile?.display_name || ''),
+        // Which language to speak. The browser keeps a copy in localStorage so
+        // the first paint has an answer before this request lands; this is the
+        // one that wins, and signing in on a new machine is what corrects it.
+        language: LANG_IDS.includes(profile?.language) ? profile.language : 'en',
         admin: me.admin,
         email: me.email || '',
         provider: me.provider || '',
@@ -642,6 +650,28 @@ async function route(req, res, url, me) {
     }
     await db.update('profiles', { id: `eq.${me.id}` }, { display_name: next || null });
     json(res, 200, { displayName: next });
+    return true;
+  }
+
+  // ---- the interface language ----------------------------------------------
+  // Stored on the profile rather than in a URL, so it follows the account
+  // between machines. The browser mirrors it into localStorage for the first
+  // paint; this is the copy that outlives a cleared cache.
+  if (req.method === 'POST' && p === '/api/account/language') {
+    if (!requireUser()) return true;
+    const body = await readJson(req);
+    // resolveLang answers null rather than 'en' for something it does not
+    // recognise. That distinction is the whole point on a setter: an account
+    // sending a language the site does not have has to be told so, not quietly
+    // reset to English. A tag carrying a region or a script (pt-BR, zh-Hans) is
+    // recognised and resolves to the id we serve.
+    const next = resolveLang(body?.language);
+    if (!next) {
+      json(res, 400, { error: 'That is not a language the site is available in.' });
+      return true;
+    }
+    await db.update('profiles', { id: `eq.${me.id}` }, { language: next });
+    json(res, 200, { language: next });
     return true;
   }
 

@@ -48,6 +48,8 @@ import sideTeamCreator from '../icons/sideicons/sideicon_2d_creator.svg?raw';
 import logoFullUrl from '../icons/aim4logos/logocolor.png';
 import logoMarkUrl from '../icons/aim4logos/logo1x1.png';
 import { SettingsManager } from '../core/SettingsManager.js';
+import { initI18n, onLangChange, translate } from '../i18n/index.js';
+import { addFooterLanguagePicker } from '../i18n/picker.js';
 import { bindColumnPrefs } from '../replays/stats/columnPrefs.js';
 import { AuthManager } from '../core/AuthManager.js';
 import { initTrainingView } from './trainingView.js';
@@ -285,6 +287,22 @@ if (IS_MOBILE) {
 // Sign-in lives here, on the main site, and nowhere else: the trainer and
 // football both read this same Supabase session (persisted in localStorage)
 // instead of offering their own login forms.
+// Language, before anything renders. The shell's own markup is already in
+// index.html by now, so the first sweep catches the sidebar and the footer in
+// the same pass as everything the views add afterwards. English is the default
+// and installs nothing at all.
+void initI18n();
+// The account page is the setting's home, but a signed-out visitor is shown
+// nothing there except the plans, so the footer carries the only way in for
+// them. Same place the mobile/desktop switch already lives.
+addFooterLanguagePicker();
+onLangChange(() => {
+  const route = ROUTES[lastRouteName];
+  if (!route) return;
+  const titled = translate(route.title) ?? route.title;
+  document.title = lastRouteName === 'home' ? 'AIM4.io' : `AIM4.io - ${titled}`;
+});
+
 const settings = new SettingsManager();
 const auth = new AuthManager(settings);
 // Database column choices ride the same per-account settings blob AuthManager
@@ -906,6 +924,13 @@ function syncSideNav(routeName) {
 }
 
 /**
+ * The page the shell is on, remembered so a language change can rewrite the
+ * browser tab. Everything else on screen is a DOM node the translation layer
+ * reaches by itself; document.title is not.
+ */
+let lastRouteName = 'home';
+
+/**
  * @param {string} name  ROUTES key
  * @param {boolean} [push]
  * @param {object|null} [params]  extra query params (round, mode, …)
@@ -913,6 +938,7 @@ function syncSideNav(routeName) {
 function setView(name, push = false, params = null) {
   const routeName = ROUTES[name] ? name : 'not-found';
   const route = ROUTES[routeName];
+  lastRouteName = routeName;
   const shell = route.shell;
   const resolvedParams = { ...(params || searchParams()) };
   if (route.page) resolvedParams.page = route.page;
@@ -924,7 +950,12 @@ function setView(name, push = false, params = null) {
   syncSideNav(routeName);
 
   document.getElementById('page-title').textContent = route.title;
-  document.title = routeName === 'home' ? 'AIM4.io' : `AIM4.io - ${route.title}`;
+  // The heading is a DOM node, so the translation layer reaches it on its own.
+  // document.title is not, and a browser tab still reading "Demo Manager" on an
+  // otherwise Russian site is the one piece of English nobody can miss.
+  const titled = translate(route.title) ?? route.title;
+  document.title = routeName === 'home' ? 'AIM4.io' : `AIM4.io - ${titled}`;
+
 
   // The head-actions slot belongs to whichever page is on screen; the page
   // repopulates it on show (e.g. the pattern finder's chapter tabs).

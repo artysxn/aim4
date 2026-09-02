@@ -18,6 +18,7 @@
 
 import { fetchDemos } from '../replays/api.js';
 import { MAPS } from '../replays/shared/roundId.js';
+import { ago, date } from '../i18n/format.js';
 
 /** Where the viewer records the round you were last in. */
 export const LAST_ROUND_KEY = 'aim4:last-round';
@@ -45,17 +46,20 @@ export function rememberRound(entry) {
   }
 }
 
+/**
+ * "3 minutes ago", in the interface language.
+ *
+ * This was four hand-written English forms ("just now", "5m ago", "3h ago",
+ * "2d ago"). Intl says the same thing in every language and gets the plural
+ * agreement right, which "2d ago" cannot: the compactness was never worth a
+ * card that reads half in Finnish and half in English.
+ */
 function whenText(ts) {
   const t = Number(ts);
   if (!Number.isFinite(t) || t <= 0) return '';
-  const mins = Math.floor((Date.now() - t) / 60000);
-  if (mins < 1) return 'just now';
-  if (mins < 60) return `${mins}m ago`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  if (days < 30) return `${days}d ago`;
-  return new Date(t).toLocaleDateString();
+  // Past a month the gap stops being useful and the date is what you want.
+  if (Date.now() - t > 30 * 24 * 60 * 60 * 1000) return date(t);
+  return ago(t);
 }
 
 export function initHomeView({ auth, escapeHtml }) {

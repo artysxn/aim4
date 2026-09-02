@@ -96,7 +96,11 @@ test('an all-identical history still produces usable levels', () => {
 
 test('every column is a whole week and rows are Monday first', () => {
   const cal = buildCalendar({ days: new Map(), window: 90, today: at(2026, 3, 7) });
-  assert.equal(WEEKDAYS[0], 'Mon');
+  // WEEKDAYS is a function now: the names come from Intl in the interface
+  // language, so the array cannot be frozen at module load. The claim being
+  // tested is the ordering, not the spelling.
+  assert.equal(WEEKDAYS().length, 7);
+  assert.equal(WEEKDAYS()[0], 'Mon', 'English names, and Monday is first');
   for (const week of cal.weeks.slice(0, -1)) {
     assert.equal(week.length, 7, 'a full column');
   }

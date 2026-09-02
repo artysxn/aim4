@@ -7,6 +7,9 @@
 --------------------------------------------------------------------------- */
 
 @import '../lib/entitlementUi.css';
+/* Cyrillic and CJK, which the brand faces do not have. Shared with the
+   trainer's style.css, which sets the same two font tokens. */
+@import '../i18n/fonts.css';
 
 /* PP Mori — body / UI */
 @font-face {
@@ -96,7 +99,6 @@
   font-style: italic;
   font-display: swap;
 }
-
 :root {
   --bg: #000000;
   --panel: #0c0c0c;
@@ -126,6 +128,7 @@
   --sidebar-w-collapsed: 68px;
   --ease-smooth: cubic-bezier(0.4, 0, 0.2, 1);
 }
+
 
 * {
   box-sizing: border-box;
@@ -957,6 +960,20 @@ a {
 }
 .foot-bottom a:hover {
   color: var(--text);
+}
+/* The language picker sits in the footer line rather than in a settings page,
+   because that line is the only part of the site a signed-out visitor can
+   reach it from. Sized down to the line it is on so it reads as one more item
+   in the row, not a form dropped into the footer. */
+.foot-lang {
+  padding: 4px 8px;
+  font-size: 12px;
+  border-color: transparent;
+  background: transparent;
+}
+.foot-lang:hover,
+.foot-lang:focus-visible {
+  border-color: var(--border);
 }
 
 /* ---- Shared view widgets ----------------------------------------------------- */

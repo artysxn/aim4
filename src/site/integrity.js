@@ -22,6 +22,7 @@
 // ---------------------------------------------------------------------------
 
 import { accessToken, apiBase } from '../replays/api.js';
+import { activeLocale } from '../i18n/format.js';
 
 const PING_MIN_MS = 5 * 60 * 1000;
 
@@ -44,7 +45,7 @@ function deviceLabel(type) {
 function countryName(code) {
   if (!code) return 'an unknown country';
   try {
-    return new Intl.DisplayNames(['en'], { type: 'region' }).of(code) || code;
+    return new Intl.DisplayNames([activeLocale()], { type: 'region' }).of(code) || code;
   } catch {
     return code;
   }

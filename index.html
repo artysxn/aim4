@@ -44,6 +44,23 @@
           /* detection must never block the page */
         }
       })();
+
+      // Language, for the same reason and at the same moment. The choice lives
+      // on the account, but /api/me is a round trip and the fonts depend on the
+      // answer: PP Mori has no Cyrillic and no CJK, so Russian, Chinese and
+      // Japanese swap the whole type stack. Reading the local mirror here means
+      // the page paints once, in the right face, instead of flipping when the
+      // account replies.
+      (function () {
+        try {
+          var lang = localStorage.getItem('aim4.lang');
+          if (!lang || !/^(ru|zh|pt|es|fr|pl|ja|sv|da|no|fi)$/.test(lang)) return;
+          document.documentElement.setAttribute('data-lang', lang);
+          document.documentElement.setAttribute('lang', lang === 'zh' ? 'zh-Hans' : lang === 'no' ? 'nb' : lang);
+        } catch (e) {
+          /* the site is readable in English; this only chooses a face */
+        }
+      })();
     </script>
     <link rel="stylesheet" href="/src/site/site.css" />
     <link rel="stylesheet" href="/src/replays/replays.css" />

@@ -146,7 +146,7 @@ export function initContactView(host, { auth, escapeHtml }) {
           ${t.messages
             .map(
               (m) => `
-              <div class="contact-msg is-${m.from === 'admin' ? 'admin' : 'user'}">
+              <div class="contact-msg is-${m.from === 'admin' ? 'admin' : 'user'}" data-i18n="off">
                 <span class="contact-msg-by">${m.from === 'admin' ? 'aim4' : esc(m.by || 'you')}</span>
                 <p>${esc(m.text)}</p>
               </div>`

@@ -62,6 +62,16 @@ export const accountApi = {
       })
     ),
 
+  /** Change the interface language. One of LANG_IDS in src/i18n/langs.js. */
+  setLanguage: async (language) =>
+    asJson(
+      await fetch(`${API_BASE}/api/account/language`, {
+        method: 'POST',
+        headers: await headers(),
+        body: JSON.stringify({ language })
+      })
+    ),
+
   retention: async () =>
     asJson(await fetch(`${API_BASE}/api/account/retention`, { headers: await headers() })),
 

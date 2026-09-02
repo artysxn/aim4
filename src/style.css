@@ -7,6 +7,10 @@
 
 @import './lib/entitlementUi.css';
 
+/* Cyrillic and CJK, which the brand faces do not have. Shared with the site's
+   site.css, which sets the same two font tokens. */
+@import './i18n/fonts.css';
+
 @font-face {
   font-family: 'PP Mori';
   src: url('/fonts/pp/PPMori-Extralight.otf') format('opentype');
