@@ -240,15 +240,75 @@ test('full sprint with a rifle is never Shift', () => {
   assert.equal(k.shift, false);
 });
 
+test('stopping from a sprint is not Shift', () => {
+  // Release W at 250 u/s and coast on the real friction curve. The speed
+  // passes down through the walk band on its way to zero, and the speed a
+  // tenth of a second ahead is lower still, so a forward-only window reads
+  // every stop as a tapped Shift. No tick of the run-down may.
+  let v = 250;
+  const pos = fromSpeeds((t) => (t < 100 ? 250 : (v = coastStep(v))));
+  const sample = track((t) => pos.get(t) || { x: 0, y: 0 });
+  for (let at = 100; at <= 150; at++) {
+    const k = keysAt({ at, rate: RATE, sample, weaponName: 'ak47' });
+    assert.equal(k.shift, false, `tick ${at} of the run-down`);
+  }
+});
+
+test('coasting under the walk cap with nothing held is not Shift', () => {
+  // Under the cap on both sides of now, and nobody is walking: the key came
+  // up and friction is doing the rest. Walking is a held key and spends
+  // accel like one; this spends none.
+  let v = 100;
+  const pos = fromSpeeds((t) => (t < 100 ? 100 : (v = coastStep(v))));
+  const sample = track((t) => pos.get(t) || { x: 0, y: 0 });
+  for (let at = 104; at <= 130; at++) {
+    const k = keysAt({ at, rate: RATE, sample, weaponName: 'ak47' });
+    assert.equal(k.shift, false, `tick ${at} of the coast`);
+  }
+});
+
+test('walking from standstill is Shift once it is moving', () => {
+  // Accelerate() toward the walk cap rather than the sprint cap. Behind is a
+  // standstill (under the cap), ahead is a walk (under the cap), so the
+  // two-sided window lights it as soon as the speed is readable at all.
+  const cap = walkCap('ak47');
+  let v = 0;
+  const pos = fromSpeeds((t) => (t < 100 ? 0 : (v = accelStep(v, cap - 5))));
+  const sample = track((t) => pos.get(t) || { x: 0, y: 0 });
+  assert.equal(keysAt({ at: 112, rate: RATE, sample, weaponName: 'ak47' }).shift, true, 'early');
+  assert.equal(keysAt({ at: 140, rate: RATE, sample, weaponName: 'ak47' }).shift, true, 'steady');
+  assert.equal(keysAt({ at: 140, rate: RATE, sample, weaponName: 'ak47' }).w, true, 'and it is W');
+});
+
 // ---- state-mirror keys ------------------------------------------------------
 
 test('rising duck is Ctrl, releasing is not', () => {
-  // Down over 16 ticks, held, then up.
+  // Down over 16 ticks, held, then up. The flag is set the way the parser
+  // sets it (laihoe.js: m_bDucked OR amount > 0.5), which means it is STILL
+  // SET for the first half of the release. The old fixture only raised it at
+  // a full duck, so the old read passed here while lighting Ctrl on every
+  // real release.
   const duck = (t) => (t < 100 ? 0 : t < 116 ? (t - 100) / 16 : t < 150 ? 1 : Math.max(0, 1 - (t - 150) / 16));
-  const sample = track((t) => ({ duckAmount: duck(t), flags: duck(t) >= 1 ? FLAG_DUCKING : 0 }));
+  const sample = track((t) => ({ duckAmount: duck(t), flags: duck(t) > 0.5 ? FLAG_DUCKING : 0 }));
   assert.equal(keysAt({ at: 108, rate: RATE, sample }).ctrl, true, 'going down');
   assert.equal(keysAt({ at: 130, rate: RATE, sample }).ctrl, true, 'held');
-  assert.equal(keysAt({ at: 156, rate: RATE, sample }).ctrl, false, 'released');
+  assert.equal(keysAt({ at: 156, rate: RATE, sample }).ctrl, false, 'released, flag still set');
+  for (let at = 152; at <= 166; at++) {
+    assert.equal(keysAt({ at, rate: RATE, sample }).ctrl, false, `tick ${at} of the release`);
+  }
+});
+
+test('a release stored as a duck nibble is not Ctrl on its plateaus', () => {
+  // Stored duck is 0..15, so a slow release repeats a value on adjacent rows.
+  // "next is not below now" is true on every one of those plateaus; the read
+  // has to look further apart than the plateau is wide.
+  const nib = (v) => Math.round(v * 15) / 15;
+  const duck = (t) => (t < 100 ? 1 : Math.max(0, 1 - (t - 100) / 24));
+  const sample = track((t) => ({ duckAmount: nib(duck(t)), flags: duck(t) > 0.5 ? FLAG_DUCKING : 0 }));
+  assert.equal(keysAt({ at: 90, rate: RATE, sample }).ctrl, true, 'held before the release');
+  for (let at = 102; at <= 122; at++) {
+    assert.equal(keysAt({ at, rate: RATE, sample }).ctrl, false, `tick ${at} of the release`);
+  }
 });
 
 test('a jump lights Space, walking off a ledge does not', () => {

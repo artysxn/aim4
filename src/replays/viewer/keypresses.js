@@ -55,7 +55,7 @@
 // order, so scrubbing, seeking and playing backwards cannot wedge a key on.
 // ---------------------------------------------------------------------------
 
-import { FLAG_AIRBORNE, FLAG_DUCKING, FLAG_SCOPED } from '../shared/tickFormat.js';
+import { FLAG_AIRBORNE, FLAG_SCOPED } from '../shared/tickFormat.js';
 import { WEAPON_SPEED, DEFAULT_WEAPON_SPEED } from '../../../shared/sim/constants.js';
 import { FRICTION, STOP_SPEED, WALK_SPEED_SCALE } from '../../../shared/sim3d/constants.js';
 
@@ -170,6 +170,22 @@ export const SPACE_HOLD = 0.35;
 export const M1_HOLD = 0.14;
 /** Speed slack over the exact walk cap, absorbing quantization noise. */
 const WALK_PAD = 8;
+
+/**
+ * Rows either side of now that the duck amount is compared across for Ctrl.
+ *
+ * The stored duck is a nibble, so a transition that moves 1/16 a tick can sit
+ * on the same value for two rows running, and two adjacent rows cannot tell
+ * "held" from "releasing, mid-step". Three rows apart the true value has moved
+ * ~3/16 in either direction, which is above DUCK_STEP, so the sign is honest.
+ * Kept at the stencil width so Ctrl releases within a tick or two of the key,
+ * the same lag the movement keys already have.
+ */
+const DUCK_WINDOW = STENCIL;
+/** More than one nibble of change, so quantization alone can never make a trend. */
+const DUCK_STEP = 1.5 / 15;
+/** A duck this deep is a held crouch, whatever the transition state. */
+const DUCK_HELD = 0.9;
 
 /** The walk speed cap for a held weapon (bare name, e.g. "ak47"). */
 export function walkCap(weaponName) {
@@ -398,29 +414,54 @@ export function keysAt({
     a = r < -SECTOR;
   }
 
-  // Ctrl: the duck key is down while the duck amount is rising or held up.
-  // Falling means released, whatever the amount still is.
+  // Ctrl: the duck key is down while the duck amount is rising, or held at
+  // the bottom and not about to come up. Falling means released, whatever
+  // the amount still is.
+  //
+  // FLAG_DUCKING is deliberately NOT consulted. The parser sets it from
+  // m_bDucked, which is the crouched HULL, and the hull stays crouched for most
+  // of the way back up: the flag is true through the release, which is the
+  // one moment this read must say no. It is a hull state, not a key.
+  //
+  // Two adjacent rows cannot be trusted either. The duck is stored as a
+  // nibble, so a release that moves 1/16 a tick lands on the same stored value
+  // two rows running, and "next is not below now" is true on every one of
+  // those plateaus. So the trend is taken DUCK_WINDOW rows apart, where the
+  // true value has moved by more than a step and the sign means something.
   const duckNow = s0.duckAmount || 0;
-  const duckNext = now.duckNext;
+  const dPrev = sample(T - DUCK_WINDOW * h, SP2)?.duckAmount ?? duckNow;
+  const dNext = sample(T + DUCK_WINDOW * h, SN2)?.duckAmount ?? duckNow;
   const ctrl =
-    (s0.flags & FLAG_DUCKING) !== 0 || (duckNow > 0.02 && duckNext >= duckNow - 1e-3);
+    dNext - dPrev > DUCK_STEP || (duckNow >= DUCK_HELD && dNext >= duckNow - DUCK_STEP);
 
-  // Shift: on the ground, upright, at a speed the walk cap explains, and
-  // still under that cap well ahead of now. The forward window is what stops
-  // a sprint's run-up through the walk band (~100 ms of every start from
-  // standstill) reading as a tapped Shift: mid run-up the speed a tenth of a
-  // second later is already past any weapon's cap, while a real walker is
-  // still under it. Starting to WALK from standstill stays under it too, so
-  // walking lights up from its first ticks.
+  // Shift: a movement key is down, on the ground, upright, at a speed the
+  // walk cap explains, and under that cap on BOTH sides of now.
+  //
+  // Every sprint passes through the walk band twice: ~100 ms on the way up
+  // from standstill and ~100 ms on the way back down to it. The old read only
+  // looked ahead, which catches the run-up (the speed a tenth of a second
+  // later is past any cap) and misses the run-down entirely: on the way down
+  // the speed ahead is LOWER still, so every stop read as a tapped Shift.
+  // Looking behind as well closes it: on the run-down the player was above
+  // the cap a moment ago, and on the run-up they will be a moment from now,
+  // while a real walker is under it in both directions.
+  //
+  // Requiring a key down is the other half. Coasting to a stop after a
+  // release is under the cap on both sides too, and nobody is walking: the
+  // input read is ~zero because friction is doing all of it. Walking spends
+  // ACCEL x wishspeed like any other held key, so `down` separates the two.
   let shift = false;
-  if (!airborne && duckNow < 0.4 && speed >= MOVE_MIN) {
+  if (!airborne && ground && down && duckNow < 0.4 && speed >= MOVE_MIN) {
     const cap = walkCap(weaponName) + WALK_PAD;
     if (speed <= cap) {
+      const span = 2 * (h / hz);
       const n2a = sample(T + 6 * h, SP2);
       const n2b = sample(T + 8 * h, SN2);
-      const ahead =
-        n2a && n2b ? Math.hypot(n2b.x - n2a.x, n2b.y - n2a.y) / (2 * (h / hz)) : 0;
-      shift = ahead <= cap;
+      const ahead = n2a && n2b ? Math.hypot(n2b.x - n2a.x, n2b.y - n2a.y) / span : 0;
+      const p2a = sample(T - 8 * h, SP2);
+      const p2b = sample(T - 6 * h, SN2);
+      const behind = p2a && p2b ? Math.hypot(p2b.x - p2a.x, p2b.y - p2a.y) / span : 0;
+      shift = ahead <= cap && behind <= cap;
     }
   }
 

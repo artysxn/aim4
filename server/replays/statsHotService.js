@@ -398,6 +398,22 @@ export async function getHotStore(io, user, records, opts = {}) {
 
   const hit = cache.get(key);
   if (hit) {
+    // Marked stale by refreshHotStore: the index files under this store were
+    // rewritten (an aim scan, a rename sweep) without any record key moving,
+    // so the key comparison below would call it current. Rebuild DETACHED and
+    // keep serving what is resident, exactly as the too-much-changed branch
+    // does. Never a cold store: that was the 503 that sent every open client
+    // to page the raw library, and with five people on the site it never
+    // stopped.
+    if (hit.stale && !building.has(key)) {
+      if (Date.now() - lastBuildFailure.at >= BUILD_RETRY_MS) {
+        hit.stale = false;
+        const job = startBuild(io, user, records);
+        if (opts.requireWarm) job.catch(() => {});
+        else return job;
+      }
+    }
+
     // Nothing changed: serve what is resident.
     let missing = 0;
     for (const k of wanted.keys()) if (!hit.ids.has(k)) missing++;
@@ -813,7 +829,9 @@ export function hotStoreStatus() {
       players: v.store.players.size,
       demos: v.store.demos.length,
       dead: v.dead,
-      bytes: v.store.bytes
+      bytes: v.store.bytes,
+      // Marked by refreshHotStore and not yet picked up by a rebuild.
+      stale: Boolean(v.stale)
     });
   }
   const progress = [...buildProgress.entries()].map(([key, p]) => ({
@@ -846,6 +864,41 @@ export function hotStoreStatus() {
   };
 }
 
+/**
+ * The index files changed under a store whose record keys did not.
+ *
+ * This is what the aim scan and the rename sweep need, and it is NOT
+ * invalidateHotStore. Dropping the resident store answers the next /aggregate
+ * with a 503, and a 503 sends every open Database, Pattern Finder and Team
+ * page off to download the raw library through the paged /stats path, three
+ * hundred demos at a time, all of them at once. On 2026-09-02 the perf panel
+ * showed that storm as the shape of the whole site: /stats at 649 calls with a
+ * 995-second worst case, and /api/me, which does nothing, at half a second.
+ *
+ * The scan that caused it runs whenever anyone opens a Performance page, so
+ * with a handful of people on the site the store was being dropped every few
+ * minutes and was cold at almost every moment anyone looked at it.
+ *
+ * So: mark the store stale. The next caller keeps getting the resident
+ * columns and kicks a rebuild that runs detached and swaps in whole when it is
+ * done, reading the rewritten index files as it goes. Nobody sees a 503, and
+ * the new numbers land a few minutes later rather than never (the old path
+ * reloaded the snapshot on disk, which predates the scan, and then found every
+ * key matching and stopped).
+ *
+ * The snapshot latch stays put: a stale store must not be REPLACED by an older
+ * file, only by the rebuild. The write that follows the rebuild refreshes it.
+ */
+export function refreshHotStore() {
+  for (const hit of cache.values()) hit.stale = true;
+  lastBuildFailure = { at: 0, message: '' };
+}
+
+/**
+ * Drop the resident store outright. For tests and for an explicit admin
+ * rebuild; production code that has merely rewritten some index files wants
+ * refreshHotStore above, for the reasons set out there.
+ */
 export function invalidateHotStore() {
   cache.clear();
   // The cooldown is a brake on retrying a build that just failed. Dropping the

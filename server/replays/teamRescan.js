@@ -20,7 +20,7 @@ import path from 'node:path';
 import { buildTeamIdentity, findRenameTargets } from './teamIdentity.js';
 import { renameDemoTeams, invalidateDemoList, listDemos } from './demoStore.js';
 import { patchIndexTeamNames } from './statsIndex.js';
-import { invalidateHotStore, patchHotStoreTeamNames } from './statsHotService.js';
+import { patchHotStoreTeamNames, refreshHotStore } from './statsHotService.js';
 import { invalidatePeerAverages } from './peerAverages.js';
 import { invalidateRoster } from './rosterCatalogue.js';
 
@@ -131,7 +131,7 @@ export async function applyTeamRename(io, user, demoId, team1, team2) {
   invalidateRoster(user);
   invalidatePeerAverages();
   const patched = patchHotStoreTeamNames(io, user, touched);
-  if (patched < touched.length) invalidateHotStore();
+  if (patched < touched.length) refreshHotStore();
 
   const others = touched.slice(1).map((r) => ({
     id: r.id,
@@ -228,7 +228,7 @@ export function startTeamRescan(io, user) {
       Object.prototype.hasOwnProperty.call(identity.renames, r.id)
     );
     const patched = patchHotStoreTeamNames(io, user, renamedRecords);
-    if (patched < renamedRecords.length) invalidateHotStore();
+    if (patched < renamedRecords.length) refreshHotStore();
 
     state.summary = { ...identity.summary, teams: store.teams.length };
     console.log(

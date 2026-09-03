@@ -1282,14 +1282,46 @@ export async function patchIndexTeamNames(io, user, record) {
 }
 
 export async function loadStoredEntry(io, user, demoId) {
+  const file = path.join(statsDir(io.userDir(user)), `${demoId}.json`);
   const cached = memory.get(demoId);
   if (cached?.entry) {
-    remember(demoId, cached);
-    return cached.entry;
+    // An entry this function read off disk itself carries the file's mtime,
+    // and is trusted only while the file still has it. Anything may rewrite
+    // an index behind this cache — patchIndexTeamNames, the aim scan, a
+    // reparse, a test — and handing back the parse of a file that has since
+    // changed is exactly the bug a rename test caught: the heal appended the
+    // OLD team name. A stat is microseconds; the parse it stands in for is
+    // milliseconds to seconds. Entries put here by persistEntry carry no
+    // mtime and are served as before: that path wrote the file itself.
+    if (cached.mtimeMs == null) {
+      remember(demoId, cached);
+      return cached.entry;
+    }
+    const st = await fsp.stat(file).catch(() => null);
+    if (st && st.mtimeMs === cached.mtimeMs) {
+      remember(demoId, cached);
+      return cached.entry;
+    }
+    memory.delete(demoId);
+    memoryBytes -= cached.bytes || 0;
   }
-  const file = path.join(statsDir(io.userDir(user)), `${demoId}.json`);
   try {
-    return JSON.parse(await fsp.readFile(file, 'utf8'));
+    const text = await fsp.readFile(file, 'utf8');
+    const st = await fsp.stat(file).catch(() => null);
+    const entry = JSON.parse(text);
+    // Keep it. This path is what the hot store's build and heal, the aim scan
+    // and every paged /stats read go through, and it used to parse the file
+    // and hand it back without remembering: five people paging the library
+    // at once was five full parses of every index on the one thread. The
+    // cache is bounded in bytes (AIM4_STATS_MEMORY_MB), and the size is the
+    // text we just read, so this costs no stringify.
+    remember(demoId, {
+      key: entry?.key,
+      entry,
+      bytes: text.length,
+      mtimeMs: st ? st.mtimeMs : 0
+    });
+    return entry;
   } catch {
     return null;
   }
@@ -1543,6 +1575,12 @@ export async function statsPayload(io, user, records, demoIds = null, opts = {})
       while (cursor < page.length) {
         const idx = cursor++;
         results[idx] = await loadOne(page[idx]);
+        // A miss is a sync JSON.parse of up to several MB, and four readers
+        // back to back held the loop for a visible hiccup on every live
+        // request: rounds not loading in the viewer while somebody else's
+        // Database page was being served. One setImmediate per demo costs
+        // microseconds and lets a tick request through between parses.
+        await yieldEventLoop();
       }
     }
   );

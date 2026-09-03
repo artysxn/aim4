@@ -54,7 +54,11 @@ import { PACKAGE_EXT } from '../replays/shared/replayPackage.js';
 import { formatBytes } from '../replays/tickStore.js';
 import { createStatsPanel, defaultMinRounds } from '../replays/stats/statsPanel.js';
 import { createAnalyticsPanel } from '../replays/analytics/analyticsPanel.js';
-import { invalidateStatsCache, getStatsPayload } from '../replays/statsCache.js';
+import {
+  invalidateScopedStatsCache,
+  invalidateStatsCache,
+  getStatsPayload
+} from '../replays/statsCache.js';
 import commentsIcon from '../icons/demos_comments.svg?raw';
 import bookmarkIcon from '../icons/demos_bookmarks_added.svg?raw';
 import { mbWrap } from '../icons/menubuttons.js';
@@ -4433,7 +4437,12 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     rebuildTeamClusters();
     libraryReady = true;
     if (listingStatsSig(demos) !== prevSig) {
-      invalidateStatsCache();
+      // Scoped only. This fires on every listing change — one upload landing
+      // was enough — and dropping the LIBRARY slot here made every open
+      // Charts or Pattern Finder tab re-download the whole library. The
+      // server heals a new demo into the aggregate in place; the paged
+      // payload catches up on its next natural pull.
+      invalidateScopedStatsCache();
       if (!inflightStatsKey) loadedStatsKey = '';
     }
   }

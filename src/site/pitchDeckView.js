@@ -198,9 +198,30 @@ export function initPitchDeckView({ escapeHtml, openRoute }) {
     return max;
   }
 
+  /**
+   * A demonstration slide: one video, full width. A YouTube link becomes an
+   * embed; anything else is played directly. The URL is ordinary slide text,
+   * so the admin editor can swap it without a deploy once the recording
+   * exists.
+   */
+  function videoHtml(video) {
+    const url = String(video?.url || '').trim();
+    if (!url) return `<p class="pd-video-empty">${esc(video?.caption || '')}</p>`;
+    const yt = url.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|shorts\/))([\w-]{6,})/);
+    const frame = yt
+      ? `<iframe class="pd-video" src="https://www.youtube-nocookie.com/embed/${esc(
+          yt[1]
+        )}?rel=0" title="${esc(video.caption || 'Demonstration')}" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen loading="lazy"></iframe>`
+      : `<video class="pd-video" src="${esc(url)}" controls playsinline preload="metadata"></video>`;
+    return `<div class="pd-video-wrap">${frame}${
+      video.caption ? `<p class="pd-video-caption">${esc(video.caption)}</p>` : ''
+    }</div>`;
+  }
+
   function slideHtml(slide) {
     const max = barMax(slide);
     let body = '';
+    if (slide.video) body += videoHtml(slide.video);
     if (slide.quote) {
       body += `<blockquote class="pd-quote">${esc(slide.quote)}</blockquote>`;
       if (slide.quoteBy) body += `<p class="pd-quote-by">${esc(slide.quoteBy)}</p>`;
@@ -246,9 +267,12 @@ export function initPitchDeckView({ escapeHtml, openRoute }) {
                 .join('')}</tr>`
           )
           .join('')}</tbody>
-      </table>${slide.tableNote ? `<p class="pd-note">${esc(slide.tableNote)}</p>` : ''}</div>`;
+      </table>${slide.tableNote ? `<p class="pd-note">* ${esc(slide.tableNote)}</p>` : ''}</div>`;
     }
-    if (slide.note) body += `<p class="pd-note">${esc(slide.note)}</p>`;
+    // Footnotes, marked as footnotes. Small grey italic under a slide was
+    // read as decoration and skipped; an asterisk says "this qualifies the
+    // thing above" and gets read.
+    if (slide.note) body += `<p class="pd-note">* ${esc(slide.note)}</p>`;
     return `
       <section class="pd-slide${slide.tone ? ` pd-tone-${slide.tone}` : ''}${
         slide.center ? ' is-center' : ''

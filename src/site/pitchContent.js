@@ -161,8 +161,9 @@ export const PITCH_MONEY = Object.freeze({
  * @typedef {{
  *   id: string, kicker?: string, title: string, lead?: string,
  *   points?: string[], columns?: {tag?: string, title: string, lead?: string, points?: string[]}[],
- *   table?: {head: string[], rows: string[][], highlight?: number},
+ *   table?: {head: string[], rows: string[][], highlight?: number, wrap?: boolean},
  *   stats?: {value: string, label: string}[],
+ *   video?: {url: string, caption?: string},
  *   quote?: string, quoteBy?: string, note?: string, tableNote?: string,
  *   tone?: 'plus'|'minus'|'ask', center?: boolean, dense?: boolean, big?: string
  * }} Slide
@@ -175,7 +176,11 @@ export const PITCH_SLIDES = [
     id: 'title',
     kicker: 'aim4.io',
     title: 'Aim for trophies.',
-    lead: 'One platform for Counter-Strike preparation: demo review, statistics, opponent scouting, strategy, and mechanical training. Built by a competitor, for competitors.',
+    lead: 'One platform for Counter-Strike preparation: demo review, statistics, opponent scouting, strategy, and mechanical training. Made by players and analysts, shaped by feedback from teams, coaches and players at every level.',
+    stats: [
+      { value: '70,000+', label: 'hours of Counter-Strike behind it' },
+      { value: '20+', label: 'years of shared team experience' }
+    ],
     big: 'AIM4',
     center: true
   },
@@ -323,6 +328,17 @@ export const PITCH_SLIDES = [
 
   // ---- the pluses --------------------------------------------------------
   {
+    id: 'demo-video',
+    kicker: 'Demonstration',
+    title: 'Two minutes inside the product',
+    video: {
+      // Paste the recording here, or in the admin editor. A YouTube link
+      // becomes an embed; a direct file plays inline. Empty shows the caption.
+      url: '',
+      caption: 'Recording to follow. Until then the live product is at aim4.io, and every part of this deck can be tried there.'
+    }
+  },
+  {
     id: 'plus-time',
     kicker: 'Strength',
     tone: 'plus',
@@ -372,14 +388,31 @@ export const PITCH_SLIDES = [
     id: 'plus-everyone',
     kicker: 'Strength',
     tone: 'plus',
-    title: 'Not only teams. Anyone.',
-    lead: 'The team toolkit is the deep end. The shallow end is every solo player who wants to get better, and it is a far larger market.',
+    title: 'Works for everyone.',
+    lead: 'Aimed at teams at the very top of the professional scene, and still of high use to players at every tier below. The same tools and the same depth, whoever is holding them.',
     columns: [
       { title: 'Solo player', points: ['Own stats and trends', 'Aim training and routines', 'Learn from pro demos'] },
       { title: 'Analyst / coach', points: ['Anti-strat automation', 'Pattern search', 'Report building'] },
       { title: 'Team', points: ['Stratbook and roles', 'Shared library and seats', 'Win models and auto coach'] }
     ],
     note: 'You can do everything from the website, including mechanical training suited to your needs. No install, no second account.'
+  },
+  // The roadmap sits here, right after the strengths, because where the
+  // product is going is part of what it is. It used to come after pricing,
+  // which was too late for the reader who decides in the first ten slides.
+  {
+    id: 'roadmap',
+    kicker: 'Roadmap',
+    title: 'Where the product goes',
+    points: [
+      'CS2 plugin integration: the same bot practice inside the real game, with your team.',
+      'Neural networks and deep learning to build bots that feel like real players, tuned to a specific team or opponent.',
+      'Automatic match import from ESEA, non-HLTV events and pug platforms.',
+      'Continuous work on performance, analytical depth and model accuracy.',
+      'TeamSpeak bot: review your in-match communication, and coach it.',
+      'A sharper auto coach, until it genuinely saves a coach hours a week.',
+      'A deeper anti-strat tool: more triggers, simpler output.'
+    ]
   },
 
   // ---- the minuses -------------------------------------------------------
@@ -389,26 +422,11 @@ export const PITCH_SLIDES = [
     tone: 'minus',
     title: 'What is missing today',
     points: [
-      'One developer. Every line is mine, which is the biggest single risk in this deck.',
       'No marketing, no sales, no brand presence. The product has never been put in front of an audience.',
-      'Billing is built but not switched on. Revenue today is zero.',
+      'Billing has only just been switched on. Revenue today is effectively zero.',
       'No company structure, no legal or accounting function behind it.',
       'Support, onboarding and documentation are thin.'
     ]
-  },
-  {
-    id: 'minus-risks',
-    kicker: 'Honest weakness',
-    tone: 'minus',
-    title: 'What could go wrong',
-    points: [
-      'Competitors are funded and can buy attention faster than I can earn it.',
-      'The product depends on demo formats and third-party data sources that I do not control.',
-      'First development venture: the engineering is proven by the product, not by a track record.',
-      'Team software sells slowly. The buying cycle is a season, not a click.',
-      'Infrastructure cost grows with the library. It scales, but it is not free.'
-    ],
-    note: 'Every one of these is a gap a partner or an investor fills. That is the point of this conversation.'
   },
 
   // ---- market and competition -------------------------------------------
@@ -501,17 +519,62 @@ export const PITCH_SLIDES = [
     id: 'market',
     kicker: 'Market',
     title: 'The buyers already pay for pieces',
-    stats: [
-      { value: '~1M', label: 'CS2 concurrent players' },
-      { value: '1,000s', label: 'registered amateur teams' },
-      { value: '5-14', label: 'seats per team sale' }
-    ],
-    points: [
-      'ESEA, ESL, FACEIT and national leagues are full of teams already paying for servers, stats and practice tools.',
-      'The buyer is the team or the coach, so one sale is five to fourteen seats and renews by season.',
-      'The solo tier feeds the funnel: players arrive alone and bring their team later.',
-      'The aim-training crowd is a second door into the same funnel, and it already has the habit of paying for practice software.'
-    ]
+    lead: 'Four kinds of buyer. Each already pays for parts of this, usually as two or three separate subscriptions, and each gets the whole of it here for one.',
+    table: {
+      wrap: true,
+      head: ['Buyer', 'How many', 'Pays today for', 'On aim4'],
+      rows: [
+        [
+          'Solo player',
+          'Around a million online at any hour',
+          'A stats site, an aim trainer and a practice server, each on its own subscription',
+          'One solo plan, in the browser'
+        ],
+        [
+          'Amateur team',
+          'Thousands registered across ESEA, ESL, FACEIT and national leagues',
+          'Servers, stats and practice tools, paid per person, plus a stratbook somewhere else',
+          'One team plan for the whole roster, 5 to 14 seats'
+        ],
+        [
+          'Professional team',
+          'Hundreds of rostered organisations',
+          'Analyst tooling at hundreds to over a thousand euros a month, plus a stats subscription on top',
+          'One team plan, a fraction of that'
+        ],
+        [
+          'Aim trainer crowd',
+          'Millions of registered users across the two big trainers',
+          'A separate app, installed, with its own account and its own subscription',
+          'Free, in the browser, on the same account'
+        ]
+      ]
+    },
+    tableNote: 'Players arrive alone and bring their team later. The solo and aim-training tiers are the two doors into one funnel, and the team sale is the part that renews by season.'
+  },
+  {
+    id: 'price-compare',
+    // Eight rows and a footnote: the dense layout keeps it inside one screen.
+    dense: true,
+    kicker: 'Pricing',
+    title: 'What the pieces cost today',
+    lead: 'Public prices of the tools a player or a team pays for now, one slice each, next to the plans on aim4 that cover all of them.',
+    table: {
+      wrap: true,
+      highlight: 7,
+      head: ['Tool', 'Covers', 'Price'],
+      rows: [
+        ['Aimlabs+', 'Aim training', '$9.99 a month'],
+        ["KovaaK's", 'Aim training', '$9.99 once, on Steam'],
+        ['Leetify Pro', 'Solo stats and demo insights', 'About $10 a month'],
+        ['Refrag', 'Practice server and routines', 'About $7 a month solo, about $15 a month for a team'],
+        ['Skybox Edge', '3D demo viewing and analysis for teams', '€350 to €1,299 a month'],
+        ['Scope.gg, CS2Lens', 'Stats and 2D demo tools', 'Not published, quoted on request'],
+        ['Stratbase', 'Stratbook', 'Not published, quoted on request'],
+        ['aim4.io', 'All of the above, one account', `${price('solo_lite')}–${price('team_tier3')} / mo`]
+      ]
+    },
+    tableNote: 'List prices as published in September 2026, rounded. Stats, practice and a trainer alone come to roughly $25 to $30 a month per player before anyone has opened a demo.'
   },
   {
     id: 'pricing-ladder',
@@ -587,21 +650,6 @@ export const PITCH_SLIDES = [
   },
 
   // ---- roadmap -----------------------------------------------------------
-  {
-    id: 'roadmap',
-    kicker: 'Roadmap',
-    title: 'Where the product goes',
-    points: [
-      'CS2 plugin integration: the same bot practice inside the real game, with your team.',
-      'Neural networks and deep learning to build bots that feel like real players, tuned to a specific team or opponent.',
-      'Automatic match import from ESEA, non-HLTV events and pug platforms.',
-      'Continuous work on performance, analytical depth and model accuracy.',
-      'TeamSpeak bot: review your in-match communication, and coach it.',
-      'A sharper auto coach, until it genuinely saves a coach hours a week.',
-      'A deeper anti-strat tool: more triggers, simpler output.'
-    ]
-  },
-
   // ---- the asks ----------------------------------------------------------
   {
     id: 'ask',
@@ -622,7 +670,7 @@ export const PITCH_SLIDES = [
     title: 'Investor',
     lead: 'You put in capital. You take a fixed percentage of gross subscription income, for as long as the product earns.',
     points: [
-      'No equity, no board seat, no say in the roadmap.',
+      'No equity and no board seat. What you do get is first priority on feedback, and direct cooperation on every upgrade.',
       'Paid from the first euro of revenue, not from profit.',
       'Runs in perpetuity, and is transferable.',
       'Capital goes to marketing, infrastructure and buying development time.'
@@ -634,15 +682,20 @@ export const PITCH_SLIDES = [
     kicker: 'Option B',
     tone: 'ask',
     title: 'Partner',
-    lead: '49% of the company. Income split 50/50. I keep 51% and the product direction; you take everything I am not equipped to do.',
+    lead: '49% of the company.',
     columns: [
       {
-        title: 'You bring',
+        title: 'What I am looking for assistance in',
         points: ['Promotion and marketing', 'Sales and partnerships', 'Logistics and operations', 'Legal and company structure']
       },
       {
-        title: 'I bring',
-        points: ['The product, entirely built', 'Development and roadmap', 'Domain expertise and network', 'Ongoing engineering']
+        title: 'What I see in the partnership',
+        points: [
+          'A finished product, sold from day one',
+          'Product and engineering stay in expert hands',
+          'Growth decided together, income split equally',
+          'Two people covering what one cannot'
+        ]
       }
     ],
     note: 'Equity 51/49, income 50/50. The split is deliberate: control stays with the product, reward is equal.'
@@ -667,19 +720,23 @@ export const PITCH_SLIDES = [
     title: 'Full private sale',
     lead: 'The entire product, source and platform, goes to the buyer. Full control, majority shares, the name.',
     points: [
-      'One condition, non-negotiable: 5% of income comes to me as a permanent royalty.',
+      'One condition: 5% of income comes to me as a permanent royalty.',
       'Handover includes the codebase, infrastructure, data pipeline and documentation.',
-      'A transition period of development support can be agreed on top.',
+      'I would like to keep working on the project after the sale. Trends and needs change every season, and I have the experience and knowledge to keep developing it under new ownership.',
       'Priced above both other options, because it ends my upside.'
     ],
     big: 'aim4',
-    note: 'Everything is negotiable except the 5%.'
+    note: 'The 5% is the part I care about most. The rest is open to discussion.'
   },
   {
     id: 'close',
     kicker: 'aim4.io',
     title: 'Aim for trophies.',
-    lead: 'The product is finished enough to sell and far from finished. What it is missing is not engineering.',
+    lead: 'The product is finished enough to sell and far from finished. What it needs next is reach, and the right people beside it. If that is you, the conversation starts here.',
+    stats: [
+      { value: '@artcs', label: 'Discord' },
+      { value: '@artys4n', label: 'Twitter' }
+    ],
     center: true,
     big: 'AIM4'
   }

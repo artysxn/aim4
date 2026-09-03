@@ -983,6 +983,17 @@ export function initPerformanceView({ auth, escapeHtml }) {
   let activityDays = null;
   let activityFor = '';
 
+  /**
+   * The demo-side player that IS the signed-in viewer, or '' if the roster does
+   * not have them. Same lookup resolveDefault() uses to land a signed-in
+   * visitor on their own page, so the two cannot disagree about who "you" are.
+   */
+  function ownPlayerId() {
+    const uname = auth?.username || auth?.displayName || '';
+    if (!uname) return '';
+    return findPlayerByUsername(rosterPlayers(roster, '', Infinity), uname)?.id || '';
+  }
+
   function drawActivity(days) {
     const slot = document.getElementById('pf-activity');
     if (!slot || !days) return;
@@ -1002,20 +1013,25 @@ export function initPerformanceView({ auth, escapeHtml }) {
     // and every scan poll wipes it, and a calendar of the last 90 days does not
     // depend on any filter: refetching it on each of those would be two round
     // trips to redraw the same squares.
-    if (activityFor === who && activityDays) {
+    // The trainer and demo-watch halves are keyed by ACCOUNT, and only the
+    // viewer's own account is readable here. So they belong on exactly one
+    // page: the viewer's own. The old condition compared `who` against
+    // `playerId`, which is what `who` was just set from, so it was always true
+    // and every signed-in visitor saw their own training drawn under whichever
+    // pro they were looking at.
+    const mine = who === ownPlayerId();
+    const userId = mine && auth?.user?.id ? auth.user.id : null;
+    const cacheKey = `${who}|${userId || ''}`;
+    if (activityFor === cacheKey && activityDays) {
       drawActivity(activityDays);
       return;
     }
     try {
-      const days = await fetchActivity({
-        playerId: who,
-        userId: auth?.user?.id && who === playerId ? auth.user.id : null,
-        days: 90
-      });
+      const days = await fetchActivity({ playerId: who, userId, days: 90 });
       // The chapter may have been swapped while the fetch was in flight.
       if (playerId !== who) return;
       activityDays = days;
-      activityFor = who;
+      activityFor = cacheKey;
       drawActivity(days);
     } catch {
       /* a calendar that will not load is not worth breaking the chapter for */

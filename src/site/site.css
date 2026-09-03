@@ -4780,12 +4780,44 @@ body.deck-mode .site-main {
   line-height: 1.45;
 }
 
+/* A footnote, not a whisper. These carry the qualifications that make the
+   numbers above honest, and small grey italic was being skipped as decoration.
+   The asterisk is added by the renderer; this just keeps it legible. */
 .pd-note {
   margin: 18px 0 0;
   max-width: 780px;
+  color: var(--text);
+  opacity: 0.82;
+  font-size: clamp(13px, 1.2vw, 16px);
+  line-height: 1.45;
+}
+
+/* The demonstration slide. 16:9, as wide as the slide allows, nothing else on
+   it: the video is the argument. */
+.pd-video-wrap {
+  margin: 18px auto 0;
+  max-width: 1080px;
+  width: 100%;
+}
+.pd-video {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: #000;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.pd-video-caption,
+.pd-video-empty {
+  margin: 12px 0 0;
   color: var(--muted);
-  font-size: clamp(12px, 1.15vw, 15px);
-  font-style: italic;
+  font-size: clamp(13px, 1.2vw, 16px);
+}
+.pd-video-empty {
+  padding: 48px 24px;
+  text-align: center;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
 }
 
 .pd-slide.is-center .pd-note {

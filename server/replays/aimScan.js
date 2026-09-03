@@ -30,7 +30,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { AIM_MOTION_VERSION } from '../../src/replays/shared/aimMotion.js';
 import { refreshAimMotion } from './statsIndex.js';
-import { invalidateHotStore } from './statsHotService.js';
+import { refreshHotStore } from './statsHotService.js';
 
 /** Written next to the stats indexes it summarises. */
 const LEDGER_NAME = 'aim-scan.json';
@@ -336,9 +336,11 @@ async function runLoop() {
   current = null;
   await flushLedger();
   // The Database reads aim ratings off the hot store, which was packed before
-  // any of this existed. Once, at the end: dropping it per demo would make
-  // every /aggregate during the scan pay for a cold rebuild.
-  if (report.measured > 0) invalidateHotStore();
+  // any of this existed. Once, at the end, and as a REFRESH, not a drop: the
+  // resident store keeps answering while a detached rebuild reads the indexes
+  // this scan just rewrote. Dropping it here was the 503 that sent every open
+  // client to page the raw library, on every Performance visit, all day.
+  if (report.measured > 0) refreshHotStore();
 }
 
 /**

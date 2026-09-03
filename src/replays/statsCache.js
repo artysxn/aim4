@@ -103,6 +103,23 @@ export function invalidateStatsCache() {
   cacheGeneration += 1;
 }
 
+/**
+ * The library listing moved (an upload landed, a rename, a parse finished).
+ *
+ * That is not a reason to throw the library payload away. The Database and
+ * the team pages read the server aggregate, which heals one demo in place;
+ * only Charts and the Pattern Finder hold the paged payload, and one demo
+ * stale there until the next natural pull is nothing next to what dropping it
+ * cost: every listing change re-downloaded the whole library, three hundred
+ * demos a page, in every open tab. So the scoped slot goes (it is cheap to
+ * refetch and usually about the demos that just changed) and the generation
+ * bumps so panels recompute from what they hold; the library slot stays.
+ */
+export function invalidateScopedStatsCache() {
+  scopedSlot = emptySlot();
+  cacheGeneration += 1;
+}
+
 function emitBatch(key, info) {
   for (const fn of batchListeners.get(key) || []) {
     try {

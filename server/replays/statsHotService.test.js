@@ -7,6 +7,7 @@ import {
   hotRefreshing,
   hotStoreStatus,
   patchHotStoreTeamNames,
+  refreshHotStore,
   visibilityMask,
   warmHotStoreFromSnapshot
 } from './statsHotService.js';
@@ -194,6 +195,57 @@ assert.deepEqual(hotStoreStatus().stores, [], 'invalidate clears');
   const goodRounds = ids.reduce((n, id) => n + ENTRIES.get(id).rounds.length, 0);
   assert.equal(warm.nRounds, goodRounds, 'every healthy round packed, none from the poisoned demo');
   assert.equal(hotStoreStatus().lastBuildFailure, null, 'a skipped entry is not a failed build');
+
+  invalidateHotStore();
+  await fsp.rm(tmp, { recursive: true, force: true });
+}
+
+// --- refreshHotStore: rewritten indexes never cost anyone a 503 --------------
+// The aim scan and the rename sweep rewrite index files without moving a
+// record key, and used to call invalidateHotStore for it. That dropped the
+// resident store, the next /aggregate answered 503, and every open client fell
+// back to paging the raw library — on every Performance visit, all day, which
+// is what the 2026-09-02 perf panel showed. A refresh keeps serving and
+// rebuilds behind the scenes.
+{
+  const fsp = await import('node:fs/promises');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'aim4-hot-refresh-'));
+  await fsp.mkdir(path.join(tmp, 'stats'), { recursive: true });
+  for (const [id, e] of ENTRIES) {
+    await fsp.writeFile(path.join(tmp, 'stats', `${id}.json`), JSON.stringify(e));
+  }
+  const io5 = { userDir: () => tmp };
+  const records = ids.map(recordFor);
+
+  // Warm it the awaited way, as boot code would.
+  const before = await getHotStore(io5, 'local', records);
+  assert.ok(before, 'a store is resident');
+  const roundsBefore = before.nRounds;
+
+  refreshHotStore();
+  assert.equal(hotStoreStatus().stores.length, 1, 'a refresh does NOT drop the resident store');
+  assert.equal(hotStoreStatus().stores[0].stale, true, 'it is marked stale, and says so');
+
+  // The request path: an answer NOW, from the resident columns, never null.
+  const served = await getHotStore(io5, 'local', records, { requireWarm: true });
+  assert.ok(served, 'the request path is answered immediately after a refresh');
+  assert.equal(served.nRounds, roundsBefore, 'with the columns it already had');
+  assert.equal(hotStoreStatus().building, true, 'and the rebuild is running detached');
+  assert.equal(hotStoreStatus().stores[0].stale, false, 'the flag is spent once a rebuild is kicked');
+
+  // Let the detached rebuild land and confirm nothing went cold in between.
+  let building = true;
+  for (let i = 0; i < 400 && building; i++) {
+    await new Promise((r) => setTimeout(r, 25));
+    const s = await getHotStore(io5, 'local', records, { requireWarm: true });
+    assert.ok(s, 'no call during the rebuild ever answers null');
+    building = hotStoreStatus().building;
+  }
+  assert.equal(building, false, 'the rebuild finished');
+  assert.equal(hotStoreStatus().stores.length, 1, 'one store, swapped in whole');
+  assert.equal(hotStoreStatus().stores[0].rounds, roundsBefore, 'same library, rebuilt');
 
   invalidateHotStore();
   await fsp.rm(tmp, { recursive: true, force: true });

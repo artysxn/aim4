@@ -674,7 +674,12 @@ export async function listDemoLineups(user) {
  * @type {Map<string, {value: object, expires: number}>}
  */
 const usageCache = new Map();
-const USAGE_TTL_MS = 15 * 1000;
+// Ten minutes, not fifteen seconds. Every write path already clears this
+// through invalidateDemoList, so the TTL is only a net for something writing
+// behind our back — and at fifteen seconds it had /status re-statting the
+// entire rounds directory (~25 files a demo, six figures of entries) many
+// times a minute under load, which is most of why /status sat at a 36 s p95.
+const USAGE_TTL_MS = 10 * 60 * 1000;
 
 /**
  * Builds in flight, so concurrent misses share one walk. A page load fires
