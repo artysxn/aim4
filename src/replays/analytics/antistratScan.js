@@ -58,6 +58,20 @@ const SETCALL_FROM = 110;
 const SETCALL_TO = 80;
 /** Widest first-kill spread allowed inside one merged set call, in seconds. */
 const SETCALL_CLOCK_SPAN = 8;
+/**
+ * What a sheet calls a piece of utility where the zone it lands in has a
+ * house name nobody reads aloud. Only the label changes: the zone keeps its
+ * name for lanes and positions.
+ */
+export const UTILITY_ALIASES = {
+  DD2: { mezii: 'Left mid', bunny: 'B Doors', 'b door': 'B Doors' }
+};
+
+function aliasSpot(mapCode, label) {
+  const table = UTILITY_ALIASES[String(mapCode || '').toUpperCase()];
+  return (table && table[String(label || '').trim().toLowerCase()]) || label;
+}
+
 /** Field separator inside a utility signature key. */
 const UTIL_SEP = '\u0001';
 
@@ -182,6 +196,7 @@ export function roundFeatures({ meta, track, row, teamIdx, opponent, context, ne
   const side = sides[teamIdx] === 'CT' ? 'CT' : 'T';
   const roster = meta.players || [];
   const ours = roster.filter((p) => p.team === teamIdx);
+  const theirs = roster.filter((p) => p.team && p.team !== teamIdx);
   const ourIds = new Set(ours.map((p) => p.id));
   if (!ours.length) return null;
 
@@ -203,6 +218,9 @@ export function roundFeatures({ meta, track, row, teamIdx, opponent, context, ne
       clock: clockOf(k.tick || 0),
       attacker: k.attacker,
       victim: k.victim,
+      assister: k.assister || '',
+      throughSmoke: Boolean(k.throughSmoke),
+      attackerBlind: Boolean(k.attackerBlind),
       weapon: k.weapon || '',
       x: Number.isFinite(k._wx) ? k._wx : null,
       y: Number.isFinite(k._wy) ? k._wy : null,
@@ -218,26 +236,32 @@ export function roundFeatures({ meta, track, row, teamIdx, opponent, context, ne
   const weaponNames = (meta.weapons || []).map((w) =>
     String(w || '').toLowerCase().replace(/^weapon_/, '')
   );
+  // The other team rides along as `opp`, sampled the same way: who held what
+  // ground and when is what an aggressive move or a stack is measured against.
   const series = [];
   if (track) {
     const states = [];
-    for (let tick = t0; tick <= endTick; tick += SAMPLE_SECONDS * tickRate) {
-      track.sampleAll(tick, states);
-      const pts = [];
-      for (const p of ours) {
+    const read = (list, tick) => {
+      const out = [];
+      for (const p of list) {
         const s = states[p.slot];
         if (!s || !s.alive || !aliveAt(p.id, tick)) continue;
         if (!Number.isFinite(s.x) || !Number.isFinite(s.y)) continue;
         const names = network ? positionsAtPoint(s.x, s.y, network).map((z) => z.name) : [];
-        pts.push({
+        out.push({
           id: p.id,
           x: s.x,
           y: s.y,
+          z: Number.isFinite(s.z) ? s.z : null,
           pos: names[0] || '',
           awp: weaponNames[s.weapon] === 'awp'
         });
       }
-      series.push({ tick, elapsed: elapsedOf(tick), pts });
+      return out;
+    };
+    for (let tick = t0; tick <= endTick; tick += SAMPLE_SECONDS * tickRate) {
+      track.sampleAll(tick, states);
+      series.push({ tick, elapsed: elapsedOf(tick), pts: read(ours, tick), opp: read(theirs, tick) });
     }
   }
   const sampleAt = (tick) => {
@@ -259,24 +283,25 @@ export function roundFeatures({ meta, track, row, teamIdx, opponent, context, ne
     }
   }
 
-  // The opening kill gets named ground on both ends (for the Openings report):
-  // where the shooter stood, and where the victim dropped.
+  // Every kill gets named ground on both ends: where the shooter stood, and
+  // where the victim dropped. The openings read the first one; the written
+  // summaries ask "from where" of all of them.
   const firstKill = kills[0] || null;
-  if (firstKill && network) {
-    firstKill.attackerZone = '';
-    firstKill.victimZone =
-      firstKill.x !== null
-        ? positionsAtPoint(firstKill.x, firstKill.y, network).map((z) => z.name)[0] || ''
-        : '';
-    if (track) {
-      const shooter = roster.find((x) => x.id === firstKill.attacker);
-      if (shooter) {
-        const s = track.sample(shooter.slot, firstKill.tick, {});
-        if (Number.isFinite(s.x) && Number.isFinite(s.y) && (s.x || s.y)) {
-          firstKill.attackerZone =
-            positionsAtPoint(s.x, s.y, network).map((z) => z.name)[0] || '';
-        }
-      }
+  for (const k of kills) {
+    k.attackerZone = '';
+    k.victimZone = '';
+    k.ax = null;
+    k.ay = null;
+    if (!network) continue;
+    if (k.x !== null) k.victimZone = positionsAtPoint(k.x, k.y, network).map((z) => z.name)[0] || '';
+    if (!track) continue;
+    const shooter = roster.find((x) => x.id === k.attacker);
+    if (!shooter) continue;
+    const s = track.sample(shooter.slot, k.tick, {});
+    if (Number.isFinite(s.x) && Number.isFinite(s.y) && (s.x || s.y)) {
+      k.ax = s.x;
+      k.ay = s.y;
+      k.attackerZone = positionsAtPoint(s.x, s.y, network).map((z) => z.name)[0] || '';
     }
   }
 
@@ -302,9 +327,12 @@ export function roundFeatures({ meta, track, row, teamIdx, opponent, context, ne
       ? matchCoachSmoke(utilDb.utilities, x, y, UTILITY_MATCH_UNITS, type)
       : null;
     const zone = network ? positionsAtPoint(x, y, network).map((z) => z.name)[0] || '' : '';
+    const thrown = Number(g.throwTick ?? det);
     nades.push({
       type,
       tick: det,
+      // Seconds since the round went live at which it left the hand.
+      throwAt: elapsedOf(thrown),
       // Seconds since the round went live, at the detonation. The clock below
       // is the throw, counting down; anything filtering on when a piece of
       // utility was UP wants this one.
@@ -316,7 +344,12 @@ export function roundFeatures({ meta, track, row, teamIdx, opponent, context, ne
       y,
       fx: Number.isFinite(g.from?.x) ? g.from.x : null,
       fy: Number.isFinite(g.from?.y) ? g.from.y : null,
+      fromZone:
+        network && Number.isFinite(g.from?.x) && Number.isFinite(g.from?.y)
+          ? positionsAtPoint(g.from.x, g.from.y, network).map((z) => z.name)[0] || ''
+          : '',
       name: db?.name || '',
+      label: aliasSpot(mapCode, db?.name || zone),
       sx: Number.isFinite(db?.detonate?.x) ? db.detonate.x : null,
       sy: Number.isFinite(db?.detonate?.y) ? db.detonate.y : null,
       zone
@@ -336,7 +369,17 @@ export function roundFeatures({ meta, track, row, teamIdx, opponent, context, ne
     const x = Number(g.at?.x);
     const y = Number(g.at?.y);
     if (!Number.isFinite(det) || !Number.isFinite(x) || !Number.isFinite(y)) continue;
-    enemyNades.push({ type, tick: det, at: elapsedOf(det), x, y });
+    const zone = network ? positionsAtPoint(x, y, network).map((z) => z.name)[0] || '' : '';
+    enemyNades.push({
+      type,
+      tick: det,
+      at: elapsedOf(det),
+      x,
+      y,
+      zone,
+      label: aliasSpot(mapCode, zone),
+      player: g.player
+    });
   }
   enemyNades.sort((a, b) => a.tick - b.tick);
 
@@ -416,6 +459,18 @@ export function roundFeatures({ meta, track, row, teamIdx, opponent, context, ne
     return best;
   };
 
+  // Which site's key ground each grenade landed on. Null is the middle of the
+  // map: utility there can serve either site, which is what makes it a read.
+  // `near` is the looser read (the usual pad past the pieces): a flash pops in
+  // the air over a site, often outside every zone, and still belongs to it.
+  // `onSite` is the bombsite proper, without the ground in front of it.
+  for (const n of nades) {
+    n.region = siteNear(n.x, n.y, 0);
+    n.near = siteNear(n.x, n.y);
+    n.onSite = ['a', 'b'].find((site) => nearAnyPiece(n.x, n.y, sitePieces[site], 0)) || null;
+  }
+  for (const n of enemyNades) n.region = siteNear(n.x, n.y, 0);
+
   /** First sample with `count`+ of ours inside either site's pieces. */
   const siteEntry = (count) => {
     for (const s of series) {
@@ -467,6 +522,8 @@ export function roundFeatures({ meta, track, row, teamIdx, opponent, context, ne
     sampleAt,
     firstVisit,
     towardCount,
+    towardPieces,
+    sitePieces,
     siteNear,
     siteEntry,
     hasTicks: Boolean(track)
@@ -535,7 +592,7 @@ export function paceSite(r) {
 const filesOf = (list) => list.map((r) => r.file);
 
 /** Named label for a grenade: database name first, zone fallback. */
-export const nadeLabel = (n) => n.name || n.zone || '';
+export const nadeLabel = (n) => n.label ?? (n.name || n.zone || '');
 
 /** Round-type key to label for one map and side, Default included. */
 export function typeLabels(mapCode, side) {

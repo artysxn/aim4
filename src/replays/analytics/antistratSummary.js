@@ -3,41 +3,51 @@
 // Teams antistrat, summary mode: the prep sheet a coach writes by hand.
 //
 // The detailed report (antistratConfig.js) prints every number the scan has.
-// This one keeps the handful a player needs before the match and says them
-// the way a coach would: "Top Con flash: Always B (6 of 6)", rounds as their
-// handful of variations ("4x Quick 4 mid fight into full freeze"), and a short
-// paragraph per player. Notes are written in green, negative findings in red,
+// This one keeps what a player needs before the match and says it the way a
+// coach would: "Short flash: Always B (12 of 12)", rounds as their variations
+// ("2x Slow default 1-2-2 with smoke CT A into A exec from Short"), site
+// rounds by the kind of hit they are, and a paragraph per player about what
+// they actually do. Notes are written in green, negative findings in red,
 // which is how those sheets are written.
 //
 // It is printed, so nothing links anywhere, and it makes no calls of its own:
 // it says what the team does and how often, and the analyst writes the plan.
 //
-// Same scan, same rounds (antistratScan.js `extract`), so every number here is
-// one the detailed report also has. Only the selection and the words differ,
-// and the words come from reportMessages.js, never from a model.
+// Same scan, same rounds (antistratScan.js `extract`). The per-round reads
+// (entries, lurks, boosts, which utility was a read) live in
+// antistratReads.js so every section asks them the same way.
 // ---------------------------------------------------------------------------
 
 import { MAPS } from '../shared/roundId.js';
 import { ROUND_SECONDS } from '../viewer/roundClock.js';
 import { phaseAtTick } from '../coach/roundPhases.js';
 import { positionsAtPoint } from '../zones/pointInZone.js';
-import { FORMATIONS, formatFormation, paceType } from './patternDefs.js';
-import {
-  BUY_CONTEXTS,
-  TELL_MIN_ROUNDS,
-  classifyPace,
-  laneCountsAt,
-  nadeLabel,
-  paceSite,
-  snapshotSample,
-  typeLabels
-} from './antistratScan.js';
+import { FORMATIONS, paceType } from './patternDefs.js';
+import { BUY_CONTEXTS, TELL_MIN_ROUNDS, classifyPace, nadeLabel, paceSite, typeLabels } from './antistratScan.js';
 import { demoTimestamp, tagTrigger } from '../shared/statsMath.js';
 import {
-  buildTimeIndex,
-  playerActions,
-  recurringActions
-} from './playerScoutScan.js';
+  ALONE_UNITS,
+  aggressiveMovesOf,
+  awpSpotOf,
+  boostsOf,
+  commitElapsed,
+  ctStackOf,
+  entryOf,
+  formationOf,
+  killRead,
+  laneOfPos,
+  leanOf,
+  lurkersOf,
+  median,
+  oppToward,
+  roundSite,
+  sampleAtElapsed,
+  smokeBreaksOf,
+  tally,
+  tellUtility,
+  throwElapsed,
+  utilKey
+} from './antistratReads.js';
 import { say } from './reportMessages.js';
 import {
   capitalize,
@@ -48,12 +58,10 @@ import {
   nadeName,
   nadePlural,
   NADE_SLANG,
-  noun,
   paragraph,
   percent,
   plural,
-  sentence,
-  withArticle
+  sentence
 } from './reportProse.js';
 
 // ---------------------------------------------------------------------------
@@ -65,14 +73,16 @@ export const SUMMARY_CATEGORIES = [
   { key: 'sideT', group: 'Sides', label: 'T side' },
   { key: 'sideCT', group: 'Sides', label: 'CT side' },
   { key: 'positions', group: 'Sections', label: 'Positions' },
-  { key: 'pace', group: 'Sections', label: 'Pace and setups' },
+  { key: 'pace', group: 'Sections', label: 'Pace and calls' },
   { key: 'tells', group: 'Sections', label: 'Tells' },
+  { key: 'defaults', group: 'Sections', label: 'Default utility' },
   { key: 'danger', group: 'Sections', label: 'Dangerous rounds and openings' },
   { key: 'force', group: 'Sections', label: 'Force buys' },
   { key: 'antiforce', group: 'Sections', label: 'Anti-ecos and antiforces' },
   { key: 'sites', group: 'Sections', label: 'Site rounds and retakes' },
   { key: 'pistols', group: 'Sections', label: 'Pistols' },
-  { key: 'players', group: 'Sections', label: 'Players' }
+  { key: 'players', group: 'Sections', label: 'Players' },
+  { key: 'misc', group: 'Sections', label: 'Misc statistics' }
 ];
 
 export const SUMMARY_GROUPS = ['Sides', 'Sections'];
@@ -87,29 +97,18 @@ export const NEGATIVE_COLOR = '#e06666';
 // ---------------------------------------------------------------------------
 
 const FAST = ['rush', 'pop', 'contact'];
-const PACE_WORD = {
-  rush: 'rush',
-  pop: 'pop',
-  contact: 'contact',
-  'full-exec': 'full exec',
-  default: 'default',
-  'slow-default': 'slow default',
-  other: 'other'
-};
 const SIDE_OF = { T: 'T', CT: 'CT' };
-/** Teammates within this of each other are together; past it a player is alone. */
-const ALONE_UNITS = 600;
 /** An opening this early on the clock (seconds left, 1:30) is an aggressive one. */
 const AGGRESSIVE_CLOCK = 90;
 /** The midround read for AWP spots and holds: 1:20 on the clock. */
 const MIDROUND_ELAPSED = 35;
-
-const median = (list) => {
-  const s = list.filter(Number.isFinite).sort((a, b) => a - b);
-  if (!s.length) return null;
-  const m = s.length >> 1;
-  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
-};
+/**
+ * Utility that lands later than 1:20 belongs to a default that turned into a
+ * midround call: its timing follows what the other team showed, so the sheet
+ * never prints it. Earlier than that it is a set call, and the clock is the
+ * most useful thing on the line.
+ */
+const SET_CALL_ELAPSED = 35;
 
 function bump(map, key, by = 1) {
   if (!key) return;
@@ -120,6 +119,10 @@ function top(map) {
   let best = null;
   for (const [k, v] of map) if (!best || v > best[1]) best = [k, v];
   return best;
+}
+
+function mostCommon(list, pick) {
+  return tally(list, pick)[0]?.[0] || '';
 }
 
 /** Words of a call label in the case a sentence wants: "B Split" -> "B split". */
@@ -170,13 +173,6 @@ function zoneAt(x, y, network) {
   return positionsAtPoint(x, y, network).map((z) => z.name)[0] || '';
 }
 
-/** Which lane (notation index) a named position belongs to, or -1. */
-function laneOfPos(pos, laneSets) {
-  if (!laneSets || !pos) return -1;
-  const key = String(pos).toLowerCase();
-  return laneSets.findIndex((s) => s.has(key));
-}
-
 function siteLetter(site) {
   return site ? String(site).toUpperCase() : '';
 }
@@ -192,19 +188,116 @@ function namedTags(r, side) {
   return (r.tags?.[side] || []).filter((t) => t.k && t.k !== 'default');
 }
 
-/** Seconds since the round went live at which a grenade left the hand. */
-const throwElapsed = (n) => (Number.isFinite(n.clock) ? ROUND_SECONDS - n.clock : n.at);
+/** A player's name as the sheet's header writes it: the main's own name first. */
+const nameOf = (ctx, id) => ctx.mains?.find((m) => m.id === id)?.name || ctx.nameOf.get(id) || id;
+const won = (list) => list.filter((x) => (x.r || x).won).length;
+/** A clock worth printing: only set calls, never the midround. */
+const setClock = (elapsed) =>
+  Number.isFinite(elapsed) && elapsed <= SET_CALL_ELAPSED ? clockText(ROUND_SECONDS - elapsed) : '';
+
+/** "Smoke B Doors + Window, molo Backplat + Car, 3 flashes". */
+function utilitySummary(util, flashes = 0) {
+  const parts = utilityParts(util.filter((u) => u.type !== 'flashbang'));
+  if (flashes >= 1) parts.push(plural(Math.round(flashes), 'flash', 'flashes'));
+  return parts.join(', ');
+}
+
+/** Formation counts as the sheet writes them, every lane named: "2-1-2". */
+const formText = (counts) => (counts ? counts.join('-') : '');
+
+/**
+ * The formation a set of rounds shares, or '' when they do not share one:
+ * a line naming one round's "0-1-4" for five rounds that all differ is wrong
+ * about four of them.
+ */
+function sharedForm(list, pick) {
+  const [form, n] = tally(list, (x) => formText(pick(x)))[0] || ['', 0];
+  return form && (list.length === 1 || (n >= 2 && n * 5 >= list.length * 2)) ? form : '';
+}
 
 // ---------------------------------------------------------------------------
 // Positions
 // ---------------------------------------------------------------------------
 
+/** Early ground a player lives on, as a lane label (T) or a position (CT). */
+function observedRole(ctx, side, id) {
+  const lanes = FORMATIONS[ctx.mapCode]?.t || [];
+  const counts = new Map();
+  let n = 0;
+  let awp = 0;
+  let full = 0;
+  for (const r of ctx.rounds) {
+    if (r.side !== side || !r.hasTicks || r.ownEcon < 4) continue;
+    full++;
+    if (r.series.some((s) => s.pts.some((p) => p.id === id && p.awp))) awp++;
+    for (const s of r.series) {
+      if (s.elapsed < 8 || s.tick >= r.bounds.midStartTick) continue;
+      const p = s.pts.find((x) => x.id === id);
+      if (!p) continue;
+      n++;
+      if (side === 'T') {
+        const l = laneOfPos(p.pos, ctx.laneSets);
+        if (l >= 0 && lanes[l]) bump(counts, lanes[l].label);
+      } else if (p.pos) bump(counts, p.pos);
+    }
+  }
+  if (awp >= 5 && percent(awp, full) >= 35) return { label: 'AWPer', share: 100 };
+  const best = top(counts);
+  return best ? { label: best[0], share: percent(best[1], n) } : { label: '', share: 0 };
+}
+
+const sameGround = (role, label) => {
+  const a = String(role || '').toLowerCase();
+  const b = String(label || '').toLowerCase();
+  return Boolean(a && b && (a.includes(b) || b.includes(a)));
+};
+
+/**
+ * One role per player per side. The roles system's vote comes first; when two
+ * players carry the same one, it stays with whoever actually plays there and
+ * the other is named for the ground they really hold. A sheet with two "A
+ * Long" players in it is wrong about one of them.
+ */
+export function rolesFor(ctx, side) {
+  return (ctx._roles ||= {})[side] ||= (() => {
+    const rows = ctx.mains.map((m) => ({
+      id: m.id,
+      role: ctx.rolesOf?.(m.id, side) || '',
+      seen: observedRole(ctx, side, m.id)
+    }));
+    const out = new Map();
+    const byRole = new Map();
+    for (const row of rows) {
+      if (!row.role) continue;
+      if (!byRole.has(row.role)) byRole.set(row.role, []);
+      byRole.get(row.role).push(row);
+    }
+    for (const row of rows) {
+      if (!row.role) {
+        out.set(row.id, row.seen.label || '');
+        continue;
+      }
+      const group = byRole.get(row.role);
+      if (group.length === 1) {
+        out.set(row.id, row.role);
+        continue;
+      }
+      const keeper =
+        group.find((g) => sameGround(g.role, g.seen.label)) ||
+        [...group].sort((a, b) => b.seen.share - a.seen.share)[0];
+      out.set(row.id, row === keeper ? row.role : row.seen.label || row.role);
+    }
+    return out;
+  })();
+}
+
 function positionsFor(ctx, side) {
-  return ctx.mains.map((m) => ({ id: m.id, name: m.name, role: ctx.rolesOf(m.id, side) || '' }));
+  const roles = rolesFor(ctx, side);
+  return ctx.mains.map((m) => ({ id: m.id, name: m.name, role: roles.get(m.id) || '' }));
 }
 
 // ---------------------------------------------------------------------------
-// Pace (T) and setups (CT)
+// Pace (T) and calls (CT)
 // ---------------------------------------------------------------------------
 
 /**
@@ -281,45 +374,8 @@ function paceFor(ctx) {
   return { basis: buys.length, rows };
 }
 
-/**
- * CT setups: how many stand on A, on B and in between at the formation clock,
- * over the full buys. Five toward one site is written as the stack it is.
- */
-function setupsFor(ctx) {
-  const order = (FORMATIONS[ctx.mapCode]?.ct || []).map((c) => c.label);
-  if (!order.length) return null;
-  const set = ctx.rounds.filter((r) => r.side === 'CT' && r.ownEcon >= 4 && r.hasTicks);
-  const byForm = new Map();
-  for (const r of set) {
-    const snap = snapshotSample(r, ctx.mapCode);
-    if (!snap || !snap.pts.length) continue;
-    const a = r.towardCount(snap, 'a', 0);
-    const b = r.towardCount(snap, 'b', 0);
-    const ee = Math.max(0, snap.pts.length - a - b);
-    const form = order.map((slot) => (slot === 'A' ? a : slot === 'B' ? b : ee)).join('-');
-    if (!byForm.has(form)) byForm.set(form, { rounds: [], a, b });
-    byForm.get(form).rounds.push(r);
-  }
-  const basis = [...byForm.values()].reduce((n, g) => n + g.rounds.length, 0);
-  const rows = [...byForm.entries()]
-    .map(([form, g]) => {
-      const wins = g.rounds.filter((r) => r.won).length;
-      let note = '';
-      if (g.a >= 3) note = `Stack A`;
-      else if (g.b >= 3) note = `Stack B`;
-      return {
-        label: form,
-        count: g.rounds.length,
-        share: percent(g.rounds.length, basis),
-        winrate: percent(wins, g.rounds.length),
-        files: g.rounds.map((r) => r.file),
-        note
-      };
-    })
-    .sort((x, y) => y.count - x.count)
-    .slice(0, 6);
-
-  // The calls the round library names on CT, as a share of every CT round.
+/** The calls the round library names on CT, as a share of every CT round. */
+function ctCallsFor(ctx) {
   const labels = typeLabels(ctx.mapCode, 'CT');
   const all = ctx.rounds.filter((r) => r.side === 'CT');
   const calls = new Map();
@@ -332,160 +388,260 @@ function setupsFor(ctx) {
       if (at !== null) c.times.push(at);
     }
   }
-  const callRows = [...calls.entries()]
+  const rows = [...calls.entries()]
     .map(([key, c]) => ({
       label: labels.get(key) || key,
       count: c.rounds.length,
       share: percent(c.rounds.length, all.length),
-      winrate: percent(c.rounds.filter((r) => r.won).length, c.rounds.length),
+      winrate: percent(won(c.rounds), c.rounds.length),
       clock: c.times.length ? clockText(ROUND_SECONDS - median(c.times)) : '',
       files: c.rounds.map((r) => r.file)
     }))
     .filter((c) => c.count >= 2)
     .sort((x, y) => y.count - x.count)
     .slice(0, 6);
-  return { basis, order, rows, calls: callRows };
+  return { calls: rows };
 }
 
 // ---------------------------------------------------------------------------
 // Tells
 // ---------------------------------------------------------------------------
 
+/** A tell's answer has to beat how often that answer happens anyway by this. */
+const TELL_MIN_LIFT = 20;
+const TELL_SHARE = 75;
+/** A negative tell: utility in this share of rounds or more... */
+const ABSENT_USUAL = 60;
+/** ...whose absence points one way at least this often. */
+const ABSENT_SHARE = 75;
+const TELLS_PER_OUTCOME = 3;
+
 /**
- * What one round "went", in the words a tell answers with: the round-library
- * calls it carried (the specific ones flagged ahead of "All B hits") and, on
- * T, the site it committed to.
+ * What one round "went", in the words a tell answers with.
+ *
+ * T: the site, how it was hit (rush, pop, execute, split, the entrance), and
+ * the round-library calls it carried. CT: the calls they chose, the stack, and
+ * where the AWP stood at 1:35. "All B hits" on a CT round is the other team's
+ * decision, so it never answers a CT tell.
  */
-function roundOutcomes(r, side, labels) {
+function roundOutcomes(r, side, labels, ctx) {
   const out = new Map();
-  // On CT only the calls they chose count: "All B hits" on a CT round is the
-  // other team's decision, and a flash thrown because of it says nothing.
+  const add = (word, specific = true) => {
+    if (!word) return;
+    const prev = out.get(word);
+    out.set(word, { word, specific: Boolean(prev?.specific) || specific });
+  };
   const tags = side === 'CT' ? specificTags(r, side) : namedTags(r, side);
   for (const t of tags) {
     const word = shortCall(labels.get(t.k) || t.k);
     if (!word || word === 'default' || /afterplant|retake/.test(t.k)) continue;
-    const prev = out.get(word);
-    out.set(word, { word, specific: Boolean(prev?.specific) || !/^all-[ab]-hits$/.test(t.k) });
+    add(word, !/^all-[ab]-hits$/.test(t.k));
   }
   if (side === 'T') {
-    const site = paceSite(r);
-    if (site && !out.has(site.toUpperCase())) {
-      out.set(site.toUpperCase(), { word: site.toUpperCase(), specific: false });
+    const site = roundSite(r);
+    if (site) {
+      add(site, false);
+      const pace = classifyPace(r);
+      if (pace === 'rush') add(`${site} rush`);
+      else if (pace === 'pop') add(`${site} pop`);
+      else if (pace === 'contact') add(`early ${site}`);
+      else if (pace === 'full-exec') add(`${site} execute`);
+      const e = r.hasTicks ? entryOf(r, ctx.laneSets) : null;
+      if (e?.site === site) {
+        if (e.split) add(`${site} split`);
+        else if (e.route) add(`${site} through ${e.route}`);
+      }
+    }
+  } else {
+    // "Something non-default": any of their early aggression calls, as one
+    // answer. Where each call alone is too rare to read, together they are not.
+    const aggressive = specificTags(r, side).filter((t) => AGGRESSION_CALL.test(labels.get(t.k) || t.k));
+    if (aggressive.length) add('early aggression');
+  }
+  if (side === 'CT' && r.hasTicks) {
+    // Where each of the five stands at 1:35: "MAHAR_- close Balc".
+    const s = sampleAtElapsed(r, 20);
+    for (const m of ctx.mains || []) {
+      const p = s?.pts.find((x) => x.id === m.id);
+      if (p?.pos) add(`${m.name} ${p.pos}`);
+    }
+    const stack = ctStackOf(r);
+    if (stack) add(`${stack} stack`);
+    const awp = awpArea(r, awpSpotOf(r, 20), ctx);
+    if (awp) add(`AWP ${awp}`);
+  }
+  return out;
+}
+
+/**
+ * A position as the part of the map it belongs to: a T lane by its word
+ * ("long", "mid", "B"), else the site whose ground it is on, else the
+ * position itself. Thirty AWP spots say nothing; four areas do.
+ */
+function areaOf(r, pos, ctx) {
+  if (!pos) return '';
+  const lanes = FORMATIONS[ctx.mapCode]?.t || [];
+  const l = laneOfPos(pos, ctx.laneSets);
+  if (l >= 0 && lanes[l]) return laneWord(lanes[l]);
+  const p = r.series.flatMap((s) => s.pts).find((x) => x.pos === pos);
+  const site = p ? r.siteNear(p.x, p.y) : null;
+  return site ? site.toUpperCase() : pos;
+}
+
+function awpArea(r, pos, ctx) {
+  return areaOf(r, pos, ctx);
+}
+
+/** CT calls that are early aggression rather than a setup. */
+const AGGRESSION_CALL = /push|fight|solo|start|peek|aggress/i;
+
+const regionWord = (region) => (region ? region.toUpperCase() : 'mid');
+
+/** "Doors smoke", "Utility on B early", "2+ smokes on B by 1:30", "mid nade". */
+function featureWords(f, side) {
+  switch (f.kind) {
+    case 'util':
+      return nadeName(f.name, f.type);
+    case 'region':
+      return side === 'T'
+        ? `Smoke or molo anywhere on ${regionWord(f.region)} site before the hit`
+        : `Smoke or molo on ${regionWord(f.region)} site early`;
+    case 'count':
+      return `2+ ${nadePlural(f.type)} on ${regionWord(f.region)} by 1:30`;
+    case 'typeRegion':
+      return `${regionWord(f.region)} ${NADE_SLANG[f.type] || 'nade'}`;
+    default:
+      return '';
+  }
+}
+
+const featureCache = new WeakMap();
+
+/**
+ * The tell features one round showed: each piece of read utility by name,
+ * any smoke or molotov on a site's ground before the hit, two of a kind on one
+ * site by 1:30, and each kind of grenade per region.
+ */
+function tellFeatures(r) {
+  if (featureCache.has(r)) return featureCache.get(r);
+  const feats = new Map();
+  const add = (key, f) => {
+    if (!feats.has(key)) feats.set(key, { key, ...f });
+  };
+  const counts = new Map();
+  for (const n of tellUtility(r)) {
+    const region = n.region || '';
+    add(`u\0${utilKey(n)}`, { kind: 'util', name: nadeLabel(n), type: n.type, region });
+    add(`t\0${region}\0${n.type}`, { kind: 'typeRegion', region, type: n.type });
+    if (n.type === 'smokegrenade' || n.type === 'molotov') {
+      // "If anywhere on B is molotoved, it's B": the bombsite itself.
+      if (n.onSite) add(`g\0${n.onSite}`, { kind: 'region', region: n.onSite });
+      if (region && throwElapsed(n) <= 25) bump(counts, `${region}\0${n.type}`);
     }
   }
-  return out;
-}
-
-/** Points a tell's answer has to beat its own base rate by to say anything. */
-const TELL_MIN_LIFT = 25;
-const TELLS_PER_OUTCOME = 2;
-/**
- * A tell is utility the other team SEES with time to act on it: landed at
- * least this many seconds before the round starts happening. A molotov on a
- * position five seconds after they walked out onto the site says nothing a
- * defender did not already know.
- */
-const TELL_LEAD = 5;
-
-/**
- * Seconds since the round went live at which it starts happening: the first
- * kill, two players on a site, or the plant, whichever comes first.
- */
-function actionElapsed(r) {
-  const times = [];
-  if (Number.isFinite(r.firstKill?.clock)) times.push(ROUND_SECONDS - r.firstKill.clock);
-  const entry = r.siteEntry?.(2);
-  if (entry) times.push(ROUND_SECONDS - entry.clock);
-  if (Number.isFinite(r.plantClock)) times.push(ROUND_SECONDS - r.plantClock);
-  return times.length ? Math.min(...times) : null;
-}
-
-/** Named utility that was up early enough to read the round from. */
-function earlyUtility(r) {
-  const act = actionElapsed(r);
-  return r.nades.filter((n) => nadeLabel(n) && (act === null || n.at <= act - TELL_LEAD));
-}
-
-/** Per round, the utility keys it showed early: file -> Set(key). */
-function earlyKeys(set) {
-  const out = new Map();
-  for (const r of set) {
-    const keys = new Set();
-    for (const n of earlyUtility(r)) keys.add(`${nadeLabel(n)}\0${n.type}`);
-    out.set(r.file, keys);
+  for (const [k, c] of counts) {
+    if (c < 2) continue;
+    const [region, type] = k.split('\0');
+    add(`c\0${k}`, { kind: 'count', region, type });
   }
-  return out;
+  featureCache.set(r, feats);
+  return feats;
 }
 
 /**
  * Utility that gives the round away, read as "where does it go".
  *
- * Every grenade seen early enough in enough rounds, by name, with the answer
- * most of its rounds share. Ranked by how reliable the read is, and capped per
- * answer so the list covers B, A and mid rather than five ways of saying B.
+ * The pool is every round's read utility (antistratReads.tellUtility): mid
+ * utility before the round commits, and site utility seen well before the
+ * plant with nothing dying straight after it. Each feature seen in enough
+ * rounds is answered with the outcome most of its rounds share, kept when that
+ * answer is reliable and beats how often it happens anyway.
  *
  * @param {object[]} set   rounds to read (one side)
  * @param {'T'|'CT'} side
  * @param {object} ctx
  * @param {{ minRounds?: number, minShare?: number, limit?: number }} [opts]
  */
-export function tellsOver(set, side, ctx, { minRounds = TELL_MIN_ROUNDS, minShare = 80, limit = 5 } = {}) {
+export function tellsOver(
+  set,
+  side,
+  ctx,
+  { minRounds = TELL_MIN_ROUNDS, minShare = TELL_SHARE, limit = 10, siteCap = 2, outcomeCap = TELLS_PER_OUTCOME } = {}
+) {
   const labels = typeLabels(ctx.mapCode, side);
-  const outcomesOf = new Map(set.map((r) => [r.file, roundOutcomes(r, side, labels)]));
-  /** name\0type -> { name, type, rounds: Map(file -> outcomes) } */
-  const byKey = new Map();
-  for (const r of set) {
-    for (const n of earlyUtility(r)) {
-      const label = nadeLabel(n);
-      const key = `${label}\0${n.type}`;
-      if (!byKey.has(key)) byKey.set(key, { name: label, type: n.type, rounds: new Map() });
-      byKey.get(key).rounds.set(r.file, outcomesOf.get(r.file));
-    }
-  }
-  // How often each answer happens anyway. A grenade thrown in every round of
-  // a call that happens in 80% of rounds is that team's default, not a read.
+  const outcomesOf = new Map(set.map((r) => [r.file, roundOutcomes(r, side, labels, ctx)]));
   const base = new Map();
   for (const o of outcomesOf.values()) for (const x of o.values()) bump(base, x.word);
+  /** key -> { f, files: [] } */
+  const byKey = new Map();
+  for (const r of set) {
+    for (const f of tellFeatures(r).values()) {
+      if (f.kind === 'typeRegion') continue;
+      if (!byKey.has(f.key)) byKey.set(f.key, { f, files: [] });
+      byKey.get(f.key).files.push(r.file);
+    }
+  }
   const candidates = [];
-  for (const rec of byKey.values()) {
-    const n = rec.rounds.size;
+  for (const { f, files } of byKey.values()) {
+    const n = files.length;
     if (n < minRounds) continue;
-    const tally = new Map();
-    for (const [file, outcomes] of rec.rounds) {
-      for (const o of outcomes.values()) {
-        if (!tally.has(o.word)) tally.set(o.word, { hits: 0, files: [], specific: o.specific });
-        const bag = tally.get(o.word);
+    const t = new Map();
+    for (const file of files) {
+      for (const o of outcomesOf.get(file).values()) {
+        if (!t.has(o.word)) t.set(o.word, { hits: 0, files: [], specific: o.specific });
+        const bag = t.get(o.word);
         bag.hits++;
         bag.files.push(file);
-        bag.specific = bag.specific || o.specific;
       }
     }
-    const best = [...tally.entries()].sort(
-      (a, b) => b[1].hits - a[1].hits || Number(b[1].specific) - Number(a[1].specific)
-    )[0];
+    // The best answer that says something: reliable, and well above how often
+    // it happens anyway. A call they run in 90% of rounds answers every tell
+    // and so answers none.
+    const best = [...t.entries()]
+      .map(([word, bag]) => ({ word, bag, share: percent(bag.hits, n), lift: percent(bag.hits, n) - percent(base.get(word) || 0, set.length) }))
+      .filter((x) => x.share >= minShare && x.lift >= TELL_MIN_LIFT)
+      .sort((a, b) => b.share - a.share || Number(b.bag.specific) - Number(a.bag.specific) || b.lift - a.lift)[0];
     if (!best) continue;
-    const share = percent(best[1].hits, n);
-    if (share < minShare) continue;
-    if (share - percent(base.get(best[0]) || 0, set.length) < TELL_MIN_LIFT) continue;
+    const share = best.share;
     candidates.push({
-      utility: nadeName(rec.name, rec.type),
-      name: rec.name,
-      type: rec.type,
-      outcome: best[0],
-      hits: best[1].hits,
+      utility: featureWords(f, side),
+      kind: f.kind,
+      region: f.region,
+      name: f.name,
+      type: f.type,
+      outcome: best.word,
+      hits: best.bag.hits,
       rounds: n,
       share,
-      freq: frequencyWord(best[1].hits, n, minShare),
-      files: [...rec.rounds.keys()],
-      hitFiles: best[1].files
+      freq: frequencyWord(best.bag.hits, n, minShare) || 'Mostly',
+      files,
+      hitFiles: best.bag.files
     });
   }
-  candidates.sort((a, b) => b.share - a.share || b.rounds - a.rounds || a.utility.localeCompare(b.utility));
+  // Mid utility first: it is the read that could have gone either way. Then
+  // the broad site reads, then single pieces of site utility, one per answer.
+  // Site utility is ranked by how much of it there is: "Stairs smoke: Always
+  // A (40 of 40)" is worth more than a 5-round flash with the same answer.
+  const rank = (t) => (t.kind === 'util' && !t.region ? 0 : t.kind === 'region' || t.kind === 'count' ? 1 : 2);
+  candidates.sort(
+    (a, b) =>
+      rank(a) - rank(b) ||
+      (rank(a) === 2 ? b.rounds - a.rounds : 0) ||
+      b.share - a.share ||
+      b.rounds - a.rounds ||
+      a.utility.localeCompare(b.utility)
+  );
   const perOutcome = new Map();
+  const perSiteRead = new Map();
   const out = [];
   for (const t of candidates) {
     const used = perOutcome.get(t.outcome) || 0;
-    if (used >= TELLS_PER_OUTCOME) continue;
+    if (used >= outcomeCap) continue;
+    if (t.kind === 'util' && t.region) {
+      const key = `${t.region}|${t.outcome}`;
+      if ((perSiteRead.get(key) || 0) >= siteCap) continue;
+      perSiteRead.set(key, (perSiteRead.get(key) || 0) + 1);
+    }
     perOutcome.set(t.outcome, used + 1);
     out.push(t);
     if (out.length >= limit) break;
@@ -498,37 +654,43 @@ export function tellsOver(set, side, ctx, { minRounds = TELL_MIN_ROUNDS, minShar
  * rounds WITHOUT it go. A window smoke in 70% of rounds is nothing; the 30%
  * that skip it going A eight times in ten is.
  */
-function absenceTellsOver(set, side, ctx, { limit = 3 } = {}) {
+function absenceTellsOver(set, side, ctx, { limit = 4 } = {}) {
   if (set.length < 8) return [];
   const labels = typeLabels(ctx.mapCode, side);
-  const outcomesOf = new Map(set.map((r) => [r.file, roundOutcomes(r, side, labels)]));
-  const keysOf = earlyKeys(set);
+  const outcomesOf = new Map(set.map((r) => [r.file, roundOutcomes(r, side, labels, ctx)]));
   const base = new Map();
   for (const o of outcomesOf.values()) for (const x of o.values()) bump(base, x.word);
   const usage = new Map();
-  for (const keys of keysOf.values()) for (const k of keys) bump(usage, k);
+  for (const r of set) {
+    for (const f of tellFeatures(r).values()) {
+      if (f.kind === 'region') continue;
+      if (!usage.has(f.key)) usage.set(f.key, { f, n: 0 });
+      usage.get(f.key).n++;
+    }
+  }
   const out = [];
-  for (const [key, used] of usage) {
-    const usual = percent(used, set.length);
-    if (usual < 50 || usual > 92) continue;
-    const without = set.filter((r) => !keysOf.get(r.file).has(key));
+  for (const { f, n } of usage.values()) {
+    const usual = percent(n, set.length);
+    if (usual < ABSENT_USUAL) continue;
+    const without = set.filter((r) => !tellFeatures(r).has(f.key));
     if (without.length < 4) continue;
-    const tally = new Map();
-    for (const r of without) for (const o of outcomesOf.get(r.file).values()) bump(tally, o.word);
-    const best = top(tally);
+    const t = new Map();
+    for (const r of without) for (const o of outcomesOf.get(r.file).values()) bump(t, o.word);
+    const best = [...t.entries()]
+      .map(([word, hits]) => ({ word, hits, share: percent(hits, without.length) }))
+      .filter((x) => x.share >= ABSENT_SHARE && x.share - percent(base.get(x.word) || 0, set.length) >= TELL_MIN_LIFT)
+      .sort((a, b) => b.share - a.share || b.word.length - a.word.length)[0];
     if (!best) continue;
-    const share = percent(best[1], without.length);
-    if (share < 75) continue;
-    if (share - percent(base.get(best[0]) || 0, set.length) < TELL_MIN_LIFT) continue;
-    const [name, type] = key.split('\0');
+    const share = best.share;
     out.push({
-      utility: nadeName(name, type),
+      utility: featureWords(f, side),
       usual,
-      outcome: best[0],
-      hits: best[1],
+      outcome: best.word,
+      hits: best.hits,
       rounds: without.length,
       share,
-      freq: frequencyWord(best[1], without.length, 75)
+      freq: frequencyWord(best.hits, without.length, ABSENT_SHARE) || 'Mostly',
+      files: without.map((r) => r.file)
     });
   }
   out.sort((a, b) => b.share - a.share || b.rounds - a.rounds);
@@ -536,9 +698,44 @@ function absenceTellsOver(set, side, ctx, { limit = 3 } = {}) {
   return out.filter((t) => (seen.has(t.outcome) ? false : seen.add(t.outcome))).slice(0, limit);
 }
 
+/**
+ * Site utility that reads, grouped by what it reads as: "Tetris flash (21 of
+ * 22), A smoke (19 of 20), Stairs smoke (12 of 13): Mostly A". One line per
+ * answer instead of one per grenade, so every piece of it fits on the sheet.
+ */
+function siteTellGroups(list) {
+  const by = new Map();
+  for (const t of list) {
+    if (!by.has(t.outcome)) by.set(t.outcome, []);
+    by.get(t.outcome).push(t);
+  }
+  return [...by.entries()]
+    .map(([outcome, items]) => {
+      const shown = [...items].sort((a, b) => b.rounds - a.rounds || b.share - a.share).slice(0, 5);
+      return {
+        outcome,
+        freq: shown.every((t) => t.hits === t.rounds) ? 'Always' : 'Mostly',
+        items: shown,
+        rounds: shown.reduce((n, t) => n + t.rounds, 0)
+      };
+    })
+    .sort((a, b) => b.rounds - a.rounds)
+    .slice(0, 4);
+}
+
 function tellsFor(ctx, side) {
   const set = ctx.rounds.filter((r) => r.side === side && r.ownEcon >= 2);
-  const tells = tellsOver(set, side, ctx);
+  const all = tellsOver(set, side, ctx, { limit: 60, siteCap: 99, outcomeCap: 99 });
+  const isSite = (t) => t.kind === 'util' && t.region;
+  const siteGroups = siteTellGroups(all.filter(isSite));
+  const perOutcome = new Map();
+  const tells = [];
+  for (const t of all.filter((x) => !isSite(x))) {
+    const used = perOutcome.get(t.outcome) || 0;
+    if (used >= TELLS_PER_OUTCOME || tells.length >= 8) continue;
+    perOutcome.set(t.outcome, used + 1);
+    tells.push(t);
+  }
   const absent = absenceTellsOver(set, side, ctx);
   const first = set.filter((r) => BUY_CONTEXTS[0].test(r));
   let firstBuy = null;
@@ -546,25 +743,72 @@ function tellsFor(ctx, side) {
     const found = tellsOver(first, side, ctx, { minRounds: 3, minShare: 100, limit: 2 });
     firstBuy = { rounds: first.length, tells: found };
   }
-  return { tells, absent, firstBuy };
+  return { rounds: set.length, tells, siteGroups, absent, firstBuy };
+}
+
+// ---------------------------------------------------------------------------
+// Default utility
+// ---------------------------------------------------------------------------
+
+/**
+ * Utility a side throws in most full buy against full buy rounds: their
+ * default. Each with how often, when (only when it is early enough to be a
+ * timing) and who throws it when one player owns it.
+ */
+function defaultUtilityFor(ctx, side) {
+  const set = ctx.rounds.filter((r) => r.side === side && r.ownEcon >= 4 && r.oppEcon >= 4);
+  if (set.length < 6) return null;
+  const rec = new Map();
+  for (const r of set) {
+    const seen = new Set();
+    for (const n of r.nades) {
+      const label = nadeLabel(n);
+      if (!label) continue;
+      const k = `${label}\0${n.type}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      if (!rec.has(k)) rec.set(k, { label, type: n.type, rounds: 0, times: [], throwers: new Map() });
+      const u = rec.get(k);
+      u.rounds++;
+      u.times.push(throwElapsed(n));
+      bump(u.throwers, n.player);
+    }
+  }
+  const rows = [...rec.values()]
+    .filter((u) => percent(u.rounds, set.length) > 50)
+    .map((u) => {
+      const t = median(u.times);
+      const who = top(u.throwers);
+      return {
+        key: `${u.label}\0${u.type}`,
+        label: u.label,
+        type: u.type,
+        share: percent(u.rounds, set.length),
+        clock: t !== null && t <= SET_CALL_ELAPSED ? clockText(ROUND_SECONDS - t) : '',
+        thrower: who && percent(who[1], u.rounds) >= 50 ? nameOf(ctx, who[0]) : ''
+      };
+    })
+    .sort((a, b) => b.share - a.share || a.label.localeCompare(b.label));
+  return { rounds: set.length, rows };
+}
+
+/** Default utility they drop on a given set of rounds: "No Mid smoke (85% of full buys, 10% here)". */
+function droppedDefaults(ctx, side, set, defaults) {
+  if (!defaults?.rows?.length || set.length < 4) return [];
+  const notes = [];
+  for (const row of defaults.rows) {
+    if (row.share < 60) continue;
+    const here = set.filter((r) => r.nades.some((n) => `${nadeLabel(n)}\0${n.type}` === row.key)).length;
+    const pct = percent(here, set.length);
+    if (pct > 25 || row.share - pct < 40) continue;
+    notes.push(`No ${nadeName(row.label, row.type)} (${row.share}% of full buys, ${pct}% here).`);
+  }
+  return notes.slice(0, 4);
 }
 
 // ---------------------------------------------------------------------------
 // Rounds, grouped into variations
 // ---------------------------------------------------------------------------
-
-/**
- * The moment a round commits, in seconds since it went live: two players on a
- * site, the plant, or failing both the first kill. Utility thrown around it is
- * the call's utility; utility from the other end of the round is not.
- */
-function commitElapsed(r) {
-  const entry = r.siteEntry(2);
-  if (entry) return ROUND_SECONDS - entry.clock;
-  if (Number.isFinite(r.plantClock)) return ROUND_SECONDS - r.plantClock;
-  if (Number.isFinite(r.firstKill?.clock)) return ROUND_SECONDS - r.firstKill.clock;
-  return null;
-}
 
 /** Seconds before the commit that still count as the call's utility. */
 const CALL_UTILITY_LEAD = 25;
@@ -587,11 +831,14 @@ function groupUtility(list, share = 0.5) {
       const key = `${label}|${n.type}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      if (!bag.has(key)) bag.set(key, { label, type: n.type, rounds: 0, times: [], lands: [] });
+      if (!bag.has(key)) {
+        bag.set(key, { label, type: n.type, region: n.region || '', rounds: 0, times: [], lands: [], throwers: new Map() });
+      }
       const rec = bag.get(key);
       rec.rounds++;
       rec.times.push(t);
       rec.lands.push(n.at);
+      bump(rec.throwers, n.player);
     }
   }
   const need = Math.max(1, Math.ceil(list.length * share));
@@ -601,11 +848,30 @@ function groupUtility(list, share = 0.5) {
     .sort((a, b) => (a.t ?? 0) - (b.t ?? 0));
 }
 
+/** Flashes thrown into a hit per round, around the commit, on that site's ground when given. */
+function hitFlashes(list, site = '') {
+  const region = site.toLowerCase();
+  const per = list.map((r) => {
+    const commit = commitElapsed(r);
+    return r.nades.filter((n) => {
+      if (n.type !== 'flashbang') return false;
+      if (region && (n.near || n.region) !== region) return false;
+      const t = throwElapsed(n);
+      return commit === null || (t >= commit - CALL_UTILITY_LEAD && t <= commit + 5);
+    });
+  });
+  return { perRound: median(per.map((l) => l.length)) || 0, all: per.flat() };
+}
+
 /** Per kind, how many spots one line names before it stops being a summary. */
 const UTILITY_PER_KIND = { smokegrenade: 3, molotov: 3, flashbang: 2, hegrenade: 2 };
 
 /** "smokes Top Con and B Site, molo Yekindar + Backsite, flash B Main". */
 export function utilityWords(util) {
+  return joinList(utilityParts(util));
+}
+
+function utilityParts(util) {
   const byType = { smokegrenade: [], molotov: [], flashbang: [], hegrenade: [] };
   for (const u of util) {
     const list = byType[u.type];
@@ -618,33 +884,15 @@ export function utilityWords(util) {
   const flashes = byType.flashbang;
   if (flashes.length) parts.push(`${flashes.length > 1 ? nadePlural('flashbang') : 'flash'} ${joinList(flashes, '+')}`);
   if (byType.hegrenade.length) parts.push(`${NADE_SLANG.hegrenade} ${joinList(byType.hegrenade, '+')}`);
-  return joinList(parts);
-}
-
-function mostCommon(list, pick) {
-  const counts = new Map();
-  for (const x of list) bump(counts, pick(x));
-  const best = top(counts);
-  return best ? best[0] : '';
+  return parts;
 }
 
 const paceGroup = (p) => (p === 'slow-default' ? 'default' : p || 'other');
 
-/** CT formation at the snapshot, in the map's CT order ("2-1-2"). */
-function ctCounts(r, ctx) {
-  const order = (FORMATIONS[ctx.mapCode]?.ct || []).map((c) => c.label);
-  const snap = snapshotSample(r, ctx.mapCode);
-  if (!snap || !snap.pts.length || !order.length) return null;
-  const a = r.towardCount(snap, 'a', 0);
-  const b = r.towardCount(snap, 'b', 0);
-  const ee = Math.max(0, snap.pts.length - a - b);
-  return order.map((slot) => (slot === 'A' ? a : slot === 'B' ? b : ee));
-}
-
 /**
  * What a round looked like up to the moment it committed: pace, site, where
- * the players started, the utility, and when it went. Two rounds with the same
- * shape are the same round played twice.
+ * the players started, the utility, how it went in and when. Two rounds with
+ * the same shape are the same round played twice.
  */
 function shapeOf(r, ctx, side) {
   const commit = commitElapsed(r);
@@ -655,25 +903,32 @@ function shapeOf(r, ctx, side) {
     if (commit !== null && n.at > commit + 3) continue;
     util.add(`${label}\0${n.type}`);
   }
+  const pace = side === 'T' ? classifyPace(r) : '';
   return {
     r,
-    pace: side === 'T' ? paceGroup(classifyPace(r)) : 'ct',
-    slow: side === 'T' && classifyPace(r) === 'slow-default',
-    site: ((side === 'T' ? paceSite(r) : r.hitSite) || '').toUpperCase(),
+    pace: side === 'T' ? paceGroup(pace) : 'ct',
+    slow: pace === 'slow-default',
+    site: roundSite(r),
     commit,
     util,
-    counts: side === 'T' ? laneCountsAt(r, ctx.mapCode, ctx.laneSets) : ctCounts(r, ctx)
+    counts: side === 'T' ? formationOf(r, ctx.mapCode, ctx.laneSets) : null,
+    entry: side === 'T' && r.hasTicks ? entryOf(r, ctx.laneSets) : null,
+    lean: side === 'T' && r.hasTicks ? leanOf(r) : '',
+    call: side === 'CT' ? specificTags(r, 'CT')[0]?.k || '' : '',
+    stack: side === 'CT' && r.hasTicks ? ctStackOf(r) : ''
   };
 }
 
 /**
- * Same round or not: same pace, the same site for anything that commits early,
- * the players starting within a body of each other, the utility mostly the
- * same, and the timing within five seconds (fifteen for slower rounds).
+ * Same round or not. T: same pace, the same site for anything that commits
+ * early, the players starting within a body of each other, the utility
+ * mostly the same, and the timing within five seconds (fifteen for slower
+ * rounds). CT: the same call and the same stack.
  */
 function sameShape(a, b) {
   if (a.pace !== b.pace) return false;
-  const open = a.pace === 'default' || a.pace === 'other' || a.pace === 'ct';
+  if (a.pace === 'ct') return a.call === b.call && a.stack === b.stack;
+  const open = a.pace === 'default' || a.pace === 'other';
   if (!open && a.site !== b.site) return false;
   if (a.counts && b.counts && a.counts.length === b.counts.length) {
     let d = 0;
@@ -702,123 +957,416 @@ function clusterRounds(rounds, ctx, side) {
     if (home) home.members.push(s);
     else clusters.push({ seed: s, members: [s] });
   }
-  return clusters.sort((a, b) => b.members.length - a.members.length || (a.seed.commit ?? 999) - (b.seed.commit ?? 999));
+  return clusters.sort(
+    (a, b) =>
+      b.members.length - a.members.length ||
+      percent(won(b.members), b.members.length) - percent(won(a.members), a.members.length) ||
+      (a.seed.commit ?? 999) - (b.seed.commit ?? 999)
+  );
 }
 
 /** "1x A, 2x B" over the sites a variation ended on. */
 function siteSpread(members) {
-  const sites = new Map();
-  for (const m of members) bump(sites, m.site || 'mid');
-  return [...sites.entries()]
-    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+  return tally(members, (m) => m.site || 'mid')
     .map(([s, n]) => `${n}x ${s}`)
     .join(', ');
 }
 
-/** One variation in a sheet's words: "Full A execute with smokes X + Y". */
-function variationWords(cluster, ctx, side) {
-  const m = cluster.members;
-  const rounds = m.map((s) => s.r);
-  const pace = cluster.seed.pace;
-  const site = mostCommon(m, (s) => s.site);
-  const sites = new Set(m.map((s) => s.site).filter(Boolean));
-  const form = mostCommon(m, (s) =>
-    s.counts ? (side === 'T' ? formatFormation(ctx.mapCode, s.counts) : s.counts.join('-')) : ''
+/** Where the fighting of a site-less fast round happened. */
+function fightZone(members) {
+  return mostCommon(
+    members.filter((m) => m.r.firstKill),
+    (m) => m.r.firstKill.victimZone || m.r.firstKill.attackerZone || ''
   );
-  const commits = m.map((s) => s.commit).filter(Number.isFinite);
-  const clock = commits.length ? clockText(ROUND_SECONDS - median(commits)) : '';
-  // One or two pieces of utility say what the round is; the full list is
-  // detail nobody reads off a printed sheet. Smokes first, a molotov only
-  // when there are none.
-  const common = groupUtility(rounds);
-  const smokes = common.filter((u) => u.type === 'smokegrenade').slice(0, 2);
-  const util = utilityWords(smokes.length ? smokes : common.filter((u) => u.type === 'molotov').slice(0, 1));
-  let head;
-  if (side === 'CT') {
-    const labels = typeLabels(ctx.mapCode, 'CT');
-    const call = mostCommon(m, (s) => specificTags(s.r, 'CT')[0]?.k || '');
-    const early = m.filter((s) => s.r.firstKill && s.r.firstKill.clock >= AGGRESSIVE_CLOCK);
-    const zone = mostCommon(early, (s) => s.r.firstKill.attackerOurs ? s.r.firstKill.attackerZone : s.r.firstKill.victimZone);
-    head = form ? `${form} setup` : 'Setup';
-    if (call && m.filter((s) => specificTags(s.r, 'CT')[0]?.k === call).length * 2 >= m.length) {
-      head += `, ${callName(labels.get(call) || call)}`;
-    }
-    if (zone && early.length * 2 >= m.length) head += `, early fight ${zone}`;
-    return sentence(util ? `${head} with ${util}` : head);
-  }
-  switch (pace) {
-    case 'rush':
-      head = `${site ? `${site} ` : ''}rush${form ? ` (${form})` : ''}`;
-      break;
-    case 'pop':
-      head = `${site ? `${site} ` : ''}pop${clock ? ` around ${clock}` : ''}${form ? ` (${form})` : ''}`;
-      break;
-    case 'contact':
-      head = `${form ? `${form} ` : ''}early fight${clock ? ` around ${clock}` : ''}`;
-      break;
-    case 'full-exec':
-      head = `full ${site ? `${site} ` : ''}execute${clock ? ` around ${clock}` : ''}`;
-      break;
-    case 'default': {
-      const slow = m.filter((s) => s.slow).length * 2 > m.length;
-      head = `${slow ? 'slow ' : ''}default${form ? ` ${form}` : ''}`;
-      break;
-    }
-    default:
-      head = form || 'mixed round';
-  }
-  if (util) head += ` with ${util}`;
-  const open = pace === 'default' || pace === 'other' || pace === 'contact';
-  if (open && sites.size >= 2) head += `. Open ended (${siteSpread(m)})`;
-  else if (open && site) head += ` into ${site}`;
-  return sentence(capitalize(head));
 }
 
-/** Most this many variations by name, then one line for everything else. */
+/**
+ * Why the odd rounds of a variation went elsewhere: something in most of them
+ * that hardly ever happens in the rest. An opening kill or death somewhere,
+ * a smoke or molotov from the other team, or one of ours reaching ground the
+ * usual rounds never reach before the call.
+ */
+function branchWhy(minor, major, ctx) {
+  const reasons = (s) => {
+    const r = s.r;
+    const commit = s.commit ?? 60;
+    const out = new Set();
+    const k = r.firstKill;
+    if (k && ROUND_SECONDS - k.clock <= commit) {
+      const zone = k.victimZone || k.attackerZone;
+      if (zone) out.add(k.attackerOurs ? `after an opening kill at ${zone}` : `after losing a player at ${zone}`);
+    }
+    for (const n of r.enemyNades || []) {
+      if (n.at > commit || (n.type !== 'smokegrenade' && n.type !== 'molotov')) continue;
+      if (n.label) out.add(`after a CT ${n.type === 'molotov' ? 'molotov' : 'smoke'} on ${n.label}`);
+    }
+    for (const [pos, tick] of r.firstVisit || []) {
+      if ((tick - r.t0) / r.tickRate <= commit - 3) out.add(`reach:${pos}`);
+    }
+    return out;
+  };
+  const minorSets = minor.map(reasons);
+  const majorSets = major.map(reasons);
+  let best = null;
+  const keys = new Set(minorSets.flatMap((s) => [...s]));
+  for (const key of keys) {
+    const m = minorSets.filter((s) => s.has(key)).length / minor.length;
+    const M = majorSets.length ? majorSets.filter((s) => s.has(key)).length / majorSets.length : 0;
+    if (m < 0.5 || M > 0.25) continue;
+    const score = m - M;
+    if (!best || score > best.score) best = { key, score };
+  }
+  if (!best) return '';
+  if (best.key.startsWith('reach:')) return `after getting to ${best.key.slice(6)} early`;
+  return best.key;
+}
+
+/** One T variation in a sheet's words. */
+function tVariationWords(cluster, ctx) {
+  const m = cluster.members;
+  const pace = cluster.seed.pace;
+  // Rounds that died before reaching a site say nothing about where it went.
+  const withSite = m.filter((s) => s.site);
+  const [site, siteN] = tally(withSite, (s) => s.site)[0] || ['', 0];
+  const hasSite = Boolean(site) && withSite.length * 2 >= m.length;
+  const noHit = m.length - withSite.length;
+  const hit = hasSite ? m.filter((s) => s.site === site) : [];
+  const entries = hit.map((s) => s.entry).filter((e) => e && e.site === site);
+  const route = mostCommon(entries, (e) => e.route);
+  const split = entries.length > 0 && entries.filter((e) => e.split).length * 2 > entries.length;
+  const form = sharedForm(m, (s) => s.counts);
+  const clock = setClock(median(m.map((s) => s.commit)));
+  const common = groupUtility(m.map((s) => s.r));
+  const smokes = common.filter((u) => u.type === 'smokegrenade').slice(0, 2);
+  const util = utilityWords(smokes.length ? smokes : common.filter((u) => u.type === 'molotov').slice(0, 1));
+  const from = () => (split ? ' split' : route ? ` through ${route}` : '');
+  let head;
+  let extra = '';
+  if (!hasSite && FAST.includes(pace)) {
+    const zone = fightZone(m);
+    head = `Early fight${zone ? ` at ${zone}` : ''}${clock ? ` around ${clock}` : ''}${form ? ` (${form})` : ''}`;
+  } else {
+    switch (pace) {
+      case 'rush':
+        head = `${site} rush${from()}${form ? ` (${form})` : ''}`;
+        break;
+      case 'pop':
+        head = `${site} pop${from()}${clock ? ` around ${clock}` : ''}${form ? ` (${form})` : ''}`;
+        break;
+      case 'contact':
+        head = `Contact into ${site}${from()}${clock ? ` around ${clock}` : ''}${form ? ` (${form})` : ''}`;
+        break;
+      case 'full-exec':
+        head = `Full ${site} execute${split ? ' (split)' : route ? ` from ${route}` : ''}${clock ? ` around ${clock}` : ''}`;
+        break;
+      case 'default': {
+        const slow = m.filter((s) => s.slow).length * 2 > m.length;
+        head = `${slow ? 'Slow default' : 'Default'}${form ? ` ${form}` : ''}`;
+        break;
+      }
+      default:
+        head = form ? `Mixed ${form}` : 'Mixed round';
+    }
+  }
+  if (util) head += ` with ${util}`;
+  if (!hasSite && FAST.includes(pace)) head += ', no hit';
+  if (pace === 'default' || pace === 'other') {
+    if (!hasSite) {
+      const zone = fightZone(m);
+      head += `, no hit${zone ? ` (the fights are at ${zone})` : ''}`;
+    }
+    else if (siteN / withSite.length >= 0.75) {
+      const lean = mostCommon(hit, (s) => s.lean);
+      const exec = groupUtility(hit.map((s) => s.r)).filter((u) => u.type === 'smokegrenade').length >= 2;
+      const how = split ? `${site} split` : `${site} ${exec ? 'exec' : 'hit'}${route ? ` from ${route}` : ''}`;
+      head += ` into ${lean && lean !== site ? `${lean} into ` : ''}${how}`;
+      const minor = withSite.filter((s) => s.site !== site);
+      if (minor.length) {
+        const other = mostCommon(minor, (s) => s.site);
+        const why = branchWhy(minor, hit, ctx);
+        const times = minor.length === 1 ? 'once' : `${minor.length} times`;
+        extra = ` Adapted to ${other} ${times}${why ? `, ${why}` : ''}.`;
+      }
+    } else head += `. Open ended (${siteSpread(withSite)})`;
+    if (hasSite && noHit) extra += ` ${noHit === 1 ? 'One round' : `${noHit} rounds`} never reached a site.`;
+  }
+  return `${sentence(capitalize(head))}${extra}`;
+}
+
+/** One CT variation: the call, the stack, the early fight and who takes it. */
+function ctVariationWords(cluster, ctx) {
+  const m = cluster.members;
+  const labels = typeLabels(ctx.mapCode, 'CT');
+  const call = cluster.seed.call;
+  const stack = cluster.seed.stack;
+  const early = m.filter(
+    (s) => s.r.firstKill && s.r.firstKill.clock >= AGGRESSIVE_CLOCK && (s.r.firstKill.attackerOurs || s.r.firstKill.victimOurs)
+  );
+  const zone = mostCommon(early, (s) => (s.r.firstKill.attackerOurs ? s.r.firstKill.attackerZone : s.r.firstKill.victimZone) || '');
+  const who = tally(early, (s) => (s.r.firstKill.attackerOurs ? s.r.firstKill.attacker : s.r.firstKill.victim))[0];
+  const common = groupUtility(m.map((s) => s.r));
+  const smokes = common.filter((u) => u.type === 'smokegrenade').slice(0, 2);
+  const util = utilityWords(smokes.length ? smokes : common.filter((u) => u.type === 'molotov').slice(0, 1));
+  let head = call ? capitalize(callName(labels.get(call) || call)) : 'Default setup';
+  if (stack) head += `, ${stack} stack`;
+  if (zone && early.length * 2 >= m.length) {
+    const named = who && who[1] * 2 >= early.length ? ` (${nameOf(ctx, who[0])})` : '';
+    head += `, early fight ${zone}${named}`;
+  }
+  return sentence(util ? `${head} with ${util}` : head);
+}
+
+function variationWords(cluster, ctx, side) {
+  return side === 'CT' ? ctVariationWords(cluster, ctx) : tVariationWords(cluster, ctx);
+}
+
+/** A round in two or three words, for the list of the ones played once. */
+function coarseWords(s, side, ctx) {
+  if (side === 'CT') {
+    const labels = typeLabels(ctx.mapCode, 'CT');
+    const call = s.call ? capitalize(callName(labels.get(s.call) || s.call)) : 'Default setup';
+    return s.stack ? `${call}, ${s.stack} stack` : call;
+  }
+  const site = s.site;
+  switch (s.pace) {
+    case 'rush':
+      return site ? `${site} rush` : 'Early fight';
+    case 'pop':
+      return site ? `${site} pop` : 'Early fight';
+    case 'contact':
+      return site ? `Contact into ${site}` : 'Early fight';
+    case 'full-exec':
+      return site ? `${site} execute` : 'Execute, no hit';
+    case 'default':
+      return site ? `Default into ${site}` : 'Default, no hit';
+    default:
+      return site ? `Mixed into ${site}` : 'Mixed, no hit';
+  }
+}
+
+/** Most this many variations by name, then the rest by what they were. */
 const VARIATIONS_SHOWN = 6;
 
 /**
- * A set of rounds as its variations: the six played most, each with how many
- * times, and one line for the rest. Every line is one way the round is played,
- * not one round.
+ * A set of rounds as its variations: the ones played more than once, each
+ * with how many times, then every round played once grouped by what it was
+ * ("Others: 3x B rush (won 2), 2x Default into A (won 1)"). Most played first,
+ * best won first among equals.
  */
 function variationsFor(rounds, ctx, side, { min = 1 } = {}) {
   if (rounds.length < min) return null;
   const clusters = clusterRounds(rounds, ctx, side);
-  const shown = clusters.slice(0, VARIATIONS_SHOWN);
-  const rest = rounds.length - shown.reduce((n, c) => n + c.members.length, 0);
+  // Rounds played once that are still the same kind of round (five A
+  // executes with different smokes) are one variation, named as a group.
+  const singles = clusters.filter((c) => c.members.length === 1).flatMap((c) => c.members);
+  const byWords = new Map();
+  for (const s of singles) {
+    const w = coarseWords(s, side, ctx);
+    if (!byWords.has(w)) byWords.set(w, []);
+    byWords.get(w).push(s);
+  }
+  const promoted = [...byWords.values()].filter((l) => l.length >= 2).map((l) => ({ seed: l[0], members: l }));
+  const rate = (c) => percent(won(c.members), c.members.length);
+  const shown = [...clusters.filter((c) => c.members.length >= 2), ...promoted]
+    .sort((a, b) => b.members.length - a.members.length || rate(b) - rate(a))
+    .slice(0, VARIATIONS_SHOWN);
+  if (!shown.length && clusters.length) shown.push(clusters[0]);
+  const shownFiles = new Set(shown.flatMap((c) => c.members.map((s) => s.r.file)));
   const lines = shown.map((c) => `${c.members.length}x ${variationWords(c, ctx, side)}`);
-  if (rest > 0) lines.push(`${rest}x Other variations`);
-  return { rounds: rounds.length, lines, clusters };
+  const rest = clusters.flatMap((c) => c.members).filter((s) => !shownFiles.has(s.r.file));
+  if (rest.length) {
+    const groups = new Map();
+    for (const s of rest) {
+      const w = coarseWords(s, side, ctx);
+      if (!groups.has(w)) groups.set(w, []);
+      groups.get(w).push(s);
+    }
+    const parts = [...groups.entries()]
+      .sort((a, b) => b[1].length - a[1].length || percent(won(b[1]), b[1].length) - percent(won(a[1]), a[1].length))
+      .map(([w, list]) => `${list.length}x ${w} (won ${won(list)})`);
+    lines.push(`Others: ${parts.join(', ')}.`);
+  }
+  return { rounds: rounds.length, lines, clusters: [...clusters.filter((c) => c.members.length >= 2), ...promoted, ...clusters.filter((c) => c.members.length === 1 && !promoted.some((p) => p.members.includes(c.members[0])))] };
 }
 
 // ---------------------------------------------------------------------------
 // Dangerous rounds and openings
 // ---------------------------------------------------------------------------
 
-/** "VERY quick A pop" and the like: fast, won, and seen more than once. */
+/** Our player in an opening duel, whichever end of it they were on. */
+const ourDuelist = (k) => (k.attackerOurs ? k.attacker : k.victim);
+
+/**
+ * How our player in a duel was moving: pushing (covered ground just before),
+ * or holding (stood still). The shooter's read comes from killRead; a victim
+ * of ours is measured the same way off our own samples.
+ */
+function duelMove(r, k) {
+  if (k.attackerOurs) {
+    const read = killRead(r, k);
+    return read.pushing ? 'pushing' : read.holding ? 'holding' : '';
+  }
+  const now = r.sampleAt(k.tick)?.pts.find((p) => p.id === k.victim);
+  const before = r.sampleAt(k.tick - 2 * r.tickRate)?.pts.find((p) => p.id === k.victim);
+  if (!now || !before) return '';
+  const d = Math.hypot(now.x - before.x, now.y - before.y);
+  return d >= 180 ? 'pushing' : d < 80 ? 'holding' : '';
+}
+
+/** "holding, flashed for him, with the AWP": what most of a set of kills share. */
+function killHow(items) {
+  const n = items.length;
+  if (!n) return '';
+  const words = [];
+  const reads = items.map(({ r, k }) => ({ read: killRead(r, k), move: duelMove(r, k) }));
+  const pushing = reads.filter((x) => x.move === 'pushing').length;
+  const holding = reads.filter((x) => x.move === 'holding').length;
+  if (pushing * 2 > n) words.push('pushing');
+  else if (holding * 2 > n) words.push('holding');
+  const flashed = reads.filter((x) => x.read.flashed).length;
+  if (flashed * 2 >= n) words.push(`flashed for him in ${flashed}`);
+  const alone = reads.filter((x) => x.read.mates === 0).length;
+  if (alone * 10 >= n * 7) words.push('alone');
+  else if ((n - alone) * 10 >= n * 7) words.push('with a teammate next to him');
+  if (reads.filter((x) => x.read.awp).length * 2 > n) words.push('with the AWP');
+  return words.join(', ');
+}
+
+/**
+ * Who gets the opening kills, and how: every main with a real share of them,
+ * the ground they take them on and from, when, and what they share (holding
+ * or pushing, flashed for, alone, AWP).
+ */
+function openerLines(ctx, side, buys) {
+  const mainIds = new Set(ctx.mains.map((m) => m.id));
+  const opens = buys.filter((r) => r.firstKill?.attackerOurs && mainIds.has(r.firstKill.attacker));
+  const byPlayer = new Map();
+  for (const r of opens) {
+    const id = r.firstKill.attacker;
+    if (!byPlayer.has(id)) byPlayer.set(id, []);
+    byPlayer.get(id).push({ r, k: r.firstKill });
+  }
+  const lines = [];
+  const players = [...byPlayer.entries()].filter(([, l]) => l.length >= 3).sort((a, b) => b[1].length - a[1].length);
+  for (const [id, list] of players) {
+    // The ground that repeats by name, then what is left by part of the map
+    // ("3 in long"), and only then "elsewhere".
+    const minZone = Math.max(2, Math.ceil(list.length * 0.15));
+    const zones = tally(list, (x) => x.k.victimZone || '').filter(([z, n]) => z && n >= minZone).slice(0, 3);
+    const parts = [];
+    const used = new Set();
+    for (const [zone, n] of zones) {
+      const at = list.filter((x) => x.k.victimZone === zone);
+      at.forEach((x) => used.add(x));
+      const from = mostCommon(at, (x) => x.k.attackerZone || '');
+      const clock = clockText(median(at.map((x) => x.k.clock)));
+      const how = killHow(at);
+      parts.push(`${n} at ${zone}${from && from !== zone ? ` from ${from}` : ''} around ${clock}${how ? ` (${how})` : ''}`);
+    }
+    const left = list.filter((x) => !used.has(x));
+    const areas = tally(left, (x) => killArea(x.r, x.k, ctx)).filter(([a, n]) => a && n >= 2).slice(0, 2);
+    for (const [area, n] of areas) {
+      const at = left.filter((x) => killArea(x.r, x.k, ctx) === area);
+      at.forEach((x) => used.add(x));
+      const clock = clockText(median(at.map((x) => x.k.clock)));
+      const how = killHow(at);
+      parts.push(`${n} ${/^[AB]$/.test(area) ? 'on' : 'in'} ${area} around ${clock}${how ? ` (${how})` : ''}`);
+    }
+    const rest = list.length - used.size;
+    if (!parts.length) parts.push('spread out');
+    else if (rest > 0) parts.push(`${rest} elsewhere`);
+    lines.push(`${nameOf(ctx, id)} gets the first kill in ${list.length} rounds: ${parts.join('; ')}.`);
+  }
+  return lines;
+}
+
+/** The part of the map a kill happened in: a T lane, else a site's ground. */
+function killArea(r, k, ctx) {
+  const lanes = FORMATIONS[ctx.mapCode]?.t || [];
+  const l = laneOfPos(k.victimZone, ctx.laneSets);
+  if (l >= 0 && lanes[l]) return laneWord(lanes[l]);
+  const site = k.x !== null ? r.siteNear(k.x, k.y) : null;
+  return site ? site.toUpperCase() : '';
+}
+
+/** Player whose name a set of reads keeps, when one of them owns most of it. */
+function owner(ctx, ids) {
+  const best = tally(ids, (x) => x)[0];
+  return best && best[1] * 2 >= ids.length ? nameOf(ctx, best[0]) : '';
+}
+
 function dangerFor(ctx, side) {
   const lines = [];
   const buys = ctx.rounds.filter((r) => r.side === side && r.ownEcon >= 4 && r.hasTicks);
   if (side === 'T') {
-    const clusters = clusterRounds(buys, ctx, 'T').filter(
-      (c) => c.members.length >= 2 && ['rush', 'pop', 'contact', 'full-exec'].includes(c.seed.pace)
-    );
-    const ranked = clusters
-      .map((c) => ({ c, wins: c.members.filter((s) => s.r.won).length }))
-      .filter((x) => x.wins >= 2 && percent(x.wins, x.c.members.length) >= 60)
-      .sort((a, b) => b.wins - a.wins)
-      .slice(0, 3);
-    for (const { c, wins } of ranked) {
-      lines.push(`${variationWords(c, ctx, 'T')} Won ${wins} of ${c.members.length}.`);
+    // Fast rounds and early hits, each with what it brings and who leads it.
+    const early = buys.filter((r) => {
+      const pace = classifyPace(r);
+      if (FAST.includes(pace)) return true;
+      const c = commitElapsed(r);
+      return pace === 'full-exec' && c !== null && c <= 45;
+    });
+    const groups = new Map();
+    for (const r of early) {
+      const pace = classifyPace(r);
+      const site = roundSite(r);
+      const e = entryOf(r, ctx.laneSets);
+      // Grouped by the lane they came down, named by the route most of them
+      // took: "T Outside A" and "A Ramp" are one way into A.
+      const way = site && e?.site === site ? (e.split ? 'split' : e.route ? `lane:${laneOfPos(e.route, ctx.laneSets)}:${laneOfPos(e.route, ctx.laneSets) >= 0 ? '' : e.route}` : '') : '';
+      const key = `${pace}|${site}|${way}`;
+      if (!groups.has(key)) groups.set(key, { pace, site, split: way === 'split', rounds: [] });
+      groups.get(key).rounds.push(r);
+    }
+    for (const g of groups.values()) {
+      const route = g.split ? '' : mostCommon(g.rounds, (r) => entryOf(r, ctx.laneSets)?.route || '');
+      g.how = g.split ? 'split' : route ? `through ${route}` : '';
+    }
+    const ranked = [...groups.values()]
+      .filter((g) => g.rounds.length >= 2)
+      .sort((a, b) => b.rounds.length - a.rounds.length || percent(won(b.rounds), b.rounds.length) - percent(won(a.rounds), a.rounds.length))
+      .slice(0, 5);
+    for (const g of ranked) {
+      const n = g.rounds.length;
+      const clock = setClock(median(g.rounds.map((r) => commitElapsed(r))));
+      const form = sharedForm(g.rounds, (r) => formationOf(r, ctx.mapCode, ctx.laneSets));
+      const word = { rush: 'rush', pop: 'pop', contact: 'contact', 'full-exec': 'execute' }[g.pace] || g.pace;
+      const head = g.site
+        ? `${g.site} ${word}${g.how ? ` ${g.how}` : ''}`
+        : `Early fight at ${mostCommon(g.rounds, (r) => r.firstKill?.victimZone || '') || 'mid'}`;
+      const util = utilitySummary(groupUtility(g.rounds), hitFlashes(g.rounds, g.site).perRound);
+      const leaders = g.rounds.map((r) => entryOf(r, ctx.laneSets)?.players?.[0]?.id).filter(Boolean);
+      const lead = leaders.length >= 2 ? owner(ctx, leaders) : '';
+      const leadN = lead ? leaders.filter((id) => nameOf(ctx, id) === lead).length : 0;
+      lines.push(
+        `${capitalize(head)}${clock ? ` around ${clock}` : ''}${form ? ` (${form})` : ''}, ${n} times, won ${won(g.rounds)}.` +
+          `${util ? ` ${capitalize(util)}.` : ''}${lead ? ` ${lead} first in (${leadN} of ${n}).` : ''}`
+      );
+    }
+
+    // Early calls the round library names: "early long" rounds and the like.
+    const labels = typeLabels(ctx.mapCode, 'T');
+    const calls = new Map();
+    for (const r of buys) {
+      for (const t of specificTags(r, 'T')) {
+        const at = tagTrigger(t);
+        if (at === null || at > 30 || /default/i.test(labels.get(t.k) || t.k)) continue;
+        if (!calls.has(t.k)) calls.set(t.k, { rounds: [], times: [] });
+        calls.get(t.k).rounds.push(r);
+        calls.get(t.k).times.push(at);
+      }
+    }
+    for (const [k, c] of [...calls.entries()].filter(([, c]) => c.rounds.length >= 3).sort((a, b) => b[1].rounds.length - a[1].rounds.length).slice(0, 3)) {
+      const sites = tally(c.rounds, (r) => roundSite(r) || 'no hit');
+      const where = sites.map(([s, n]) => `${n}x ${s}`).join(', ');
+      lines.push(
+        `${capitalize(callName(labels.get(k) || k))} around ${clockText(ROUND_SECONDS - median(c.times))}, ${c.rounds.length} times, won ${won(c.rounds)} (then ${where}).`
+      );
     }
   } else {
-    // CT danger is aggression: early fights away from the sites.
+    // CT danger is aggression: early fights, who takes them and how.
     const early = buys.filter(
-      (r) =>
-        r.firstKill &&
-        r.firstKill.clock >= AGGRESSIVE_CLOCK &&
-        (r.firstKill.attackerOurs || r.firstKill.victimOurs)
+      (r) => r.firstKill && r.firstKill.clock >= AGGRESSIVE_CLOCK && (r.firstKill.attackerOurs || r.firstKill.victimOurs)
     );
     const byZone = new Map();
     for (const r of early) {
@@ -829,48 +1377,184 @@ function dangerFor(ctx, side) {
       byZone.get(zone).push(r);
     }
     const zones = [...byZone.entries()].filter(([, l]) => l.length >= 3).sort((a, b) => b[1].length - a[1].length);
-    for (const [zone, list] of zones.slice(0, 3)) {
-      const won = list.filter((r) => r.firstKill.attackerOurs).length;
+    for (const [zone, list] of zones.slice(0, 4)) {
+      const n = list.length;
+      const wonDuel = list.filter((r) => r.firstKill.attackerOurs).length;
       const clock = clockText(median(list.map((r) => r.firstKill.clock)));
-      lines.push(`Early fight ${zone} around ${clock}, ${list.length} times (won the duel ${won} times).`);
+      const who = tally(list, (r) => ourDuelist(r.firstKill))[0];
+      const moves = list.map((r) => duelMove(r, r.firstKill));
+      const pushing = moves.filter((m) => m === 'pushing').length;
+      const holding = moves.filter((m) => m === 'holding').length;
+      const how = pushing * 2 > n ? ', pushing' : holding * 2 > n ? ', holding' : '';
+      // Utility of ours that went in just before, near the fight.
+      const before = new Map();
+      for (const r of list) {
+        const seen = new Set();
+        for (const g of r.nades) {
+          if (g.tick > r.firstKill.tick || g.tick < r.firstKill.tick - 6 * r.tickRate) continue;
+          const label = nadeLabel(g);
+          if (!label || seen.has(label + g.type)) continue;
+          seen.add(label + g.type);
+          bump(before, `${label}\0${g.type}`);
+        }
+      }
+      const util = top(before);
+      const utilText =
+        util && util[1] * 10 >= n * 4 ? `; ${withUtil(util[0])} first in ${util[1]} of them` : '';
+      // Walking through a smoke into the fight: the break the fight comes from.
+      const breaks = list.filter((r) =>
+        smokeBreaksOf(r).some((b) => b.tick <= r.firstKill.tick && b.tick >= r.firstKill.tick - 5 * r.tickRate)
+      ).length;
+      const breakText = breaks * 10 >= n * 3 ? `; walked through the smoke into it in ${breaks}` : '';
+      const whoText = who && who[1] * 10 >= n * 4 ? `: ${nameOf(ctx, who[0])} in ${who[1]}${how}` : how ? `:${how.slice(1)}` : '';
+      lines.push(`Early fight ${zone} around ${clock}, ${n} times (won the duel ${wonDuel})${whoText}${utilText}${breakText}.`);
     }
     if (buys.length >= 8 && percent(early.length, buys.length) < 20) {
       lines.push('Passive early, the fighting comes in the midround.');
     }
+    // Pushes alone onto ground the Ts had taken, before 1:30.
+    const pushes = new Map();
+    for (const r of buys) {
+      const seen = new Set();
+      for (const m of aggressiveMovesOf(r)) {
+        if (m.elapsed > 25 || seen.has(m.id)) continue;
+        seen.add(m.id);
+        const key = `${m.id}\0${m.zone}`;
+        if (!pushes.has(key)) pushes.set(key, { id: m.id, zone: m.zone, rounds: [], times: [] });
+        pushes.get(key).rounds.push(r);
+        pushes.get(key).times.push(m.elapsed);
+      }
+    }
+    for (const p of [...pushes.values()].filter((p) => p.rounds.length >= 4).sort((a, b) => b.rounds.length - a.rounds.length).slice(0, 2)) {
+      lines.push(
+        `${nameOf(ctx, p.id)} pushes ${p.zone} alone around ${clockText(ROUND_SECONDS - median(p.times))} in ${p.rounds.length} rounds (won ${won(p.rounds)}).`
+      );
+    }
   }
-  // Who gets the first kill, and where. Only the players who carry a real
-  // share of them: everyone gets one sometimes.
-  const opens = buys.filter((r) => r.firstKill?.attackerOurs);
-  const byPlayer = new Map();
-  for (const r of opens) {
-    if (!byPlayer.has(r.firstKill.attacker)) byPlayer.set(r.firstKill.attacker, []);
-    byPlayer.get(r.firstKill.attacker).push(r);
-  }
-  const players = [...byPlayer.entries()]
-    .filter(([, l]) => l.length >= 4 && percent(l.length, opens.length) >= 25)
-    .sort((a, b) => b[1].length - a[1].length)
-    .slice(0, 2);
-  for (const [id, list] of players) {
-    const zone = mostCommon(list, (r) => r.firstKill.victimZone || '');
-    const atZone = zone ? list.filter((r) => r.firstKill.victimZone === zone) : list;
-    const clock = clockText(median(atZone.map((r) => r.firstKill.clock)));
-    const name = ctx.nameOf.get(id) || id;
-    lines.push(
-      `${name} gets the first kill in ${list.length} rounds${
-        zone ? `, ${atZone.length} of them ${zone} around ${clock}` : ` around ${clock}`
-      }.`
-    );
-  }
+
+  // Boosts, smokes walked through and contact searched together.
+  lines.push(...boostLines(ctx, buys));
+  lines.push(...smokeBreakLines(ctx, side, buys));
+  if (side === 'T') lines.push(...contactLines(ctx, buys));
+  lines.push(...awpEarlyLines(ctx, side, buys));
+  lines.push(...openerLines(ctx, side, buys));
   return { lines };
+}
+
+const withUtil = (key) => {
+  const [label, type] = key.split('\0');
+  return `a ${nadeName(label, type)}`;
+};
+
+function boostLines(ctx, buys) {
+  const byZone = new Map();
+  for (const r of buys) {
+    const b = boostsOf(r)[0];
+    if (!b || !b.zone) continue;
+    if (!byZone.has(b.zone)) byZone.set(b.zone, []);
+    byZone.get(b.zone).push({ r, b });
+  }
+  return [...byZone.entries()]
+    .filter(([, l]) => l.length >= 2)
+    .sort((a, b) => b[1].length - a[1].length)
+    .slice(0, 2)
+    .map(([zone, list]) => {
+      const clock = clockText(ROUND_SECONDS - median(list.map((x) => x.b.elapsed)));
+      const top = owner(ctx, list.map((x) => x.b.top));
+      const bottom = owner(ctx, list.map((x) => x.b.bottom));
+      const who = top && bottom ? ` (${top} on ${bottom})` : top ? ` (${top} on top)` : '';
+      return `Boost at ${zone} around ${clock}${who}, ${list.length} rounds, won ${won(list)}.`;
+    });
+}
+
+function smokeBreakLines(ctx, side, buys) {
+  const byZone = new Map();
+  for (const r of buys) {
+    const seen = new Set();
+    for (const b of smokeBreaksOf(r)) {
+      if (b.elapsed > 50 || seen.has(b.zone)) continue;
+      seen.add(b.zone);
+      if (!byZone.has(b.zone)) byZone.set(b.zone, []);
+      byZone.get(b.zone).push({ r, b });
+    }
+  }
+  const them = side === 'T' ? 'CT' : 'T';
+  return [...byZone.entries()]
+    .filter(([, l]) => l.length >= 3)
+    .sort((a, b) => b[1].length - a[1].length)
+    .slice(0, 2)
+    .map(([zone, list]) => {
+      const clock = clockText(ROUND_SECONDS - median(list.map((x) => x.b.elapsed)));
+      const who = owner(ctx, list.map((x) => x.b.id));
+      return `Walk through the ${them} smoke on ${zone} around ${clock}${who ? ` (usually ${who})` : ''}, ${list.length} rounds, won ${won(list)}.`;
+    });
+}
+
+/** Early fights where two or more of ours went looking together. */
+function contactLines(ctx, buys) {
+  const byZone = new Map();
+  for (const r of buys) {
+    const k = r.firstKill;
+    if (!k || k.clock < AGGRESSIVE_CLOCK) continue;
+    const id = ourDuelist(k);
+    const s = r.sampleAt(k.tick);
+    const me = s?.pts.find((p) => p.id === id) || (k.victimOurs && k.x !== null ? { x: k.x, y: k.y } : null);
+    if (!me) continue;
+    const near = (s?.pts || []).filter((p) => p.id !== id && Math.hypot(p.x - me.x, p.y - me.y) <= ALONE_UNITS).length;
+    if (near < 1) continue;
+    const zone = k.victimZone || k.attackerZone;
+    if (!zone) continue;
+    if (!byZone.has(zone)) byZone.set(zone, []);
+    byZone.get(zone).push({ r, near: near + 1 });
+  }
+  return [...byZone.entries()]
+    .filter(([, l]) => l.length >= 3)
+    .sort((a, b) => b[1].length - a[1].length)
+    .slice(0, 2)
+    .map(([zone, list]) => {
+      const clock = clockText(median(list.map((x) => x.r.firstKill.clock)));
+      const players = Math.round(median(list.map((x) => x.near)));
+      const wonDuel = list.filter((x) => x.r.firstKill.attackerOurs).length;
+      return `Search contact at ${zone} with ${players} players around ${clock}, ${list.length} rounds (won the first duel ${wonDuel}).`;
+    });
+}
+
+/** Where the AWP takes early duels, when it does it repeatedly. */
+function awpEarlyLines(ctx, side, buys) {
+  const byZone = new Map();
+  for (const r of buys) {
+    const k = r.firstKill;
+    if (!k || k.clock < AGGRESSIVE_CLOCK) continue;
+    const id = ourDuelist(k);
+    const me = r.sampleAt(k.tick)?.pts.find((p) => p.id === id);
+    const awp = k.attackerOurs ? /awp/.test(k.weapon) : Boolean(me?.awp);
+    if (!awp) continue;
+    const zone = k.attackerOurs ? k.attackerZone || k.victimZone : k.victimZone;
+    if (!zone) continue;
+    if (!byZone.has(zone)) byZone.set(zone, []);
+    byZone.get(zone).push(r);
+  }
+  return [...byZone.entries()]
+    .filter(([, l]) => l.length >= 3)
+    .sort((a, b) => b[1].length - a[1].length)
+    .slice(0, 2)
+    .map(([zone, list]) => {
+      const clock = clockText(median(list.map((r) => r.firstKill.clock)));
+      const who = owner(ctx, list.map((r) => ourDuelist(r.firstKill)));
+      const wonDuel = list.filter((r) => r.firstKill.attackerOurs).length;
+      return `AWP${who ? ` (${who})` : ''} takes the first duel at ${zone} around ${clock} in ${list.length} rounds (won ${wonDuel}).`;
+    });
 }
 
 // ---------------------------------------------------------------------------
 // Anti-ecos, antiforces, force buys and pistols
 // ---------------------------------------------------------------------------
 
-function antiforceFor(ctx, side) {
+function antiforceFor(ctx, side, defaults) {
   const set = ctx.rounds.filter((r) => r.side === side && r.ownEcon >= 4 && r.oppEcon <= 3 && r.hasTicks);
-  return variationsFor(set, ctx, side, { min: 2 });
+  const out = variationsFor(set, ctx, side, { min: 2 });
+  if (out) out.notes = droppedDefaults(ctx, side, set, defaults);
+  return out;
 }
 
 function forceFor(ctx, side) {
@@ -901,7 +1585,7 @@ function pistolsFor(ctx, side) {
   const notes = [];
   if (ordered.length >= 3) {
     const last = out.clusters[clusterOf.get(ordered[ordered.length - 1].file)];
-    const lastWords = last ? variationWords(last, ctx, side).replace(/\.$/, '') : '';
+    const lastWords = last ? variationWords(last, ctx, side).replace(/\.$/, '').split('. ')[0] : '';
     if (!repeats) notes.push(`They never ran the same pistol twice in a row.${lastWords ? ` Last one was: ${lastWords}.` : ''}`);
     else if (lastWords) notes.push(`Last one was: ${lastWords}.`);
   }
@@ -909,8 +1593,150 @@ function pistolsFor(ctx, side) {
 }
 
 // ---------------------------------------------------------------------------
-// T site rounds: what the site players will be dealing with
+// T site rounds: the kinds of hit a site player will be dealing with
 // ---------------------------------------------------------------------------
+
+/** Which kind of hit one T round onto a site was. */
+function hitKind(r, ctx) {
+  const pace = classifyPace(r);
+  if (pace === 'rush' || pace === 'pop') return 'rush';
+  const e = entryOf(r, ctx.laneSets);
+  if (e?.split) return 'split';
+  const smokes = groupUtility([r], 1).filter((u) => u.type === 'smokegrenade').length;
+  if (pace === 'full-exec' || (smokes >= 2 && (e?.players.length || 0) >= 3)) return 'execute';
+  return 'hit';
+}
+
+const HIT_WORD = { rush: 'rushes and pops', execute: 'execute', split: 'split', hit: 'smaller hits' };
+
+/**
+ * One kind of hit onto a site, as a sentence a site player can use: what is
+ * smoked and molotoved, how many flashes and where, who throws what without
+ * coming in, which way the bodies come and how it goes. The clock is only
+ * printed for a set call (utility up before 1:20).
+ */
+function hitKindWords(kind, list, site, ctx) {
+  const n = list.length;
+  const entries = list.map((r) => entryOf(r, ctx.laneSets)).filter((e) => e && e.site === site);
+  const util = groupUtility(list);
+  const smokes = util.filter((u) => u.type === 'smokegrenade');
+  // Molotovs and flashes on the site itself: the default's flashes in mid are
+  // not part of the hit a site player has to play against. Their spots vary
+  // round to round, so they are counted per round and the spots that recur
+  // in a quarter of the rounds are named.
+  const molos = siteUtility(list, site, 'molotov');
+  const flashes = siteUtility(list, site, 'flashbang');
+  const routeCounts = tally(entries.flatMap((e) => e.players.map((p) => p.from)), (x) => x);
+  const perRound = (name) => Math.round(routeCounts.find(([r]) => r === name)?.[1] / Math.max(1, entries.length) || 0);
+  const routes = routeCounts
+    .filter(([name]) => name)
+    .map(([name]) => ({ name, n: perRound(name) }))
+    .filter((x) => x.n >= 1)
+    .slice(0, 3);
+  // A set call is utility up before 1:20; the sheet prints when it is thrown.
+  const landed = median(smokes.map((u) => u.land));
+  const set = smokes.length && setClock(landed) ? clockText(ROUND_SECONDS - median(smokes.map((u) => u.t))) : '';
+  const sentences = [];
+  const route = routes[0]?.name || '';
+  const go =
+    kind === 'split'
+      ? `come in from ${joinList(routes.map((x) => x.name))}`
+      : route
+        ? `go ${entries.length && median(entries.map((e) => e.players.length)) >= 4 ? 'mass ' : ''}through ${route}`
+        : 'go in';
+  // Smokes whose spots vary still count: "smoke CT A + 2 more".
+  const smokeCount = Math.round(
+    median(
+      list.map((r) => {
+        const commit = commitElapsed(r);
+        return r.nades.filter((g) => {
+          if (g.type !== 'smokegrenade') return false;
+          const t = throwElapsed(g);
+          return commit === null || (t >= commit - CALL_UTILITY_LEAD && t <= commit + 5);
+        }).length;
+      })
+    ) || 0
+  );
+  const named = smokes.slice(0, 3).map((u) => u.label);
+  const extraSmokes = smokeCount - named.length;
+  const smokeText = named.length
+    ? `smoke ${joinList(named, '+')}${extraSmokes >= 1 ? ` + ${extraSmokes} more` : ''}`
+    : smokeCount >= 2
+      ? `throw ${smokeCount} smokes`
+      : '';
+  const lead = set
+    ? `Have a set call ${site} ${kind === 'hit' ? 'hit' : kind === 'rush' ? 'pop' : kind}${smokeText ? ` with ${smokeText.replace(/^smoke /, '')} smoke${smokes.length > 1 ? 's' : ''} thrown around ${set}` : ''}`
+    : `On ${kind === 'rush' ? `${site} rushes and pops` : kind === 'hit' ? `${site} hits with little utility` : `${site} ${kind}`}, ${smokeText ? `${smokeText} and ` : ''}${go}`;
+  sentences.push(set ? `${lead}, then ${go}` : lead);
+  for (const u of [molos, flashes]) {
+    if (u.rounds * 100 < u.of * 35) continue;
+    const word = u.type === 'molotov' ? ['molotov', 'molotovs'] : ['flash', 'flashes'];
+    const count = Math.max(1, Math.round(u.perRound));
+    const where = u.spots.length ? `, mostly ${joinList(u.spots)}` : '';
+    sentences.push(
+      u.rounds * 4 >= u.of * 3
+        ? `${capitalize(plural(count, ...word))} ${count === 1 ? 'is' : 'are'} thrown${where}`
+        : `${capitalize(word[1])} in ${u.rounds} of ${u.of} (usually ${count})${where}`
+    );
+  }
+  if (molos.rounds * 5 < molos.of && flashes.rounds * 5 < flashes.of) sentences.push('No flashes or molotovs are thrown');
+  // Utility thrown by someone who never comes in: the lurk's part in it.
+  for (const u of smokes.slice(0, 2)) {
+    const thrower = top(u.throwers);
+    if (!thrower || thrower[1] * 2 < u.rounds) continue;
+    const inside = entries.filter((e) => e.players.some((p) => p.id === thrower[0])).length;
+    if (inside * 10 > entries.length * 3) continue;
+    const role = rolesFor(ctx, 'T').get(thrower[0]);
+    sentences.push(`${nameOf(ctx, thrower[0])}${role ? ` (${role})` : ''} throws the ${u.label} smoke but does not go in`);
+  }
+  if (routes.length) {
+    sentences.push(`Usually ${joinList(routes.map((x) => `${x.n} ${x.name}`))} (${percent(won(list), n)}% won of ${plural(n, 'round')})`);
+  } else {
+    sentences.push(`${percent(won(list), n)}% won of ${plural(n, 'round')}`);
+  }
+  return paragraph(sentences, ctx.names);
+}
+
+/**
+ * One kind of grenade thrown onto a site around the hit: how many a round
+ * (median) and the spots that come back in a quarter of the rounds.
+ */
+function siteUtility(list, site, type) {
+  const region = site.toLowerCase();
+  const per = [];
+  const spots = new Map();
+  for (const r of list) {
+    const commit = commitElapsed(r);
+    const seen = new Set();
+    let n = 0;
+    for (const g of r.nades) {
+      if (g.type !== type || (g.near || g.region) !== region) continue;
+      const t = throwElapsed(g);
+      if (commit !== null && (t < commit - CALL_UTILITY_LEAD || t > commit + 5)) continue;
+      n++;
+      const label = nadeLabel(g);
+      if (label && !seen.has(label)) {
+        seen.add(label);
+        bump(spots, label);
+      }
+    }
+    per.push(n);
+  }
+  const used = per.filter((n) => n > 0);
+  return {
+    type,
+    rounds: used.length,
+    of: list.length,
+    // How many when they do use it, not a median dragged to zero by the
+    // rounds that skip it.
+    perRound: median(used) || 0,
+    spots: [...spots.entries()]
+      .filter(([, c]) => c * 4 >= list.length)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([label]) => label)
+  };
+}
 
 function tSiteFor(ctx, site) {
   const letter = site.toUpperCase();
@@ -919,74 +1745,33 @@ function tSiteFor(ctx, site) {
   const bullets = [];
   if (toward.length < 3) return { site: letter, rounds: toward.length, bullets };
 
-  // The utility that comes in, by how dependably.
-  const all = groupUtility(toward, 0.25);
-  const always = all.filter((u) => percent(u.rounds, toward.length) >= 75);
-  const often = all.filter((u) => {
-    const p = percent(u.rounds, toward.length);
-    return p >= 40 && p < 75;
-  });
-  if (always.length) bullets.push(`Almost always ${utilityWords(always)}.`);
-  if (often.length) bullets.push(`Often ${utilityWords(often)}.`);
-
-  // Patience: when the smokes are up against when they walk in.
-  const lands = [];
-  const entries = [];
+  const kinds = new Map();
   for (const r of toward) {
-    const entry = r.siteEntry(2);
-    if (!entry || entry.site !== site) continue;
-    entries.push({ r, entry });
-    const enter = ROUND_SECONDS - entry.clock;
-    const smokes = r.nades.filter(
-      (n) => n.type === 'smokegrenade' && nadeLabel(n) && n.at <= enter && n.at >= enter - CALL_UTILITY_LEAD
-    );
-    if (smokes.length) lands.push(Math.min(...smokes.map((n) => n.at)));
+    const k = hitKind(r, ctx);
+    if (!kinds.has(k)) kinds.set(k, []);
+    kinds.get(k).push(r);
   }
-  if (entries.length >= 3 && lands.length >= 3) {
-    const land = median(lands);
-    const go = median(entries.map((e) => ROUND_SECONDS - e.entry.clock));
-    if (land !== null && go !== null && go > land) {
-      const wait = Math.round(go - land);
-      bullets.push(
-        `Smokes for the hit land around ${clockText(ROUND_SECONDS - land)}, they enter around ${clockText(ROUND_SECONDS - go)}${
-          wait >= 10 ? ' (patient)' : wait <= 4 ? ' (straight in)' : ''
-        }.`
-      );
-    }
-  }
+  const ranked = [...kinds.entries()]
+    .filter(([, l]) => l.length >= 2)
+    .sort((a, b) => b[1].length - a[1].length);
+  // Set calls go after the rest: "Have a set call ..." reads as the addendum.
+  const setFirst = (list) => {
+    const smokes = groupUtility(list).filter((u) => u.type === 'smokegrenade');
+    return Boolean(smokes.length && setClock(median(smokes.map((u) => u.land))));
+  };
+  ranked.sort((a, b) => Number(setFirst(a[1])) - Number(setFirst(b[1])) || b[1].length - a[1].length);
+  // Kinds played once are too few for a sentence of their own.
+  for (const [kind, list] of ranked) bullets.push(hitKindWords(kind, list, letter, ctx));
 
-  // Where they come from: one entrance, or a split.
-  const routes = new Map();
-  let splits = 0;
-  for (const { r, entry } of entries) {
-    const before = r.sampleAt(entry.tick - 3 * r.tickRate);
-    const after = r.sampleAt(entry.tick);
-    if (!before || !after) continue;
-    const onSite = new Set(after.pts.filter((p) => r.siteNear(p.x, p.y, 0) === site).map((p) => p.id));
-    const from = before.pts.filter((p) => onSite.has(p.id)).map((p) => p.pos).filter(Boolean);
-    const lanes = new Set(from.map((pos) => laneOfPos(pos, ctx.laneSets)).filter((l) => l >= 0));
-    if (lanes.size >= 2) splits++;
-    else bump(routes, mostCommon(from, (x) => x));
-  }
-  const route = top(routes);
-  if (entries.length >= 4) {
-    if (percent(splits, entries.length) >= 40) bullets.push(`Split in ${splits} of ${entries.length} entries.`);
-    if (route && route[0] && percent(route[1], entries.length) >= 40) {
-      bullets.push(`Mostly come in through ${route[0]} (${route[1]} of ${entries.length}).`);
-    }
-  }
-
-  // Late finishes, and where they come from.
-  const late = entries.filter(({ entry }) => entry.clock <= 40);
+  const late = toward.filter((r) => {
+    const e = entryOf(r, ctx.laneSets);
+    return e && e.site === letter && e.elapsed >= ROUND_SECONDS - 40;
+  });
   if (late.length >= 2) {
-    const zone = mostCommon(late, ({ r, entry }) => {
-      const s = r.sampleAt(entry.tick - 3 * r.tickRate);
-      return mostCommon((s?.pts || []).filter((p) => p.pos), (p) => p.pos);
-    });
-    bullets.push(`${late.length} late round finishes${zone ? `, usually from ${zone}` : ''}.`);
+    const zone = mostCommon(late, (r) => entryOf(r, ctx.laneSets).route);
+    bullets.push(`${late.length} late round finishes${zone ? `, usually from ${zone}` : ''} (won ${won(late)}).`);
   }
-
-  const wins = toward.filter((r) => r.won).length;
+  const wins = won(toward);
   bullets.push(`Win ${percent(wins, toward.length)}% of ${letter} rounds (${wins} of ${toward.length}).`);
   return { site: letter, rounds: toward.length, bullets };
 }
@@ -1010,11 +1795,12 @@ function ctVsSiteFor(ctx, site) {
   );
   const bullets = [];
   if (set.length < 3) return { site: letter, rounds: set.length, bullets };
-  const wins = set.filter((r) => r.won).length;
+  const wins = won(set);
   bullets.push(`Win ${percent(wins, set.length)}% against ${letter} hits (${wins} of ${set.length}).`);
 
   const there = [];
   const rotate = [];
+  const rotators = [];
   const util = new Map();
   for (const r of set) {
     const tick = contactTick(r, site);
@@ -1022,10 +1808,14 @@ function ctVsSiteFor(ctx, site) {
     const s = r.sampleAt(tick);
     const n = r.towardCount(s, site, 0);
     there.push(n);
+    const onSite = new Set((s?.pts || []).filter((p) => r.siteNear(p.x, p.y, 0) === site).map((p) => p.id));
     for (const later of r.series) {
       if (later.tick <= tick) continue;
-      if (r.towardCount(later, site, 0) > n) {
+      const arrived = later.pts.find((p) => !onSite.has(p.id) && r.siteNear(p.x, p.y, 0) === site);
+      if (arrived) {
         rotate.push((later.tick - tick) / r.tickRate);
+        const from = s?.pts.find((p) => p.id === arrived.id)?.pos;
+        if (from) rotators.push(from);
         break;
       }
     }
@@ -1044,7 +1834,10 @@ function ctVsSiteFor(ctx, site) {
     bullets.push(`Usually ${n} on ${letter} when the hit comes.`);
   }
   if (rotate.length >= 3) {
-    bullets.push(`First rotator usually arrives ${Math.round(median(rotate))} seconds after the first fight.`);
+    const from = mostCommon(rotators, (x) => x);
+    bullets.push(
+      `First rotator usually arrives ${Math.round(median(rotate))} seconds after the first fight${from ? `, mostly from ${from}` : ''}.`
+    );
   }
   const used = [...util.entries()]
     .filter(([, c]) => percent(c, set.length) >= 40)
@@ -1058,6 +1851,10 @@ function ctVsSiteFor(ctx, site) {
   return { site: letter, rounds: set.length, bullets };
 }
 
+/**
+ * Retakes: how they go, how many are alive for them, and where those players
+ * come from (the ground they stood on when the bomb went down).
+ */
 function retakesFor(ctx) {
   const set = ctx.rounds.filter((r) => r.side === 'CT' && r.ownEcon >= 2 && r.hasTicks && r.plantTick != null);
   const bullets = [];
@@ -1065,13 +1862,26 @@ function retakesFor(ctx) {
     const list = set.filter((r) => (r.plantSite || r.hitSite) === site);
     if (list.length < 2) continue;
     const letter = site.toUpperCase();
-    const wins = list.filter((r) => r.won).length;
+    const wins = won(list);
     const alive = [];
     const waits = [];
+    const from = new Map();
     let saves = 0;
     for (const r of list) {
       const at = r.sampleAt(r.plantTick);
-      if (at) alive.push(at.pts.length);
+      if (at) {
+        alive.push(at.pts.length);
+        const seen = new Set();
+        for (const p of at.pts) {
+          const near = r.siteNear(p.x, p.y, 0);
+          if (near === site) continue;
+          // The other site's ground is one place to come from, whatever corner.
+          const where = near ? `${near.toUpperCase()} site` : p.pos;
+          if (!where || seen.has(where)) continue;
+          seen.add(where);
+          bump(from, where);
+        }
+      }
       // The retake starts with the first fight after the plant.
       const kill = r.kills.find((k) => k.tick > r.plantTick && (k.attackerOurs || k.victimOurs));
       if (kill) waits.push((kill.tick - r.plantTick) / r.tickRate);
@@ -1082,6 +1892,12 @@ function retakesFor(ctx) {
     const wait = waits.length >= 2 ? Math.round(median(waits)) : 0;
     if (wait >= 2) parts.push(`first fight about ${wait} seconds after it`);
     bullets.push(`${parts.join(', ')}.`);
+    const sources = [...from.entries()]
+      .filter(([, n]) => n * 5 >= list.length)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([zone, n]) => `${zone} (${n} of ${list.length})`);
+    if (sources.length) bullets.push(`The retake on ${letter} comes from ${joinList(sources)}.`);
     if (saves >= 2) bullets.push(`Saved instead of retaking ${letter} ${countWord(saves)}.`);
   }
   return { rounds: set.length, bullets };
@@ -1104,7 +1920,7 @@ export function openingsFor(ctx, side) {
           false;
     const phase = phaseAtTick(k.tick, r.bounds);
     const site = r.siteNear(k.x, k.y) || (side === 'T' ? paceSite(r) : r.hitSite) || null;
-    const roundSite = side === 'T' ? paceSite(r) : r.hitSite;
+    const roundSiteOf = side === 'T' ? paceSite(r) : r.hitSite;
     if (!byPlayer.has(k.attacker)) byPlayer.set(k.attacker, []);
     byPlayer.get(k.attacker).push({
       file: r.file,
@@ -1114,14 +1930,14 @@ export function openingsFor(ctx, side) {
       late: phase === 'late',
       setCall,
       site,
-      roundSite,
+      roundSite: roundSiteOf,
       aggressive: k.clock >= AGGRESSIVE_CLOCK
     });
   }
   const total = set.length;
   const lines = [];
   for (const [id, kills] of byPlayer) {
-    const name = ctx.nameOf.get(id) || id;
+    const name = nameOf(ctx, id);
     const seed = `${ctx.seed}|open|${side}|${id}`;
     const zones = new Map();
     for (const k of kills) {
@@ -1237,14 +2053,9 @@ function earlyHome(ctx, side, id) {
 // Players
 // ---------------------------------------------------------------------------
 
-/** Early duels a player has to take part in, as a share of the team's, to read as aggressive. */
-const AGGRESSION_HIGH = 0.35;
-const AGGRESSION_MID = 0.2;
-
 /** The player's sample in one 1s slice, or null. */
 function sampleOf(r, id, elapsed) {
-  const s = r.sampleAt(r.t0 + elapsed * r.tickRate);
-  return s?.pts.find((p) => p.id === id) || null;
+  return sampleAtElapsed(r, elapsed)?.pts.find((p) => p.id === id) || null;
 }
 
 /** Which site a lane stands for, when it stands for one ("B" -> 'b'). */
@@ -1254,23 +2065,26 @@ function laneSite(lane) {
 }
 
 /**
- * One paragraph per player, built from what the rounds say about them. Every
- * sentence is optional: a fact the rounds do not support is left out rather
- * than written vaguely. No recommendations: the analyst writes those.
+ * One paragraph per player about what they actually do: where they play and
+ * whether that changes round to round, how often they go in alone onto ground
+ * the other team held, how often they lurk and what they do on it, the
+ * opening duels they take, and what they throw. Every sentence is optional: a
+ * fact the rounds do not support is left out rather than written vaguely. No
+ * recommendations: the analyst writes those.
  */
 export function playerFor(ctx, side, main, extras) {
   const id = main.id;
   const name = main.name;
-  const role = ctx.rolesOf(id, side) || '';
+  const role = (ctx.mains ? rolesFor(ctx, side).get(id) : '') || ctx.rolesOf?.(id, side) || '';
   const seed = `${ctx.seed}|player|${side}|${id}`;
   const lanes = FORMATIONS[ctx.mapCode]?.t || [];
-  const rounds = ctx.rounds.filter((r) => r.side === side && r.hasTicks);
+  const rounds = ctx.rounds.filter((r) => r.side === side && r.hasTicks && r.ourIds?.includes(id));
   const full = rounds.filter((r) => r.ownEcon >= 4);
   if (!full.length) return null;
+  const them = side === 'T' ? 'CTs' : 'Ts';
 
   // Where they are once out of spawn, by lane, and by ground in the midround.
   const laneEarly = new Map();
-  const zoneEarly = new Map();
   const zoneMid = new Map();
   let earlyN = 0;
   let midN = 0;
@@ -1283,150 +2097,106 @@ export function playerFor(ctx, side, main, extras) {
         earlyN++;
         const lane = laneOfPos(p.pos, ctx.laneSets);
         if (lane >= 0) bump(laneEarly, lane);
-        if (p.pos) bump(zoneEarly, p.pos);
       } else if (s.tick < r.bounds.lateStartTick) {
         midN++;
         if (p.pos) bump(zoneMid, p.pos);
       }
     }
   }
-  // Lanes are the T notation's. A CT has no lane, only the ground they hold.
   const mainLane = side === 'T' ? top(laneEarly) : null;
   const lane = mainLane && lanes[mainLane[0]] ? lanes[mainLane[0]] : null;
   const laneName = lane ? laneWord(lane) : '';
   const laneShare = mainLane ? percent(mainLane[1], earlyN) : 0;
-  // Their usual early ground, inside their lane when they have one.
-  const homeZone =
-    top(
-      new Map(
-        [...zoneEarly].filter(([pos]) => !mainLane || laneOfPos(pos, ctx.laneSets) === mainLane[0])
-      )
-    )?.[0] ||
-    top(zoneEarly)?.[0] ||
-    '';
-
-  // Aggression: the share of the team's early opening duels they are in.
-  const isEarly = (r) => r.firstKill && r.firstKill.clock >= AGGRESSIVE_CLOCK;
-  const inDuel = (r) => r.firstKill && (r.firstKill.attacker === id || r.firstKill.victim === id);
-  const earlyDuels = rounds.filter((r) => isEarly(r) && inDuel(r));
-  const teamEarly = rounds.filter((r) => isEarly(r) && (r.firstKill.attackerOurs || r.firstKill.victimOurs));
-  const opens = rounds.filter(inDuel);
-  const share = teamEarly.length ? earlyDuels.length / teamEarly.length : 0;
-  const aggrKey =
-    share >= AGGRESSION_HIGH ? 'player-aggr-high' : share >= AGGRESSION_MID ? 'player-aggr-mid' : 'player-aggr-low';
-  const earlyZone = mostCommon(earlyDuels, (r) => r.firstKill.victimZone || '');
 
   const awpRounds = full.filter((r) => r.series.some((s) => s.pts.some((p) => p.id === id && p.awp)));
   // A rifler who picks up a dropped AWP five times is not the AWPer.
   const isAwper = awpRounds.length >= 5 && percent(awpRounds.length, full.length) >= 35;
 
   const sentences = [];
-  if (isAwper) {
-    // Where the AWP sits in the midround, round by round.
-    const spots = new Map();
-    for (const r of awpRounds) {
-      const p = sampleOf(r, id, MIDROUND_ELAPSED);
-      const l = p ? laneOfPos(p.pos, ctx.laneSets) : -1;
-      bump(spots, side === 'T' && l >= 0 && lanes[l] ? laneWord(lanes[l]) : p?.pos || '');
+  // Where they start, and whether it changes: the spot at 1:37 round by round.
+  const spots = tally(
+    full.map((r) => sampleOf(r, id, 18)).filter((p) => p?.pos),
+    (p) => {
+      if (side !== 'T') return p.pos;
+      const l = laneOfPos(p.pos, ctx.laneSets);
+      return l >= 0 && lanes[l] ? laneWord(lanes[l]) : p.pos;
     }
-    const ranked = [...spots.entries()].filter(([k]) => k).sort((a, b) => b[1] - a[1]);
+  );
+  const spotN = spots.reduce((n, [, c]) => n + c, 0);
+  if (isAwper) {
+    const ranked = tally(
+      awpRounds.map((r) => sampleOf(r, id, MIDROUND_ELAPSED)).filter(Boolean),
+      (p) => {
+        const l = laneOfPos(p.pos, ctx.laneSets);
+        return side === 'T' && l >= 0 && lanes[l] ? laneWord(lanes[l]) : p.pos || '';
+      }
+    ).filter(([k]) => k);
     const busy = ranked.filter(([, n]) => n >= 2).length;
     sentences.push(say(busy >= 3 ? 'player-awp-dynamic' : 'player-awp-static', seed));
     const shown = ranked.slice(0, 3);
     const restN = ranked.slice(3).reduce((n, [, c]) => n + c, 0);
-    const parts = shown.map(([where, n], i, arr) =>
-      i === arr.length - 1 && arr.length > 2 && n >= 3 && !restN
-        ? `rest (${plural(n, 'round')}) towards ${where}`
-        : n === 1
-          ? `once ${where}`
-          : `${plural(n, 'round')} ${where}`
-    );
+    const parts = shown.map(([where, n]) => (n === 1 ? `once ${where}` : `${plural(n, 'round')} ${where}`));
     if (restN) parts.push(`rest (${plural(restN, 'round')}) spread out`);
     if (parts.length) sentences.push(capitalize(joinList(parts)));
+  } else if (spots.length && spotN >= 6) {
+    const [spot, n] = spots[0];
+    const share = percent(n, spotN);
+    if (share >= 65) {
+      sentences.push(`Plays ${spot} almost every round (${n} of ${spotN}), always doing the same thing`);
+    } else {
+      const parts = spots.slice(0, 3).map(([w, c]) => `${w} ${c}`);
+      sentences.push(`${share >= 45 ? `Mostly ${spot}, but moves around` : 'Dynamic, starts in different places'}: ${joinList(parts)} of ${spotN} rounds`);
+    }
   } else if (side === 'T' && laneName && laneShare >= 35) {
     sentences.push(say('player-plays', seed, { where: laneName }));
-  } else if (role || homeZone) {
-    // On T how aggressive someone is only gets a word when it is extreme
-    // (below); on CT it is part of describing the position.
-    const where = say('player-plays', seed, { where: role || homeZone });
-    sentences.push(side === 'T' ? where : `${where}, ${say(aggrKey, seed)}`);
   }
 
-  // T aggression, only when it stands out: opening duels taken on ground the
-  // team had not reached, or had reached only seconds before.
-  if (side === 'T') {
-    let pushes = 0;
-    const pushZones = new Map();
-    for (const r of full) {
-      const k = r.firstKill;
-      if (!k || k.tick >= r.bounds.midStartTick) continue;
-      if (k.attacker !== id && k.victim !== id) continue;
-      const me = r.sampleAt(k.tick)?.pts.find((p) => p.id === id);
-      const pos = me?.pos || (k.attacker === id ? k.attackerZone : k.victimZone) || '';
-      if (!pos) continue;
-      const first = r.firstVisit?.get(pos);
-      if (first === undefined || k.tick - first <= 6 * r.tickRate) {
-        pushes++;
-        bump(pushZones, pos);
-      }
-    }
-    if (pushes >= 5 && percent(pushes, full.length) >= 25) {
-      const zone = top(pushZones)?.[0];
-      sentences.push(
-        `Very aggressive: in ${pushes} of ${full.length} rounds takes the opening duel pushing ${
-          zone ? `into ${zone} ` : ''
-        }before the team holds it`
-      );
-    }
+  // Aggression: walking alone onto ground the other team held this round.
+  const aggr = [];
+  for (const r of full) {
+    const m = aggressiveMovesOf(r).find((x) => x.id === id && x.elapsed <= 45);
+    if (m) aggr.push({ r, m });
   }
-
-  // The first thing they do in most rounds, with how many are beside them.
-  const withActions = full.map((r) => ({ file: r.file, won: r.won, actions: playerActions(r, id) }));
-  const recurring = recurringActions(withActions, buildTimeIndex(withActions), 0.25).filter((a) =>
-    a.kind === 'nade' ? a.t >= 8 : a.t >= 10
-  );
-  const firstHabit = [...recurring].sort((a, b) => a.t - b.t)[0];
-  if (firstHabit) {
-    const mates = [];
-    for (const f of firstHabit.files.slice(0, 20)) {
-      const r = full.find((x) => x.file === f);
-      const s = r?.sampleAt(r.t0 + firstHabit.t * r.tickRate);
-      const me = s?.pts.find((p) => p.id === id);
-      if (!me) continue;
-      mates.push(s.pts.filter((p) => p.id !== id && Math.hypot(p.x - me.x, p.y - me.y) <= ALONE_UNITS).length);
-    }
-    const near = Math.round(median(mates) ?? 0);
-    const action =
-      firstHabit.kind === 'nade'
-        ? withArticle(nadeName(firstHabit.spot, firstHabit.type))
-        : `getting to ${firstHabit.spot}`;
+  const aggrShare = percent(aggr.length, full.length);
+  if (aggr.length >= 3) {
+    const zone = mostCommon(aggr, (x) => x.m.zone);
+    const zoneN = aggr.filter((x) => x.m.zone === zone).length;
+    const clock = clockText(ROUND_SECONDS - median(aggr.filter((x) => x.m.zone === zone).map((x) => x.m.elapsed)));
+    const level = aggrShare >= 35 ? 'Aggressive' : aggrShare >= 15 ? 'Sometimes aggressive' : 'Rarely aggressive';
     sentences.push(
-      say('player-first-timing', seed, {
-        action,
-        clock: firstHabit.clock,
-        with: near >= 2 ? say('player-with-mates', seed, { n: near }) : near === 1 ? say('player-with-mate', seed) : ''
-      })
+      `${level}: goes in alone onto ground the ${them} held in ${aggr.length} of ${full.length} rounds, ${
+        zoneN >= 2 ? `mostly ${zone} around ${clock}` : 'never the same place twice'
+      } (won ${won(aggr)})`
     );
+  } else if (full.length >= 8) {
+    sentences.push(`Hardly ever goes in alone (${aggr.length} of ${full.length} rounds)`);
   }
 
-  // How rarely the team commits to their lane: "at 1:20 only twice with 3+ mid".
-  if (side === 'T' && lane && !laneSite(lane) && !isAwper) {
-    let n = 0;
-    for (const r of full) {
-      const s = r.sampleAt(r.t0 + MIDROUND_ELAPSED * r.tickRate);
-      if (!s) continue;
-      const inLane = s.pts.filter((p) => laneOfPos(p.pos, ctx.laneSets) === mainLane[0]).length;
-      if (inLane >= 3) n++;
-    }
-    if (n >= 1 && n <= 3) {
+  // Lurks (T): away from the team when it commits, and what he does there.
+  if (side === 'T') {
+    const lurks = full.filter((r) => lurkersOf(r).has(id));
+    if (lurks.length >= 4 && percent(lurks.length, full.length) >= 8) {
+      const where = mostCommon(lurks, (r) => sampleOf(r, id, commitElapsed(r) ?? MIDROUND_ELAPSED)?.pos || '');
+      const active = lurks.filter((r) => {
+        const c = commitElapsed(r);
+        return aggressiveMovesOf(r).some((m) => m.id === id && c !== null && Math.abs(m.elapsed - c) <= 15);
+      }).length;
+      const kills = lurks.filter((r) => {
+        const c = commitElapsed(r);
+        return r.kills.some((k) => k.attacker === id && c !== null && ROUND_SECONDS - k.clock >= c - 10 && ROUND_SECONDS - k.clock <= c + 15);
+      }).length;
       sentences.push(
-        say('player-team-lane', seed, {
-          clock: clockText(ROUND_SECONDS - MIDROUND_ELAPSED),
-          count: countWord(n),
-          lane: laneName
-        })
+        `Lurks in ${lurks.length} of ${full.length} rounds${where ? `, mostly ${where}` : ''}: pushes alone while the team hits in ${active}, gets a kill around the hit in ${kills}`
       );
     }
+  }
+
+  // Opening duels: how often they are in one and how they go.
+  const opens = full.filter((r) => r.firstKill && (r.firstKill.attacker === id || r.firstKill.victim === id));
+  if (opens.length >= 4) {
+    const winsDuel = opens.filter((r) => r.firstKill.attacker === id).length;
+    const zone = mostCommon(opens, (r) => r.firstKill.victimZone || '');
+    sentences.push(`Takes the first duel in ${opens.length} of ${full.length} rounds (wins ${winsDuel})${zone ? `, most often at ${zone}` : ''}`);
   }
 
   // When the fights come, in their lane if they have one.
@@ -1444,24 +2214,15 @@ export function playerFor(ctx, side, main, extras) {
   if (fightSet.length >= 3) {
     const zone = mostCommon(fightSet, (f) => f.zone);
     const where = inLane ? `${laneSite(lane) ? 'on' : 'in'} ${laneName}` : zone ? `on ${zone}` : '';
-    let line = say('player-active-around', seed, {
-      where,
-      clock: clockText(median(fightSet.map((f) => f.clock)))
-    }).replace(/\s+around/, ' around');
-    if (side !== 'T' && aggrKey === 'player-aggr-low' && laneEarly.size >= 2) {
-      line = `${line}, ${say('player-otherwise-passive', seed)}`;
-    }
-    sentences.push(line);
-  }
-  if (side !== 'T' && earlyDuels.length >= 2 && earlyDuels.length <= 4 && earlyZone && aggrKey !== 'player-aggr-high') {
-    sentences.push(say('player-early-peeks', seed, { zone: earlyZone }));
+    sentences.push(
+      say('player-active-around', seed, { where, clock: clockText(median(fightSet.map((f) => f.clock))) }).replace(/\s+around/, ' around')
+    );
   }
 
   // The ground they hold in the midround and how long they stay on it.
-  let holdZone = '';
   const hold = top(zoneMid);
   if (hold && midN && percent(hold[1], midN) >= 25) {
-    holdZone = hold[0];
+    const holdZone = hold[0];
     const leaves = [];
     for (const r of full) {
       let last = null;
@@ -1477,40 +2238,20 @@ export function playerFor(ctx, side, main, extras) {
     }
   }
 
-  // Ground they hold early, and how rarely they are still on it at 1:30.
-  let earlyHold = '';
-  {
-    const spots = new Map();
-    for (const r of full) bump(spots, sampleOf(r, id, 15)?.pos || '');
-    spots.delete('');
-    const best = top(spots);
-    if (best && full.length >= 6 && percent(best[1], full.length) >= 40 && best[0] !== holdZone) {
-      earlyHold = best[0];
-      const still = full.filter((r) => sampleOf(r, id, 25)?.pos === earlyHold).length;
-      if (still >= 1 && percent(still, best[1]) <= 35) {
-        sentences.push(say('player-late-hold', seed, { n: still, zone: earlyHold, clock: '1:30' }));
-      }
-    }
-  }
-
   // Utility they throw round after round.
   const util = (extras?.utility || []).filter((u) => u.share >= 25);
   if (util.length) {
     sentences.push(
       say('player-utility', seed, {
-        list: joinList(
-          util.slice(0, 2).map((u) => `${withArticle(nadeName(u.name, u.type))} at ${u.clock} (${u.share}%)`)
-        )
+        list: joinList(util.slice(0, 2).map((u) => `a ${nadeName(u.name, u.type)} at ${u.clock} (${u.share}%)`))
       })
     );
   }
 
   // T: do they leave their lane when the team commits to the other site?
-  let leavesHome = false;
-  let otherSite = '';
-  if (side === 'T' && lane && laneSite(lane) && homeZone) {
+  if (side === 'T' && lane && laneSite(lane)) {
     const home = laneSite(lane);
-    otherSite = home === 'a' ? 'b' : 'a';
+    const otherSite = home === 'a' ? 'b' : 'a';
     const away = full.filter((r) => paceSite(r) === otherSite);
     if (away.length >= 3) {
       let joined = 0;
@@ -1521,10 +2262,9 @@ export function playerFor(ctx, side, main, extras) {
       }
       const joinShare = percent(joined, away.length);
       if (joinShare >= 70) {
-        leavesHome = true;
         sentences.push(say('player-joins', seed, { lane: otherSite.toUpperCase(), share: joinShare }));
       } else if (joinShare <= 30) {
-        sentences.push(say('player-stays', seed, { zone: homeZone, other: otherSite.toUpperCase() }));
+        sentences.push(say('player-stays', seed, { zone: laneName, other: otherSite.toUpperCase() }));
       }
     }
   }
@@ -1538,6 +2278,140 @@ export function playerFor(ctx, side, main, extras) {
     // The analyst writes the recommendations; the sheet only states facts.
     rec: ''
   };
+}
+
+// ---------------------------------------------------------------------------
+// Misc statistics
+// ---------------------------------------------------------------------------
+
+const MISC_MIN_ROUNDS = 8;
+
+/** "about twice as much", "a bit more", "about as often". */
+function ratioWords(a, b) {
+  if (!a || !b) return '';
+  const r = a / b;
+  if (r >= 2.6) return `about ${Math.round(r)} times as much as`;
+  if (r >= 1.7) return 'about twice as much as';
+  if (r >= 1.25) return 'a bit more than';
+  return '';
+}
+
+/**
+ * What the other team did in our rounds, in the words a sheet uses: their
+ * round-library calls, and on our T side their stacks and where their AWP
+ * started; on our CT side how many of them went towards a site or mid.
+ */
+function enemyShapes(r, ctx) {
+  const out = new Set();
+  const them = r.side === 'T' ? 'CT' : 'T';
+  const labels = typeLabels(ctx.mapCode, them);
+  for (const t of specificTags(r, them)) out.add(capitalize(callWords(labels.get(t.k) || t.k)));
+  if (!r.hasTicks) return out;
+  if (r.side === 'T') {
+    const s = sampleAtElapsed(r, 25);
+    const a = oppToward(r, s, 'a', 0);
+    const b = oppToward(r, s, 'b', 0);
+    if (a >= 3 && a > b) out.add('Enemy A stack (3+ on A at 1:30)');
+    if (b >= 3 && b > a) out.add('Enemy B stack (3+ on B at 1:30)');
+    const awp = sampleAtElapsed(r, 15)?.opp?.find((p) => p.awp);
+    if (awp?.pos) {
+      const lanes = FORMATIONS[ctx.mapCode]?.t || [];
+      const l = laneOfPos(awp.pos, ctx.laneSets);
+      const site = r.siteNear(awp.x, awp.y);
+      const area = site ? site.toUpperCase() : l >= 0 && lanes[l] ? laneWord(lanes[l]) : awp.pos;
+      out.add(`Enemy AWP ${area} start`);
+    }
+  } else {
+    const s = sampleAtElapsed(r, 35);
+    if (oppToward(r, s, 'a') >= 3) out.add('A defaults (3+ enemy players towards A)');
+    if (oppToward(r, s, 'b') >= 3) out.add('B defaults (3+ enemy players towards B)');
+    const lanes = FORMATIONS[ctx.mapCode]?.t || [];
+    const mid = lanes.findIndex((l) => l.key === 'mid' || /mid/i.test(l.label));
+    const snap = sampleAtElapsed(r, 13);
+    if (mid >= 0 && (snap?.opp || []).filter((p) => laneOfPos(p.pos, ctx.laneSets) === mid).length >= 4) {
+      out.add('4 mid rounds from Ts');
+    }
+  }
+  return out;
+}
+
+function miscFor(ctx) {
+  const paragraphs = { T: [], CT: [] };
+  // T side.
+  {
+    const set = ctx.rounds.filter((r) => r.side === 'T' && r.ownEcon >= 2);
+    const a = set.filter((r) => roundSite(r) === 'A');
+    const b = set.filter((r) => roundSite(r) === 'B');
+    if (a.length + b.length >= 6) {
+      const wa = percent(won(a), a.length);
+      const wb = percent(won(b), b.length);
+      const lead = Math.abs(wa - wb) < 10 ? '' : wa > wb ? 'A' : 'B';
+      const pref = lead
+        ? `, more successful on ${lead}`
+        : ', with no indication given to which they prefer due to success';
+      const more = a.length >= b.length ? ['A', a.length, b.length, 'B'] : ['B', b.length, a.length, 'A'];
+      const ratio = ratioWords(more[1], more[2]);
+      const amount = ratio
+        ? ` In terms of amount, they go ${more[0]} ${ratio} ${more[3]}.`
+        : ' In terms of amount, they go to both sites about as often.';
+      paragraphs.T.push(`On their T side, they win ${wa}% of A rounds and ${wb}% of B rounds${pref}.${amount}`);
+    }
+    const rows = faced(set, ctx);
+    const bad = rows.filter((x) => x.winrate < 50).sort((x, y) => x.winrate - y.winrate);
+    if (rows.length) {
+      if (bad.length) {
+        const items = bad.slice(0, 4).map((x) => `${x.label} (${ctx.teamName} have ${x.winrate}% winrate against this, ${x.rounds} rounds)`);
+        paragraphs.T.push(
+          bad.length <= 3
+            ? `Highlights for T include only ${bad.length} CT start${bad.length === 1 ? '' : 's'} that ${bad.length === 1 ? 'has' : 'have'} a positive winrate against them:`
+            : `${bad.length} CT starts have a positive winrate against them on T. The ones that hurt them most:`
+        );
+        paragraphs.T.push({ list: items });
+      } else {
+        const worst = [...rows].sort((x, y) => x.winrate - y.winrate)[0];
+        paragraphs.T.push(
+          `No CT start has a positive winrate against them; the hardest for them is ${worst.label} (${worst.winrate}% won, ${worst.rounds} rounds).`
+        );
+      }
+    }
+  }
+  // CT side.
+  {
+    const set = ctx.rounds.filter((r) => r.side === 'CT' && r.ownEcon >= 2);
+    const a = set.filter((r) => r.hitSite === 'a');
+    const b = set.filter((r) => r.hitSite === 'b');
+    if (a.length + b.length >= 6) {
+      paragraphs.CT.push(
+        `On their CT side, they have a ${percent(won(a), a.length)}% winrate against A rounds, and a ${percent(won(b), b.length)}% winrate against B rounds.`
+      );
+    }
+    const rows = faced(set, ctx);
+    const good = rows.filter((x) => x.winrate >= 55).sort((x, y) => y.winrate - x.winrate).slice(0, 3);
+    const weak = rows.filter((x) => x.winrate < 45).sort((x, y) => x.winrate - y.winrate).slice(0, 2);
+    if (good.length) {
+      paragraphs.CT.push(
+        `Highlights for CT include ${joinList(good.map((x) => `a ${x.winrate}% winrate against ${x.label} (${x.rounds} rounds)`))}.`
+      );
+    }
+    if (weak.length) {
+      paragraphs.CT.push(`They struggle against ${joinList(weak.map((x) => `${x.label} (${x.winrate}% won, ${x.rounds} rounds)`))}.`);
+    }
+  }
+  return paragraphs;
+}
+
+/** Our winrate against each thing the other team did, with enough rounds of it. */
+function faced(set, ctx) {
+  const by = new Map();
+  for (const r of set) {
+    for (const label of enemyShapes(r, ctx)) {
+      if (!by.has(label)) by.set(label, []);
+      by.get(label).push(r);
+    }
+  }
+  return [...by.entries()]
+    .filter(([, l]) => l.length >= MISC_MIN_ROUNDS)
+    .map(([label, l]) => ({ label, rounds: l.length, winrate: percent(won(l), l.length) }));
 }
 
 // ---------------------------------------------------------------------------
@@ -1561,22 +2435,24 @@ export function buildSummaryReport({ extract, sections, mapCode, teamName }) {
     teamName,
     seed: `${teamName}|${mapCode}`,
     // Handles are written as their owners write them, sentence start or not.
-    names: [...(extract.nameOf?.values?.() || [])]
+    names: [...new Set([...(extract.nameOf?.values?.() || []), ...(extract.mains || []).map((m) => m.name)])]
   };
   const players = sections?.players || [];
-  const out = { teamName, mapCode, sides: {} };
+  const out = { teamName, mapCode, sides: {}, misc: miscFor(ctx) };
   for (const side of ['T', 'CT']) {
     const order = ['b', 'a'];
     const count = (s) =>
       ctx.rounds.filter((r) => r.side === side && (side === 'T' ? paceSite(r) : r.hitSite) === s).length;
     order.sort((x, y) => count(y) - count(x));
+    const defaults = defaultUtilityFor(ctx, side);
     out.sides[side] = {
       positions: positionsFor(ctx, side),
       pace: side === 'T' ? paceFor(ctx) : null,
-      setups: side === 'CT' ? setupsFor(ctx) : null,
+      setups: side === 'CT' ? ctCallsFor(ctx) : null,
       tells: tellsFor(ctx, side),
+      defaults,
       danger: dangerFor(ctx, side),
-      antiforce: antiforceFor(ctx, side),
+      antiforce: antiforceFor(ctx, side, defaults),
       force: forceFor(ctx, side),
       sites: order.map((s) => (side === 'T' ? tSiteFor(ctx, s) : ctVsSiteFor(ctx, s))),
       retakes: side === 'CT' ? retakesFor(ctx) : null,
@@ -1624,13 +2500,6 @@ function paceHtml(esc, pace) {
   );
 }
 
-function setupsHtml(esc, setups) {
-  if (!setups?.rows?.length) return '';
-  return li(
-    setups.rows.map((r) => `${esc(r.label)}: ${r.share}% (${r.count}, ${r.winrate}% won)${aside(r.note, esc)}`)
-  );
-}
-
 function callsHtml(esc, setups) {
   if (!setups?.calls?.length) return '';
   return li(
@@ -1644,9 +2513,13 @@ function tellsHtml(esc, tells) {
   const rows = tells.tells.map(
     (t) => `${esc(capitalize(t.utility))}: ${note(esc(`${t.freq} ${t.outcome}`))} (${t.hits} of ${t.rounds})`
   );
+  for (const g of tells.siteGroups || []) {
+    const items = g.items.map((t) => `${t.utility} (${t.hits} of ${t.rounds})`);
+    rows.push(`${esc(capitalize(joinList(items)))}: ${note(esc(`${g.freq} ${g.outcome}`))}`);
+  }
   for (const t of tells.absent || []) {
     rows.push(
-      `Without ${esc(t.utility)} (${100 - t.usual}% of rounds): ${note(esc(`${t.freq || 'Mostly'} ${t.outcome}`))} (${t.hits} of ${t.rounds})`
+      `No ${esc(t.utility)} (thrown in ${t.usual}% of rounds): ${note(esc(`${t.freq || 'Mostly'} ${t.outcome}`))} (${t.hits} of ${t.rounds})`
     );
   }
   if (tells.firstBuy) {
@@ -1662,6 +2535,16 @@ function tellsHtml(esc, tells) {
   return li(rows);
 }
 
+function defaultsHtml(esc, d) {
+  if (!d?.rows?.length) return '';
+  return li(
+    d.rows.map((u) => {
+      const bits = [u.clock ? `usually ${u.clock}` : '', u.thrower].filter(Boolean).join(', ');
+      return `${esc(capitalize(nadeName(u.label, u.type)))}: ${u.share}%${bits ? ` (${esc(bits)})` : ''}`;
+    })
+  );
+}
+
 const linesHtml = (esc, lines) => li((lines || []).map((l) => esc(l)));
 
 function variationsHtml(esc, v) {
@@ -1673,6 +2556,16 @@ function playersHtml(esc, list) {
   return list
     .map((p) => `<h3>${esc(p.name)}${p.role ? ` (${esc(p.role)})` : ''}</h3><p>${esc(p.text)}</p>`)
     .join('');
+}
+
+function miscHtml(esc, misc) {
+  const block = (items) =>
+    items
+      .map((x) => (typeof x === 'string' ? `<p>${esc(x)}</p>` : `<ol>${x.list.map((i) => `<li>${esc(i)}</li>`).join('')}</ol>`))
+      .join('');
+  const t = block(misc?.T || []);
+  const ct = block(misc?.CT || []);
+  return t || ct ? `${t}${ct}` : '';
 }
 
 /**
@@ -1700,11 +2593,9 @@ export function buildSummaryDocHtml(spec, esc) {
     };
     section('positions', 'Positions', positionsHtml(esc, bag.positions));
     if (side === 'T') section('pace', 'Pace', paceHtml(esc, bag.pace));
-    else {
-      section('pace', `Setups (${(bag.setups?.order || []).join(' - ')})`, setupsHtml(esc, bag.setups));
-      section('pace', 'Calls', callsHtml(esc, bag.setups));
-    }
+    else section('pace', 'Calls', callsHtml(esc, bag.setups));
     section('tells', 'Tells', tellsHtml(esc, bag.tells));
+    section('defaults', 'Default utility', defaultsHtml(esc, bag.defaults));
     if (side === 'T') section('force', 'Force buys', variationsHtml(esc, bag.force));
     section('danger', 'Dangerous rounds & openings', linesHtml(esc, bag.danger?.lines));
     section('antiforce', side === 'T' ? 'Antiforces' : 'Anti-ecos', variationsHtml(esc, bag.antiforce));
@@ -1715,6 +2606,10 @@ export function buildSummaryDocHtml(spec, esc) {
     if (side === 'CT') section('sites', 'Retakes', linesHtml(esc, bag.retakes?.bullets));
     section('pistols', 'Pistols', variationsHtml(esc, bag.pistols));
     if (cats.has('players') && bag.players.length) parts.push(playersHtml(esc, bag.players));
+  }
+  if (cats.has('misc')) {
+    const html = miscHtml(esc, spec.report?.misc);
+    if (html) parts.push(`<h2 style="${HEADING_STYLE}">MISC STATISTICS:</h2>${html}`);
   }
   return parts.join('');
 }

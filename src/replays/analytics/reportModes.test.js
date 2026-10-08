@@ -35,7 +35,7 @@ const summary = buildSummaryDocHtml(
   {
     teamName: 'WBT',
     mapCode: 'ANU',
-    categories: ['sideT', 'positions', 'pace', 'tells', 'danger', 'antiforce', 'pistols', 'players'],
+    categories: ['sideT', 'positions', 'pace', 'tells', 'defaults', 'danger', 'antiforce', 'pistols', 'players', 'misc'],
     report: {
       sides: {
         T: {
@@ -49,16 +49,35 @@ const summary = buildSummaryDocHtml(
           },
           tells: {
             tells: [{ utility: 'Top Con flash', freq: 'Always', outcome: 'B', hits: 6, rounds: 6, hitFiles: ['r1'] }],
+            siteGroups: [
+              {
+                outcome: 'B',
+                freq: 'Always',
+                items: [
+                  { utility: 'Kitchen smoke', hits: 11, rounds: 11 },
+                  { utility: 'B Bench molo', hits: 6, rounds: 6 }
+                ]
+              }
+            ],
             absent: [{ utility: 'Window smoke', usual: 70, freq: 'Mostly', outcome: 'A', hits: 8, rounds: 10 }],
             firstBuy: { rounds: 4, tells: [] }
           },
+          defaults: { rounds: 30, rows: [{ label: 'Top mid', type: 'smokegrenade', share: 90, clock: '1:50', thrower: 'Psycho' }] },
           danger: { lines: ['Smash gets the first kill in 13 rounds, 6 of them A Main around 1:16.'] },
-          antiforce: { rounds: 7, lines: ['4x Quick 4 mid fight', '3x Other variations'] },
+          antiforce: {
+            rounds: 7,
+            lines: ['4x Quick 4 mid fight', 'Others: 2x B rush (won 1), 1x A pop (won 0).'],
+            notes: ['No Top mid smoke (90% of full buys, 10% here).']
+          },
           force: null,
           sites: [],
           pistols: { rounds: 3, lines: ['2x A rush', '1x Other variations'], notes: ['They never ran the same pistol twice in a row.'] },
           players: [{ name: 'Psycho', role: 'Mid', text: 'Plays mid.', rec: '' }]
         }
+      },
+      misc: {
+        T: ['On their T side, they win 55% of A rounds and 53% of B rounds.', { list: ['Enemy AWP B start (WBT have 44% winrate against this, 9 rounds)'] }],
+        CT: ['On their CT side, they have a 61% winrate against A rounds.']
       }
     }
   },
@@ -72,9 +91,15 @@ assert.match(summary, /Rush: 10% \(6, 5 towards B, 0 towards A\)/);
 assert.equal(NOTE_COLOR, '#6aa84f', 'notes are green');
 assert.ok(summary.includes(`<span style="color: ${NOTE_COLOR}">*They never rush A</span>`), 'pace note in green');
 assert.ok(summary.includes(`<span style="color: ${NOTE_COLOR}">Always B</span>`), 'tell answer in green');
-assert.match(summary, /Without Window smoke \(30% of rounds\): <span[^>]*>Mostly A<\/span> \(8 of 10\)/);
+assert.match(summary, /No Window smoke \(thrown in 70% of rounds\): <span[^>]*>Mostly A<\/span> \(8 of 10\)/);
+assert.match(summary, /Kitchen smoke \(11 of 11\) and B Bench molo \(6 of 6\): <span[^>]*>Always B<\/span>/, 'site tells grouped by answer');
+assert.match(summary, /<h3>T Default utility<\/h3><ul><li>Top mid smoke: 90% \(usually 1:50, Psycho\)<\/li><\/ul>/);
+assert.match(summary, /<li>Others: 2x B rush \(won 1\), 1x A pop \(won 0\)\.<\/li>/, 'the rest are listed, not counted');
+assert.ok(summary.includes(`<span style="color: ${NOTE_COLOR}">*No Top mid smoke (90% of full buys, 10% here).</span>`), 'dropped default in green');
+assert.match(summary, /<h2 style="font-size: 19px">MISC STATISTICS:<\/h2><p>On their T side, they win 55%/);
+assert.match(summary, /<ol><li>Enemy AWP B start \(WBT have 44% winrate against this, 9 rounds\)<\/li><\/ol>/);
 assert.ok(summary.includes(`<span style="color: ${NEGATIVE_COLOR}">No tells for first buy</span>`), 'missing tells in red');
-assert.match(summary, /<h3>T Antiforces<\/h3><ul><li>4x Quick 4 mid fight<\/li><li>3x Other variations<\/li><\/ul>/);
+assert.match(summary, /<h3>T Antiforces<\/h3><ul><li>4x Quick 4 mid fight<\/li>/);
 assert.match(summary, /<h3>T Pistols<\/h3>.*They never ran the same pistol/);
 assert.match(summary, /<h3>Psycho \(Mid\)<\/h3><p>Plays mid\.<\/p>/);
 assert.ok(!summary.includes('<a '), 'printed: no links');
