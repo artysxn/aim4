@@ -16,3 +16,8 @@
 *.png   binary
 *.jpg   binary
 *.jpeg  binary
+
+# The demo library's round files: compressed, so the same guess applies.
+*.tickz       binary
+*.zst         binary
+*.aim4replay  binary

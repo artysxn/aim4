@@ -30,6 +30,22 @@ dist/
 # without git; committing it would double the map for no one's benefit.
 /server/data/cs3d/pack/*/geo.orig/
 
+# The demo library ships too, so a second machine gets the same matches: the
+# match records (demos/) and their compact round files (rounds/), with the
+# team pages, painted zones, lineups and notes that go with them. Not the
+# stats index (stats/, rebuilt on boot), not upload scratch, and never sim/
+# (tens of GB of simulated rounds).
+!/server/data/replays/
+/server/data/replays/*
+!/server/data/replays/teams.json
+!/server/data/replays/zones/
+!/server/data/replays/coachSmokes/
+!/server/data/replays/local/
+/server/data/replays/local/*
+!/server/data/replays/local/demos/
+!/server/data/replays/local/rounds/
+!/server/data/replays/local/notes.json
+
 # Extracted duel corpus + training logs. Regenerate with:
 #   node scripts/extract-duel-episodes.mjs
 scripts/duel-cache/
@@ -62,3 +78,5 @@ scripts/round-cache/
 # rebuilt from source; the shipped artifact is published through
 # /api/recorder, never committed.
 recorder/target
+
+server/data/replays/
