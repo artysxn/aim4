@@ -57,8 +57,7 @@ const PAGES = [
   { name: 'train', html: 'train.html' },
   { name: 'cs3d', html: 'cs3d.html' },
   { name: 'football', html: 'tools/football.html' },
-  { name: 'zone-editor', html: 'tools/zone-editor.html' },
-  { name: 'sim-view', html: 'tools/sim-view.html' }
+  { name: 'zone-editor', html: 'tools/zone-editor.html' }
 ];
 
 const log = (...args) => console.log('[build]', ...args);
@@ -109,6 +108,9 @@ function rootPaths() {
     setup(build) {
       build.onResolve({ filter: /^\// }, (args) => {
         if (args.namespace !== 'file') return null;
+        // Entry points (the worker pass) arrive as absolute filesystem paths,
+        // which also start with '/'. They are already resolved.
+        if (args.kind === 'entry-point') return null;
         const rel = args.path.slice(1);
         const abs = path.join(ROOT, rel);
         if (fs.existsSync(abs)) return { path: abs };

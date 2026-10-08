@@ -52,7 +52,7 @@ const SURFACES = [
 ];
 
 /** Staff-only, and never translated. Listed so the report can say so. */
-const EXCLUDED = ['src/site/admin', 'src/site/simView.js', 'src/site/simApi.js', 'src/tools', 'src/site/pitch'];
+const EXCLUDED = ['src/site/admin', 'src/tools', 'src/site/pitch'];
 
 // ---------------------------------------------------------------------------
 // The keep list: strings that are shown but must stay English.

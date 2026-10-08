@@ -81,6 +81,8 @@ const base = `http://127.0.0.1:${stub.address().port}`;
 process.env.SUPABASE_URL = base;
 process.env.SUPABASE_ANON_KEY = 'anon-key';
 process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-key';
+// The stub stands in for Supabase, which local mode deliberately never talks to.
+process.env.AIM4_LOCAL = '0';
 
 const { passwordLogin, resetLoginThrottle } = await import('./login.js');
 

@@ -85,6 +85,8 @@ const stub = http.createServer(async (req, res) => {
 await new Promise((r) => stub.listen(0, '127.0.0.1', r));
 process.env.SUPABASE_URL = `http://127.0.0.1:${stub.address().port}`;
 process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-role-test-key';
+// The stub stands in for Supabase, which local mode deliberately never talks to.
+process.env.AIM4_LOCAL = '0';
 
 const { CAP } = await import('../../shared/entitlements/keys.js');
 const { resolveEntitlements } = await import('../../shared/entitlements/resolve.js');

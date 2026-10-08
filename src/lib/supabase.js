@@ -21,13 +21,19 @@ import { createLocalClient } from './localClient.js';
 
 const url = import.meta.env.VITE_SUPABASE_URL || '';
 const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
-const localAllowed = String(import.meta.env.VITE_LOCAL_MODE ?? '').toLowerCase() !== '0';
+const localFlag = String(import.meta.env.VITE_LOCAL_MODE ?? '').toLowerCase();
+const localAllowed = localFlag !== '0';
+// VITE_LOCAL_MODE=1 picks the local client even when a .env still carries
+// Supabase credentials. Without it the server is local (owner id 'local:owner')
+// while the browser signs in to the hosted project, and the two disagree.
+const localForced = localFlag === '1' || localFlag === 'true' || localFlag === 'on';
+const hosted = Boolean(url && anonKey) && !localForced;
 
 let client = null;
 
 /** True when there is something to sign in to. Locally: always. */
 export function supabaseConfigured() {
-  return Boolean(url && anonKey) || localAllowed;
+  return hosted || localAllowed || localForced;
 }
 
 /** OAuth redirect target — must be whitelisted in Supabase → Auth → URL configuration. */
@@ -37,13 +43,13 @@ export function authRedirectUrl() {
 
 /** True when this build is the single-account local one. */
 export function isLocalClient() {
-  return supabaseConfigured() && !(url && anonKey);
+  return supabaseConfigured() && !hosted;
 }
 
 export function getSupabase() {
   if (!supabaseConfigured()) return null;
   if (client) return client;
-  client = url && anonKey
+  client = hosted
     ? createClient(url, anonKey, {
         auth: {
           persistSession: true,

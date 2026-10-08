@@ -261,7 +261,5 @@ export const adminApi = {
   },
 
   perf: () => get('/api/admin/perf'),
-  /** The sim registry, read only (6.5). Served by the sim routes, not admin. */
-  simModels: () => get('/api/sim/models'),
   resetPerf: () => send('POST', '/api/admin/perf/reset', {})
 };

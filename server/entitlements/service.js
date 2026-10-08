@@ -21,6 +21,9 @@ import { localMode, OWNER_ID } from '../local/mode.js';
 
 /** Read at call time, not import time: .env and tests both set this late. */
 function config() {
+  // Local mode has no database: the owner's id is 'local:owner', not a uuid, so
+  // a .env that still carries Supabase credentials must not send it to Postgres.
+  if (localMode()) return { url: '', key: '' };
   return {
     url: (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '').replace(/\/$/, ''),
     key: process.env.SUPABASE_SERVICE_ROLE_KEY || ''

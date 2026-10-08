@@ -24,7 +24,6 @@ import { handleRecorderRequest } from './recorder/routes.js';
 import { handleSampleDemoRequest } from './replays/sampleDemos.js';
 import { handleTeamRequest } from './replays/teamRoutes.js';
 import { handleAdminRequest } from './admin/routes.js';
-import { handleSimRequest } from './sim/routes.js';
 import { handleAccountRequest } from './account/routes.js';
 import { handleSupportRequest } from './support/routes.js';
 import { handlePitchRequest } from './pitchRoutes.js';
@@ -33,8 +32,7 @@ import { handleFaceitWebhookRequest } from './ingest/faceit/webhookRoutes.js';
 import { handleCs3dRequest } from './cs3d/routes.js';
 import { handleLocalRequest } from './local/routes.js';
 import { checkCaseSensitivity, sweepStaleUploads } from './replays/demoStore.js';
-import { parseQueueBusy, resumeInterruptedParses, sweepBatchFiles } from './replays/jobs.js';
-import { setParserBusyProbe } from './sim/jobs.js';
+import { resumeInterruptedParses, sweepBatchFiles } from './replays/jobs.js';
 import { printHostBanner, fetchPublicIp } from './network.js';
 import { localMode, OWNER_NAME } from './local/mode.js';
 // Hosted-only boot jobs, started below only when local mode is off.
@@ -160,13 +158,6 @@ const server = http.createServer(async (req, res) => {
     // answers with Access-Control-Allow-Origin: *, which is right for a public
     // demo library and wrong for an endpoint that can grant subscriptions.
     if (url.pathname.startsWith('/api/admin') && (await handleAdminRequest(req, res, url))) {
-      return;
-    }
-
-    // Sim, for the same reason as admin, plus one of its own: the generic
-    // OPTIONS reply below would confirm the prefix exists to any origin, and
-    // this surface is meant to be invisible to everyone but one account.
-    if (url.pathname.startsWith('/api/sim') && (await handleSimRequest(req, res, url))) {
       return;
     }
 
@@ -347,10 +338,6 @@ sweepStaleUploads().catch(() => {});
 // interrupted parses must not hold the port closed.
 resumeInterruptedParses().catch(() => {});
 sweepBatchFiles().catch(() => {});
-// Sim work yields to demo parsing (SIM-PLAN 9.2b). The probe is injected here
-// rather than imported inside the sim runner so the two queues stay unaware of
-// each other's internals, and so a test can drive it.
-setParserBusyProbe(parseQueueBusy);
 // Admins are a table, not an env list. AIM4_ADMIN_USER_IDS only bootstraps it,
 // so a fresh project has someone who can reach the panel. Never awaited and
 // never fatal: no admins configured is a normal state for a local run. Skipped
