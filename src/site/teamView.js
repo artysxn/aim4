@@ -112,6 +112,15 @@ const STRAT_CATEGORY_CT = [
   'Setup',
   'Retake'
 ];
+/** List order: pistols → full → AWP → antiforce/eco → force (not the select order). */
+const STRAT_ECONOMY_SORT = [
+  'Pistol',
+  'Full buy',
+  'Full buy + AWP',
+  'Antiforce',
+  'Eco',
+  'Force'
+];
 
 const SB_COLOR_DEFAULTS = {
   'econ-pistol': '#7a7a7a',
@@ -2099,6 +2108,23 @@ export function initTeamView({ auth, escapeHtml }) {
       .join('');
   }
 
+  function stratSortRank(list, value) {
+    const i = list.indexOf(value);
+    return i < 0 ? list.length : i;
+  }
+
+  function compareStrats(a, b, side) {
+    const cats = side === 'CT' ? STRAT_CATEGORY_CT : STRAT_CATEGORY_T;
+    const econ =
+      stratSortRank(STRAT_ECONOMY_SORT, a.economy) - stratSortRank(STRAT_ECONOMY_SORT, b.economy);
+    if (econ) return econ;
+    const cat = stratSortRank(cats, a.category) - stratSortRank(cats, b.category);
+    if (cat) return cat;
+    return String(a.name || '').localeCompare(String(b.name || ''), undefined, {
+      sensitivity: 'base'
+    });
+  }
+
   function stratRows(mapCode, side) {
     const canEdit = Boolean(team?.isAdmin);
     const roles = positionsFor(side, mapCode);
@@ -2106,7 +2132,7 @@ export function initTeamView({ auth, escapeHtml }) {
     const colCount = 7 + roles.length;
     const rows = (team.stratbook || [])
       .filter((s) => s.map === mapCode && s.side === side)
-      .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+      .sort((a, b) => compareStrats(a, b, side));
 
     if (!rows.length) {
       return `<tr class="sb-empty sb-${side.toLowerCase()}"><td colspan="${colCount}">No strategies yet.</td></tr>`;
@@ -2456,6 +2482,50 @@ export function initTeamView({ auth, escapeHtml }) {
     }
   }
 
+  /** Portaled to body so `.sb-section` zoom / table overflow cannot clip them. */
+  function clearSbFloatingMenus() {
+    document.querySelectorAll('body > .sb-visible-menu, body > .sb-links-menu').forEach((el) => {
+      el.remove();
+    });
+  }
+
+  function placeSbFloatingMenus() {
+    clearSbFloatingMenus();
+    const place = (menuAttr, toggleAttr, id) => {
+      if (!id) return;
+      const menu = shellEl.querySelector(`[${menuAttr}="${CSS.escape(id)}"]`);
+      const btn = shellEl.querySelector(`[${toggleAttr}="${CSS.escape(id)}"]`);
+      if (!menu || !btn) return;
+      document.body.appendChild(menu);
+      menu.style.visibility = 'hidden';
+      const r = btn.getBoundingClientRect();
+      const mw = menu.offsetWidth || 160;
+      const mh = menu.offsetHeight || 0;
+      let top = r.bottom + 4;
+      let left = r.left;
+      if (top + mh > window.innerHeight - 8) top = Math.max(8, r.top - mh - 4);
+      if (left + mw > window.innerWidth - 8) left = Math.max(8, window.innerWidth - mw - 8);
+      if (left < 8) left = 8;
+      menu.style.top = `${top}px`;
+      menu.style.left = `${left}px`;
+      menu.style.visibility = '';
+    };
+    place('data-sb-visible-menu', 'data-sb-visible-toggle', openVisibleMenu);
+    place('data-sb-links-menu', 'data-sb-links-toggle', openLinksMenu);
+  }
+
+  function renderStratbook() {
+    const top = shellEl.scrollTop;
+    const left = shellEl.scrollLeft;
+    clearSbFloatingMenus();
+    shellEl.innerHTML = stratbookHtml();
+    applyStratbookViewHeights();
+    shellEl.scrollTop = top;
+    shellEl.scrollLeft = left;
+    placeSbFloatingMenus();
+    void ensureUtilityIndex();
+  }
+
   /** Patch one strategy without a full re-render (keeps focus). */
   async function patchStrategy(id, patch) {
     const existing = (team.stratbook || []).find((s) => s.id === id);
@@ -2699,7 +2769,7 @@ export function initTeamView({ auth, escapeHtml }) {
       .filter(
         (s) => s.map === mapCode && s.side === side && stratVisibleToPlayer(s, playerId)
       )
-      .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+      .sort((a, b) => compareStrats(a, b, side));
 
     return rows
       .map((s) => {
@@ -2903,11 +2973,10 @@ export function initTeamView({ auth, escapeHtml }) {
       return;
     }
     if (page === 'team-stratbook') {
-      shellEl.innerHTML = stratbookHtml();
-      applyStratbookViewHeights();
-      void ensureUtilityIndex();
+      renderStratbook();
       return;
     }
+    clearSbFloatingMenus();
     if (page === 'team-strategies') {
       shellEl.innerHTML = myStrategiesHtml();
       void ensureUtilityIndex();
@@ -2987,6 +3056,28 @@ export function initTeamView({ auth, escapeHtml }) {
     if (!search || page !== 'team-docs') return;
     docsQuery = search.value;
     paintDocsList();
+  });
+
+  // Keep focus from scrolling the shell when opening stratbook popovers.
+  shellEl.addEventListener('mousedown', (e) => {
+    if (page !== 'team-stratbook') return;
+    if (e.target.closest?.('[data-sb-visible-toggle], [data-sb-links-toggle]')) {
+      e.preventDefault();
+    }
+  });
+
+  shellEl.addEventListener(
+    'scroll',
+    () => {
+      if (page !== 'team-stratbook') return;
+      if (openVisibleMenu || openLinksMenu) placeSbFloatingMenus();
+    },
+    { passive: true }
+  );
+
+  window.addEventListener('resize', () => {
+    if (page !== 'team-stratbook') return;
+    if (openVisibleMenu || openLinksMenu) placeSbFloatingMenus();
   });
 
   shellEl.addEventListener('click', async (e) => {
@@ -3316,6 +3407,23 @@ export function initTeamView({ auth, escapeHtml }) {
       return;
     }
 
+    const visToggle = t.closest('[data-sb-visible-toggle]');
+    if (visToggle) {
+      if (!team.isAdmin) return;
+      const id = visToggle.dataset.sbVisibleToggle;
+      openVisibleMenu = openVisibleMenu === id ? '' : id;
+      openLinksMenu = '';
+      render();
+      return;
+    }
+  });
+
+  // Portaled stratbook menus live on document.body (escape zoom/overflow clip).
+  document.addEventListener('click', async (e) => {
+    if (page !== 'team-stratbook' || !team) return;
+    const t = e.target;
+    if (!(t instanceof Element)) return;
+
     const linkOpen = t.closest('[data-sb-link-open]');
     if (linkOpen) {
       const id = linkOpen.dataset.sbId;
@@ -3351,31 +3459,41 @@ export function initTeamView({ auth, escapeHtml }) {
     }
 
     if (
-      page === 'team-stratbook' &&
-      openLinksMenu &&
-      !t.closest('[data-sb-links-menu]') &&
-      !t.closest('[data-sb-links-toggle]')
+      (openLinksMenu || openVisibleMenu) &&
+      !t.closest(
+        '[data-sb-links-menu], [data-sb-links-toggle], [data-sb-visible-menu], [data-sb-visible-toggle]'
+      )
     ) {
       openLinksMenu = '';
+      openVisibleMenu = '';
       render();
     }
+  });
 
-    const visToggle = t.closest('[data-sb-visible-toggle]');
-    if (visToggle) {
-      if (!team.isAdmin) return;
-      const id = visToggle.dataset.sbVisibleToggle;
-      openVisibleMenu = openVisibleMenu === id ? '' : id;
+  document.addEventListener('change', async (e) => {
+    if (page !== 'team-stratbook' || !team) return;
+    const t = e.target;
+    if (!(t instanceof Element) || !t.closest('.sb-visible-menu')) return;
+
+    const sbField = t.closest('[data-sb-field]');
+    if (sbField?.dataset.sbField === 'visibleAll') {
+      const id = sbField.dataset.sbId;
+      if (!id) return;
+      await patchStrategy(id, { visibleAll: sbField.checked });
       render();
       return;
     }
 
-    if (
-      page === 'team-stratbook' &&
-      openVisibleMenu &&
-      !t.closest('[data-sb-visible-menu]') &&
-      !t.closest('[data-sb-visible-toggle]')
-    ) {
-      openVisibleMenu = '';
+    const visPlayer = t.closest('[data-sb-visible-player]');
+    if (visPlayer) {
+      const id = visPlayer.dataset.sbId;
+      const playerId = visPlayer.dataset.sbVisiblePlayer;
+      const existing = (team.stratbook || []).find((s) => s.id === id);
+      if (!existing) return;
+      const set = new Set(existing.visibleTo || []);
+      if (visPlayer.checked) set.add(playerId);
+      else set.delete(playerId);
+      await patchStrategy(id, { visibleTo: [...set] });
       render();
     }
   });
@@ -3479,40 +3597,14 @@ export function initTeamView({ auth, escapeHtml }) {
       const id = sbField.dataset.sbId;
       const field = sbField.dataset.sbField;
       if (!id || !field) return;
-
-      if (field === 'visibleAll') {
-        await patchStrategy(id, { visibleAll: sbField.checked });
-        // It lives in the Players menu now, so the button label above it and
-        // the per-player boxes it overrides both have to be repainted.
-        render();
-        return;
-      }
       if (field === 'economy' || field === 'category') {
         await patchStrategy(id, { [field]: sbField.value });
-        const td = sbField.closest('td');
-        if (td) {
-          td.className =
-            field === 'economy'
-              ? `sb-cell-econ ${econClass(sbField.value)}`
-              : `sb-cell-cat ${catClass(sbField.value)}`;
-        }
-        return;
+        // Re-sort the map/side table after buy type or call type changes.
+        render();
+        shellEl
+          .querySelector(`[data-sb-field="${field}"][data-sb-id="${CSS.escape(id)}"]`)
+          ?.focus({ preventScroll: true });
       }
-      return;
-    }
-
-    const visPlayer = t.closest('[data-sb-visible-player]');
-    if (visPlayer) {
-      const id = visPlayer.dataset.sbId;
-      const playerId = visPlayer.dataset.sbVisiblePlayer;
-      const existing = (team.stratbook || []).find((s) => s.id === id);
-      if (!existing) return;
-      const set = new Set(existing.visibleTo || []);
-      if (visPlayer.checked) set.add(playerId);
-      else set.delete(playerId);
-      await patchStrategy(id, { visibleTo: [...set] });
-      // Refresh the button label without closing the menu.
-      render();
     }
   });
 
