@@ -10,30 +10,44 @@
 // The pack directory is per host, like replays: it is not in git and not in
 // the image. Point CS3D_PACK_DIR elsewhere to serve from another disk.
 //
-// A file that is not on this disk is fetched from the public pack bucket and
-// kept beside the rest, so a host with only Nuke (or a half-fetched Cache)
-// still has viewmodels, sky HDR, and the other maps. Map-pack bytes always
-// win: a filled interactives.json is never replaced by the older copy on the
-// bucket. Shared packs (weapons, players, fx, bullets) are the exception: if
-// the bucket index is a higher version than the copy on this disk, the index
-// is replaced and the rest of the pack is re-filled on demand. Otherwise a
-// leftover v3 weapons/ hides v4 forever, which is what localhost was doing.
-// Set CS3D_FETCH_BASE=off to disable.
+// A local install serves what is on this disk and nothing else. There used to
+// be a silent fill: a file that was not on disk was fetched from the public
+// pack bucket and kept beside the rest, so a host with only Nuke still had
+// viewmodels, sky HDR and the other maps. That is off unless you ask for it —
+// set CS3D_FETCH_BASE to a base URL to enable, or `off` to be explicit. Without
+// it a missing file is a 404 that says which path was tried, which is the
+// honest answer on a machine that is supposed to be self-contained.
+//
+// It stays available for one legitimate job: populating a fresh install.
+// `scripts/cs3d-fetch.mjs` pulls packs from the same bucket into this
+// directory, once, on purpose.
 // ---------------------------------------------------------------------------
 
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { localMode } from '../local/mode.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const PACK_DIR = path.resolve(process.env.CS3D_PACK_DIR || path.join(__dirname, '..', 'data', 'cs3d', 'pack'));
 
-/** Same public bucket scripts/cs3d-fetch.mjs and the production client use. */
+/**
+ * The optional fill-from-bucket base, '' when disabled.
+ *
+ * Disabled by default in local mode: the packs are on this disk, so reaching
+ * for the bucket is a network call that can only fail — and one that rewrites
+ * working files when it does not.
+ */
 const DEFAULT_FALLBACK = 'https://pub-2cbbca6c60604cc7a9fde25f012821d9.r2.dev';
 
 export function packFallbackBase() {
   const v = process.env.CS3D_FETCH_BASE;
   if (v === '0' || v === 'off' || v === 'false') return '';
+  if (localMode() && v === undefined) {
+    // The packs are on this disk, so reaching for the bucket is a network call
+    // that can only fail (and that rewrites working files when it does not).
+    return '';
+  }
   return String(v || DEFAULT_FALLBACK).replace(/\/$/, '');
 }
 

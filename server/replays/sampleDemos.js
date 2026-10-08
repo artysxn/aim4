@@ -2,10 +2,10 @@
 // replays/sampleDemos.js
 // Local .aim4replay files in sampledemos/, served without a library import.
 //
-// Host (`npm run host`) also overlays them onto GET /api/replays/demos and
-// the round/package routes so the 2D viewer and 3D Import round see the same
-// records. Vite serves /api/sampledemos so `npm run dev` works without the
-// replay library backend. Production stays out unless AIM4_SAMPLE_DEMOS=1.
+// Host (`npm start`) also overlays them onto GET /api/replays/demos and the
+// round/package routes so the 2D viewer and 3D Import round see the same
+// records. Set AIM4_SAMPLE_DEMOS=1 to serve them without the replay library
+// backend.
 // ---------------------------------------------------------------------------
 
 import fsp from 'node:fs/promises';

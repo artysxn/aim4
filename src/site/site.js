@@ -6,8 +6,8 @@
 // (train.html); gamemode deep links launch it directly.
 // ---------------------------------------------------------------------------
 
-// site.css is linked from the HTML entries directly (no JS import: Vite
-// treats a dual link+import reference as two different modules in dev).
+// site.css is linked from the HTML entries directly (no JS import: the build
+// treats a dual link+import reference as two different modules).
 import accountIcon from '../icons/icon_account.svg?raw';
 import logoGoogle from '../icons/logo_google.svg?raw';
 import logoSteam from '../icons/logo_steam.svg?raw';
@@ -128,8 +128,8 @@ const IS_MOBILE = isMobileSite();
 // into every link copied from this page.
 captureReferral();
 
-// Brand logos — Vite hashes these into /assets so Vercel serves them (the
-// catch-all rewrite used to send /icons/* to train.html).
+// Brand logos — imported as URLs so the build copies them under /assets with a
+// hashed name (the catch-all rewrite used to send /icons/* to train.html).
 document.querySelectorAll('.side-logo-full, .hero-logo img, .foot-logo img').forEach((img) => {
   img.src = logoFullUrl;
 });

@@ -32,6 +32,24 @@ import {
 } from './playerScoutConfig.js';
 import { runPlayerScan } from './playerScoutScan.js';
 import { writeScoutNotes } from './playerScoutNotes.js';
+import {
+  PLAYER_INTERNAL_CATEGORIES,
+  PLAYER_MODE_GROUPS,
+  PLAYER_SUMMARY_CATEGORIES,
+  buildPlayerInternalDocHtml,
+  buildPlayerInternalReport,
+  buildPlayerSummaryDocHtml,
+  buildPlayerSummaryReport,
+  playerCoachFiles
+} from './playerScoutModes.js';
+import { INTERNAL_COLUMNS, coachRounds } from './antistratInternal.js';
+import { REPORT_MODES } from './reportModes.js';
+
+const MODE_CATALOGUE = {
+  detailed: { categories: PLAYER_CATEGORIES, groups: PLAYER_GROUPS },
+  summary: { categories: PLAYER_SUMMARY_CATEGORIES, groups: PLAYER_MODE_GROUPS },
+  internal: { categories: PLAYER_INTERNAL_CATEGORIES, groups: PLAYER_MODE_GROUPS }
+};
 import { spinnerHtml, statsProgressLabel } from '../../lib/spinner.js';
 import { mbWrap } from '../../icons/menubuttons.js';
 
@@ -60,8 +78,12 @@ export function createPlayerScoutPanel({ escapeHtml }) {
     mapCode: '',
     /** @type {Set<string>} demo ids dropped from the run */
     excluded: new Set(),
-    /** @type {Set<string>} selected category keys */
-    cats: new Set(PLAYER_CATEGORIES.map((c) => c.key)),
+    /** 'detailed' | 'summary' | 'internal' */
+    mode: 'detailed',
+    /** @type {Record<string, Set<string>>} selected category keys, per mode */
+    cats: Object.fromEntries(
+      Object.entries(MODE_CATALOGUE).map(([mode, cat]) => [mode, new Set(cat.categories.map((c) => c.key))])
+    ),
     destTeamId: '',
     busy: false,
     progress: '',
@@ -162,8 +184,12 @@ export function createPlayerScoutPanel({ escapeHtml }) {
       !state.busy &&
       Boolean(state.playerId && state.mapCode && state.destTeamId) &&
       includedMatches().length > 0 &&
-      [...state.cats].some((k) => PLAYER_CATEGORIES.some((c) => c.key === k))
+      [...state.cats[state.mode]].some((k) => catalogue().categories.some((c) => c.key === k))
     );
+  }
+
+  function catalogue() {
+    return MODE_CATALOGUE[state.mode] || MODE_CATALOGUE.detailed;
   }
 
   // ---- render -------------------------------------------------------------
@@ -276,15 +302,25 @@ export function createPlayerScoutPanel({ escapeHtml }) {
     </section>`;
   }
 
+  function modeSwitchHtml() {
+    return `<div class="rv-az-seg as-mode-seg" role="group" aria-label="Report">
+      ${REPORT_MODES.map(
+        (m) =>
+          `<button type="button" class="rv-az-seg-btn${m.key === state.mode ? ' active' : ''}" data-ps-mode="${m.key}"
+            aria-pressed="${m.key === state.mode ? 'true' : 'false'}">${escapeHtml(m.label)}</button>`
+      ).join('')}
+    </div>`;
+  }
+
   function categoriesStepHtml() {
     if (!state.playerId || !state.mapCode) return '';
-    const groups = PLAYER_GROUPS.map((group) => {
-      const rows = PLAYER_CATEGORIES.filter((c) => c.group === group)
+    const { categories, groups: groupNames } = catalogue();
+    const picked = state.cats[state.mode];
+    const groups = groupNames.map((group) => {
+      const rows = categories.filter((c) => c.group === group)
         .map(
           (c) => `<label class="as-cat-main">
-            <input type="checkbox" data-ps-cat="${escapeHtml(c.key)}" ${
-              state.cats.has(c.key) ? 'checked' : ''
-            } />
+            <input type="checkbox" data-ps-cat="${escapeHtml(c.key)}" ${picked.has(c.key) ? 'checked' : ''} />
             <span>${escapeHtml(c.label)}</span>
           </label>`
         )
@@ -296,7 +332,10 @@ export function createPlayerScoutPanel({ escapeHtml }) {
     }).join('');
     return `<section class="an-card as-step">
       <header class="an-card-head"><h3 class="an-section-title">Categories</h3></header>
-      <div class="as-step-body as-cats">${groups}</div>
+      <div class="as-step-body">
+        ${modeSwitchHtml()}
+        <div class="as-cats">${groups}</div>
+      </div>
     </section>`;
   }
 
@@ -409,19 +448,29 @@ export function createPlayerScoutPanel({ escapeHtml }) {
     setProgress('Preparing scan…');
 
     const included = includedMatches();
-    const title = `Player: ${player.name} on ${MAPS[state.mapCode]?.name || state.mapCode}`;
+    const mode = state.mode;
+    const mapName = MAPS[state.mapCode]?.name || state.mapCode;
+    const title =
+      mode === 'summary'
+        ? `Summary: ${player.name} on ${mapName}`
+        : mode === 'internal'
+          ? `Internal: ${player.name} on ${mapName}`
+          : `Player: ${player.name} on ${mapName}`;
+    const categories = [...state.cats[mode]];
     try {
       // The picker runs on the catalogue, which carries no rounds. Fetch them
-      // now, scoped to the matches this run actually covers.
+      // now, scoped to the matches this run actually covers. The internal
+      // report always fetches its own: it prints ratings, and those need the
+      // whole rating bundle or they are quietly a different number.
       let scanPayload = payload;
-      if (payload?.identityOnly) {
+      if (payload?.identityOnly || mode === 'internal') {
         setProgress('Loading rounds for these matches…');
         scanPayload = await getStatsPayload(
           included.map((d) => d.id),
           {
             // Round-library tags name what the team ran; roles name the four
-            // bodies around him. Nothing else is read.
-            columns: ['roundLibrary', 'roles'],
+            // bodies around him.
+            columns: mode === 'internal' ? INTERNAL_COLUMNS : ['roundLibrary', 'roles'],
             onProgress: (p) => setProgress(statsProgressLabel(p))
           }
         );
@@ -431,8 +480,40 @@ export function createPlayerScoutPanel({ escapeHtml }) {
         playerId: state.playerId,
         mapCode: state.mapCode,
         demoIds: included.map((d) => d.id),
+        keepRounds: mode !== 'detailed',
         onProgress: (done, total) => setProgress(`Scanning round ${done} of ${total}…`)
       });
+
+      if (mode !== 'detailed') {
+        let html;
+        if (mode === 'summary') {
+          setProgress('Writing the summary…');
+          const report = buildPlayerSummaryReport({ results, mapCode: state.mapCode });
+          html = buildPlayerSummaryDocHtml({ mapCode: state.mapCode, categories, report }, escapeHtml);
+        } else {
+          const coached = await coachRounds({
+            files: playerCoachFiles(results),
+            mapCode: state.mapCode,
+            network: results.extract.network,
+            onProgress: (done, total) => setProgress(`Coaching round ${done} of ${total}…`)
+          });
+          setProgress('Writing the report…');
+          const report = buildPlayerInternalReport({
+            results,
+            payload: scanPayload,
+            coached,
+            mapCode: state.mapCode
+          });
+          html = buildPlayerInternalDocHtml({ mapCode: state.mapCode, categories, report }, escapeHtml);
+        }
+        await saveTeamDocument(dest.id, { title, html });
+        state.outcome = 'ok';
+        state.outcomeMsg = `Saved "${title}" to ${dest.name}. ${results.rounds} rounds scanned.`;
+        state.busy = false;
+        state.progress = '';
+        render();
+        return;
+      }
 
       // Second pass: the rounds the scan picked out, written the way a
       // strategy is written. Its failure is not the report's failure.
@@ -472,7 +553,7 @@ export function createPlayerScoutPanel({ escapeHtml }) {
             roles: results.roles,
             mates: results.mates,
             matches: included.map((d) => ({ label: matchLabel(d) })),
-            categories: [...state.cats],
+            categories,
             results,
             notes,
             utilityNote
@@ -535,8 +616,8 @@ export function createPlayerScoutPanel({ escapeHtml }) {
     const cat = t.closest('[data-ps-cat]');
     if (cat) {
       const key = cat.dataset.psCat;
-      if (cat.checked) state.cats.add(key);
-      else state.cats.delete(key);
+      if (cat.checked) state.cats[state.mode].add(key);
+      else state.cats[state.mode].delete(key);
       render();
       return;
     }
@@ -569,6 +650,14 @@ export function createPlayerScoutPanel({ escapeHtml }) {
       state.outcome = '';
       render();
       el.querySelector('#ps-player-search')?.focus();
+      return;
+    }
+    const modeBtn = e.target.closest('[data-ps-mode]');
+    if (modeBtn) {
+      if (state.busy) return;
+      state.mode = MODE_CATALOGUE[modeBtn.dataset.psMode] ? modeBtn.dataset.psMode : 'detailed';
+      state.outcome = '';
+      render();
       return;
     }
     if (e.target.closest('[data-ps-generate]')) void generate();

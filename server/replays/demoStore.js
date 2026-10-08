@@ -1332,6 +1332,9 @@ async function rebuildNotesIndex(user) {
       /* skip corrupt */
     }
   }
+  // The index is written on a read path (a missing index is rebuilt), so the
+  // library folder may not exist yet on a machine that has never held a demo.
+  await ensureDirs(user);
   await fsp.writeFile(notesIndexPath(user), JSON.stringify(noted));
   return noted;
 }
@@ -1346,6 +1349,7 @@ async function setNotedRound(user, stem, hasNote) {
   const has = list.includes(stem);
   if (hasNote === has) return;
   const next = hasNote ? [...list, stem] : list.filter((f) => f !== stem);
+  await ensureDirs(user);
   await fsp.writeFile(notesIndexPath(user), JSON.stringify(next));
 }
 

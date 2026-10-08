@@ -5,7 +5,7 @@
 // Its own module because the map loader needs it in the browser and
 // MeshCollision.test.js needs it in Node, and meshMap.js cannot be imported
 // there: it reaches the trainer's GLTFLoader through packBase.js, whose
-// `?three-webgl` specifier only resolves under Vite. Nothing here imports
+// `?three-webgl` specifier only resolves in the browser bundle. Nothing here
 // anything but three.
 // ---------------------------------------------------------------------------
 

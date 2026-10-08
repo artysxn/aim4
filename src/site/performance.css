@@ -58,6 +58,8 @@
 
 .pf-filters {
   margin-bottom: 0;
+  /* Buys, result, opening and the Zones extras outgrow one line. */
+  flex-wrap: wrap;
 }
 
 /* The re-rendered half of every chapter. It is a flex item of .view-pad, so
@@ -225,7 +227,7 @@
 .pf-maps {
   display: flex;
   flex-direction: column;
-  gap: 28px;
+  gap: 10px;
 }
 
 .pf-map-block {
@@ -850,4 +852,346 @@ a.pf-rt-go:hover {
   margin: 0;
   color: var(--muted);
   font: 400 12px var(--font-body);
+}
+
+/* Tables behind their titles: closed until the reader opens one. */
+.pf-dd {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.pf-dd > .pf-dd-summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  padding: 10px 14px;
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+  color: var(--text);
+  font: 600 14px/1.2 var(--font-body);
+}
+
+.pf-dd > .pf-dd-summary::-webkit-details-marker {
+  display: none;
+}
+
+.pf-dd > .pf-dd-summary::before {
+  content: '';
+  flex: none;
+  width: 6px;
+  height: 6px;
+  margin: 0 2px 0 1px;
+  border-right: 2px solid var(--muted);
+  border-bottom: 2px solid var(--muted);
+  transform: rotate(-45deg);
+  transition: transform 0.15s var(--ease-smooth);
+}
+
+.pf-dd[open] > .pf-dd-summary::before {
+  transform: rotate(45deg);
+}
+
+.pf-dd > .pf-dd-summary:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.pf-dd-count {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.pf-dd-body {
+  min-width: 0;
+  padding: 0 14px 14px;
+}
+
+/* A map's pair of tables as a dropdown: the title line is the summary. */
+details.pf-map-block {
+  display: block;
+}
+
+.pf-dd > .pf-dd-summary .pf-map-head {
+  flex: 1;
+}
+
+/* Zones: the map, and what was picked on it. */
+.pf-zones {
+  display: grid;
+  grid-template-columns: minmax(0, 760px) minmax(240px, 300px);
+  gap: 16px;
+  align-items: start;
+}
+
+.pf-zones-map {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  background: #0d0d0f;
+}
+
+.pf-zones-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  touch-action: manipulation;
+}
+
+.pf-zones-tip {
+  position: absolute;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 9px;
+  border-radius: 6px;
+  background: #111;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+  color: var(--muted);
+  font: 400 12px var(--font-body);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.pf-zones-tip strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.pf-zones-status {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(10, 10, 12, 0.6);
+}
+
+.pf-zones-status[hidden] {
+  display: none;
+}
+
+.pf-zones-side {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.pf-zcontrols {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pf-zcard {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.pf-zcard-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.pf-zcard-name {
+  margin: 0;
+  color: var(--text);
+  font: 600 16px/1.2 var(--font-body);
+}
+
+.pf-zcard-sub {
+  margin: -6px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.pf-zcard-close {
+  padding: 2px 6px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.pf-zcard-close:hover {
+  color: var(--text);
+}
+
+.pf-zcard-rating {
+  color: var(--text);
+  font: 600 40px/1 var(--font-body);
+  letter-spacing: -0.02em;
+}
+
+.pf-zcard-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 12px;
+  margin: 0;
+}
+
+.pf-zcard-stats div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pf-zcard-stats dt {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.pf-zcard-stats dd {
+  margin: 0;
+  color: var(--text);
+  font: 600 14px var(--font-body);
+}
+
+.pf-zcard-players {
+  width: 100%;
+  font-size: 12px;
+}
+
+.pf-zcard-link {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: 4px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--text);
+  font: 600 12px var(--font-body);
+  text-decoration: none;
+}
+
+.pf-zcard-link:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.pf-zlist-title {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.pf-zlist {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pf-zlist-btn {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font: 400 13px var(--font-body);
+  text-align: left;
+  cursor: pointer;
+}
+
+.pf-zlist-btn:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.pf-zlist-btn > :last-child {
+  font-weight: 600;
+}
+
+.pf-zlegend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.pf-zlegend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.pf-zlegend-item i {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
+
+.pf-ztable {
+  width: 100%;
+  font-size: 12px;
+}
+
+.pf-ztable-row {
+  cursor: pointer;
+}
+
+.pf-ztable-row:hover td {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.pf-ztable-row.is-selected td {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.pf-ztable-row.is-thin td {
+  color: var(--muted);
+}
+
+/* Buy and its AWP switch, side by side in the toolbar. */
+.pf-buy {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pf-buy .rp-awp-toggle {
+  width: auto;
+  min-height: var(--st-ctrl-h);
+  border: 0;
+  border-radius: var(--st-ctrl-radius);
+  background: var(--st-ctrl-bg);
+  color: var(--st-ctrl-text);
+}
+
+.pf-buy .rp-awp-toggle.active,
+.pf-buy .rp-awp-toggle:has(input:checked) {
+  background: var(--st-ctrl-bg-on);
+  color: var(--st-ctrl-text-on);
+  box-shadow: none;
+}
+
+@media (max-width: 900px) {
+  .pf-zones {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }

@@ -34,7 +34,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { assetBase } from './mapLoader.js';
-import { packFetch, loadWithRetry, PACK_CDN } from './packFetch.js';
+import { packFetch, loadWithRetry } from './packFetch.js';
 import { UNIT_M } from '../../shared/sim3d/units.js';
 import { sourceVFovFromHFov } from '../utils/MathUtils.js';
 import { VIEW_RECOIL_TRACKING } from '../../shared/sim3d/recoil.js';
@@ -295,15 +295,7 @@ export class ViewModelAssets {
   }
 
   async _load() {
-    try {
-      await this._loadFrom(this.base);
-    } catch (e) {
-      const cdn = `${PACK_CDN}/weapons`;
-      if (this.base.replace(/\/$/, '') === cdn) throw e;
-      console.warn('cs3d: weapons pack missed at', this.base, '— trying the public bucket');
-      this.base = cdn;
-      await this._loadFrom(this.base);
-    }
+    await this._loadFrom(this.base);
   }
 
   async _loadFrom(base) {

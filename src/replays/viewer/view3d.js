@@ -45,6 +45,8 @@ import { BulletAssets } from '../../cs3d/bulletPack.js';
 import { Decals } from '../../cs3d/decals.js';
 import { Tracers } from '../../cs3d/tracers.js';
 import { SunTracker, loadShadowMask } from '../../cs3d/sunlight.js';
+import { BodyShadows } from '../../cs3d/bodyShadows.js';
+import { createShaderWarmup } from '../../cs3d/shaderWarmup.js';
 import { SettingsManager, VIEWMODEL_FOV_MIN, VIEWMODEL_FOV_MAX } from '../../core/SettingsManager.js';
 import { bulletDirection } from '../../../shared/sim3d/inaccuracy.js';
 import { cs3dMap } from '../../../shared/cs3d/maps.js';
@@ -83,6 +85,25 @@ import { canSpectateSlot, DEATH_FOLLOW_SECONDS, deathFollowShouldSnap, nextCamMo
 import { keysAt } from './keypresses.js';
 
 const DEG = Math.PI / 180;
+/**
+ * Longest the boot screen waits on shaders once everything has downloaded.
+ * The warm-up normally finishes well inside this; it is the rail for a GPU
+ * that compiles far slower than measured, not a target.
+ */
+const WARM_MAX_MS = 20000;
+
+/** Yield to the event loop without the 4 ms clamp (or a hidden tab's 1 s one). */
+function yieldNow() {
+  return new Promise((resolve) => {
+    const ch = new MessageChannel();
+    ch.port1.onmessage = () => resolve();
+    ch.port2.postMessage(0);
+  });
+}
+/** `?c3debug=1` exposes the scene as `window.__c3` (see bootScene). */
+const DEBUG_3D = typeof location !== 'undefined' && new URLSearchParams(location.search).get('c3debug') === '1';
+/** Per-pass milliseconds of the last frame, filled only under `?c3debug=1`. */
+const frameStamp = { sky: 0, world: 0, bloom: 0, vm: 0, bodies: 0, total: 0 };
 const RAD = 180 / Math.PI;
 
 const TEAM_COLOR = { T: 0xd9a24a, CT: 0x5b87e0 };
@@ -194,6 +215,10 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange }) {
   const bulletAssets = new BulletAssets();
   const sunTracker = new SunTracker();
   let vmPass = null;
+  /** The players' own shadow on the map (src/cs3d/bodyShadows.js). */
+  let bodyShadows = null;
+  /** Body groups handed to it each frame; filled once the actors exist. */
+  const casters = [];
   let xray = null;
   let xrayWanted = false;
   let _xraySubjects = [];
@@ -439,14 +464,28 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange }) {
       console.log(`cs3d: node material lookup repaired for ${repaired} material types (minified build)`);
     }
 
+    try {
+      bodyShadows = new BodyShadows(renderer);
+    } catch (e) {
+      bodyShadows = null;
+      console.warn('cs3d: body shadows unavailable', e);
+    }
+
     const mapName = cs3dMap(slug)?.name || slug;
-    boot = createBootScreen(container, mapName, slug);
+    // Held past the download: the shaders are built behind it (see below).
+    boot = createBootScreen(container, mapName, slug, { hold: true });
 
     pack = new MapPack({
       slug,
       scene,
       renderer,
-      onProgress: (p) => boot.setProgress(p),
+      onProgress: (p) => {
+        if (DEBUG_3D) {
+          const log = (window.__c3prog = window.__c3prog || []);
+          log.push([Math.round(performance.now()), p.phase, p.groupsLoaded, p.texLoaded]);
+        }
+        boot.setProgress(p);
+      },
       onPhys: (collider) => {
         interactives?.setCollider(collider);
         player.setCollider(collider, interactives?.movers);
@@ -481,6 +520,7 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange }) {
       getPack: () => pack,
       getLighting: () => lighting,
       bloom: bloomPass,
+      stamp: DEBUG_3D ? frameStamp : undefined,
       overlayAfter: new URLSearchParams(location.search).get('vm') === 'after',
       // Inside the scene pass, never after it — see createMapRenderer.
       overlay: () => {
@@ -504,6 +544,11 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange }) {
     nadeEffects.setProbeGrid(() => pack?.probeGrid || null);
     pack.lightmapIntensity = lighting.lightmapIntensity;
     pack.sun = lighting.worldSun();
+    if (bodyShadows) {
+      bodyShadows.setSun(pack.sun?.toSun);
+      // Compiled into the world's materials, so it has to be in before load().
+      pack.sunShade = bodyShadows.node();
+    }
     pack.skyAmbient = lighting.skyAmbient;
     nadeEffects.setLight(pack.sun ? { ...pack.sun, ambient: lighting.skyAmbient } : null);
     if (manifest.sky?.equirect) {
@@ -548,9 +593,65 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange }) {
       applyFrame();
     });
 
-    await pack.load(manifest);
-    look.applyAll();
-    attachWorld();
+    // The pack streams in the background while this draws warm-up frames
+    // behind the boot screen (src/cs3d/shaderWarmup.js): every material's
+    // shader is built as soon as its batch and its textures exist, a few per
+    // frame, instead of all of them on the first frame after the last byte.
+    // The screen lifts on a textured, compiled map rather than on flat
+    // stand-in colours followed by seconds of stutter.
+    resize();
+    const warm = createShaderWarmup({
+      batches: () => pack.batches.values(),
+      ready: (b) => pack.materials?.final?.get(b.userData?.matId) === b.material,
+      render: () => mapRenderer.render(camera)
+    });
+    let geometryIn = false;
+    let loadError = null;
+    const loading = pack.load(manifest).then(
+      () => {
+        geometryIn = true;
+        look.applyAll();
+        attachWorld();
+      },
+      (e) => {
+        loadError = e;
+      }
+    );
+    let settledAt = 0;
+    for (;;) {
+      if (loadError) throw loadError;
+      if (!renderer || pack.aborted) return;
+      const settled = geometryIn && pack.materials?.settled !== false;
+      if (settled && !settledAt) settledAt = performance.now();
+      const left = warm.step({ all: settled });
+      if (settled) {
+        const total = warm.built + left;
+        boot.setStage(Math.round((100 * warm.built) / Math.max(1, total)), `Shaders ${warm.built} / ${total}`);
+        if (left === 0 || performance.now() - settledAt > WARM_MAX_MS) break;
+      }
+      if (left > 0 && (settled || warm.pending() > 0)) await yieldNow();
+      else await new Promise((r) => setTimeout(r, 25));
+    }
+    await loading;
+    if (DEBUG_3D) {
+      // `?c3debug=1`: the scene for the console, and a frame timer that does
+      // not depend on rAF (which a hidden tab throttles to nothing).
+      window.__c3 = {
+        scene,
+        camera,
+        renderer,
+        pack,
+        bodyShadows,
+        stamp: frameStamp,
+        bodies,
+        /** Draw `n` frames back to back; returns ms per frame. */
+        time(n = 10) {
+          const t = performance.now();
+          for (let i = 0; i < n; i++) drawFrame(performance.now());
+          return (performance.now() - t) / n;
+        }
+      };
+    }
     if (pack.sun) nadeEffects.setLight({ ...pack.sun, ambient: lighting.skyAmbient });
     boot.finish();
     ready = true;
@@ -1537,6 +1638,10 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange }) {
 
   function loop(now) {
     raf = requestAnimationFrame(loop);
+    drawFrame(now);
+  }
+
+  function drawFrame(now) {
     const t = now || performance.now();
     const dt = lastNow ? Math.min(0.1, (t - lastNow) / 1000) : 0;
     lastNow = t;
@@ -1563,8 +1668,25 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange }) {
     _xraySubjects = xray?.enabled ? collectXraySubjects() : [];
     xray?.updateLabels(camera, _xraySubjects);
     updateMatchHud();
+    if (bodyShadows) {
+      const tb = DEBUG_3D ? performance.now() : 0;
+      casters.length = 0;
+      for (const b of bodies) {
+        if (b.model?.group?.visible) casters.push(b.model.group);
+        else if (b.group.visible) casters.push(b.group);
+      }
+      bodyShadows.update(scene, camera, casters);
+      if (DEBUG_3D) frameStamp.bodies = performance.now() - tb;
+    }
+    const tr = DEBUG_3D ? performance.now() : 0;
+    const culled = pack?.cullBatches?.(camera) || 0;
+    if (DEBUG_3D) frameStamp.culled = culled;
     if (mapRenderer) mapRenderer.render(camera);
     else renderer.render(scene, camera);
+    if (DEBUG_3D) {
+      frameStamp.render = performance.now() - tr;
+      frameStamp.total = performance.now() - t;
+    }
   }
 
   return {
@@ -1785,6 +1907,7 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange }) {
       crosshairXh = null;
       flashOverlay?.remove();
       for (const b of bodies) b.model?.dispose();
+      bodyShadows?.dispose();
       xray?.dispose();
       matchHud?.el?.remove();
       keysEl?.remove();

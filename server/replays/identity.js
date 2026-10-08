@@ -22,6 +22,7 @@
 import { readTicketHeader, verifyTicket } from '../admin/impersonation.js';
 import { freeEntitlements, loadEntitlements } from '../entitlements/load.js';
 import { db, isSiteAdmin } from '../entitlements/service.js';
+import { OWNER, ownerEntitlements, localMode } from '../local/mode.js';
 
 /**
  * Read at call time rather than at import: the .env loader and the test
@@ -82,6 +83,7 @@ function usernameOf(user) {
 }
 
 export function isConfigured() {
+  if (localMode()) return true;
   const { url, key } = supabase();
   return Boolean(url && key);
 }
@@ -122,6 +124,11 @@ export function demoUploadIdentity(me) {
  * once per request.
  */
 async function resolveActor(req) {
+  // Local mode has one caller and it is the owner, so there is nothing to
+  // verify. Answering here means every route below keeps its own sign-in checks
+  // and simply never sees an anonymous request.
+  if (localMode()) return Object.freeze({ ...OWNER, entitlements: ownerEntitlements() });
+
   const token = bearer(req);
   const { url, key } = supabase();
   if (!token || !url || !key) return ANONYMOUS;

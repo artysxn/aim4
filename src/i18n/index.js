@@ -27,8 +27,8 @@ export const LANG_KEY = 'aim4.lang';
 /**
  * One entry per language with a catalogue on disk. Written as a literal map of
  * arrow functions rather than a computed import of a path built at runtime, so
- * Vite can see each file at build time and give every language its own chunk: a
- * Finnish visitor should not download Japanese.
+* the build can see each file and give every language its own chunk: a
+    * Finnish visitor should not download Japanese.
  *
  * The catalogues are JSON rather than modules because they are data, they are
  * generated and merged by a script, and a JSON diff of a translation change is

@@ -31,9 +31,31 @@ import {
   shortDate
 } from './antistratConfig.js';
 import { runAntistratScan } from './antistratScan.js';
+import { REPORT_MODES } from './reportModes.js';
+import {
+  SUMMARY_CATEGORIES,
+  SUMMARY_GROUPS,
+  buildSummaryDocHtml,
+  buildSummaryReport
+} from './antistratSummary.js';
+import {
+  INTERNAL_CATEGORIES,
+  INTERNAL_COLUMNS,
+  INTERNAL_GROUPS,
+  buildInternalDocHtml,
+  buildInternalReport,
+  coachRounds,
+  internalCoachFiles
+} from './antistratInternal.js';
 import { PACE_TYPES } from './patternDefs.js';
 import { setSpinnerLabel, spinnerHtml, statsProgressLabel } from '../../lib/spinner.js';
 import { mbWrap } from '../../icons/menubuttons.js';
+
+const MODE_CATALOGUE = {
+  detailed: { categories: ANTISTRAT_CATEGORIES, groups: ANTISTRAT_GROUPS },
+  summary: { categories: SUMMARY_CATEGORIES, groups: SUMMARY_GROUPS },
+  internal: { categories: INTERNAL_CATEGORIES, groups: INTERNAL_GROUPS }
+};
 
 /**
  * @param {{ escapeHtml: (s: string) => string }} deps
@@ -60,8 +82,14 @@ export function createAntistratPanel({ escapeHtml }) {
     mapCode: '',
     /** @type {Set<string>} demo ids dropped from the run */
     excluded: new Set(),
-    /** @type {Set<string>} selected category keys */
-    cats: new Set(ANTISTRAT_CATEGORIES.map((c) => c.key)),
+    /** 'detailed' | 'summary' | 'internal' */
+    mode: 'detailed',
+    /** @type {Record<string, Set<string>>} selected category keys, per mode */
+    cats: Object.fromEntries(
+      Object.entries(MODE_CATALOGUE).map(([mode, cat]) => [mode, new Set(cat.categories.map((c) => c.key))])
+    ),
+    /** @type {Set<string>} demo ids marked as official games (internal mode) */
+    official: new Set(),
     destTeamId: '',
     busy: false,
     progress: '',
@@ -162,8 +190,12 @@ export function createAntistratPanel({ escapeHtml }) {
       !state.busy &&
       Boolean(state.teamKey && state.mapCode && state.destTeamId) &&
       includedMatches().length > 0 &&
-      [...state.cats].some((k) => ANTISTRAT_CATEGORIES.some((c) => c.key === k))
+      [...state.cats[state.mode]].some((k) => catalogue().categories.some((c) => c.key === k))
     );
+  }
+
+  function catalogue() {
+    return MODE_CATALOGUE[state.mode] || MODE_CATALOGUE.detailed;
   }
 
   // ---- render -------------------------------------------------------------
@@ -259,13 +291,24 @@ export function createAntistratPanel({ escapeHtml }) {
 
   function matchesStepHtml() {
     if (!state.teamKey || !state.mapCode) return '';
+    const internal = state.mode === 'internal';
     const rows = matches()
       .map((d) => {
         const on = !state.excluded.has(d.id);
-        return `<label class="as-match${on ? '' : ' off'}">
-          <input type="checkbox" data-as-match="${escapeHtml(d.id)}" ${on ? 'checked' : ''} />
-          <span>${escapeHtml(matchLabel(d))}</span>
-        </label>`;
+        const official = state.official.has(d.id);
+        // Internal reports compare practice with official games; which is
+        // which is the reader's to say, because nothing in a demo knows.
+        const mark = internal
+          ? `<button type="button" class="as-official${official ? ' active' : ''}" data-as-official="${escapeHtml(
+              d.id
+            )}" aria-pressed="${official ? 'true' : 'false'}">Official</button>`
+          : '';
+        return `<div class="as-match${on ? '' : ' off'}">
+          <label class="as-match-pick">
+            <input type="checkbox" data-as-match="${escapeHtml(d.id)}" ${on ? 'checked' : ''} />
+            <span>${escapeHtml(matchLabel(d))}</span>
+          </label>${mark}
+        </div>`;
       })
       .join('');
     return `<section class="an-card as-step">
@@ -276,15 +319,25 @@ export function createAntistratPanel({ escapeHtml }) {
     </section>`;
   }
 
+  function modeSwitchHtml() {
+    return `<div class="rv-az-seg as-mode-seg" role="group" aria-label="Report">
+      ${REPORT_MODES.map(
+        (m) =>
+          `<button type="button" class="rv-az-seg-btn${m.key === state.mode ? ' active' : ''}" data-as-mode="${m.key}"
+            aria-pressed="${m.key === state.mode ? 'true' : 'false'}">${escapeHtml(m.label)}</button>`
+      ).join('')}
+    </div>`;
+  }
+
   function categoriesStepHtml() {
     if (!state.teamKey || !state.mapCode) return '';
-    const groups = ANTISTRAT_GROUPS.map((group) => {
-      const rows = ANTISTRAT_CATEGORIES.filter((c) => c.group === group)
+    const { categories, groups: groupNames } = catalogue();
+    const picked = state.cats[state.mode];
+    const groups = groupNames.map((group) => {
+      const rows = categories.filter((c) => c.group === group)
         .map(
           (c) => `<label class="as-cat-main">
-            <input type="checkbox" data-as-cat="${escapeHtml(c.key)}" ${
-              state.cats.has(c.key) ? 'checked' : ''
-            } />
+            <input type="checkbox" data-as-cat="${escapeHtml(c.key)}" ${picked.has(c.key) ? 'checked' : ''} />
             <span>${escapeHtml(c.label)}</span>
           </label>`
         )
@@ -296,7 +349,10 @@ export function createAntistratPanel({ escapeHtml }) {
     }).join('');
     return `<section class="an-card as-step">
       <header class="an-card-head"><h3 class="an-section-title">Categories</h3></header>
-      <div class="as-step-body as-cats">${groups}</div>
+      <div class="as-step-body">
+        ${modeSwitchHtml()}
+        <div class="as-cats">${groups}</div>
+      </div>
     </section>`;
   }
 
@@ -405,13 +461,23 @@ export function createAntistratPanel({ escapeHtml }) {
     renderProgress();
 
     const included = includedMatches();
-    const title = `Antistrat: ${team.name} on ${MAPS[state.mapCode]?.name || state.mapCode}`;
+    const mode = state.mode;
+    const mapName = MAPS[state.mapCode]?.name || state.mapCode;
+    const title =
+      mode === 'summary'
+        ? `Summary: ${team.name} on ${mapName}`
+        : mode === 'internal'
+          ? `Internal: ${team.name} on ${mapName}`
+          : `Antistrat: ${team.name} on ${mapName}`;
+    const categories = [...state.cats[mode]];
     try {
       // The picker runs on the catalogue, which carries no rounds. Fetch them
       // now, scoped to the matches this run actually covers — a handful of
-      // demos rather than the library.
+      // demos rather than the library. The internal report always fetches its
+      // own: its tables carry ratings, and a payload without the full rating
+      // bundle would produce plausible numbers that are not this team's.
       let scanPayload = payload;
-      if (payload?.identityOnly) {
+      if (payload?.identityOnly || mode === 'internal') {
         state.progress = 'Loading rounds for these matches…';
         renderProgress();
         scanPayload = await getStatsPayload(
@@ -424,7 +490,7 @@ export function createAntistratPanel({ escapeHtml }) {
             // `roles` is 55 bytes a round and is NOT implied by anything else:
             // without it every `roleForPlayer` lookup returns null and the
             // report prints "T unknown, CT unknown" for all five players.
-            columns: ['roundLibrary', 'roles'],
+            columns: mode === 'internal' ? INTERNAL_COLUMNS : ['roundLibrary', 'roles'],
             onProgress: (p) => {
               state.progress = statsProgressLabel(p);
               renderProgress();
@@ -438,28 +504,65 @@ export function createAntistratPanel({ escapeHtml }) {
         mapCode: state.mapCode,
         demoIds: included.map((d) => d.id),
         paceKeys: PACE_TYPES.map((p) => p.key),
+        keepRounds: mode !== 'detailed',
         onProgress: (done, total) => {
           state.progress = `Scanning round ${done} of ${total}…`;
           renderProgress();
         }
       });
-      // Nothing in the report is a picture any more: every map carries its
-      // own rounds and draws them, so there is nothing to render here.
-      state.progress = 'Writing document…';
-      renderProgress();
-      await saveTeamDocument(dest.id, {
-        title,
-        html: buildAntistratDocHtml(
+      let html;
+      if (mode === 'summary') {
+        state.progress = 'Writing the summary…';
+        renderProgress();
+        const report = buildSummaryReport({
+          extract: results.extract,
+          sections: results.sections,
+          mapCode: state.mapCode,
+          teamName: team.name
+        });
+        html = buildSummaryDocHtml({ teamName: team.name, mapCode: state.mapCode, categories, report }, escapeHtml);
+      } else if (mode === 'internal') {
+        // Every full buy goes through the autocoach, the same pass the viewer
+        // runs, and the round notes are written from its flags.
+        const coached = await coachRounds({
+          files: internalCoachFiles(results),
+          mapCode: state.mapCode,
+          network: results.extract.network,
+          onProgress: (done, total) => {
+            state.progress = `Coaching round ${done} of ${total}…`;
+            renderProgress();
+          }
+        });
+        state.progress = 'Writing the report…';
+        renderProgress();
+        const officialIds = new Set(included.map((d) => d.id).filter((id) => state.official.has(id)));
+        const report = buildInternalReport({
+          results,
+          payload: scanPayload,
+          teamKey: state.teamKey,
+          teamName: team.name,
+          mapCode: state.mapCode,
+          coached,
+          officialIds
+        });
+        html = buildInternalDocHtml({ teamName: team.name, mapCode: state.mapCode, categories, report }, escapeHtml);
+      } else {
+        // Nothing in the report is a picture any more: every map carries its
+        // own rounds and draws them, so there is nothing to render here.
+        state.progress = 'Writing document…';
+        renderProgress();
+        html = buildAntistratDocHtml(
           {
             teamName: team.name,
             mapCode: state.mapCode,
             matches: included.map((d) => ({ label: matchLabel(d) })),
-            categories: [...state.cats],
+            categories,
             results
           },
           escapeHtml
-        )
-      });
+        );
+      }
+      await saveTeamDocument(dest.id, { title, html });
       state.outcome = 'ok';
       state.outcomeMsg = `Saved "${title}" to ${dest.name}. ${results.rounds} rounds scanned.`;
     } catch (err) {
@@ -515,8 +618,8 @@ export function createAntistratPanel({ escapeHtml }) {
     const cat = t.closest('[data-as-cat]');
     if (cat) {
       const key = cat.dataset.asCat;
-      if (cat.checked) state.cats.add(key);
-      else state.cats.delete(key);
+      if (cat.checked) state.cats[state.mode].add(key);
+      else state.cats[state.mode].delete(key);
       render();
       return;
     }
@@ -536,6 +639,7 @@ export function createAntistratPanel({ escapeHtml }) {
       state.teamKey = pick.dataset.asPickTeam;
       state.mapCode = '';
       state.excluded.clear();
+      state.official.clear();
       state.outcome = '';
       teamSearch = '';
       teamMenuOpen = false;
@@ -546,10 +650,27 @@ export function createAntistratPanel({ escapeHtml }) {
       state.teamKey = '';
       state.mapCode = '';
       state.excluded.clear();
+      state.official.clear();
       state.outcome = '';
       render();
       const input = el.querySelector('#as-team-search');
       input?.focus();
+      return;
+    }
+    const modeBtn = e.target.closest('[data-as-mode]');
+    if (modeBtn) {
+      if (state.busy) return;
+      state.mode = MODE_CATALOGUE[modeBtn.dataset.asMode] ? modeBtn.dataset.asMode : 'detailed';
+      state.outcome = '';
+      render();
+      return;
+    }
+    const official = e.target.closest('[data-as-official]');
+    if (official) {
+      const id = official.dataset.asOfficial;
+      if (state.official.has(id)) state.official.delete(id);
+      else state.official.add(id);
+      render();
       return;
     }
     if (e.target.closest('[data-as-generate]')) void generate();

@@ -6623,6 +6623,43 @@ body.rv-open:has(.side-collapsed) .rv-side-show {
   text-decoration: line-through;
 }
 
+.as-match-pick {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+/* Internal reports: which of the included matches were official games. */
+.as-official {
+  flex: none;
+  padding: 3px 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--muted);
+  font: 600 11px var(--font-body);
+  cursor: pointer;
+}
+
+.as-official:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.as-official.active {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.1);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+
+.as-mode-seg {
+  width: auto;
+  max-width: 360px;
+}
+
 .as-cats {
   flex-direction: row;
   flex-wrap: wrap;

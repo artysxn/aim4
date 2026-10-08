@@ -1,7 +1,8 @@
 // ---------------------------------------------------------------------------
 // replays/api.js
-// Client for /api/replays/*. Talks to the same backend as the trainer
-// (VITE_API_URL in production, same origin in dev through the Vite proxy).
+// Client for /api/replays/*. Talks to the same backend that served this page:
+// the client is built into dist/ and served by the API host itself, so the
+// default (empty VITE_API_URL) is same origin and needs no proxy.
 //
 // The library folder is shared, but who is asking is not: every request carries
 // the Supabase access token, and the backend decides from it which demos exist
@@ -1019,6 +1020,29 @@ export async function fetchRoundPacks(files, { stride = 100, ticks = true, meta 
   const out = new Map();
   for (const p of packs) out.set(p.file, { meta: p.meta, ticks: p.ticks });
   return out;
+}
+
+/**
+ * Kill / death / assist / hit positions for many rounds (roundZoneEvents).
+ *
+ * Resolves to a Map file -> record|null, or to null when the server has no
+ * such endpoint yet (an older build): the caller then computes the same
+ * records itself from round packs.
+ */
+export async function fetchRoundZoneEvents(files, ids = null) {
+  const res = await safeFetch(`${API_BASE}/api/replays/rounds/zone-events`, {
+    method: 'POST',
+    headers: await headers({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ files, ...(ids?.length ? { ids } : {}) })
+  });
+  if (res.status === 404 || res.status === 405) return null;
+  if (!res.ok) throw new Error(`Could not load round positions (${res.status})`);
+  const type = res.headers.get('content-type') || '';
+  // An SPA fallback answering HTML is an old server too.
+  if (!type.includes('json')) return null;
+  const body = await res.json();
+  if (!body?.rounds || typeof body.rounds !== 'object') return null;
+  return new Map(Object.entries(body.rounds));
 }
 
 /** Longest text one note will keep; the server truncates to the same length. */

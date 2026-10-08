@@ -136,6 +136,7 @@ import {
   visibleRecords
 } from './visibility.js';
 import { encodeRoundPacks } from '../../src/replays/shared/roundPackWire.js';
+import { roundZoneEvents } from '../../src/replays/shared/roundZoneEvents.js';
 import { importReplayPackage } from './importPackage.js';
 import { readChampion } from '../training/champion.js';
 import { spawnsForMap } from './spawnPoints.js';
@@ -2786,6 +2787,56 @@ export async function handleReplayRequest(req, res, url) {
     headers['Content-Length'] = buf.length;
     res.writeHead(200, headers);
     res.end(buf);
+    return true;
+  }
+
+  // Where each kill, death, assist and hit happened, for many rounds at once:
+  // Performance > Zones. The same walk the client can do off a round pack
+  // (roundZoneEvents), done here because the server reads the 100-tick pass as
+  // a plain file and answers with a few hundred bytes a round instead of the
+  // ~30 KB of meta and ticks the client would otherwise download to compute it.
+  if (req.method === 'POST' && p === '/api/replays/rounds/zone-events') {
+    let body;
+    try {
+      body = await readJson(req, 512 * 1024);
+    } catch (err) {
+      json(res, 400, { error: err.message });
+      return true;
+    }
+    const files = (Array.isArray(body.files) ? body.files : [])
+      .map((f) => String(f || ''))
+      .filter((f) => /^[A-Za-z0-9_~-]+$/.test(f));
+    if (!files.length) {
+      json(res, 400, { error: 'Pass files: [roundFile, …].' });
+      return true;
+    }
+    if (files.length > 400) {
+      json(res, 400, { error: 'At most 400 rounds per request.' });
+      return true;
+    }
+    const ids = Array.isArray(body.ids)
+      ? body.ids.map((id) => String(id || '')).filter(Boolean).slice(0, 64)
+      : null;
+    await roundLookup();
+    const rounds = {};
+    let cursor = 0;
+    const worker = async () => {
+      while (cursor < files.length) {
+        const file = files[cursor++];
+        rounds[file] = null;
+        try {
+          if (!(await canOpenRound(file))) continue;
+          const meta = await readRoundMetaMaybeSample(user, file);
+          if (!meta) continue;
+          const ticks = await readRoundTicksMaybeSample(user, file, 100);
+          rounds[file] = roundZoneEvents(meta, ticks, ids && ids.length ? ids : null);
+        } catch {
+          rounds[file] = null;
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(8, files.length) }, worker));
+    await jsonBig(res, 200, { rounds }, req, { 'Cache-Control': 'no-store' });
     return true;
   }
 

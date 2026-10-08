@@ -58,8 +58,11 @@
   padding: 0;
 }
 
-html,
-body {
+/* Scoped to the standalone map page. The 3D replay viewer (view3d.js) imports
+   this file too, and with code splitting off it ships in the site bundle, where
+   an unscoped html/body overflow:hidden stops every long page from scrolling. */
+html.cs3d-page,
+html.cs3d-page body {
   height: 100%;
   background: var(--bg);
   color: var(--text);

@@ -161,7 +161,7 @@ let skipNadeHurt = false;
 // WebGPU, with three's built-in WebGL2 fallback when the browser has no
 // adapter (`forceWebGL` also forces it for A/B testing via ?webgl=1). The
 // whole island imports from 'three/webgpu'. GLTF addons are pointed at that
-// same build in vite.config.js so loaders and mixers share one Mesh/Vector3.
+// same build in build/build.mjs so loaders and mixers share one Mesh/Vector3.
 const forceWebGL = params.get('webgl') === '1';
 const msaaBoot = params.get('msaa') !== '0' && localStorage.getItem('cs3d_msaa') !== '0';
 const renderer = new THREE.WebGPURenderer({
@@ -1138,8 +1138,8 @@ window.addEventListener('drop', async (e) => {
 //
 // A bare id is a library demo, fetched as a package from the replays API —
 // that is the link the 2D viewer's "watch in 3D" button hands over. Anything
-// containing a slash is treated as a URL, which is what makes dev deep-links
-// work against a file on disk (Vite serves /@fs/).
+// containing a slash is treated as a URL, which is what lets a local path
+// point at a demo file on disk.
 if (params.get('demo')) {
   const ref = params.get('demo');
   const isId = /^[A-Za-z0-9_-]+$/.test(ref);

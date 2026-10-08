@@ -41,6 +41,11 @@ const GEO_CONCURRENCY = 4;
 const SHADOW_KEEP_RADIUS = 1800;
 
 /** Where the packs live: VITE_CS3D_ASSET_BASE, else the API host's /api/cs3d. */
+/** Pack files are immutable; the manifest's timestamp versions every URL. */
+export function packVersionQuery(manifest) {
+  return `?v=${encodeURIComponent(manifest?.generated || String(manifest?.version ?? ''))}`;
+}
+
 export function assetBase() {
   const explicit = import.meta.env?.VITE_CS3D_ASSET_BASE;
   if (explicit) return String(explicit).replace(/\/$/, '');
@@ -347,6 +352,10 @@ class TileBatch extends THREE.BatchedMesh {
     this._lastIndirect = new Uint32Array(0);
     this._lastCullCount = -1;
     this._cullDirty = true;
+    /** Sphere around every tile, in the batch's own space; see worldSphere(). */
+    this._union = new THREE.Sphere();
+    this._unionDirty = true;
+    this._worldSphere = new THREE.Sphere();
     // Front-to-back sorting is a per-frame sort of every tile for a modest
     // overdraw win; the culling is what matters here.
     this.sortObjects = false;
@@ -419,6 +428,40 @@ class TileBatch extends THREE.BatchedMesh {
     this._tileBoxes[bo + 4] = box.max.y;
     this._tileBoxes[bo + 5] = box.max.z;
     this._cullDirty = true;
+    this._unionDirty = true;
+  }
+
+  /**
+   * One sphere around every tile, in world space, or null while the batch is
+   * empty. The union is rebuilt only when a tile is added.
+   */
+  worldSphere() {
+    if (this._unionDirty) {
+      this._unionDirty = false;
+      const u = this._union;
+      u.makeEmpty();
+      const sph = this._tileSpheres;
+      const box = this._aabb.makeEmpty();
+      const n = this._drawInfo.length;
+      for (let i = 0; i < n; i++) {
+        const o = i * 4;
+        const r = sph[o + 3];
+        box.expandByPoint(this._pt.set(sph[o] - r, sph[o + 1] - r, sph[o + 2] - r));
+        box.expandByPoint(this._pt.set(sph[o] + r, sph[o + 1] + r, sph[o + 2] + r));
+      }
+      if (!box.isEmpty()) {
+        box.getCenter(u.center);
+        let r = 0;
+        for (let i = 0; i < n; i++) {
+          const o = i * 4;
+          const d = Math.hypot(sph[o] - u.center.x, sph[o + 1] - u.center.y, sph[o + 2] - u.center.z) + sph[o + 3];
+          if (d > r) r = d;
+        }
+        u.radius = r;
+      }
+    }
+    if (this._union.isEmpty()) return null;
+    return this._worldSphere.copy(this._union).applyMatrix4(this.matrixWorld);
   }
 
   onBeforeRender(renderer, scene, camera, geometry, material) {
@@ -514,6 +557,10 @@ class TileBatch extends THREE.BatchedMesh {
   }
 }
 
+const _cullProj = new THREE.Matrix4();
+const _cullFrustum = new THREE.Frustum();
+const _cullCam = new THREE.Vector3();
+
 export class MapPack {
   /**
    * @param {object} o
@@ -538,6 +585,8 @@ export class MapPack {
     this.lightmapIntensity = lightmapIntensity;
     /** {toSun, color, intensity} for the world's analytic sun; set by main before load(). */
     this.sun = null;
+    /** TSL float that shades the world's sun term (bodyShadows.js); set before load(). */
+    this.sunShade = null;
     this.base = `${assetBase()}/${slug}`;
     this.manifest = null;
     this.materials = null;
@@ -608,7 +657,12 @@ export class MapPack {
   async fetchManifest() {
     const res = await packFetch(`${this.base}/manifest.json`, { cache: 'no-cache' });
     if (!res.ok) throw new Error(`No pack for "${this.slug}" (${res.status} from ${this.base}/manifest.json)`);
-    return res.json();
+    const manifest = await res.json();
+    // Callers fetch pack files between this and load() (the colour grade, the
+    // sky, the shadow mask). Without the version here those URLs ended in the
+    // string "undefined": `post/lut.binundefined`, a 404, and no grade.
+    this.v = packVersionQuery(manifest);
+    return manifest;
   }
 
   /** @param {object} [preloaded] a manifest from fetchManifest(), to skip the second round trip */
@@ -620,13 +674,14 @@ export class MapPack {
     this.manifest = manifest;
     // Pack files are served immutable; the manifest's timestamp versions every URL
     // so a re-pack under the same names is never served from a stale cache.
-    this.v = `?v=${encodeURIComponent(manifest.generated || String(manifest.version))}`;
+    this.v = packVersionQuery(manifest);
     const skyGroups = manifest.sky3d?.groups || [];
     this.groupsTotal = manifest.groups.length + skyGroups.length;
     this.bytesTotal = [...manifest.groups, ...skyGroups].reduce((a, g) => a + (g.bytes || 0), 0);
     this.materials = new MaterialLibrary(manifest, this.base, this.renderer, this.v, {
       lightmapIntensity: this.lightmapIntensity,
-      probeAmbient: !!manifest.probeAmbient
+      probeAmbient: !!manifest.probeAmbient,
+      sunShade: this.sunShade
     });
     if (this.sun) this.materials.setSun(this.sun);
     if (this.skyAmbient) this.materials.setSkyAmbient(this.skyAmbient);
@@ -971,6 +1026,43 @@ export class MapPack {
    * shadow map. Off when the live map is not being redrawn: the extra tiles
    * are then just more vertex work in the colour pass.
    */
+  /**
+   * Hide whole batches the camera cannot see.
+   *
+   * Every batch is one object to the renderer, and r169 pays for each object
+   * it draws whether or not a single tile of it survives the per-tile cull
+   * inside onBeforeRender: bindings, uniforms and a draw, ~30 µs apiece on
+   * the main thread, for 400-odd batches a frame. A batch whose tiles are all
+   * outside the view and outside the radius kept for the shadow pass (the
+   * same two tests the per-tile cull makes) is hidden instead, which drops it
+   * before any of that.
+   *
+   * Call once a frame, before drawing, with the camera the frame is drawn
+   * from. Nothing else on a batch drives `visible`.
+   * @param {THREE.Camera} camera
+   */
+  cullBatches(camera) {
+    camera.updateMatrixWorld();
+    _cullProj.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+    _cullFrustum.setFromProjectionMatrix(_cullProj, this.renderer?.coordinateSystem);
+    _cullCam.setFromMatrixPosition(camera.matrixWorld);
+    let hidden = 0;
+    for (const b of this.batches.values()) {
+      const s = b.worldSphere?.();
+      let show = true;
+      if (s) {
+        show = _cullFrustum.intersectsSphere(s);
+        if (!show && b.keepRadius > 0) {
+          const reach = b.keepRadius + s.radius;
+          show = s.center.distanceToSquared(_cullCam) < reach * reach;
+        }
+      }
+      if (b.visible !== show) b.visible = show;
+      if (!show) hidden++;
+    }
+    return hidden;
+  }
+
   setShadowKeep(on) {
     const r = on ? SHADOW_KEEP_RADIUS : 0;
     for (const [key, b] of this.batches) {

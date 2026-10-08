@@ -17,6 +17,8 @@
 // failing every request or, worse, letting everyone through.
 // ---------------------------------------------------------------------------
 
+import { localMode, OWNER_ID } from '../local/mode.js';
+
 /** Read at call time, not import time: .env and tests both set this late. */
 function config() {
   return {
@@ -52,6 +54,8 @@ let warned = false;
 function warnOnce() {
   if (warned) return;
   warned = true;
+  // Expected locally, where the owner's entitlements and admin come from local/mode.js.
+  if (localMode()) return;
   console.warn(
     '[entitlements] SUPABASE_SERVICE_ROLE_KEY is not set. Every account resolves ' +
       'to the free tier and admin actions are unavailable.'
@@ -262,6 +266,8 @@ function bootstrapAdminIds() {
  */
 export async function isSiteAdmin(userId) {
   if (!userId) return false;
+  // Local mode has no site_admins table: the owner is the admin by definition.
+  if (localMode()) return userId === OWNER_ID;
   const hit = adminCache.get(userId);
   if (hit && hit.expires > Date.now()) return hit.value;
 
@@ -281,6 +287,10 @@ export async function isSiteAdmin(userId) {
 /** Full admin row, for can_impersonate / can_grant. Null when not an admin. */
 export async function siteAdmin(userId) {
   if (!userId) return null;
+  // One account locally, so there is nobody to impersonate or grant to.
+  if (localMode()) {
+    return userId === OWNER_ID ? { user_id: userId, can_impersonate: false, can_grant: false } : null;
+  }
   try {
     return await db.selectOne('site_admins', { select: '*', user_id: `eq.${userId}` });
   } catch {

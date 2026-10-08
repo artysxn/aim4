@@ -745,7 +745,7 @@ function sideBlock({ rounds, playerId, side }) {
  * @param {string[]} args.demoIds  included matches
  * @param {(done: number, total: number) => void} [args.onProgress]
  */
-export async function runPlayerScan({ payload, playerId, mapCode, demoIds, onProgress }) {
+export async function runPlayerScan({ payload, playerId, mapCode, demoIds, onProgress, keepRounds = false }) {
   const wanted = new Set(demoIds);
   const jobs = [];
   const includedDemos = [];
@@ -789,7 +789,7 @@ export async function runPlayerScan({ payload, playerId, mapCode, demoIds, onPro
   }
   if (!jobs.length) throw new Error('No rounds of that player on this map.');
 
-  const { rounds, network } = await extractRounds({ jobs, mapCode, onProgress });
+  const { rounds, network, laneSets } = await extractRounds({ jobs, mapCode, onProgress });
   if (!rounds.length) throw new Error('None of the selected rounds could be read.');
 
   // Names and roles for everyone who played beside him, so the strategies and
@@ -826,7 +826,22 @@ export async function runPlayerScan({ payload, playerId, mapCode, demoIds, onPro
 
   const teamName = [...teamNames.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || '';
 
+  // The summary and internal modes read the rounds themselves, in the shape
+  // the team report's builders take: the scouted player is the one "main".
+  const extract = keepRounds
+    ? {
+        rounds,
+        network,
+        laneSets,
+        nameOf: new Map(Object.entries(mates).map(([id, m]) => [id, m.name])),
+        mains: [{ id: playerId, name: mates[playerId]?.name || playerName || playerId }],
+        rolesOf: (id, side) => mates[id]?.[side] || '',
+        includedDemos
+      }
+    : null;
+
   return {
+    extract,
     mapCode,
     playerId,
     playerName: playerName || playerId,

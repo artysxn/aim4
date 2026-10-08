@@ -4,8 +4,9 @@
 //   WS    /ws              → multiplayer duels (128 tick)
 //   GET   /*               → static client (when AIM4_SERVE_STATIC=1)
 //
-// Dev:  npm run server     (API + WS on 127.0.0.1, use Vite for the client)
-// Host: npm run host        (serves dist/ + API + WS on 0.0.0.0 for LAN/online)
+// Dev:  npm run dev          (build dist/ without minifying, then serve it)
+// Host: npm start            (serves dist/ + API + WS on 0.0.0.0 for LAN)
+// API:  npm run server       (API + WS only on 127.0.0.1, no static files)
 // ---------------------------------------------------------------------------
 
 // First, so every module below sees SUPABASE_* and friends from .env.
@@ -30,10 +31,13 @@ import { handlePitchRequest } from './pitchRoutes.js';
 import { handleBillingRequest } from './billing/routes.js';
 import { handleFaceitWebhookRequest } from './ingest/faceit/webhookRoutes.js';
 import { handleCs3dRequest } from './cs3d/routes.js';
+import { handleLocalRequest } from './local/routes.js';
 import { checkCaseSensitivity, sweepStaleUploads } from './replays/demoStore.js';
 import { parseQueueBusy, resumeInterruptedParses, sweepBatchFiles } from './replays/jobs.js';
 import { setParserBusyProbe } from './sim/jobs.js';
 import { printHostBanner, fetchPublicIp } from './network.js';
+import { localMode, OWNER_NAME } from './local/mode.js';
+// Hosted-only boot jobs, started below only when local mode is off.
 import { seedAdmins } from './entitlements/service.js';
 import { startGeoUpdater } from './account/geo.js';
 import { backfillEffectiveEntitlements } from './entitlements/load.js';
@@ -42,7 +46,14 @@ import { startVrsSync } from './replays/vrsSync.js';
 import { warmCloakBrowserCache } from './ingest/hltv/cloakBrowser.js';
 import { loadConfig as loadIngestConfig } from './ingest/hltv/config.js';
 import { startSupervisor as startIngestSupervisor } from './ingest/hltv/service.js';
+
 import { recordRequest } from './perf.js';
+
+// Everything below the boot scramble is a hosted-deployment job: a database, a
+// scheduled walk of somebody else's demos, a browser to prefetch. None of it
+// belongs on a single machine, and each one is a boot-time stall or a failed
+// fetch when the network is not there. AIM4_LOCAL=0 puts all of it back.
+const LOCAL = localMode();
 
 // PORT (no prefix) is the convention most hosts inject; AIM4_API_PORT still
 // wins so existing local/host scripts are unaffected.
@@ -113,6 +124,12 @@ const server = http.createServer(async (req, res) => {
   });
 
   try {
+    // Local mode's own profile mirror. Ahead of everything else because it is
+    // the only route that exists purely because there is no database.
+    if (await handleLocalRequest(req, res, url)) {
+      return;
+    }
+
     // Replays own their transport: a .dem upload streams to disk and a tick
     // buffer comes back as binary, so this runs ahead of the JSON body reader
     // and its 64 KB cap. It must also run ahead of the generic OPTIONS reply
@@ -336,40 +353,43 @@ sweepBatchFiles().catch(() => {});
 setParserBusyProbe(parseQueueBusy);
 // Admins are a table, not an env list. AIM4_ADMIN_USER_IDS only bootstraps it,
 // so a fresh project has someone who can reach the panel. Never awaited and
-// never fatal: no admins configured is a normal state for a local run.
-seedAdmins().catch(() => {});
-// Profiles that predate entitlements still have empty effective_capabilities;
-// RLS reads that column, so fill it once after boot.
-backfillEffectiveEntitlements().then((r) => {
-  if (r?.updated) console.log(`[entitlements] backfilled effective_* for ${r.updated} profiles`);
-}).catch(() => {});
-// Keeps the GeoIP country database at AIM4_GEOIP_DB downloaded and fresh, so
-// sharing detection needs no host-side cron and survives redeploys. First
-// check is deferred past the boot scramble; no-op when the env var is unset.
-startGeoUpdater();
-// Converts or expires trials, lapses ended subscriptions, sends the 48 hour
-// warning, and tidies quota counters. Entitlement resolution is time-aware on
-// its own, so a sweep that has not run is a reporting gap, not an access one.
-startSweep();
-// Valve regional standings: bundled snapshot at boot, then a daily GitHub
-// scan copies a newer live/<year> table when one is published.
-startVrsSync();
-// Demo ingest starts Off on every API boot. Ledger/cursor keep progress so an
-// admin turning On resumes the walk. While On, the supervisor restarts a
-// crashed child with backoff; it does not auto-enable after a deploy.
-startIngestSupervisor();
-// Prefetch CloakBrowser into the state volume so Hard Restart / On does not
-// race a 214 MB extract (spawn ETXTBSY) while Chromium is still being written.
-//
-// DEFERRED, not at boot. Every deploy cold-starts the container with empty
-// listing and stats caches, so the first minute is already the most expensive
-// of the process's life; unpacking 214 MB of Chromium in the middle of it was
-// part of why a fresh deploy answered "API may be down". Ingest starts Off on
-// every boot, so nothing needs this binary for at least as long as it takes
-// an admin to reach the panel -- and Hard Restart / On still awaits its own
-// warm, exactly as before. The delay only moves the prefetch out of the
-// window where real requests are fighting for the box.
-setTimeout(() => warmCloakBrowserCache(loadIngestConfig()).catch(() => {}), 90 * 1000);
+// never fatal: no admins configured is a normal state for a local run. Skipped
+// locally, where the owner is the admin by definition and there is no table.
+if (!LOCAL) {
+  seedAdmins().catch(() => {});
+  // Profiles that predate entitlements still have empty effective_capabilities;
+  // RLS reads that column, so fill it once after boot.
+  backfillEffectiveEntitlements().then((r) => {
+    if (r?.updated) console.log(`[entitlements] backfilled effective_* for ${r.updated} profiles`);
+  }).catch(() => {});
+  // Keeps the GeoIP country database at AIM4_GEOIP_DB downloaded and fresh, so
+  // sharing detection needs no host-side cron and survives redeploys. First
+  // check is deferred past the boot scramble; no-op when the env var is unset.
+  startGeoUpdater();
+  // Converts or expires trials, lapses ended subscriptions, sends the 48 hour
+  // warning, and tidies quota counters. Entitlement resolution is time-aware on
+  // its own, so a sweep that has not run is a reporting gap, not an access one.
+  startSweep();
+  // Valve regional standings: bundled snapshot at boot, then a daily GitHub
+  // scan copies a newer live/<year> table when one is published.
+  startVrsSync();
+  // Demo ingest starts Off on every API boot. Ledger/cursor keep progress so an
+  // admin turning On resumes the walk. While On, the supervisor restarts a
+  // crashed child with backoff; it does not auto-enable after a deploy.
+  startIngestSupervisor();
+  // Prefetch CloakBrowser into the state volume so Hard Restart / On does not
+  // race a 214 MB extract (spawn ETXTBSY) while Chromium is still being written.
+  //
+  // DEFERRED, not at boot. Every deploy cold-starts the container with empty
+  // listing and stats caches, so the first minute is already the most expensive
+  // of the process's life; unpacking 214 MB of Chromium in the middle of it was
+  // part of why a fresh deploy answered "API may be down". Ingest starts Off on
+  // every boot, so nothing needs this binary for at least as long as it takes an
+  // admin to reach the panel -- and Hard Restart / On still awaits its own
+  // warm, exactly as before. The delay only moves the prefetch out of the
+  // window where real requests are fighting for the box.
+  setTimeout(() => warmCloakBrowserCache(loadIngestConfig()).catch(() => {}), 90 * 1000);
+}
 // Load the aggregate-store SNAPSHOT shortly after boot — a load, never a
 // build (see the essay below before touching this). With the file present the
 // first Database visitor after a deploy is warm instead of eating the one
@@ -433,7 +453,15 @@ setTimeout(async () => {
 // liability.
 
 server.listen(PORT, HOST, async () => {
-  if (SERVE_STATIC) {
+  if (LOCAL) {
+    // No public IP lookup: this box is not published, and asking an outside
+    // service where it is would be the one network call local mode exists to
+    // avoid.
+    console.log('');
+    console.log(`  AIM4 local — http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT}`);
+    console.log(`  signed in as @${OWNER_NAME}, everything unlocked`);
+    console.log('');
+  } else if (SERVE_STATIC) {
     // Resolve the public IP first so the banner and /api/mp/status agree.
     const ip = await fetchPublicIp();
     if (ip) publicHost = `${ip}:${PORT}`;

@@ -49,6 +49,7 @@ import { passwordLogin } from './login.js';
 import { registerAccount } from './register.js';
 import { completeLink, safeNext, siteUrl, startUrl } from './steam.js';
 import { completeSignin, redeemCode, signinUrl } from './steamAuth.js';
+import { localMode, readProfile, writeProfile, OWNER_ID } from '../local/mode.js';
 import {
   cancelDeletion,
   deleteAccount,
@@ -150,6 +151,17 @@ export async function handleAccountRequest(req, res, url) {
     json(res, 500, { error: err.message || 'Server error' });
     return true;
   }
+}
+
+/**
+ * The profile row behind /api/me. Local mode reads the JSON file the owner edits
+ * instead of asking a database that is not there.
+ */
+async function readProfileRow(userId) {
+  if (localMode()) return userId === OWNER_ID ? readProfile() : null;
+  return db
+    .selectOne('profiles', { select: 'username, display_name, language', id: `eq.${userId}` })
+    .catch(() => null);
 }
 
 async function route(req, res, url, me) {
@@ -322,9 +334,7 @@ async function route(req, res, url, me) {
     // registration and never updated by a tag change -- serving it here meant
     // renaming your tag and watching the page keep the old one.
     const profile = me.signedIn
-      ? await db
-          .selectOne('profiles', { select: 'username, display_name, language', id: `eq.${me.id}` })
-          .catch(() => null)
+      ? await readProfileRow(me.id)
       : null;
 
     json(res, 200, {

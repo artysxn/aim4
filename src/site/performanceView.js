@@ -27,7 +27,8 @@ import {
   rosterTeams
 } from '../replays/shared/rosterQuery.js';
 import { ECONOMIES, MAPS, economyLabel } from '../replays/shared/roundId.js';
-import { indexMaps } from '../replays/shared/statsMath.js';
+import { demoTimestamp, indexMaps, rowPasses, teamNameKey } from '../replays/shared/statsMath.js';
+import { hasRoundLibrary, roundTypeRows } from '../replays/analytics/roundLibrary.js';
 import {
   CARD_METRICS,
   LAST_MATCH_OPTS,
@@ -39,6 +40,8 @@ import {
   f1,
   f2,
   findPlayerByUsername,
+  lastDemoIds,
+  lastTeamDemoIds,
   matchSeries,
   pct,
   playerDemos,
@@ -47,7 +50,9 @@ import {
   roleGrid,
   signed,
   smoothSeries,
+  statsFilterFrom,
   teamMatchSeries,
+  teamSideOf,
   teamStats
 } from '../replays/performance/performanceMath.js';
 import { aggregateGuns, gunMapForPlayer } from '../replays/performance/gunStats.js';
@@ -85,13 +90,15 @@ import { PLAN_NAMES } from '../../shared/entitlements/catalogue.js';
 import calendarIcon from '../icons/icon_calendar.svg?url';
 import { mbWrap } from '../icons/menubuttons.js';
 import { placeRankMenu, rankFilterHtml, syncRankSummary } from '../replays/shared/vrsRanks.js';
+import { createZonesChapter } from './performanceZones.js';
 import './performance.css';
 
 const CHAPTERS = [
   { key: 'summary', label: 'Summary' },
   { key: 'aim', label: 'Aim' },
   { key: 'guns', label: 'Guns' },
-  { key: 'maps', label: 'Maps' }
+  { key: 'maps', label: 'Maps' },
+  { key: 'zones', label: 'Zones' }
 ];
 
 /**
@@ -109,7 +116,13 @@ const TEAM_CHAPTERS = CHAPTERS.filter((c) => !TEAM_ONLY_CHAPTERS.has(c.key));
  * is shown. So the page has no route gate, and the two paid chapters carry the
  * gate themselves.
  */
-const GATED_CHAPTERS = new Set(['aim', 'guns', 'maps']);
+const GATED_CHAPTERS = new Set(['aim', 'guns', 'maps', 'zones']);
+
+const PHASES = [
+  { key: 'early', label: 'Early' },
+  { key: 'mid', label: 'Mid' },
+  { key: 'late', label: 'Late' }
+];
 
 /**
  * Is this chapter locked for the current account?
@@ -248,11 +261,38 @@ export function initPerformanceView({ auth, escapeHtml }) {
     map: '',
     side: '',
     econ: null,
+    oppEcon: null,
+    hasAwp: false,
+    oppHasAwp: false,
+    result: '',
+    opening: '',
     dateFrom: '',
     dateTo: '',
     rankOwn: '',
-    rankOpp: ''
+    rankOpp: '',
+    // Zones only: a phase of the round, and the calls (which need a side).
+    phase: '',
+    callOwn: '',
+    callOpp: ''
   };
+
+  /**
+   * Dropdowns the reader opened or closed, by key. A key that is not here
+   * takes its default, which is closed for everything but a chapter whose
+   * only content is the one table.
+   */
+  const ddState = new Map();
+  const ddOpen = (key, fallback = false) => (ddState.has(key) ? ddState.get(key) : fallback);
+
+  /** A table behind its title. */
+  function dd(key, title, body, { open = false, extra = '' } = {}) {
+    return `<details class="pf-dd" data-pf-dd="${escapeHtml(key)}"${ddOpen(key, open) ? ' open' : ''}>
+      <summary class="pf-dd-summary"><span class="pf-dd-title">${escapeHtml(title)}</span>${extra}</summary>
+      <div class="pf-dd-body">${body}</div>
+    </details>`;
+  }
+
+  const zones = createZonesChapter({ host, escapeHtml, ddOpen });
 
   const maps = () => indexMaps(payload || { demos: [] });
 
@@ -527,28 +567,65 @@ export function initPerformanceView({ auth, escapeHtml }) {
     </div>`;
   }
 
+  function econOptions(value) {
+    return Object.entries(ECONOMIES)
+      .map(
+        ([code, e]) =>
+          `<option value="${code}"${value != null && Number(value) === Number(code) ? ' selected' : ''}>${escapeHtml(
+            e.label || economyLabel(Number(code))
+          )}</option>`
+      )
+      .join('');
+  }
+
+  function plainSelect(key, label, options, value) {
+    return `<div class="st-filter-group">
+      <select class="site-select" data-pf-filter="${key}" aria-label="${escapeHtml(label)}">
+        <option value=""${!value ? ' selected' : ''}>${escapeHtml(label)}</option>${options
+          .map(
+            (o) =>
+              `<option value="${escapeHtml(o.key)}"${String(value) === String(o.key) ? ' selected' : ''}>${escapeHtml(o.label)}</option>`
+          )
+          .join('')}
+      </select>
+    </div>`;
+  }
+
+  function awpToggle(key, on) {
+    return `<label class="rp-awp-toggle pf-awp${on ? ' active' : ''}" title="AWP">
+      <input type="checkbox" data-pf-awp="${key}" ${on ? 'checked' : ''} aria-label="AWP" />
+      <span>AWP</span>
+    </label>`;
+  }
+
   /**
-   * @param {{ withSide?: boolean }} [opts]
+   * @param {{ withSide?: boolean, zones?: boolean }} [opts]
    *   Maps drops the side switch: every table on that chapter already is one
    *   side, and half of each is deliberately the rounds spent on the other.
+   *   Zones always has a map (the map is the chapter), and adds the phase of
+   *   the round and, once a side is picked, the calls on that map.
    */
-  function filtersHtml({ withSide = true } = {}) {
+  function filtersHtml({ withSide = true, zones: zoneBar = false } = {}) {
+    const mapValue = zoneBar ? zoneMapCode() : ui.map;
     const mapOpts = PERF_MAPS.map(
       (m) =>
-        `<option value="${escapeHtml(m.code)}"${ui.map === m.code ? ' selected' : ''}>${escapeHtml(m.name)}</option>`
+        `<option value="${escapeHtml(m.code)}"${mapValue === m.code ? ' selected' : ''}>${escapeHtml(m.name)}</option>`
     ).join('');
     const lastOpts = LAST_MATCH_OPTS.map(
       (o) =>
         `<option value="${o.value}"${Number(ui.last) === o.value ? ' selected' : ''}>${escapeHtml(o.label)}</option>`
     ).join('');
-    const econOpts = Object.entries(ECONOMIES)
-      .map(
-        ([code, e]) =>
-          `<option value="${code}"${ui.econ != null && Number(ui.econ) === Number(code) ? ' selected' : ''}>${escapeHtml(
-            e.label || economyLabel(Number(code))
-          )}</option>`
-      )
-      .join('');
+    let calls = '';
+    if (zoneBar && ui.side && hasRoundLibrary(mapValue)) {
+      const other = ui.side === 'T' ? 'CT' : 'T';
+      const opts = (side) => roundTypeRows(mapValue, side).map((r) => ({ key: r.key, label: r.label }));
+      calls = `${plainSelect('callOwn', 'Our call', opts(ui.side), ui.callOwn)}${plainSelect(
+        'callOpp',
+        'Their call',
+        opts(other),
+        ui.callOpp
+      )}`;
+    }
     return `<div class="st-filters pf-filters">
       ${dateRangeHtml()}
       <div class="st-filter-group">
@@ -557,7 +634,7 @@ export function initPerformanceView({ auth, escapeHtml }) {
       <div class="st-filter-group">${mbWrap(
         'map',
         `<select class="site-select" data-pf-filter="map" aria-label="Map">
-          <option value=""${!ui.map ? ' selected' : ''}>Map</option>${mapOpts}</select>`
+          ${zoneBar ? '' : `<option value=""${!ui.map ? ' selected' : ''}>Map</option>`}${mapOpts}</select>`
       )}</div>
       <div class="st-filter-group">${rankFilterHtml({
         own: ui.rankOwn,
@@ -575,11 +652,38 @@ export function initPerformanceView({ auth, escapeHtml }) {
       </div>`
           : ''
       }
-      <div class="st-filter-group">
+      <div class="st-filter-group pf-buy">
         <select class="site-select" data-pf-filter="econ" aria-label="Buy">
-          <option value=""${ui.econ == null ? ' selected' : ''}>Buy</option>${econOpts}
+          <option value=""${ui.econ == null ? ' selected' : ''}>Buy</option>${econOptions(ui.econ)}
         </select>
+        ${awpToggle('hasAwp', ui.hasAwp)}
       </div>
+      <div class="st-filter-group pf-buy">
+        <select class="site-select" data-pf-filter="oppEcon" aria-label="Enemy buy">
+          <option value=""${ui.oppEcon == null ? ' selected' : ''}>Enemy buy</option>${econOptions(ui.oppEcon)}
+        </select>
+        ${awpToggle('oppHasAwp', ui.oppHasAwp)}
+      </div>
+      ${plainSelect(
+        'result',
+        'Result',
+        [
+          { key: 'won', label: 'Won' },
+          { key: 'lost', label: 'Lost' }
+        ],
+        ui.result
+      )}
+      ${plainSelect(
+        'opening',
+        'Opening',
+        [
+          { key: '5v4', label: '5v4' },
+          { key: '4v5', label: '4v5' }
+        ],
+        ui.opening
+      )}
+      ${zoneBar ? plainSelect('phase', 'Phase', PHASES, ui.phase) : ''}
+      ${calls}
     </div>`;
   }
 
@@ -651,6 +755,20 @@ export function initPerformanceView({ auth, escapeHtml }) {
 
   // ---- Maps -----------------------------------------------------------------
 
+  /**
+   * Each map's pair of tables behind the map's name. With one map picked in
+   * the toolbar there is nothing to choose between, so that one starts open.
+   */
+  function mapBlockWrap(codes) {
+    return (code, head, body) =>
+      `<details class="pf-dd pf-map-block" data-pf-dd="map-${escapeHtml(code)}"${
+        ddOpen(`map-${code}`, codes.length === 1) ? ' open' : ''
+      }>
+        <summary class="pf-dd-summary">${head}</summary>
+        <div class="pf-dd-body">${body}</div>
+      </details>`;
+  }
+
   function mapsStatsHtml() {
     const { players, demos } = maps();
     const codes = ui.map ? MAP_ROUND_CODES.filter((c) => c === ui.map) : MAP_ROUND_CODES;
@@ -661,7 +779,9 @@ export function initPerformanceView({ auth, escapeHtml }) {
       CT: (full.CT || []).filter((r) => keep.has(r.map))
     };
     const byMap = mapRoundGrid(payload, playerId, ui, players, demos);
-    return `${rolesHtml(grid)}${mapRoundBlocksHtml(byMap, codes, escapeHtml)}`;
+    return `${dd('maps-roles', 'Roles', rolesHtml(grid))}${mapRoundBlocksHtml(byMap, codes, escapeHtml, {
+      wrap: mapBlockWrap(codes)
+    })}`;
   }
 
   function matchesHtml(series) {
@@ -852,7 +972,9 @@ export function initPerformanceView({ auth, escapeHtml }) {
         read: (p) => p.roundWinrate,
         label: 'Round win rate'
       })}</div>
-      <div class="pf-matches">${teamMatchesHtml(series)}</div>`;
+      ${dd('team-matches', 'Matches', `<div class="pf-matches">${teamMatchesHtml(series)}</div>`, {
+        extra: `<span class="pf-dd-count">${series.length}</span>`
+      })}`;
   }
 
   function teamSummaryHtml() {
@@ -871,14 +993,15 @@ export function initPerformanceView({ auth, escapeHtml }) {
     const { players, demos } = maps();
     const codes = ui.map ? MAP_ROUND_CODES.filter((c) => c === ui.map) : MAP_ROUND_CODES;
     const byMap = teamMapRoundGrid(payload, teamKey, ui, players, demos);
-    return teamMapRoundBlocksHtml(byMap, codes, escapeHtml);
+    return teamMapRoundBlocksHtml(byMap, codes, escapeHtml, { wrap: mapBlockWrap(codes) });
   }
 
   function teamMapsBodyHtml() {
     return `${filtersHtml({ withSide: false })}<div id="pf-stats">${teamMapsStatsHtml()}</div>`;
   }
 
-  function summaryHtml() {
+  /** The player Summary chapter, without the toolbar around it. */
+  function summaryStatsHtml() {
     const { players, demos } = maps();
     const stats = playerStats(payload, playerId, ui, players, demos);
     const series = matchSeries(payload, playerId, ui, players, demos);
@@ -886,8 +1009,6 @@ export function initPerformanceView({ auth, escapeHtml }) {
     const peerMetrics = peers?.metrics || {};
     const rating = stats?.rating;
     return `
-      ${filtersHtml()}
-      <div id="pf-stats">
       <div class="pf-hero">
         <div class="pf-identity">
           <h2 class="pf-name">${escapeHtml(playerName || playerId)}</h2>
@@ -899,10 +1020,15 @@ export function initPerformanceView({ auth, escapeHtml }) {
         </div>
       </div>
       ${cardsHtml(stats, series, peerMetrics)}
-      ${rolesHtml(grid)}
       <div class="pf-chart-wrap">${trendChart(series)}</div>
-      <div class="pf-matches">${matchesHtml(series)}</div>
-      </div>`;
+      ${dd('roles', 'Roles', rolesHtml(grid))}
+      ${dd('matches', 'Matches', `<div class="pf-matches">${matchesHtml(series)}</div>`, {
+        extra: `<span class="pf-dd-count">${series.length}</span>`
+      })}`;
+  }
+
+  function summaryHtml() {
+    return `${filtersHtml()}<div id="pf-stats">${summaryStatsHtml()}</div>`;
   }
 
   // ---- Aim chapter ---------------------------------------------------------
@@ -1138,11 +1264,95 @@ export function initPerformanceView({ auth, escapeHtml }) {
     const gunByFile = gunMapForPlayer(careerRows, playerId, allIds);
     const rows = playerRows(payload, playerId, ui, players, demos);
     const guns = aggregateGuns(rows, playerId, players, demos, gunByFile);
-    return `${filtersHtml()}<div id="pf-stats">${gunsHtml(guns)}</div>`;
+    return `${filtersHtml()}<div id="pf-stats">${dd('guns', 'Weapons', gunsHtml(guns), { open: true })}</div>`;
   }
 
   function mapsBodyHtml() {
     return `${filtersHtml({ withSide: false })}<div id="pf-stats">${mapsStatsHtml()}</div>`;
+  }
+
+  // ---- Zones ----------------------------------------------------------------
+
+  /**
+   * The map the Zones chapter shows: the toolbar's, or with none picked the
+   * one this player or team has the most rounds on.
+   */
+  function zoneMapCode() {
+    if (ui.map) return ui.map;
+    const key = teamKey ? teamNameKey(teamKey) : '';
+    const counts = new Map();
+    for (const demo of payload?.demos || []) {
+      const mine = playerId
+        ? (demo.players || []).some((p) => p.id === playerId)
+        : teamSideOf(demo, key) !== 0;
+      if (!mine) continue;
+      const code = String(demo.map || '').toUpperCase();
+      counts.set(code, (counts.get(code) || 0) + (demo.rounds?.length || 0));
+    }
+    const ranked = PERF_MAPS.map((m) => [m.code, counts.get(m.code) || 0]).sort((a, b) => b[1] - a[1]);
+    return ranked[0]?.[1] ? ranked[0][0] : '';
+  }
+
+  /**
+   * Every round of the subject on the zone map (what to load), and the ones
+   * the toolbar keeps (what to count), with the subject's players in each:
+   * one for a player, the five who played for a team that match.
+   */
+  function zoneContext() {
+    const code = zoneMapCode();
+    const { players, demos } = maps();
+    const filter = {
+      ...statsFilterFrom({ ...ui, map: code }),
+      roundOwn: ui.side && ui.callOwn ? [ui.callOwn] : [],
+      roundOpp: ui.side && ui.callOpp ? [ui.callOpp] : []
+    };
+    const last = Number(ui.last) || 0;
+    const key = teamKey ? teamNameKey(teamKey) : '';
+    const allowed = playerId
+      ? lastDemoIds(payload, playerId, last, filter, players, demos)
+      : lastTeamDemoIds(payload, teamKey, last, filter, players, demos);
+    const jobs = [];
+    const rounds = [];
+    const names = new Map();
+    for (const demo of payload?.demos || []) {
+      if (String(demo.map || '').toUpperCase() !== code) continue;
+      let team = 0;
+      let ids = [];
+      if (playerId) {
+        const seat = (demo.players || []).find((p) => p.id === playerId);
+        if (!seat) continue;
+        team = seat.team === 2 ? 2 : 1;
+        ids = [playerId];
+      } else {
+        team = teamSideOf(demo, key);
+        if (!team) continue;
+        ids = (demo.players || []).filter((p) => p.team === team).map((p) => p.id);
+      }
+      for (const p of demo.players || []) if (!names.has(p.id)) names.set(p.id, p.name || p.id);
+      const at = demoTimestamp(demo);
+      const passes = allowed.has(demo.id);
+      for (const row of demo.rounds || []) {
+        const file = String(row.f || '').trim();
+        if (!file) continue;
+        const here = ids.filter((id) => row.p?.[id]);
+        if (!here.length) continue;
+        jobs.push({ file, ids: here });
+        if (passes && rowPasses(row, filter, team, players, demos)) rounds.push({ file, ids: here, at });
+      }
+    }
+    return {
+      subject: playerId ? `p:${playerId}` : `t:${key}`,
+      mapCode: code,
+      jobs,
+      rounds,
+      phase: ui.phase || '',
+      perPlayer: !playerId,
+      nameOf: (id) => names.get(id) || id
+    };
+  }
+
+  function zonesBodyHtml() {
+    return `${filtersHtml({ zones: true })}<div id="pf-stats">${zones.html()}</div>`;
   }
 
   function bodyHtml() {
@@ -1151,6 +1361,7 @@ export function initPerformanceView({ auth, escapeHtml }) {
     // read are noise, and the tab has to stay clickable for the lock to be the
     // thing that sells the plan.
     if ((playerId || teamKey) && chapterLocked(chapter)) return '<div data-pf-gate></div>';
+    if (chapter === 'zones' && (playerId || teamKey)) return zonesBodyHtml();
     if (!playerId && teamKey) {
       return chapter === 'maps' ? teamMapsBodyHtml() : teamSummaryHtml();
     }
@@ -1196,6 +1407,10 @@ export function initPerformanceView({ auth, escapeHtml }) {
   function refreshStats() {
     const slot = host.querySelector('#pf-stats');
     if (!slot) return;
+    if (chapter === 'zones') {
+      if (playerId || teamKey) zones.update(zoneContext());
+      return;
+    }
     if (!playerId) {
       // A team. The comparison line is fetched per map / date window, and this
       // path is only reached by filters that are not in that stamp, so the
@@ -1216,7 +1431,9 @@ export function initPerformanceView({ auth, escapeHtml }) {
       const allIds = playerDemos(payload, playerId, {}).map((d) => d.id);
       const gunByFile = gunMapForPlayer(careerRows, playerId, allIds);
       const rows = playerRows(payload, playerId, ui, players, demos);
-      slot.innerHTML = gunsHtml(aggregateGuns(rows, playerId, players, demos, gunByFile));
+      slot.innerHTML = dd('guns', 'Weapons', gunsHtml(aggregateGuns(rows, playerId, players, demos, gunByFile)), {
+        open: true
+      });
     } else if (chapter === 'maps') {
       slot.innerHTML = mapsStatsHtml();
     } else if (chapter === 'aim') {
@@ -1226,28 +1443,11 @@ export function initPerformanceView({ auth, escapeHtml }) {
         : aimChapterHtml(aimModel(stats), escapeHtml);
       // The chapter carries the calendar slot, so repainting it empties one.
       if (playerId && !chapterLocked('aim')) paintActivity(playerId);
+    } else if (chapter === 'zones') {
+      zones.update(zoneContext());
+      return;
     } else if (chapter === 'summary') {
-      const { players, demos } = maps();
-      const stats = playerStats(payload, playerId, ui, players, demos);
-      const series = matchSeries(payload, playerId, ui, players, demos);
-      const grid = roleGrid(payload, playerId, ui, players, demos);
-      const peerMetrics = peers?.metrics || {};
-      const rating = stats?.rating;
-      slot.innerHTML = `
-      <div class="pf-hero">
-        <div class="pf-identity">
-          <h2 class="pf-name">${escapeHtml(playerName || playerId)}</h2>
-          ${stats?.teamLabel ? `<span class="pf-team">${escapeHtml(stats.teamLabel)}</span>` : ''}
-        </div>
-        <div class="pf-hero-rating">
-          <span class="pf-hero-value">${f2(rating)}</span>
-          <span class="pf-hero-label">Rating</span>
-        </div>
-      </div>
-      ${cardsHtml(stats, series, peerMetrics)}
-      ${rolesHtml(grid)}
-      <div class="pf-chart-wrap">${trendChart(series)}</div>
-      <div class="pf-matches">${matchesHtml(series)}</div>`;
+      slot.innerHTML = summaryStatsHtml();
     }
     bindChrome();
   }
@@ -1264,6 +1464,8 @@ export function initPerformanceView({ auth, escapeHtml }) {
     // Not awaited: the calendar is two network round trips and the chapter has
     // already painted everything it holds.
     if (chapter === 'aim' && playerId && !paintedLock) paintActivity(playerId);
+    if (chapter === 'zones' && (playerId || teamKey) && !paintedLock) zones.update(zoneContext());
+    else zones.detach();
     if (!playerId && !teamKey) {
       document.querySelector('[data-pf-search]')?.focus();
     }
@@ -1376,6 +1578,9 @@ export function initPerformanceView({ auth, escapeHtml }) {
     const side = e.target.closest('[data-pf-side]');
     if (side) {
       ui.side = ui.side === side.dataset.pfSide ? '' : side.dataset.pfSide;
+      // Calls are named per side.
+      ui.callOwn = '';
+      ui.callOpp = '';
       renderAfterFilterChange();
       return;
     }
@@ -1413,6 +1618,12 @@ export function initPerformanceView({ auth, escapeHtml }) {
     'toggle',
     (e) => {
       const details = e.target;
+      if (details instanceof HTMLDetailsElement && details.dataset.pfDd) {
+        ddState.set(details.dataset.pfDd, details.open);
+        // A table measured while it was closed has no size to scroll by.
+        if (details.open) bindStatsHScroll(details);
+        return;
+      }
       if (!(details instanceof HTMLDetailsElement) || !details.classList.contains('st-rank-dd')) {
         return;
       }
@@ -1435,12 +1646,28 @@ export function initPerformanceView({ auth, escapeHtml }) {
   });
 
   host.addEventListener('change', (e) => {
+    const awp = e.target.closest('[data-pf-awp]');
+    if (awp) {
+      const key = awp.dataset.pfAwp === 'oppHasAwp' ? 'oppHasAwp' : 'hasAwp';
+      ui[key] = Boolean(awp.checked);
+      renderAfterFilterChange();
+      return;
+    }
     const field = e.target.closest('[data-pf-filter]');
     if (!field) return;
     const key = field.dataset.pfFilter;
     if (key === 'last') ui.last = Number(field.value) || 0;
-    else if (key === 'map') ui.map = field.value || '';
-    else if (key === 'econ') ui.econ = field.value === '' ? null : Number(field.value);
+    else if (key === 'map') {
+      ui.map = field.value || '';
+      // A call belongs to a map.
+      ui.callOwn = '';
+      ui.callOpp = '';
+    } else if (key === 'econ' || key === 'oppEcon') {
+      ui[key] = field.value === '' ? null : Number(field.value);
+    } else if (key === 'result') ui.result = field.value === 'won' || field.value === 'lost' ? field.value : '';
+    else if (key === 'opening') ui.opening = field.value === '5v4' || field.value === '4v5' ? field.value : '';
+    else if (key === 'phase') ui.phase = PHASES.some((p) => p.key === field.value) ? field.value : '';
+    else if (key === 'callOwn' || key === 'callOpp') ui[key] = field.value || '';
     else if (key === 'dateFrom' || key === 'dateTo') {
       ui[key] = field.value || '';
       if (ui.dateFrom && ui.dateTo && ui.dateFrom > ui.dateTo) {

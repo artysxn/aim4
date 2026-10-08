@@ -67,6 +67,12 @@ process.env.SUPABASE_URL = base;
 process.env.SUPABASE_ANON_KEY = 'anon';
 process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-role-test-key';
 process.env.AIM4_IMPERSONATION_SECRET = 'test-impersonation-secret';
+// Impersonation only exists in hosted mode. Local mode (server/local/mode.js) is
+// on by default and resolves every request to the one owner without reading a
+// token, which is correct for a single-user install and useless here: there is
+// no second identity to become. Opt out so identity.js takes the Supabase path
+// against the stub above.
+process.env.AIM4_LOCAL = '0';
 
 const { mintTicket, revokeTicket, verifyTicket, _resetRevoked } = await import('./impersonation.js');
 const { whoami, readOnlyBlocked } = await import('../replays/identity.js');

@@ -4377,21 +4377,50 @@ export function createTimelineViewer({
     if (graphCtLabel) graphCtLabel.textContent = ct == null ? '-' : `${ct}%`;
   }
 
+  /**
+   * The CSS size of a chart canvas, kept by a ResizeObserver rather than read
+   * off the layout every frame: getBoundingClientRect forces a layout, and
+   * with the 3D view's overlays changing the DOM each frame that layout is
+   * never clean, so the two charts cost a full layout apiece per frame.
+   */
+  const chartBoxes = new WeakMap();
+  let chartObserver = null;
+  function chartBox(canvas) {
+    let box = chartBoxes.get(canvas);
+    if (box) return box;
+    const r = canvas.getBoundingClientRect();
+    box = { width: r.width, height: r.height };
+    if (typeof ResizeObserver !== 'function') return box;
+    chartBoxes.set(canvas, box);
+    chartObserver ??= new ResizeObserver((entries) => {
+      for (const e of entries) {
+        const b = chartBoxes.get(e.target);
+        if (!b) continue;
+        b.width = e.contentRect.width;
+        b.height = e.contentRect.height;
+      }
+      lastWinDraw = '';
+      lastMapDraw = '';
+    });
+    chartObserver.observe(canvas);
+    return box;
+  }
+  /** What each chart last drew, so an unchanged frame is skipped. */
+  let lastWinResult = null;
+  let lastWinDraw = '';
+  let lastMapSeries = null;
+  let lastMapDraw = '';
+
   function drawWinGraph(result, tick) {
     if (!graphCanvas || !result?.series?.length) {
       graphPlayhead = null;
+      lastWinDraw = '';
       return;
     }
     const dpr = Math.min(2, window.devicePixelRatio || 1);
-    const rect = graphCanvas.getBoundingClientRect();
-    const w = Math.max(1, Math.round(rect.width * dpr));
-    const h = Math.max(1, Math.round(rect.height * dpr));
-    if (graphCanvas.width !== w || graphCanvas.height !== h) {
-      graphCanvas.width = w;
-      graphCanvas.height = h;
-    }
-    const ctx = graphCanvas.getContext('2d');
-    ctx.clearRect(0, 0, w, h);
+    const box = chartBox(graphCanvas);
+    const w = Math.max(1, Math.round(box.width * dpr));
+    const h = Math.max(1, Math.round(box.height * dpr));
 
     const series = result.series;
     const span = Math.max(1, series.length - 1);
@@ -4402,6 +4431,43 @@ export function createTimelineViewer({
     const ctShare = (p) => (Number(p?.ctDuel ?? p?.ct) || 0) / 100;
     const xAt = (i) => (i / span) * w;
     const yAt = (i) => h - ctShare(series[i]) * h;
+
+    // Playhead follows the series curve (half-second / event samples), not a
+    // per-tick recompute.
+    let i0 = 0;
+    for (let i = 0; i < series.length; i++) if (series[i].tick <= tick) i0 = i;
+    const i1 = Math.min(series.length - 1, i0 + 1);
+    let f = 0;
+    if (i1 > i0) {
+      const t0 = series[i0].tick;
+      const t1 = series[i1].tick;
+      f = t1 > t0 ? Math.min(1, Math.max(0, (tick - t0) / (t1 - t0))) : 0;
+    }
+    const px = xAt(i0) * (1 - f) + xAt(i1) * f;
+    const py = yAt(i0) * (1 - f) + yAt(i1) * f;
+    // Badge / tip text steps on series points; playhead Y lerps between them.
+    const sample = coachSampleAt(result, tick);
+    graphPlayhead = { x: px / dpr, y: py / dpr, tick, sample };
+    if (sample) {
+      if (graphCtLabel) graphCtLabel.textContent = `${Math.round(sample.ct)}%`;
+      if (graphTLabel) graphTLabel.textContent = `${Math.round(sample.t)}%`;
+    }
+    // The picture only changes when the dot moves a pixel. Playing, that is a
+    // few times a second, not every frame: the graph is a few hundred pixels
+    // wide and a round lasts minutes.
+    const key = `${w}x${h}|${Math.round(px)}|${Math.round(py)}`;
+    if (result === lastWinResult && key === lastWinDraw) {
+      updateWinGraphTip();
+      return;
+    }
+    lastWinResult = result;
+    lastWinDraw = key;
+    if (graphCanvas.width !== w || graphCanvas.height !== h) {
+      graphCanvas.width = w;
+      graphCanvas.height = h;
+    }
+    const ctx = graphCanvas.getContext('2d');
+    ctx.clearRect(0, 0, w, h);
 
     // Early / mid / late bands (freeze-end → end), behind the win% fill.
     const meta = activeMeta;
@@ -4478,21 +4544,6 @@ export function createTimelineViewer({
     }
     ctx.stroke();
 
-    // Playhead follows the series curve (half-second / event samples), not a
-    // per-tick recompute.
-    let i0 = 0;
-    for (let i = 0; i < series.length; i++) if (series[i].tick <= tick) i0 = i;
-    const i1 = Math.min(series.length - 1, i0 + 1);
-    let f = 0;
-    if (i1 > i0) {
-      const t0 = series[i0].tick;
-      const t1 = series[i1].tick;
-      f = t1 > t0 ? Math.min(1, Math.max(0, (tick - t0) / (t1 - t0))) : 0;
-    }
-    const px = xAt(i0) * (1 - f) + xAt(i1) * f;
-    const py = yAt(i0) * (1 - f) + yAt(i1) * f;
-    // Badge / tip text steps on series points; playhead Y lerps between them.
-    const sample = coachSampleAt(result, tick);
     const r = 4 * dpr;
     ctx.beginPath();
     ctx.arc(px, py, r + 1.2 * dpr, 0, Math.PI * 2);
@@ -4503,12 +4554,6 @@ export function createTimelineViewer({
     ctx.fillStyle = '#b5b5b5';
     ctx.fill();
 
-    graphPlayhead = { x: px / dpr, y: py / dpr, tick, sample };
-
-    if (sample) {
-      if (graphCtLabel) graphCtLabel.textContent = `${Math.round(sample.ct)}%`;
-      if (graphTLabel) graphTLabel.textContent = `${Math.round(sample.t)}%`;
-    }
     updateWinGraphTip();
   }
 
@@ -4709,12 +4754,26 @@ export function createTimelineViewer({
   function drawMapControlGraph(series, tick) {
     if (!mapCanvas || !series?.length) {
       mapPlayhead = null;
+      lastMapDraw = '';
       return;
     }
     const dpr = Math.min(2, window.devicePixelRatio || 1);
-    const rect = mapCanvas.getBoundingClientRect();
-    const w = Math.max(1, Math.round(rect.width * dpr));
-    const h = Math.max(1, Math.round(rect.height * dpr));
+    const box = chartBox(mapCanvas);
+    const w = Math.max(1, Math.round(box.width * dpr));
+    const h = Math.max(1, Math.round(box.height * dpr));
+    // Same rule as the win graph: draw again when the dot has moved a pixel.
+    {
+      const sp = Math.max(1, series.length - 1);
+      let j = 0;
+      for (let i = 0; i < series.length; i++) if (series[i].tick <= tick) j = i;
+      const a = series[j];
+      const b = series[Math.min(series.length - 1, j + 1)];
+      const f = b.tick > a.tick ? Math.min(1, Math.max(0, (tick - a.tick) / (b.tick - a.tick))) : 0;
+      const key = `${w}x${h}|${Math.round(((j + f) / sp) * w)}|${a.ct}|${a.neu}`;
+      if (series === lastMapSeries && key === lastMapDraw) return;
+      lastMapSeries = series;
+      lastMapDraw = key;
+    }
     if (mapCanvas.width !== w || mapCanvas.height !== h) {
       mapCanvas.width = w;
       mapCanvas.height = h;

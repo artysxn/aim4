@@ -370,47 +370,83 @@ not named yet.
 
 ```bash
 npm install
+npm run build
+npm start
 ```
+
+One Node process serves everything on `http://localhost:3784`: the built client,
+the REST API, and the multiplayer WebSocket, all on the same origin. There is no
+separate client host, no proxy and no external service to sign up for.
+
+`npm start` binds `0.0.0.0`, so anything on the LAN can open
+`http://<your-lan-ip>:3784`. Set `AIM4_HOST=127.0.0.1` (as `npm run server`
+does) to keep it to this machine.
+
+Other scripts:
+
+```bash
+npm run dev            # build without minifying, then serve (use while editing)
+npm run server         # backend only, 127.0.0.1, no static files
+npm run smoke          # drive every page in Chrome and report what broke
+npm test               # the full suite
+npm run parse-demo     # parse a .dem locally
+```
+
+To iterate quickly, rebuild without minifying so stack traces read:
 
 ```bash
 npm run dev
 ```
 
-Vite on `http://localhost:5173`.
+### Map and asset packs
 
-> The Vite dev server serves `*.svg?raw` imports as `image/svg+xml`, which the
-> browser refuses to execute as modules, so the site shell fails to load and you
-> get static HTML only. For anything beyond the trainer, build and serve `dist`:
-
-```bash
-npm run build && npm run host
-```
-
-`npm run host` serves the built client, the API and the WebSocket on one port.
-
-Other scripts:
+3D map packs, weapon models and the fx/player/bullet packs are read from disk
+under `server/data/cs3d/pack`, served by the same process at `/api/cs3d/…`. A
+file that is not there is a 404 that names the path it tried; nothing is
+silently fetched from the network. To pull packs in from the published bucket
+once, deliberately:
 
 ```bash
-npm run server          # backend only
-npm test                # the full suite
-npm run parse-demo      # parse a .dem locally
+npm run cs3d:fetch -- weapons
 ```
 
 ## Environment
 
-Client variables must be prefixed `VITE_`. Full table in
-[DEPLOYMENT.md](DEPLOYMENT.md).
+Client variables must be prefixed `VITE_` — that is what `build/build.mjs`
+copies into the bundle. Full table in `.env.example`.
 
 | Variable | Side | Purpose |
 | --- | --- | --- |
-| `VITE_API_URL` | Client, build-time | Backend origin. Empty = same origin. |
-| `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` | Client | Auth |
-| `SUPABASE_SERVICE_ROLE_KEY` | Server | Entitlements |
+| `VITE_API_URL` | Client, build-time | Backend origin. Empty = same origin, which is the default. |
+| `VITE_LOCAL_MODE` | Client, build-time | `1` (default) runs signed-in as one local owner with everything unlocked. |
 | `AIM4_REPLAY_DIR` | Server | Where demos, rounds, zones and notes live |
+| `AIM4_HOST` / `AIM4_API_PORT` | Server | Bind address and port (default `0.0.0.0` / `3784` under `npm start`) |
+| `CS3D_PACK_DIR` | Server | Where the map packs live |
 
 `AIM4_REPLAY_DIR` should be on a **case-sensitive** volume. Round ids differ by
 case, so on a case-insensitive filesystem rounds silently overwrite each other.
 The server warns at boot when it detects this.
+
+### Local mode
+
+There is one account and no sign-in. At boot the server logs
+`signed in as @owner, everything unlocked`, and `src/lib/supabase.js` hands the
+client a local stand-in for the Supabase client rather than a real one, so every
+code path that used to ask "is this user entitled?" asks "is this user the
+owner?" and the answer is yes.
+
+What is genuinely unavailable offline stays unavailable and says so:
+
+| Gone | Why |
+| --- | --- |
+| Billing / subscriptions | Paddle is a hosted service. The account page shows plan state locally instead. |
+| Steam sign-in and profile linking | Steam OpenID needs a public callback URL. |
+| HLTV / FACEIT demo ingestion | Both fetch over the internet. |
+| Impersonation and admin sessions | Single-user, so there is nobody to become. |
+| Remote asset fill | See "Map and asset packs" above. |
+
+`VITE_LOCAL_MODE=0` turns the local stand-in off if you ever want the real
+Supabase path back.
 
 ## Layout
 
@@ -521,9 +557,19 @@ suites to the `test` script in `package.json`.
 
 ## Deployment
 
-Split deploy: static client on one host, Node backend on another, with
-`VITE_API_URL` pointing at the backend. `VITE_API_URL` is build-time, so
-changing it needs a client rebuild. See [DEPLOYMENT.md](DEPLOYMENT.md).
+There is no separate deploy. One machine, one process, one port:
+
+```bash
+npm run build && npm start
+```
+
+`npm start` sets `AIM4_SERVE_STATIC=1` and binds `0.0.0.0`, so the client, the
+API and the WebSocket share an origin and nothing needs a reverse proxy or an
+external host. To reach it from another machine, open the port in the firewall
+or forward it.
+
+`VITE_API_URL` only matters if you deliberately split the client off onto
+another host. It is build-time, so changing it needs a rebuild.
 
 ## Conventions
 

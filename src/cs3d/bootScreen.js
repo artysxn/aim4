@@ -88,7 +88,15 @@ export function decorateBoot(el, slug) {
   };
 }
 
-export function createBootScreen(parent, name, slug = '') {
+/**
+ * @param {HTMLElement} parent
+ * @param {string} name
+ * @param {string} [slug]
+ * @param {{ hold?: boolean }} [opts]  `hold`: a finished download does not
+ *   lift the screen; the caller calls finish() when what comes after it (the
+ *   shaders) is done, and shows that step with setStage().
+ */
+export function createBootScreen(parent, name, slug = '', { hold = false } = {}) {
   const el = document.createElement('div');
   el.className = 'c3-boot';
   // Same flat children as the Hud's boot markup, so one stylesheet rules both.
@@ -102,6 +110,8 @@ export function createBootScreen(parent, name, slug = '') {
   const bar = el.querySelector('.c3-boot-bar span');
   const text = el.querySelector('.c3-boot-text');
   let booted = false;
+  /** Set once the caller has moved on to a step of its own. */
+  let staged = false;
 
   function finish() {
     if (booted) return;
@@ -114,13 +124,21 @@ export function createBootScreen(parent, name, slug = '') {
   return {
     el,
     setProgress(p) {
+      if (staged) return;
       const { done, pct, label } = packProgress(p);
       if (done) {
-        finish();
+        if (!hold) finish();
         return;
       }
       bar.style.width = `${pct}%`;
       text.textContent = `${pct}% · ${label}`;
+    },
+    /** A step after the download: its own bar and label. */
+    setStage(pct, label) {
+      if (booted) return;
+      staged = true;
+      bar.style.width = `${pct}%`;
+      text.textContent = label;
     },
     finish,
     remove() {

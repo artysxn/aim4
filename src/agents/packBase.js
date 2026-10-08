@@ -13,21 +13,18 @@
 //   1. **The renderer.** The explorer runs on `three/webgpu`; the trainer runs
 //      on the WebGL build and must keep doing so (its EffectComposer bloom has
 //      no WebGPU path). So the loader addons come in through the
-//      `?three-webgl` ids vite.config.js resolves to a second copy bound to
+//      `?three-webgl` ids the build resolves to a second copy bound to
 //      plain `three` — importing `src/cs3d/playerModels.js` here would drag
 //      1.2 MB of a second three core into the trainer bundle.
 //   2. **The asset base.** `src/cs3d/mapLoader.js` owns `assetBase()` and
 //      imports `three/webgpu` at module scope, so it cannot be imported here
 //      either. The three lines it would have given us are below, reading the
-//      same two env vars, and `packFetch` (which is three-free) is reused
-//      as-is — including its CDN retry and its shared rate-limit cooldown.
+//      same env var, and `packFetch` (which is three-free) is reused as-is.
 // ---------------------------------------------------------------------------
 
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js?three-webgl';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
-import { packFetch, loadWithRetry, PACK_CDN } from '../cs3d/packFetch.js';
-
-export { PACK_CDN };
+import { packFetch, loadWithRetry } from '../cs3d/packFetch.js';
 
 /** Where the packs live: VITE_CS3D_ASSET_BASE, else the API host's /api/cs3d. */
 export function packBase() {
@@ -44,33 +41,25 @@ export function packLoader() {
 }
 
 /**
- * Read a pack's manifest, falling back to the public bucket.
+ * Read a pack's manifest from the local asset base.
  *
- * Localhost 404s these routinely — Vite's dev middleware serves only what is
- * on disk and deliberately passes the shared packs through to the API host,
- * which may not be running. Returns `{ manifest, base }` so the caller fetches
- * the rest of the pack from wherever the manifest actually came from.
+ * There is exactly one place to look now. The packs live on this machine
+ * (server/data/cs3d/pack, served by the local API host); if one is not there
+ * it is missing, and the error names the path that was tried rather than
+ * quietly going out to a bucket to look for it.
  */
 export async function readManifest(slug, wanted, base = packBase()) {
-  const tried = [];
-  for (const root of [base, `${PACK_CDN}`]) {
-    const url = `${root}/${slug}/manifest.json`;
-    if (tried.includes(url)) continue;
-    tried.push(url);
-    let res = null;
-    try {
-      res = await packFetch(url, { cache: 'no-cache' });
-    } catch {
-      continue;
-    }
-    if (!res.ok) continue;
-    const manifest = await res.json();
-    if (wanted != null && manifest.version !== wanted) {
-      throw new Error(`${slug} pack is v${manifest.version}; this build reads v${wanted}. Re-run the packer.`);
-    }
-    return { manifest, base: `${root}/${slug}` };
+  const root = base;
+  const url = `${root}/${slug}/manifest.json`;
+  const res = await packFetch(url, { cache: 'no-cache' });
+  if (!res.ok) {
+    throw new Error(`no ${slug} pack (${res.status} from ${url}); run the packer, or copy one into server/data/cs3d/pack`);
   }
-  throw new Error(`no ${slug} pack (tried ${tried.join(', ')})`);
+  const manifest = await res.json();
+  if (wanted != null && manifest.version !== wanted) {
+    throw new Error(`${slug} pack is v${manifest.version}; this build reads v${wanted}. Re-run the packer.`);
+  }
+  return { manifest, base: `${root}/${slug}` };
 }
 
 /** `?v=` stamp so a re-pack is never served from the browser cache. */

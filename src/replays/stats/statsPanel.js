@@ -7,6 +7,7 @@
 // ---------------------------------------------------------------------------
 
 import { formatApiError } from '../api.js';
+import { isLocalClient } from '../../lib/supabase.js';
 import { getStatsPayload, peekStatsCache } from '../statsCache.js';
 import { fetchAggregate, fetchAggregateMatches, fetchRoster, fetchVrsRanks } from '../api.js';
 import { scheduleUiJob } from '../../lib/frameBudget.js';
@@ -96,8 +97,12 @@ import { placeRankMenu, rankFilterHtml, syncRankSummary } from '../shared/vrsRan
  *   onPlayRounds?: (files: string[], title: string) => void | Promise<void>
  * }} deps
  */
-/** Default minimum rounds when opening the unfiltered Database (can still be set to 0). */
-export const DEFAULT_MIN_ROUNDS = 80;
+/**
+ * Default minimum rounds when opening the unfiltered Database (can still be set to 0).
+ * 80 is tuned for the hosted library of thousands of demos. A local library of a
+ * few dozen matches has almost nobody past it, so the table showed one team.
+ */
+export const DEFAULT_MIN_ROUNDS = isLocalClient() ? 0 : 80;
 
 /** Floor once a specific map is picked in the clean Database. */
 export const MAP_MIN_ROUNDS = 5;

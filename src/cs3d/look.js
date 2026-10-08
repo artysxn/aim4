@@ -29,6 +29,9 @@ export const MAP_LOOK = {
 };
 
 export async function loadPostLut(pack, manifest) {
+  // The map LUTs are deliberately not applied.
+  return null;
+  // eslint-disable-next-line no-unreachable
   if (!manifest.post?.lut || !manifest.post.lutDim) return null;
   try {
     const res = await packFetch(`${pack.base}/${manifest.post.lut}${pack.v}`);

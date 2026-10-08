@@ -19,6 +19,7 @@
 
 import crypto from 'node:crypto';
 import { whoami } from '../replays/identity.js';
+import { localMode } from '../local/mode.js';
 import { PLAN_IDS } from '../../shared/entitlements/catalogue.js';
 import { listAudit, writeAudit } from '../entitlements/audit.js';
 import { ValidationError, createGrant, listGrants, revokeGrant } from '../entitlements/grants.js';
@@ -351,7 +352,10 @@ async function route(req, res, url, me) {
       canImpersonate: row?.can_impersonate !== false,
       canGrant: row?.can_grant !== false,
       plans: PLAN_IDS,
-      contentOps: contentOps()
+      contentOps: contentOps(),
+      // The panel hides the tabs that only exist against Supabase or the
+      // internet (users, codes, affiliates, audit, ingest).
+      local: localMode()
     });
     return true;
   }

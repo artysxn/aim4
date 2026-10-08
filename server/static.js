@@ -1,7 +1,8 @@
 // ---------------------------------------------------------------------------
 // server/static.js
-// Minimal static file server for the Vite `dist/` build. Used when hosting so
-// friends can open http://<your-ip>:<port> in a browser — same origin as /ws.
+// Minimal static file server for the built `dist/` (build/build.mjs). Binds the
+// same origin as the API and the WebSocket, so http://<your-lan-ip>:<port> in a
+// browser is the whole deployment.
 // ---------------------------------------------------------------------------
 
 import fs from 'fs';
@@ -37,7 +38,7 @@ export function distExists() {
   return fs.existsSync(path.join(DIST_DIR, 'index.html'));
 }
 
-// Extension-less page aliases — mirrors the vercel.json rewrites.
+// Extension-less page aliases: a deep link that reads better than its file.
 const PAGE_ALIASES = {
   '/train': '/train.html',
   '/tools/editvalues': '/tools/editvalues.html',
@@ -47,10 +48,9 @@ const PAGE_ALIASES = {
 
 // Paths owned by the site shell (index.html): its menu views live here.
 //
-// This list governs the self-hosted server only. Production is served by
-// Vercel, which routes from vercel.json — a path added here and not there
-// 404s (or falls through to the trainer) on aim4.io while working perfectly
-// on localhost. staticRoutes.test.js fails when the two drift apart.
+// This is the only routing table in the deployment. It used to have to be kept
+// in step with vercel.json and a skip regex in vite.config.js; staticRoutes
+// test.js now checks this list against the pages the build actually emits.
 export const SITE_VIEW_PATHS = new Set([
   '/tools',
   // Admin-only deck; the view refuses everyone else. Without this entry the

@@ -149,7 +149,9 @@ export class Cs3dMaterial extends THREE.MeshStandardNodeMaterial {
       const psun = this.cs3d.sun;
       if (psun) {
         const nDotL = max(dot(transformedNormalWorld, psun.direction), float(0));
-        irr = irr.add(psun.color.mul(psun.intensity).mul(nDotL).mul(attribute('_sun', 'float')));
+        let vis = attribute('_sun', 'float');
+        if (psun.shade) vis = vis.mul(psun.shade);
+        irr = irr.add(psun.color.mul(psun.intensity).mul(nDotL).mul(vis));
       }
       return new IrradianceNode(irr);
     }
@@ -174,7 +176,9 @@ export class Cs3dMaterial extends THREE.MeshStandardNodeMaterial {
     const sun = this.cs3d.sun;
     if (sun) {
       const nDotL = max(dot(transformedNormalWorld, sun.direction), float(0));
-      const vis = sun.mask ? texture(sun.mask, uv(1)).r : float(1);
+      let vis = sun.mask ? texture(sun.mask, uv(1)).r : float(1);
+      // What moves between the surface and the sun: the players (bodyShadows.js).
+      if (sun.shade) vis = vis.mul(sun.shade);
       irr = irr.add(sun.color.mul(sun.intensity).mul(nDotL).mul(vis));
     }
     return new IrradianceNode(irr);
@@ -287,7 +291,13 @@ export class MaterialLibrary {
       color: uniform(new THREE.Color(1, 1, 1)),
       direction: uniform(new THREE.Vector3(0, 1, 0)), // toward the sun
       intensity: uniform(0),
-      mask: null
+      mask: null,
+      /**
+       * Optional TSL float, 1 = sunlit, multiplied into every sun term that
+       * reads the baked mask: the live shadow of whatever moves (bodyShadows.js).
+       * Fixed at construction, because the materials compile it in.
+       */
+      shade: opts.sunShade || null
     };
     /** The 3D skybox's own ambient; see setSkyAmbient. */
     this.skyAmbient = uniform(new THREE.Color(0, 0, 0));
@@ -436,7 +446,8 @@ export class MaterialLibrary {
       const sun = this.sun;
       if (sun) {
         const nDotL = max(dot(transformedNormalWorld, sun.direction), float(0));
-        const vis = sun.mask ? texture(sun.mask, uv(1)).r : float(1);
+        let vis = sun.mask ? texture(sun.mask, uv(1)).r : float(1);
+        if (sun.shade) vis = vis.mul(sun.shade);
         light = light.add(sun.color.mul(sun.intensity).mul(nDotL).mul(vis).div(float(Math.PI)));
       }
       mat.colorNode = albedo.mul(light);
@@ -445,7 +456,9 @@ export class MaterialLibrary {
       const sun = this.sun;
       if (sun) {
         const nDotL = max(dot(transformedNormalWorld, sun.direction), float(0));
-        light = light.add(sun.color.mul(sun.intensity).mul(nDotL).mul(attribute('_sun', 'float')).div(float(Math.PI)));
+        let vis = attribute('_sun', 'float');
+        if (sun.shade) vis = vis.mul(sun.shade);
+        light = light.add(sun.color.mul(sun.intensity).mul(nDotL).mul(vis).div(float(Math.PI)));
       }
       mat.colorNode = albedo.mul(light);
     } else if (m.sky && this.sun) {
@@ -506,8 +519,16 @@ export class MaterialLibrary {
   streamAll() {
     if (this._started) return;
     this._started = true;
-    this._loadLightmap().catch((e) => console.warn('cs3d: lightmap failed', e));
-    this._loadShadowMask().catch((e) => console.warn('cs3d: shadow mask failed', e));
+    this._loadLightmap().catch((e) => {
+      console.warn('cs3d: lightmap failed', e);
+      this._lightmapGaveUp = true;
+      this._releaseHeld();
+    });
+    this._loadShadowMask().catch((e) => {
+      console.warn('cs3d: shadow mask failed', e);
+      this._maskGaveUp = true;
+      this._releaseHeld();
+    });
     // A bundle that fails outright (404, dropped connection) never reaches the
     // per-texture counter, so the count has to be closed out here. Otherwise
     // progress stops short of 100% forever — which now means the boot screen
@@ -562,6 +583,36 @@ export class MaterialLibrary {
       mips: false
     });
     this._rebuildLightmapped();
+    this._releaseHeld();
+  }
+
+  /**
+   * Are the lighting inputs a lightmapped material compiles in all here?
+   *
+   * Both the atlas and the sun's mask are baked into the shader, so a
+   * material built before either lands is built again when it does, and on
+   * WebGPU every build is a fresh shader: three builds of every charted
+   * surface on the map, the first two thrown away. The textures, the atlas
+   * and the mask arrive within a second of each other, so waiting costs the
+   * flat stand-in colour for that second and saves two-thirds of the work.
+   */
+  _lightingSettled() {
+    const atlasDue = !!this.manifest.lightmap?.file && !this.lightmap && !this._lightmapGaveUp;
+    const maskDue = !!this.manifest.shadowMask?.file && !this.sun.mask && !this._maskGaveUp;
+    return !atlasDue && !maskDue;
+  }
+
+  /** Every texture decoded and every lighting input in (or given up on). */
+  get settled() {
+    return this.loadedTex >= this.totalTex && this._lightingSettled();
+  }
+
+  /** Build whatever was held for the lighting, once it is all in. */
+  _releaseHeld() {
+    if (!this._held?.size || !this._lightingSettled()) return;
+    const ids = [...this._held];
+    this._held.clear();
+    for (const id of ids) this._tryBuild(id);
   }
 
   /** Drop and rebuild every lightmapped material (a lighting input arrived late). */
@@ -598,6 +649,7 @@ export class MaterialLibrary {
     const tex = makeTexture(bitmap, { srgb: false, wrap: THREE.ClampToEdgeWrapping, anisotropy: 1, mips: false });
     this.lightmap = { texture: tex, range: lm.range || 16, intensity: this.lightmapIntensity, mean: lm.mean };
     this._rebuildLightmapped();
+    this._releaseHeld();
   }
 
   async _streamBundle() {
@@ -629,7 +681,10 @@ export class MaterialLibrary {
     let next = 0; // next dir entry whose bytes we wait for
     const ready = []; // entry indices ready to decode
     let inFlight = 0;
-    const MAX_DECODE = 6;
+    // createImageBitmap decodes off the main thread; each finished one only
+    // needs a turn of it. Enough in flight that a busy main thread (the
+    // shader warm-up) still drains a batch of them per turn.
+    const MAX_DECODE = 16;
     let finish;
     const allDone = new Promise((r) => (finish = r));
     let streamDone = false;
@@ -709,6 +764,10 @@ export class MaterialLibrary {
     const m = this.manifest.materials[id];
     if (!m) return;
     for (const i of this._texIndices(m)) if (!this.textures[i]) return;
+    if (m.lightmapped && !this._lightingSettled()) {
+      (this._held ??= new Set()).add(id);
+      return;
+    }
     const mat = this._buildFinal(m);
     this.final.set(id, mat);
     if (this.simple) this.simple.delete(id);

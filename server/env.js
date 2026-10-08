@@ -2,13 +2,16 @@
 // server/env.js
 // Loads .env into process.env for the backend.
 //
-// Vite reads .env on its own for the browser bundle (the VITE_* half), which
-// made it easy to miss that Node does not: `node server/index.js` started with
-// no SUPABASE_URL, so token verification silently treated every caller as
-// signed out. Import this before anything that reads process.env.
+// Loads .env into process.env for the backend.
 //
-// Real environment variables always win, so a hosted deploy that sets them
-// properly is unaffected by a stray .env file on disk.
+// Node does not read .env on its own, which is easy to miss once the client
+// build stopped doing it for us: `node server/index.js` started with no
+// SUPABASE_URL, so token verification silently treated every caller as signed
+// out. build/build.mjs imports this too, for the same reason. Import it before
+// anything that reads process.env.
+//
+// Real environment variables always win, so a machine that sets them properly
+// is unaffected by a stray .env file on disk.
 // ---------------------------------------------------------------------------
 
 import fs from 'node:fs';

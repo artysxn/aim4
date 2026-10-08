@@ -86,7 +86,7 @@ export class BulletTracers {
    * @param {import('../agents/bulletAssets.js').BulletAssets} o.assets  the
    *   bullet pack. Injected rather than imported, so the geometry and the
    *   frequency rule can be tested without the loader (which reaches the glTF
-   *   addons through a Vite-only specifier and will not load under node).
+   *   addons through a build-only specifier and will not load under node).
    * @param {number} [o.unitScale] metres per Source unit
    */
   constructor({ camera, assets = null, unitScale = UNIT_M } = {}) {

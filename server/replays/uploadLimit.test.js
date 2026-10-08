@@ -53,6 +53,11 @@ const authStub = http.createServer((req, res) => {
 await new Promise((r) => authStub.listen(0, '127.0.0.1', r));
 process.env.SUPABASE_URL = `http://127.0.0.1:${authStub.address().port}`;
 process.env.SUPABASE_ANON_KEY = 'anon';
+// The suite checks the hosted upload gate, including that a signed-out caller
+// is refused. Local mode (server/local/mode.js) is on by default and resolves
+// every request to the one owner, so there is no signed-out caller to refuse.
+// Opt out so identity.js reads the auth stub above like it does when deployed.
+process.env.AIM4_LOCAL = '0';
 
 const { handleReplayRequest } = await import('./routes.js');
 const { MAX_UPLOAD_BYTES } = await import('./demoStore.js');

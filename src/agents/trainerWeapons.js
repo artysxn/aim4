@@ -6,7 +6,7 @@
 // one place that decides what an "AK" means here and it should not be spread
 // across the files that consume it, and everything downstream of it (the
 // ballistics, the viewmodel, the tests) can then read it without dragging in
-// the pack loader — which imports the glTF addons through a Vite-only
+// the pack loader — which imports the glTF addons through a build-only
 // specifier and cannot be loaded under node at all.
 // ---------------------------------------------------------------------------
 

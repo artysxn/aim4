@@ -9,6 +9,7 @@
 // ---------------------------------------------------------------------------
 
 import { consumeCapability, fetchVrsRanks, formatApiError } from '../api.js';
+import { isLocalClient } from '../../lib/supabase.js';
 import { placeRankMenu, rankFilterHtml, syncRankSummary } from '../shared/vrsRanks.js';
 import { getStatsPayload, statsCacheGeneration, statsCacheKey } from '../statsCache.js';
 import { scheduleUiJob } from '../../lib/frameBudget.js';
@@ -140,8 +141,10 @@ export function createChartsPanel({ escapeHtml }) {
      * 400 rather than a handful: on a full library the interesting question is
      * who is consistently good, and a five-round subject sitting at the extreme
      * of both axes is noise that stretches every scale and drags the trendline.
+     * A local library is a few dozen matches, where 400 leaves nobody, so it
+     * starts at 0 there.
      */
-    minRounds: 400,
+    minRounds: isLocalClient() ? 0 : 400,
     maxCats: 24,
     filter: emptyFilter(),
     /** Two sides (A/B), each a player or team, optionally narrowed to maps or games. */

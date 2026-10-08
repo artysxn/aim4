@@ -1,24 +1,17 @@
 // ---------------------------------------------------------------------------
 // src/cs3d/packFetch.js
-// One fetch for every pack file, with the retry the CDN turns out to need.
+// One fetch for every pack file, with the retry a burst of them turns out to
+// need.
 //
-// The packs are served from a Cloudflare R2 bucket through its `pub-*.r2.dev`
-// domain, and that domain is RATE LIMITED — Cloudflare says so in as many
-// words, and a burst of parallel requests against it comes back as HTTP 429 or
-// as a dropped connection (which the browser reports as a CORS failure with a
-// null status, because an error page carries no `Access-Control-Allow-Origin`).
+// This used to sit in front of a Cloudflare R2 bucket on its `pub-*.r2.dev`
+// domain, which is RATE LIMITED, and it also rewrote every miss under
+// `/api/cs3d/` into that bucket. Both are gone: the packs are read off this
+// machine now (server/data/cs3d/pack, served by the local API host), and a
+// local install must never quietly reach for the network to fill a hole in
+// them. What survives is the part that was never about the CDN at all.
 //
-// Loading a map is exactly such a burst: four geometry workers, the texture
-// bundle, the lightmap, the shadow mask, the probe grid, and the player,
-// weapon, fx and bullet packs, all opening at once. Measured against the live
-// bucket on 2026-08-19, twelve concurrent HEADs were enough to turn ~100
-// objects into 429s in a row; four sequential ones a second apart never
-// failed. What the user saw was a map with holes in it — `_loadGroups` logged
-// a warning per dropped group and carried on, so a tile of Anubis' geometry
-// simply never existed for the rest of the session.
-//
-// So: every pack request goes through here, and this file does three things
-// the bare `fetch` did not.
+// Every pack request goes through here, and this file does three things the
+// bare `fetch` did not.
 //
 //   1. RETRIES what is worth retrying — a network error, a 429, a 408, a 5xx —
 //      with exponential backoff and jitter. A 404 is not retried: it repeats
@@ -31,34 +24,17 @@
 //      subsystems that load in parallel cannot between them open thirty
 //      connections in the first second.
 //
-// The real fix is a custom domain in front of the bucket (r2.dev is documented
-// as unsuitable for production traffic); this is what makes the loader survive
-// until there is one, and it is worth keeping afterwards anyway — a CDN edge
-// drops connections occasionally whatever the domain.
+// The burst is the point and it did not go away with the CDN. Loading a map
+// opens four geometry workers, the texture bundle, the lightmap, the shadow
+// mask, the probe grid, and the player, weapon, fx and bullet packs at once.
+// What the user saw when one of those failed was a map with holes in it —
+// `_loadGroups` logs a warning per dropped group and carries on, so a tile of
+// Anubis' geometry simply never existed for the rest of the session. The retry
+// is still what turns a transient failure into a loaded map, and the cap is
+// still what stops the load from starving itself. Local file reads are not
+// guaranteed either: on Windows an antivirus scan or a half-written pack can
+// fail a read exactly the same way.
 // ---------------------------------------------------------------------------
-
-/** Public pack bucket. Same origin as scripts/cs3d-fetch.mjs and the API fill. */
-export const PACK_CDN = 'https://pub-2cbbca6c60604cc7a9fde25f012821d9.r2.dev';
-
-/**
- * The CDN twin of an `/api/cs3d/...` pack URL.
- *
- * Localhost often 404s these: Vite's pack middleware serves only what is on
- * disk and does not fill from the bucket, and a host with only one map still
- * lacks `weapons/`, `fx/`, and other maps' `interactives.json`. The website
- * already reads this bucket; falling back here makes the 3D viewer match.
- *
- * @param {string} url
- * @returns {string|null}
- */
-export function packCdnUrl(url) {
-  const s = String(url || '');
-  if (!s || s.startsWith(PACK_CDN)) return null;
-  const marker = '/api/cs3d/';
-  const i = s.indexOf(marker);
-  if (i < 0) return null;
-  return `${PACK_CDN}/${s.slice(i + marker.length)}`;
-}
 
 /** Total pack requests allowed in flight at once, across every subsystem. */
 const MAX_INFLIGHT = 6;
@@ -119,11 +95,11 @@ function holdOff(res) {
   cooldownUntil = Math.max(cooldownUntil, now() + ms);
 }
 
-/** 429/408/5xx are the edge saying "not now"; everything else 4xx is final. */
+/** 429/408/5xx are the host saying "not now"; everything else 4xx is final. */
 const retryableStatus = (s) => s === 429 || s === 408 || (s >= 500 && s < 600);
 
 /**
- * Fetch a pack file, retrying what the CDN is likely to serve again.
+ * Fetch a pack file, retrying what is likely to come back.
  *
  * Resolves with the `Response` — including a non-retryable failure like a 404,
  * which callers already handle by checking `res.ok`. Rejects only when the
@@ -145,43 +121,13 @@ export async function packFetch(url, init) {
       res = await fetch(url, init);
     } catch (e) {
       // A dropped connection. Indistinguishable from a CORS rejection at this
-      // level (both are a bare TypeError), and on this origin it is nearly
-      // always the rate limiter closing the socket, so treat it as retryable.
+      // level (both are a bare TypeError), and over the burst a map load opens
+      // this is the shape that used to cost a tile of geometry, so retryable.
       lastError = e;
     } finally {
       release();
     }
-    if (!res && lastError) {
-      const alt = packCdnUrl(url);
-      if (alt) {
-        packFetchStats.requests++;
-        await acquire();
-        try {
-          res = await fetch(alt, init);
-          if (res?.ok) return res;
-        } catch {
-          /* keep lastError and retry the original */
-        } finally {
-          release();
-        }
-      }
-    }
     if (res && !retryableStatus(res.status)) {
-      if (res.status === 404) {
-        const alt = packCdnUrl(url);
-        if (alt) {
-          packFetchStats.requests++;
-          await acquire();
-          try {
-            const cdnRes = await fetch(alt, init);
-            if (cdnRes?.ok) return cdnRes;
-          } catch {
-            /* keep the original 404 */
-          } finally {
-            release();
-          }
-        }
-      }
       return res;
     }
     if (res?.status === 429) {
@@ -231,7 +177,6 @@ export async function packFetchOk(url, what, init) {
  */
 export async function loadWithRetry(loader, url) {
   const tryLoad = (u) => new Promise((resolve, reject) => loader.load(u, resolve, undefined, reject));
-  const alt = packCdnUrl(url);
   let lastError = null;
   for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
     const wait = cooldownUntil - now();
@@ -240,13 +185,6 @@ export async function loadWithRetry(loader, url) {
       return await tryLoad(url);
     } catch (e) {
       lastError = e;
-      if (alt && attempt === 1) {
-        try {
-          return await tryLoad(alt);
-        } catch (cdnErr) {
-          lastError = cdnErr;
-        }
-      }
       if (attempt === ATTEMPTS) break;
       packFetchStats.retries++;
       await sleep(BASE_MS * 2 ** (attempt - 1) * (0.5 + Math.random()));

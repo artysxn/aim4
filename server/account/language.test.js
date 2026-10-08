@@ -22,6 +22,11 @@ const USER = {
 };
 
 /** What the handler asked the database to do, in order. */
+// Opt out of local mode (server/local/mode.js), which is on by default and
+// resolves every request to the one owner against a JSON profile instead of
+// the Supabase read this suite exercises.
+process.env.AIM4_LOCAL = '0';
+
 const writes = [];
 let profileRow = { username: 'tester', display_name: '', language: 'en' };
 

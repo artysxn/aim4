@@ -1,15 +1,24 @@
 // Run: node server/staticRoutes.test.js
 //
-// Three routing tables have to agree, and nothing links them.
+// server/static.js is now the ONLY routing table. It used to be three copies of
+// the same decision — server/static.js for the self-hosted server, vercel.json
+// for aim4.io, and a GAME_FALLBACK_SKIP regex in vite.config.js for the dev
+// server — with nothing linking them, and a route added to one and not the
+// others worked perfectly in one place and fell through to the trainer in
+// another. That is how /tools/pitchdeck and /public-pitch shipped broken, and
+// how /refunds was briefly a page that loaded a first-person shooter for
+// anyone following the link.
 //
-//   server/static.js   what the self-hosted server serves from the site shell
-//   vercel.json        the same decision for aim4.io
-//   vite.config.js     the same decision for the dev server, as a skip regex
+// One table removes the drift by construction. What is left to check is that
+// the table is self-consistent and that every page it can route to is actually
+// built:
 //
-// A route added to one and not the others works perfectly in one place and
-// falls through to the trainer in another. That is exactly how /tools/pitchdeck
-// and /public-pitch shipped broken, and how /refunds was briefly a page that
-// loaded a first-person shooter for anyone following the link.
+//   - every PAGE_ALIAS target is a real HTML entrypoint (a dead alias silently
+//     falls through to train.html, which is the original bug)
+//   - no SITE_VIEW_PATH is also an alias key, where the alias would silently
+//     win and take the path away from the site shell
+//   - the two fallback pages exist, since they are the last resort for
+//     everything unclaimed
 
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -18,63 +27,57 @@ import { fileURLToPath } from 'node:url';
 import { SITE_VIEW_PATHS, SITE_VIEW_PREFIXES } from './static.js';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-const vercel = JSON.parse(fs.readFileSync(path.join(root, 'vercel.json'), 'utf8'));
-const rewrites = vercel.rewrites || [];
 
-assert.ok(rewrites.length, 'vercel.json has rewrites');
+/** An HTML entrypoint lives at the repo root or under public/, and is copied to dist/. */
+function entrypointExists(rel) {
+  return fs.existsSync(path.join(root, rel)) || fs.existsSync(path.join(root, 'public', rel));
+}
 
-/** Vercel matches a source against the whole path. */
-const matches = (source, p) => {
-  if (source === p) return true;
-  try {
-    return new RegExp(`^${source}$`).test(p);
-  } catch {
-    return false;
-  }
+// The page aliases are the extension-less deep links (/train, /tools/...).
+// They are the one place a typo is invisible: the path still resolves, it just
+// resolves to the trainer.
+const ALIASES = {
+  '/train': '/train.html',
+  '/tools/editvalues': '/tools/editvalues.html',
+  '/tools/level-editor': '/tools/level-editor.html',
+  '/tools/zone-editor': '/tools/zone-editor.html'
 };
 
-/** The first rewrite that claims this path, in file order, as Vercel resolves it. */
-const routeFor = (p) => rewrites.find((r) => matches(r.source, p)) || null;
-
-// Every shell path reaches the SPA shell in production, not the trainer and not
-// a 404. The catch-all sends everything unclaimed to train.html, so "matched by
-// something" is not enough: the destination has to be index.html.
-for (const p of SITE_VIEW_PATHS) {
-  const hit = routeFor(p);
-  assert.ok(hit, `vercel.json has no rewrite for ${p} — it will 404 on aim4.io`);
-  assert.equal(
-    hit.destination,
-    '/index.html',
-    `${p} resolves to ${hit.destination} on aim4.io, not the site shell`
+for (const [alias, target] of Object.entries(ALIASES)) {
+  assert.ok(
+    entrypointExists(target),
+    `${alias} points at ${target}, which does not exist — the link would fall through to the trainer`
   );
 }
 
-// The same for the shell-owned subtrees, checked with a representative child.
-for (const prefix of SITE_VIEW_PREFIXES) {
-  const p = `${prefix}example`;
-  const hit = routeFor(p);
-  assert.ok(hit, `vercel.json has no rewrite for ${prefix}* — ${p} will 404 on aim4.io`);
-  assert.equal(hit.destination, '/index.html', `${p} does not reach the site shell on aim4.io`);
-}
-
-// The dev server has its own copy of this decision: a regex of path heads that
-// must NOT fall through to the trainer. It is a third place to forget.
-const viteConfig = fs.readFileSync(path.join(root, 'vite.config.js'), 'utf8');
-const skipLine = viteConfig.match(/GAME_FALLBACK_SKIP\s*=\s*\/(.+?)\/;/);
-assert.ok(skipLine, 'vite.config.js still declares GAME_FALLBACK_SKIP');
-const skipRe = new RegExp(skipLine[1]);
+// An alias key that is also a shell path is ambiguous: tryServeStatic applies
+// the alias first, so the trainer page would win and the site view would be
+// unreachable at exactly that URL.
 for (const p of SITE_VIEW_PATHS) {
   assert.ok(
-    skipRe.test(p),
-    `${p} is missing from GAME_FALLBACK_SKIP in vite.config.js — it loads the trainer in dev`
+    !(p in ALIASES),
+    `${p} is both a page alias and a site view path — the alias wins in tryServeStatic, so the site shell is unreachable there`
   );
 }
 
-// The catch-all has to stay last, or it swallows the routes above it.
-const catchAllIndex = rewrites.findIndex((r) => r.destination === '/train.html');
-assert.equal(catchAllIndex, rewrites.length - 1, 'the trainer catch-all must be the last rewrite');
+// Shell-owned subtrees must not be claimed by an alias either, or /account/x
+// would resolve to a page instead of the shell.
+for (const prefix of SITE_VIEW_PREFIXES) {
+  for (const alias of Object.keys(ALIASES)) {
+    assert.ok(
+      !alias.startsWith(prefix),
+      `page alias ${alias} sits inside the shell-owned subtree ${prefix}`
+    );
+  }
+}
+
+// The catch-alls. If these are missing, an unclaimed path serves nothing at all
+// rather than a usable page.
+for (const page of ['index.html', 'train.html', 'cs3d.html']) {
+  assert.ok(entrypointExists(page), `${page} is a routing fallback and must be built`);
+}
 
 console.log(
-  `staticRoutes: ${SITE_VIEW_PATHS.size} paths + ${SITE_VIEW_PREFIXES.length} subtrees agree across ` +
-    'server/static.js, vercel.json and vite.config.js'
+  `staticRoutes: ${SITE_VIEW_PATHS.size} paths + ${SITE_VIEW_PREFIXES.length} subtrees + ` +
+    `${Object.keys(ALIASES).length} aliases, all resolving to built entrypoints (server/static.js is the only table)`
 );

@@ -1,10 +1,14 @@
 // node src/cs3d/packFetch.test.js
 //
-// The retry policy that keeps a rate-limited CDN from silently deleting map
-// geometry. Every case here is a shape the live bucket actually produced on
-// 2026-08-19: a 429 with and without `Retry-After`, a dropped connection
-// (bare TypeError, which the browser also reports as a CORS failure), and a
-// 404, which must NOT be retried because it repeats forever.
+// The retry policy that keeps a dropped request from silently deleting map
+// geometry. Loading a map opens four geometry workers, the texture bundle, the
+// lightmap, the shadow mask, the probe grid and the agent/weapon packs all at
+// once, and a map with holes in it is what a single failed read looks like.
+//
+// This file used to also pin the Cloudflare R2 fallback that filled a missing
+// local pack from the public bucket. That is gone: the packs are read off this
+// machine now and a local install must not reach for the network to cover a
+// hole in them. The cases below are the policy that stayed.
 
 import assert from 'node:assert';
 
@@ -21,7 +25,7 @@ globalThis.setTimeout = (fn, ms) => {
 const realRandom = Math.random;
 Math.random = () => 0.5;
 
-const { packFetch, packFetchOk, packFetchStats, loadWithRetry, packCdnUrl } = await import('./packFetch.js');
+const { packFetch, packFetchOk, packFetchStats, loadWithRetry } = await import('./packFetch.js');
 
 const reset = () => {
   slept = 0;
@@ -38,11 +42,10 @@ const res = (status, headers = {}) => ({
   headers: { get: (k) => headers[k.toLowerCase()] ?? null }
 });
 
-assert.equal(
-  packCdnUrl('/api/cs3d/weapons/manifest.json'),
-  'https://pub-2cbbca6c60604cc7a9fde25f012821d9.r2.dev/weapons/manifest.json'
-);
-assert.equal(packCdnUrl('https://cdn/x.glb'), null);
+// ---- there is no bucket to fall back to --------------------------------------
+const mod = await import('./packFetch.js');
+assert.equal('PACK_CDN' in mod, false, 'the R2 bucket constant must be gone');
+assert.equal('packCdnUrl' in mod, false, 'the /api/cs3d/ -> bucket rewrite must be gone');
 
 // ---- a 200 goes straight through --------------------------------------------
 reset();
@@ -70,32 +73,44 @@ globalThis.fetch = async () => {
   assert.equal(packFetchStats.retries, 0);
 }
 
-// ---- a 404 under /api/cs3d/ falls through to the public bucket --------------
+// ---- a missing local pack file is just missing -------------------------------
+// The old behaviour rewrote this URL onto the public bucket. Now it must be
+// asked once, answered once, and reported as the 404 it is: going out to the
+// network to paper over a hole in a local pack is exactly what this deployment
+// is not allowed to do.
 reset();
 calls = 0;
+const seenUrls = [];
 globalThis.fetch = async (url) => {
   calls++;
-  if (String(url).includes('r2.dev')) return res(200);
+  seenUrls.push(String(url));
   return res(404);
 };
 {
   const r = await packFetch('/api/cs3d/weapons/manifest.json');
-  assert.equal(r.status, 200, 'a missing local pack file must come from the CDN');
-  assert.equal(calls, 2);
-  assert.equal(packFetchStats.retries, 0, 'a CDN fallback is not a retry');
+  assert.equal(r.status, 404);
+  assert.equal(calls, 1, 'a missing pack file must be requested exactly once');
+  assert.equal(packFetchStats.retries, 0);
+  assert.ok(
+    seenUrls.every((u) => !u.includes('r2.dev')),
+    'a local miss must not go out to the bucket'
+  );
 }
 
 reset();
-calls = 0;
+const deadUrls = [];
 globalThis.fetch = async (url) => {
   calls++;
-  if (String(url).includes('r2.dev')) return res(200);
+  deadUrls.push(String(url));
   throw new TypeError('Failed to fetch');
 };
 {
-  const r = await packFetch('http://127.0.0.1:5173/api/cs3d/weapons/manifest.json');
-  assert.equal(r.status, 200, 'a dead local API must still load the pack from the CDN');
-  assert.equal(calls, 2);
+  await assert.rejects(() => packFetch('http://127.0.0.1:3784/api/cs3d/weapons/manifest.json'));
+  assert.ok(calls > 1, `a dead request is still retried, got ${calls} call(s)`);
+  assert.ok(
+    deadUrls.every((u) => u.startsWith('http://127.0.0.1:3784/')),
+    `every retry must stay on the local host, got ${deadUrls.join(', ')}`
+  );
 }
 
 // ---- a 429 that clears is recovered, not lost -------------------------------

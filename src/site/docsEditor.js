@@ -39,7 +39,56 @@ const ALLOWED = new Set([
 ]);
 
 /** Inline styles worth keeping. Everything else is dropped on save. */
-const SAFE_STYLE = /^(font-size|line-height|font-weight|font-style|text-decoration|text-align|margin-left|padding-left)$/;
+const SAFE_STYLE = /^(font-size|line-height|font-weight|font-style|text-decoration|text-align|margin-left|padding-left|color|background-color)$/;
+
+/**
+ * Colours are kept only as plain hex or rgb()/rgba(). The generated reports
+ * colour their notes and rating bands; anything shaped like a function call
+ * other than rgb (url(), var(), expression()) is not a colour and is dropped.
+ */
+const SAFE_COLOR = /^(#[0-9a-f]{3,8}|rgba?\(\s*[\d.]+%?\s*,\s*[\d.]+%?\s*,\s*[\d.]+%?\s*(,\s*[\d.]+%?\s*)?\)|inherit)$/i;
+
+/** Relative luminance (0..1) of a hex / rgb() colour, or null when unreadable. */
+function colorLuminance(value) {
+  const v = String(value || '').trim();
+  let rgb = null;
+  const hex = /^#([0-9a-f]{3,8})$/i.exec(v);
+  if (hex) {
+    let h = hex[1];
+    if (h.length === 3 || h.length === 4) h = [...h.slice(0, 3)].map((c) => c + c).join('');
+    rgb = [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16));
+  } else {
+    const m = /^rgba?\(([^)]*)\)$/i.exec(v);
+    if (m) {
+      rgb = m[1]
+        .split(',')
+        .slice(0, 3)
+        .map((p) => (p.trim().endsWith('%') ? (parseFloat(p) / 100) * 255 : parseFloat(p)));
+    }
+  }
+  if (!rgb || rgb.some((n) => !Number.isFinite(n))) return null;
+  const [r, g, b] = rgb.map((c) => {
+    const s = Math.max(0, Math.min(255, c)) / 255;
+    return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+/**
+ * Text colour that would vanish on the dark page (Google Docs pastes
+ * `color: #000000` on every span) and white page backgrounds are dropped with
+ * the rest of a paste's formatting rather than kept as unreadable text.
+ */
+function safeStyleValue(prop, value) {
+  if (prop !== 'color' && prop !== 'background-color') return true;
+  if (!SAFE_COLOR.test(value)) return false;
+  // A link written in the text's own colour (the generated summaries' round
+  // links) is not a colour that can vanish.
+  if (/^inherit$/i.test(value)) return true;
+  const lum = colorLuminance(value);
+  if (lum === null) return false;
+  return prop === 'color' ? lum >= 0.12 : lum <= 0.6;
+}
 
 /**
  * Strip a document down to the tags and styles above. Runs on load and on
@@ -113,7 +162,8 @@ export function sanitizeHtml(html) {
           const kept = [];
           for (const rule of attr.value.split(';')) {
             const [prop, value] = rule.split(':').map((s) => (s || '').trim());
-            if (prop && value && SAFE_STYLE.test(prop.toLowerCase())) {
+            const lower = (prop || '').toLowerCase();
+            if (prop && value && SAFE_STYLE.test(lower) && safeStyleValue(lower, value)) {
               kept.push(`${prop}: ${value}`);
             }
           }

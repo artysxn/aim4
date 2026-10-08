@@ -24,7 +24,7 @@
 // a spine-to-head tilt, because every clip is authored looking level.
 //
 // The island and its GLTF addons share the WebGPU three build (see
-// vite.config.js `cs3dThreeWebgpu`). Loaded meshes are converted to
+// build/build.mjs, the WebGPU namespace). Loaded meshes are converted to
 // MeshStandardNodeMaterial below so they take the scene sun and probe
 // the same way map props do.
 // ---------------------------------------------------------------------------

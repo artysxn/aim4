@@ -39,6 +39,9 @@ const TABS = [
   { id: 'audit', label: 'Audit' }
 ];
 
+/** Tabs backed by Supabase or an internet service. A local install has neither. */
+const HOSTED_ONLY_TABS = new Set(['users', 'ingest', 'codes', 'affiliates', 'audit']);
+
 /**
  * @param {HTMLElement} host  the `.view[data-view="admin"]` element
  */
@@ -66,6 +69,7 @@ export function initAdminView(host) {
     const wrap = el('div');
     const nav = el('nav', 'admin-nav');
     for (const t of TABS) {
+      if (me?.local && HOSTED_ONLY_TABS.has(t.id)) continue;
       const btn = el('button', `admin-tab${t.id === tab ? ' active' : ''}`, t.label);
       btn.type = 'button';
       btn.addEventListener('click', () => {
@@ -137,6 +141,7 @@ export function initAdminView(host) {
     render(root, spinnerNode());
     try {
       me = await adminApi.me();
+      if (me?.local && HOSTED_ONLY_TABS.has(tab)) tab = 'tools';
       loaded = true;
       renderShell();
     } catch (err) {

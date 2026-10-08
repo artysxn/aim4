@@ -16,6 +16,14 @@ function assert(cond, msg) {
   if (!cond) throw new Error(msg || 'assert failed');
 }
 
+// Billing is a hosted service, so this suite tests the hosted shape: a request
+// with no session must be refused at the door (401) before the provider check
+// is ever reached. Local mode (server/local/mode.js) is on by default and
+// resolves every request to the one owner, which turns that same request into a
+// "known caller with billing switched off" — a different, equally correct 501.
+// Opt out so the assertions below are about the deployed path.
+process.env.AIM4_LOCAL = '0';
+
 const { handleBillingRequest, alreadyHandled, releaseEvent, mapProviderStatus, _resetSeenEvents } = await import(
   './routes.js'
 );

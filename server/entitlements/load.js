@@ -11,6 +11,7 @@
 
 import { resolveEntitlements } from '../../shared/entitlements/resolve.js';
 import { db, isConfigured, isSiteAdmin } from './service.js';
+import { ownerEntitlements, localMode } from '../local/mode.js';
 
 const cache = new Map();
 const CACHE_MS = 60 * 1000;
@@ -66,6 +67,9 @@ async function fetchSources(userId) {
  */
 export async function loadEntitlements(userId, { fresh = false } = {}) {
   if (!userId) return freeEntitlements();
+  // One account, everything unlocked. Said here rather than in whoami() because
+  // this is the function every surface asks, not just the ones behind a request.
+  if (localMode()) return ownerEntitlements();
 
   if (!fresh) {
     const hit = cache.get(userId);

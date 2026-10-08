@@ -51,10 +51,16 @@ export const LINK_FILES_MAX = 40;
  */
 export function mapGridFilter(ui = {}) {
   const econ = ui.econ === '' || ui.econ == null ? null : Number(ui.econ);
+  const oppEcon = ui.oppEcon === '' || ui.oppEcon == null ? null : Number(ui.oppEcon);
   return {
     maps: [],
     side: '',
     econ: Number.isFinite(econ) ? econ : null,
+    oppEcon: Number.isFinite(oppEcon) ? oppEcon : null,
+    hasAwp: Boolean(ui.hasAwp),
+    oppHasAwp: Boolean(ui.oppHasAwp),
+    result: ui.result === 'won' || ui.result === 'lost' ? ui.result : '',
+    advantage: ui.opening === '5v4' || ui.opening === '4v5' ? ui.opening : '',
     dateFrom: ui.dateFrom || '',
     dateTo: ui.dateTo || '',
     rankOwn: ui.rankOwn || '',

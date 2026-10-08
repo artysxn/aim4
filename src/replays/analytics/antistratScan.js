@@ -65,7 +65,7 @@ const round1 = (n) => Math.round(n * 10) / 10;
 const pct = (part, whole) => (whole > 0 ? Math.round((part / whole) * 100) : 0);
 const avgOf = (a) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : null);
 
-function fmtClock(seconds) {
+export function fmtClock(seconds) {
   if (!Number.isFinite(seconds)) return '';
   const s = Math.max(0, Math.round(seconds));
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
@@ -107,7 +107,7 @@ function nearAnyPiece(x, y, pieces, pad = NEAR_PAD) {
   return false;
 }
 
-function avgPairDistance(points) {
+export function avgPairDistance(points) {
   if (points.length < 2) return null;
   let sum = 0;
   let n = 0;
@@ -121,7 +121,7 @@ function avgPairDistance(points) {
 }
 
 /** Largest chain-linked cluster (union by ≤ CORE_LINK_UNITS pair distance). */
-function coreOf(points) {
+export function coreOf(points) {
   const n = points.length;
   if (!n) return { size: 0, cx: 0, cy: 0 };
   const parent = points.map((_, i) => i);
@@ -154,7 +154,7 @@ function coreOf(points) {
   };
 }
 
-function topCounts(map, limit = 6) {
+export function topCounts(map, limit = 6) {
   return [...map.entries()]
     .map(([name, count]) => ({ name: String(name), count }))
     .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
@@ -324,6 +324,22 @@ export function roundFeatures({ meta, track, row, teamIdx, opponent, context, ne
   }
   nades.sort((a, b) => a.tick - b.tick);
 
+  // The other side's grenades, landing only. The written reports ask one
+  // question of them ("did a smoke shut the door before they got there"), so
+  // they carry no names and no phase, just where and when.
+  const enemyNades = [];
+  for (const g of meta.events?.grenades || []) {
+    if (!g.player || ourIds.has(g.player)) continue;
+    const type = normNade(g.type);
+    if (!NADE_KINDS.includes(type)) continue;
+    const det = Number(g.detonateTick ?? g.throwTick);
+    const x = Number(g.at?.x);
+    const y = Number(g.at?.y);
+    if (!Number.isFinite(det) || !Number.isFinite(x) || !Number.isFinite(y)) continue;
+    enemyNades.push({ type, tick: det, at: elapsedOf(det), x, y });
+  }
+  enemyNades.sort((a, b) => a.tick - b.tick);
+
   // Plant, with a site letter where geometry allows one.
   const bombEv = (meta.events?.bomb || []).find((b) => b?.type === 'planted');
   const plantTick = Number.isFinite(meta.plantTick) ? meta.plantTick : bombEv?.tick ?? null;
@@ -379,6 +395,27 @@ export function roundFeatures({ meta, track, row, teamIdx, opponent, context, ne
     hitSite = nearA > nearB ? 'a' : nearB > nearA ? 'b' : null;
   }
 
+  /**
+   * Which site's ground a world point is on or heading into (site pieces plus
+   * the key zones in front of them), or null in between. The nearer site wins
+   * where both pads reach.
+   */
+  const siteNear = (x, y, pad = NEAR_PAD) => {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    let best = null;
+    let bestD = Infinity;
+    for (const site of ['a', 'b']) {
+      for (const p of towardPieces[site]) {
+        const d = distToPiece(x, y, p);
+        if (d <= pad && d < bestD) {
+          bestD = d;
+          best = site;
+        }
+      }
+    }
+    return best;
+  };
+
   /** First sample with `count`+ of ours inside either site's pieces. */
   const siteEntry = (count) => {
     for (const s of series) {
@@ -409,6 +446,7 @@ export function roundFeatures({ meta, track, row, teamIdx, opponent, context, ne
     opponent,
     side,
     won,
+    ourIds: [...ourIds],
     tags,
     ownEcon,
     oppEcon,
@@ -416,6 +454,7 @@ export function roundFeatures({ meta, track, row, teamIdx, opponent, context, ne
     kills,
     firstKill,
     nades,
+    enemyNades,
     plantTick,
     plantClock: plantTick != null ? clockOf(plantTick) : null,
     plantSite,
@@ -428,6 +467,7 @@ export function roundFeatures({ meta, track, row, teamIdx, opponent, context, ne
     sampleAt,
     firstVisit,
     towardCount,
+    siteNear,
     siteEntry,
     hasTicks: Boolean(track)
   };
@@ -484,7 +524,7 @@ export function classifyPace(r) {
 }
 
 /** The site a T round committed to: the plant, else the first 2-man entry. */
-function paceSite(r) {
+export function paceSite(r) {
   return r.plantSite || r.siteEntry(2)?.site || null;
 }
 
@@ -495,10 +535,10 @@ function paceSite(r) {
 const filesOf = (list) => list.map((r) => r.file);
 
 /** Named label for a grenade: database name first, zone fallback. */
-const nadeLabel = (n) => n.name || n.zone || '';
+export const nadeLabel = (n) => n.name || n.zone || '';
 
 /** Round-type key to label for one map and side, Default included. */
-function typeLabels(mapCode, side) {
+export function typeLabels(mapCode, side) {
   const out = new Map();
   for (const def of roundTypeRows(mapCode, side)) out.set(def.key, def.label);
   return out;
@@ -1240,7 +1280,7 @@ function aggPhase(rounds, phase, side = 'T') {
   };
 }
 
-function snapshotSample(r, mapCode) {
+export function snapshotSample(r, mapCode) {
   const snap = clockSeconds(FORMATIONS[mapCode]?.snapshot || '');
   if (snap === null) return null;
   return r.sampleAt(r.t0 + (ROUND_SECONDS - snap) * r.tickRate);
@@ -1322,7 +1362,7 @@ function aggPistols(rounds, mapCode, laneSets) {
 }
 
 /** Lane region names from patternDefs, resolved to network position names. */
-function resolveLaneSets(mapCode, network) {
+export function resolveLaneSets(mapCode, network) {
   const def = FORMATIONS[mapCode];
   if (!def || !network) return null;
   const lower = (s) => String(s || '').trim().toLowerCase();
@@ -1362,7 +1402,7 @@ function resolveLaneSets(mapCode, network) {
 }
 
 /** Per-lane player counts at the snapshot clock, or null without geometry. */
-function laneCountsAt(r, mapCode, laneSets) {
+export function laneCountsAt(r, mapCode, laneSets) {
   if (!laneSets) return null;
   const snap = snapshotSample(r, mapCode);
   if (!snap || !snap.pts.length) return null;
@@ -1381,13 +1421,13 @@ function laneCountsAt(r, mapCode, laneSets) {
 }
 
 /** T formation notation at the snapshot clock, or '' when unresolvable. */
-function laneFormation(r, mapCode, laneSets) {
+export function laneFormation(r, mapCode, laneSets) {
   const counts = laneCountsAt(r, mapCode, laneSets);
   return counts ? formatFormation(mapCode, counts, counts.awpLane) : '';
 }
 
 /** "4 B, 1 Mid" from lane counts, zeros skipped. */
-function laneSpread(mapCode, counts) {
+export function laneSpread(mapCode, counts) {
   if (!counts) return '';
   const lanes = FORMATIONS[mapCode]?.t || [];
   return counts
@@ -1412,7 +1452,7 @@ const WEAPON_GROUPS = [
   ['MG', new Set(['m249', 'negev'])]
 ];
 
-function weaponClass(weapon) {
+export function weaponClass(weapon) {
   const w = String(weapon || '')
     .toLowerCase()
     .replace(/^weapon_/, '');
@@ -1426,7 +1466,7 @@ function weaponClass(weapon) {
 }
 
 /** "1:52" or "1:44-1:39" from a list of countdown clocks. */
-function clockRange(clocks) {
+export function clockRange(clocks) {
   if (!clocks.length) return '';
   const hi = Math.max(...clocks);
   const lo = Math.min(...clocks);
@@ -1739,7 +1779,7 @@ function aggRoundList(rounds, mapCode, side) {
  * Each one carries its winrate, because the shape only matters once you know
  * whether it works.
  */
-const BUY_CONTEXTS = [
+export const BUY_CONTEXTS = [
   {
     key: 'firstGun',
     label: 'First gun round',
@@ -1819,7 +1859,7 @@ function aggBuyContext(rounds, mapCode) {
  * own buy is the same. Every bucket carries its winrate, because a team that
  * loses a third of its anti-ecos is the finding.
  */
-const ANTI_BUYS = [
+export const ANTI_BUYS = [
   { key: 'eco', label: 'Anti-eco', econs: [0, 1] },
   { key: 'force', label: 'Anti-force', econs: [2, 3] }
 ];
@@ -2341,7 +2381,8 @@ export async function runAntistratScan({
   mapCode,
   demoIds,
   paceKeys,
-  onProgress
+  onProgress,
+  keepRounds = false
 }) {
   const wanted = new Set(demoIds);
   const jobs = [];
@@ -2417,7 +2458,15 @@ export async function runAntistratScan({
   const { rounds, network, utilDb, laneSets } = await extractRounds({ jobs, mapCode, onProgress });
   if (!rounds.length) throw new Error('None of the selected rounds could be read.');
 
+  // The summary and internal reports read the rounds themselves rather than
+  // the sections below. Held off the result unless asked for: the detailed
+  // report serialises what it is handed, and these are tens of MB of samples.
+  const extract = keepRounds
+    ? { rounds, network, utilDb, laneSets, nameOf, mains, rolesOf, includedDemos }
+    : null;
+
   return {
+    extract,
     mapCode,
     rounds: rounds.length,
     ticked: rounds.filter((r) => r.hasTicks).length,

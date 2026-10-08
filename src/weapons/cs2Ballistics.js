@@ -69,7 +69,7 @@ export class CS2Ballistics {
    * @param {object} o
    * @param {{stats: (name: string) => object|null}} o.assets  the weapons pack.
    *   Injected rather than imported: the pack loader reaches the glTF addons
-   *   through a Vite-only specifier and cannot be loaded under node, and the
+   *   through a build-only specifier and cannot be loaded under node, and the
    *   ballistics are exactly the part worth testing there.
    */
   constructor({ assets } = {}) {

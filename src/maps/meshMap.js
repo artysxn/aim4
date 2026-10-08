@@ -17,7 +17,7 @@
 
 import * as THREE from 'three';
 import { MeshBVH, acceleratedRaycast } from 'three-mesh-bvh';
-import { packLoader, PACK_CDN } from '../agents/packBase.js';
+import { packLoader } from '../agents/packBase.js';
 import { MeshCollider } from '../utils/MeshCollision.js';
 import { createRayWorld } from '../cs3d/rayWorld.js';
 import { UNIT_M } from '../../shared/sim3d/units.js';
@@ -164,35 +164,29 @@ function mapMaterial() {
 }
 
 /**
- * The map's geometry, from the deploy or from the asset bucket.
+ * The map's geometry, from the local static output.
  *
- * The file is served from `public/` on a full deploy, which is the fast path
- * and the one a local `npm run dev` takes. It is also 8 MB of binary, and a
- * checkout that does not carry it — or a host serving an older build — would
- * otherwise have no map at all. So the CDN the 3D explorer's packs already
- * live on is tried second, at the same path under `maps/ported/`
- * (`npm run maps:upload` puts it there).
+ * The file is served out of the built `dist/` (it is copied there from
+ * `public/maps/` by the build), at the path the map catalog records. There is
+ * no second source to fall back to: a checkout without the geometry has no
+ * map, and saying so beats silently reaching out for it.
  *
- * `maps/` is excluded from the SPA rewrite in both vercel.json and
- * server/static.js, so a miss is a real 404 rather than index.html arriving
- * with a 200 and failing to parse as a glb.
+ * `maps/` is excluded from the SPA rewrite in server/static.js, so a miss is a
+ * real 404 rather than index.html arriving with a 200 and failing to parse as
+ * a glb.
  */
 async function fetchGltf(data) {
   const loader = packLoader();
-  // `?v=` is the map's content hash. The bucket serves this file immutable for
-  // a year, so a re-port has to arrive under a URL nobody is already holding.
+  // `?v=` is the map's content hash, so a re-port arrives under a URL nobody is
+  // already holding in the browser cache.
   const v = data.version ? `?v=${encodeURIComponent(data.version)}` : '';
-  const urls = [`${data.mesh}${v}`, `${PACK_CDN}${data.mesh}${v}`];
-  let last = null;
-  for (const url of urls) {
-    try {
-      return await loader.loadAsync(url);
-    } catch (e) {
-      last = e;
-      console.warn(`cs3d: ${data.id} not at ${url} —`, e?.message || e);
-    }
+  const url = `${data.mesh}${v}`;
+  try {
+    return await loader.loadAsync(url);
+  } catch (e) {
+    console.warn(`cs3d: ${data.id} not at ${url} —`, e?.message || e);
+    throw e;
   }
-  throw last || new Error(`${data.id}: no map geometry anywhere`);
 }
 
 async function fetchMap(data) {

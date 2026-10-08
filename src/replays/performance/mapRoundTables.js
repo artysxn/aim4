@@ -186,19 +186,22 @@ export function mapRoundTableHtml(rows, side, height, esc, table = PLAYER_TABLE)
  * @param {Record<string, { T: Array, CT: Array }>} byMap  from mapRoundGrid
  * @param {string[]} codes
  * @param {(s: string) => string} esc
+ * @param {{ wrap?: (code: string, head: string, body: string) => string }} [opts]
+ *   `wrap` puts each map's tables behind its title (the Performance page's
+ *   dropdowns); without it every block is open.
  */
-export function mapRoundBlocksHtml(byMap, codes, esc) {
+export function mapRoundBlocksHtml(byMap, codes, esc, { wrap = null } = {}) {
   const blocks = codes
     .map((code) => {
       const pair = byMap?.[code] || { T: [], CT: [] };
       const height = Math.max(pair.T.length, pair.CT.length);
-      return `<section class="pf-map-block">
-        <h3 class="pf-map-title">${esc(MAPS[code]?.name || code)}</h3>
-        <div class="pf-map-pair">
+      const head = `<h3 class="pf-map-title">${esc(MAPS[code]?.name || code)}</h3>`;
+      const body = `<div class="pf-map-pair">
           ${mapRoundTableHtml(pair.T, 'T', height, esc)}
           ${mapRoundTableHtml(pair.CT, 'CT', height, esc)}
-        </div>
-      </section>`;
+        </div>`;
+      if (wrap) return wrap(code, head, body);
+      return `<section class="pf-map-block">${head}${body}</section>`;
     })
     .join('');
   return `<div class="pf-maps">${blocks}</div>`;
@@ -226,22 +229,23 @@ export function teamMapTotalHtml(total, esc) {
  *   from teamMapRoundGrid
  * @param {string[]} codes
  * @param {(s: string) => string} esc
+ * @param {{ wrap?: (code: string, head: string, body: string) => string }} [opts]
  */
-export function teamMapRoundBlocksHtml(byMap, codes, esc) {
+export function teamMapRoundBlocksHtml(byMap, codes, esc, { wrap = null } = {}) {
   const blocks = codes
     .map((code) => {
       const pair = byMap?.[code] || { T: [], CT: [], total: null };
       const height = Math.max(pair.T.length, pair.CT.length);
-      return `<section class="pf-map-block">
-        <div class="pf-map-head">
+      const head = `<div class="pf-map-head">
           <h3 class="pf-map-title">${esc(MAPS[code]?.name || code)}</h3>
           ${teamMapTotalHtml(pair.total, esc)}
-        </div>
-        <div class="pf-map-pair">
+        </div>`;
+      const body = `<div class="pf-map-pair">
           ${mapRoundTableHtml(pair.T, 'T', height, esc, TEAM_TABLE)}
           ${mapRoundTableHtml(pair.CT, 'CT', height, esc, TEAM_TABLE)}
-        </div>
-      </section>`;
+        </div>`;
+      if (wrap) return wrap(code, head, body);
+      return `<section class="pf-map-block">${head}${body}</section>`;
     })
     .join('');
   return `<div class="pf-maps">${blocks}</div>`;

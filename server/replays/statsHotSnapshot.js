@@ -27,6 +27,7 @@
 
 import fsp from 'node:fs/promises';
 import { createWriteStream } from 'node:fs';
+import path from 'node:path';
 import { finished } from 'node:stream/promises';
 import {
   AIM_FIELDS,
@@ -114,6 +115,11 @@ export async function saveSnapshot(file, store, ids) {
   prefix.writeUInt32LE(headerBuf.length, 4);
 
   const tmp = `${file}.tmp-${process.pid}`;
+  // A fresh install has no stats/ directory yet, and the snapshot is the first
+  // thing that writes there. Without this every boot logged an ENOENT and the
+  // store was cold-built from scratch each time, which is exactly the cost the
+  // snapshot exists to avoid.
+  await fsp.mkdir(path.dirname(file), { recursive: true });
   const out = createWriteStream(tmp);
   const write = (buf) => (out.write(buf) ? Promise.resolve() : new Promise((r) => out.once('drain', r)));
   try {
