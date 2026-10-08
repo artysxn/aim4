@@ -106,6 +106,45 @@ assert.ok(!summary.includes('<a '), 'printed: no links');
 assert.ok(!summary.includes('CT SIDE'), 'an unticked side is left out');
 assert.ok(!summary.includes('—'), 'no long dashes');
 
+// ---- summary with round links (for checking it) ----------------------------
+
+const linked = buildSummaryDocHtml(
+  {
+    teamName: 'WBT',
+    mapCode: 'ANU',
+    categories: ['sideT', 'tells', 'force', 'players'],
+    links: true,
+    report: {
+      sides: {
+        T: {
+          positions: [],
+          tells: {
+            files: ['r1', 'r2', 'r3'],
+            tells: [{ utility: 'Xbox smoke', freq: 'Always', outcome: 'short pop', hits: 2, rounds: 2, files: ['r1', 'r2'], hitFiles: ['r1', 'r2'] }],
+            absent: [],
+            firstBuy: null
+          },
+          force: {
+            files: ['f1', 'f2', 'f3'],
+            lines: [
+              { text: '2x B rush through Upper.', files: ['f1', 'f2'] },
+              { text: 'Others: ', parts: [{ text: '1x A pop (won 0)', files: ['f3'] }], tail: '.', files: ['f3'] }
+            ]
+          },
+          sites: [],
+          players: [{ name: 'Psycho', role: 'Mid', text: 'Plays mid.', files: ['r1'] }]
+        }
+      }
+    }
+  },
+  esc
+);
+assert.match(linked, /<h3><a href="\/demos\?rounds=f1,f2,f3">T Force buys<\/a><\/h3>/, 'a heading opens the whole section');
+assert.match(linked, /<li><a href="\/demos\?rounds=f1,f2">2x B rush through Upper\.<\/a><\/li>/, 'a line opens its own rounds');
+assert.match(linked, /Others: <a href="\/demos\?rounds=f3">1x A pop \(won 0\)<\/a>\./, 'each of the others opens its own');
+assert.match(linked, /<a href="\/demos\?rounds=r1,r2">Xbox smoke<\/a>: <a href="\/demos\?rounds=r1,r2"><span[^>]*>Always short pop<\/span><\/a>/);
+assert.match(linked, /<h3><a href="\/demos\?rounds=r1">Psycho \(Mid\)<\/a><\/h3>/);
+
 // ---- internal ----------------------------------------------------------------
 
 const cell = (rounds, wins, wr, opk, c54, c45) => ({

@@ -189,6 +189,16 @@ function namedTags(r, side) {
 }
 
 /** A player's name as the sheet's header writes it: the main's own name first. */
+/**
+ * A line of the sheet and the rounds it was written from. The rounds only
+ * show when the document is built with links on (for checking the sheet).
+ */
+const line = (text, rounds) => ({
+  text,
+  files: [...new Set((rounds || []).map((r) => (typeof r === 'string' ? r : r?.r?.file || r?.file)).filter(Boolean))]
+});
+const filesOf = (rounds) => line('', rounds).files;
+
 const nameOf = (ctx, id) => ctx.mains?.find((m) => m.id === id)?.name || ctx.nameOf.get(id) || id;
 const won = (list) => list.filter((x) => (x.r || x).won).length;
 /** A clock worth printing: only set calls, never the midround. */
@@ -371,7 +381,7 @@ function paceFor(ctx) {
   if (slow && buys.length && defaults < 40) {
     slow.note = say('pace-defaults', `${ctx.seed}|defaults`, { share: defaults });
   }
-  return { basis: buys.length, rows };
+  return { basis: buys.length, files: filesOf(buys), rows };
 }
 
 /** The calls the round library names on CT, as a share of every CT round. */
@@ -400,7 +410,7 @@ function ctCallsFor(ctx) {
     .filter((c) => c.count >= 2)
     .sort((x, y) => y.count - x.count)
     .slice(0, 6);
-  return { calls: rows };
+  return { calls: rows, files: filesOf(all) };
 }
 
 // ---------------------------------------------------------------------------
@@ -675,7 +685,14 @@ function absenceTellsOver(set, side, ctx, { limit = 4 } = {}) {
     const without = set.filter((r) => !tellFeatures(r).has(f.key));
     if (without.length < 4) continue;
     const t = new Map();
-    for (const r of without) for (const o of outcomesOf.get(r.file).values()) bump(t, o.word);
+    const hitFiles = new Map();
+    for (const r of without) {
+      for (const o of outcomesOf.get(r.file).values()) {
+        bump(t, o.word);
+        if (!hitFiles.has(o.word)) hitFiles.set(o.word, []);
+        hitFiles.get(o.word).push(r.file);
+      }
+    }
     const best = [...t.entries()]
       .map(([word, hits]) => ({ word, hits, share: percent(hits, without.length) }))
       .filter((x) => x.share >= ABSENT_SHARE && x.share - percent(base.get(x.word) || 0, set.length) >= TELL_MIN_LIFT)
@@ -690,7 +707,8 @@ function absenceTellsOver(set, side, ctx, { limit = 4 } = {}) {
       rounds: without.length,
       share,
       freq: frequencyWord(best.hits, without.length, ABSENT_SHARE) || 'Mostly',
-      files: without.map((r) => r.file)
+      files: without.map((r) => r.file),
+      hitFiles: hitFiles.get(best.word) || []
     });
   }
   out.sort((a, b) => b.share - a.share || b.rounds - a.rounds);
@@ -743,7 +761,7 @@ function tellsFor(ctx, side) {
     const found = tellsOver(first, side, ctx, { minRounds: 3, minShare: 100, limit: 2 });
     firstBuy = { rounds: first.length, tells: found };
   }
-  return { rounds: set.length, tells, siteGroups, absent, firstBuy };
+  return { rounds: set.length, files: filesOf(set), tells, siteGroups, absent, firstBuy };
 }
 
 // ---------------------------------------------------------------------------
@@ -767,9 +785,10 @@ function defaultUtilityFor(ctx, side) {
       const k = `${label}\0${n.type}`;
       if (seen.has(k)) continue;
       seen.add(k);
-      if (!rec.has(k)) rec.set(k, { label, type: n.type, rounds: 0, times: [], throwers: new Map() });
+      if (!rec.has(k)) rec.set(k, { label, type: n.type, rounds: 0, files: [], times: [], throwers: new Map() });
       const u = rec.get(k);
       u.rounds++;
+      u.files.push(r.file);
       u.times.push(throwElapsed(n));
       bump(u.throwers, n.player);
     }
@@ -785,11 +804,12 @@ function defaultUtilityFor(ctx, side) {
         type: u.type,
         share: percent(u.rounds, set.length),
         clock: t !== null && t <= SET_CALL_ELAPSED ? clockText(ROUND_SECONDS - t) : '',
-        thrower: who && percent(who[1], u.rounds) >= 50 ? nameOf(ctx, who[0]) : ''
+        thrower: who && percent(who[1], u.rounds) >= 50 ? nameOf(ctx, who[0]) : '',
+        files: u.files
       };
     })
     .sort((a, b) => b.share - a.share || a.label.localeCompare(b.label));
-  return { rounds: set.length, rows };
+  return { rounds: set.length, files: filesOf(set), rows };
 }
 
 /** Default utility they drop on a given set of rounds: "No Mid smoke (85% of full buys, 10% here)". */
@@ -1172,7 +1192,7 @@ function variationsFor(rounds, ctx, side, { min = 1 } = {}) {
     .slice(0, VARIATIONS_SHOWN);
   if (!shown.length && clusters.length) shown.push(clusters[0]);
   const shownFiles = new Set(shown.flatMap((c) => c.members.map((s) => s.r.file)));
-  const lines = shown.map((c) => `${c.members.length}x ${variationWords(c, ctx, side)}`);
+  const lines = shown.map((c) => line(`${c.members.length}x ${variationWords(c, ctx, side)}`, c.members));
   const rest = clusters.flatMap((c) => c.members).filter((s) => !shownFiles.has(s.r.file));
   if (rest.length) {
     const groups = new Map();
@@ -1183,10 +1203,10 @@ function variationsFor(rounds, ctx, side, { min = 1 } = {}) {
     }
     const parts = [...groups.entries()]
       .sort((a, b) => b[1].length - a[1].length || percent(won(b[1]), b[1].length) - percent(won(a[1]), a[1].length))
-      .map(([w, list]) => `${list.length}x ${w} (won ${won(list)})`);
-    lines.push(`Others: ${parts.join(', ')}.`);
+      .map(([w, list]) => line(`${list.length}x ${w} (won ${won(list)})`, list));
+    lines.push({ text: 'Others: ', parts, tail: '.', files: filesOf(rest) });
   }
-  return { rounds: rounds.length, lines, clusters: [...clusters.filter((c) => c.members.length >= 2), ...promoted, ...clusters.filter((c) => c.members.length === 1 && !promoted.some((p) => p.members.includes(c.members[0])))] };
+  return { rounds: rounds.length, files: filesOf(rounds), lines, clusters: [...clusters.filter((c) => c.members.length >= 2), ...promoted, ...clusters.filter((c) => c.members.length === 1 && !promoted.some((p) => p.members.includes(c.members[0])))] };
 }
 
 // ---------------------------------------------------------------------------
@@ -1275,7 +1295,7 @@ function openerLines(ctx, side, buys) {
     const rest = list.length - used.size;
     if (!parts.length) parts.push('spread out');
     else if (rest > 0) parts.push(`${rest} elsewhere`);
-    lines.push(`${nameOf(ctx, id)} gets the first kill in ${list.length} rounds: ${parts.join('; ')}.`);
+    lines.push(line(`${nameOf(ctx, id)} gets the first kill in ${list.length} rounds: ${parts.join('; ')}.`, list));
   }
   return lines;
 }
@@ -1339,8 +1359,11 @@ function dangerFor(ctx, side) {
       const lead = leaders.length >= 2 ? owner(ctx, leaders) : '';
       const leadN = lead ? leaders.filter((id) => nameOf(ctx, id) === lead).length : 0;
       lines.push(
-        `${capitalize(head)}${clock ? ` around ${clock}` : ''}${form ? ` (${form})` : ''}, ${n} times, won ${won(g.rounds)}.` +
-          `${util ? ` ${capitalize(util)}.` : ''}${lead ? ` ${lead} first in (${leadN} of ${n}).` : ''}`
+        line(
+          `${capitalize(head)}${clock ? ` around ${clock}` : ''}${form ? ` (${form})` : ''}, ${n} times, won ${won(g.rounds)}.` +
+            `${util ? ` ${capitalize(util)}.` : ''}${lead ? ` ${lead} first in (${leadN} of ${n}).` : ''}`,
+          g.rounds
+        )
       );
     }
 
@@ -1360,7 +1383,10 @@ function dangerFor(ctx, side) {
       const sites = tally(c.rounds, (r) => roundSite(r) || 'no hit');
       const where = sites.map(([s, n]) => `${n}x ${s}`).join(', ');
       lines.push(
-        `${capitalize(callName(labels.get(k) || k))} around ${clockText(ROUND_SECONDS - median(c.times))}, ${c.rounds.length} times, won ${won(c.rounds)} (then ${where}).`
+        line(
+          `${capitalize(callName(labels.get(k) || k))} around ${clockText(ROUND_SECONDS - median(c.times))}, ${c.rounds.length} times, won ${won(c.rounds)} (then ${where}).`,
+          c.rounds
+        )
       );
     }
   } else {
@@ -1407,10 +1433,10 @@ function dangerFor(ctx, side) {
       ).length;
       const breakText = breaks * 10 >= n * 3 ? `; walked through the smoke into it in ${breaks}` : '';
       const whoText = who && who[1] * 10 >= n * 4 ? `: ${nameOf(ctx, who[0])} in ${who[1]}${how}` : how ? `:${how.slice(1)}` : '';
-      lines.push(`Early fight ${zone} around ${clock}, ${n} times (won the duel ${wonDuel})${whoText}${utilText}${breakText}.`);
+      lines.push(line(`Early fight ${zone} around ${clock}, ${n} times (won the duel ${wonDuel})${whoText}${utilText}${breakText}.`, list));
     }
     if (buys.length >= 8 && percent(early.length, buys.length) < 20) {
-      lines.push('Passive early, the fighting comes in the midround.');
+      lines.push(line('Passive early, the fighting comes in the midround.', buys));
     }
     // Pushes alone onto ground the Ts had taken, before 1:30.
     const pushes = new Map();
@@ -1427,7 +1453,10 @@ function dangerFor(ctx, side) {
     }
     for (const p of [...pushes.values()].filter((p) => p.rounds.length >= 4).sort((a, b) => b.rounds.length - a.rounds.length).slice(0, 2)) {
       lines.push(
-        `${nameOf(ctx, p.id)} pushes ${p.zone} alone around ${clockText(ROUND_SECONDS - median(p.times))} in ${p.rounds.length} rounds (won ${won(p.rounds)}).`
+        line(
+          `${nameOf(ctx, p.id)} pushes ${p.zone} alone around ${clockText(ROUND_SECONDS - median(p.times))} in ${p.rounds.length} rounds (won ${won(p.rounds)}).`,
+          p.rounds
+        )
       );
     }
   }
@@ -1438,7 +1467,7 @@ function dangerFor(ctx, side) {
   if (side === 'T') lines.push(...contactLines(ctx, buys));
   lines.push(...awpEarlyLines(ctx, side, buys));
   lines.push(...openerLines(ctx, side, buys));
-  return { lines };
+  return { lines, files: filesOf(buys) };
 }
 
 const withUtil = (key) => {
@@ -1463,7 +1492,7 @@ function boostLines(ctx, buys) {
       const top = owner(ctx, list.map((x) => x.b.top));
       const bottom = owner(ctx, list.map((x) => x.b.bottom));
       const who = top && bottom ? ` (${top} on ${bottom})` : top ? ` (${top} on top)` : '';
-      return `Boost at ${zone} around ${clock}${who}, ${list.length} rounds, won ${won(list)}.`;
+      return line(`Boost at ${zone} around ${clock}${who}, ${list.length} rounds, won ${won(list)}.`, list);
     });
 }
 
@@ -1486,7 +1515,10 @@ function smokeBreakLines(ctx, side, buys) {
     .map(([zone, list]) => {
       const clock = clockText(ROUND_SECONDS - median(list.map((x) => x.b.elapsed)));
       const who = owner(ctx, list.map((x) => x.b.id));
-      return `Walk through the ${them} smoke on ${zone} around ${clock}${who ? ` (usually ${who})` : ''}, ${list.length} rounds, won ${won(list)}.`;
+      return line(
+        `Walk through the ${them} smoke on ${zone} around ${clock}${who ? ` (usually ${who})` : ''}, ${list.length} rounds, won ${won(list)}.`,
+        list
+      );
     });
 }
 
@@ -1515,7 +1547,10 @@ function contactLines(ctx, buys) {
       const clock = clockText(median(list.map((x) => x.r.firstKill.clock)));
       const players = Math.round(median(list.map((x) => x.near)));
       const wonDuel = list.filter((x) => x.r.firstKill.attackerOurs).length;
-      return `Search contact at ${zone} with ${players} players around ${clock}, ${list.length} rounds (won the first duel ${wonDuel}).`;
+      return line(
+        `Search contact at ${zone} with ${players} players around ${clock}, ${list.length} rounds (won the first duel ${wonDuel}).`,
+        list
+      );
     });
 }
 
@@ -1542,7 +1577,7 @@ function awpEarlyLines(ctx, side, buys) {
       const clock = clockText(median(list.map((r) => r.firstKill.clock)));
       const who = owner(ctx, list.map((r) => ourDuelist(r.firstKill)));
       const wonDuel = list.filter((r) => r.firstKill.attackerOurs).length;
-      return `AWP${who ? ` (${who})` : ''} takes the first duel at ${zone} around ${clock} in ${list.length} rounds (won ${wonDuel}).`;
+      return line(`AWP${who ? ` (${who})` : ''} takes the first duel at ${zone} around ${clock} in ${list.length} rounds (won ${wonDuel}).`, list);
     });
 }
 
@@ -1743,7 +1778,7 @@ function tSiteFor(ctx, site) {
   const full = ctx.rounds.filter((r) => r.side === 'T' && r.ownEcon >= 4 && r.hasTicks);
   const toward = full.filter((r) => paceSite(r) === site);
   const bullets = [];
-  if (toward.length < 3) return { site: letter, rounds: toward.length, bullets };
+  if (toward.length < 3) return { site: letter, rounds: toward.length, bullets, files: filesOf(toward) };
 
   const kinds = new Map();
   for (const r of toward) {
@@ -1761,7 +1796,7 @@ function tSiteFor(ctx, site) {
   };
   ranked.sort((a, b) => Number(setFirst(a[1])) - Number(setFirst(b[1])) || b[1].length - a[1].length);
   // Kinds played once are too few for a sentence of their own.
-  for (const [kind, list] of ranked) bullets.push(hitKindWords(kind, list, letter, ctx));
+  for (const [kind, list] of ranked) bullets.push(line(hitKindWords(kind, list, letter, ctx), list));
 
   const late = toward.filter((r) => {
     const e = entryOf(r, ctx.laneSets);
@@ -1769,11 +1804,11 @@ function tSiteFor(ctx, site) {
   });
   if (late.length >= 2) {
     const zone = mostCommon(late, (r) => entryOf(r, ctx.laneSets).route);
-    bullets.push(`${late.length} late round finishes${zone ? `, usually from ${zone}` : ''} (won ${won(late)}).`);
+    bullets.push(line(`${late.length} late round finishes${zone ? `, usually from ${zone}` : ''} (won ${won(late)}).`, late));
   }
   const wins = won(toward);
-  bullets.push(`Win ${percent(wins, toward.length)}% of ${letter} rounds (${wins} of ${toward.length}).`);
-  return { site: letter, rounds: toward.length, bullets };
+  bullets.push(line(`Win ${percent(wins, toward.length)}% of ${letter} rounds (${wins} of ${toward.length}).`, toward));
+  return { site: letter, rounds: toward.length, bullets, files: filesOf(toward) };
 }
 
 // ---------------------------------------------------------------------------
@@ -1794,7 +1829,7 @@ function ctVsSiteFor(ctx, site) {
     (r) => r.side === 'CT' && r.ownEcon >= 4 && r.oppEcon >= 4 && r.hasTicks && r.hitSite === site
   );
   const bullets = [];
-  if (set.length < 3) return { site: letter, rounds: set.length, bullets };
+  if (set.length < 3) return { site: letter, rounds: set.length, bullets, files: filesOf(set) };
   const wins = won(set);
   bullets.push(`Win ${percent(wins, set.length)}% against ${letter} hits (${wins} of ${set.length}).`);
 
@@ -1848,7 +1883,7 @@ function ctVsSiteFor(ctx, site) {
       return { label, type };
     });
   if (used.length) bullets.push(`Usually answer it with ${utilityWords(used)}.`);
-  return { site: letter, rounds: set.length, bullets };
+  return { site: letter, rounds: set.length, bullets: bullets.map((b) => line(b, set)), files: filesOf(set) };
 }
 
 /**
@@ -1866,6 +1901,7 @@ function retakesFor(ctx) {
     const alive = [];
     const waits = [];
     const from = new Map();
+    const saveRounds = [];
     let saves = 0;
     for (const r of list) {
       const at = r.sampleAt(r.plantTick);
@@ -1885,22 +1921,25 @@ function retakesFor(ctx) {
       // The retake starts with the first fight after the plant.
       const kill = r.kills.find((k) => k.tick > r.plantTick && (k.attackerOurs || k.victimOurs));
       if (kill) waits.push((kill.tick - r.plantTick) / r.tickRate);
-      else if (!r.won) saves++;
+      else if (!r.won) {
+        saves++;
+        saveRounds.push(r);
+      }
     }
     const parts = [`Retake ${letter}: won ${wins} of ${list.length}`];
     if (alive.length >= 2) parts.push(`usually ${Math.round(median(alive))} alive at the plant`);
     const wait = waits.length >= 2 ? Math.round(median(waits)) : 0;
     if (wait >= 2) parts.push(`first fight about ${wait} seconds after it`);
-    bullets.push(`${parts.join(', ')}.`);
+    bullets.push(line(`${parts.join(', ')}.`, list));
     const sources = [...from.entries()]
       .filter(([, n]) => n * 5 >= list.length)
       .sort((a, b) => b[1] - a[1])
       .slice(0, 3)
       .map(([zone, n]) => `${zone} (${n} of ${list.length})`);
-    if (sources.length) bullets.push(`The retake on ${letter} comes from ${joinList(sources)}.`);
-    if (saves >= 2) bullets.push(`Saved instead of retaking ${letter} ${countWord(saves)}.`);
+    if (sources.length) bullets.push(line(`The retake on ${letter} comes from ${joinList(sources)}.`, list));
+    if (saves >= 2) bullets.push(line(`Saved instead of retaking ${letter} ${countWord(saves)}.`, saveRounds));
   }
-  return { rounds: set.length, bullets };
+  return { rounds: set.length, bullets, files: filesOf(set) };
 }
 
 /** Every opening kill one side's players made, with what a sheet says about it. */
@@ -2275,6 +2314,7 @@ export function playerFor(ctx, side, main, extras) {
     name,
     role,
     text: paragraph(sentences, ctx.names),
+    files: filesOf(full),
     // The analyst writes the recommendations; the sheet only states facts.
     rec: ''
   };
@@ -2354,13 +2394,15 @@ function miscFor(ctx) {
       const amount = ratio
         ? ` In terms of amount, they go ${more[0]} ${ratio} ${more[3]}.`
         : ' In terms of amount, they go to both sites about as often.';
-      paragraphs.T.push(`On their T side, they win ${wa}% of A rounds and ${wb}% of B rounds${pref}.${amount}`);
+      paragraphs.T.push(line(`On their T side, they win ${wa}% of A rounds and ${wb}% of B rounds${pref}.${amount}`, [...a, ...b]));
     }
     const rows = faced(set, ctx);
     const bad = rows.filter((x) => x.winrate < 50).sort((x, y) => x.winrate - y.winrate);
     if (rows.length) {
       if (bad.length) {
-        const items = bad.slice(0, 4).map((x) => `${x.label} (${ctx.teamName} have ${x.winrate}% winrate against this, ${x.rounds} rounds)`);
+        const items = bad
+          .slice(0, 4)
+          .map((x) => line(`${x.label} (${ctx.teamName} have ${x.winrate}% winrate against this, ${x.rounds} rounds)`, x.list));
         paragraphs.T.push(
           bad.length <= 3
             ? `Highlights for T include only ${bad.length} CT start${bad.length === 1 ? '' : 's'} that ${bad.length === 1 ? 'has' : 'have'} a positive winrate against them:`
@@ -2370,7 +2412,10 @@ function miscFor(ctx) {
       } else {
         const worst = [...rows].sort((x, y) => x.winrate - y.winrate)[0];
         paragraphs.T.push(
-          `No CT start has a positive winrate against them; the hardest for them is ${worst.label} (${worst.winrate}% won, ${worst.rounds} rounds).`
+          line(
+            `No CT start has a positive winrate against them; the hardest for them is ${worst.label} (${worst.winrate}% won, ${worst.rounds} rounds).`,
+            worst.list
+          )
         );
       }
     }
@@ -2382,7 +2427,10 @@ function miscFor(ctx) {
     const b = set.filter((r) => r.hitSite === 'b');
     if (a.length + b.length >= 6) {
       paragraphs.CT.push(
-        `On their CT side, they have a ${percent(won(a), a.length)}% winrate against A rounds, and a ${percent(won(b), b.length)}% winrate against B rounds.`
+        line(
+          `On their CT side, they have a ${percent(won(a), a.length)}% winrate against A rounds, and a ${percent(won(b), b.length)}% winrate against B rounds.`,
+          [...a, ...b]
+        )
       );
     }
     const rows = faced(set, ctx);
@@ -2390,11 +2438,16 @@ function miscFor(ctx) {
     const weak = rows.filter((x) => x.winrate < 45).sort((x, y) => x.winrate - y.winrate).slice(0, 2);
     if (good.length) {
       paragraphs.CT.push(
-        `Highlights for CT include ${joinList(good.map((x) => `a ${x.winrate}% winrate against ${x.label} (${x.rounds} rounds)`))}.`
+        line(
+          `Highlights for CT include ${joinList(good.map((x) => `a ${x.winrate}% winrate against ${x.label} (${x.rounds} rounds)`))}.`,
+          good.flatMap((x) => x.list)
+        )
       );
     }
     if (weak.length) {
-      paragraphs.CT.push(`They struggle against ${joinList(weak.map((x) => `${x.label} (${x.winrate}% won, ${x.rounds} rounds)`))}.`);
+      paragraphs.CT.push(
+        line(`They struggle against ${joinList(weak.map((x) => `${x.label} (${x.winrate}% won, ${x.rounds} rounds)`))}.`, weak.flatMap((x) => x.list))
+      );
     }
   }
   return paragraphs;
@@ -2411,7 +2464,7 @@ function faced(set, ctx) {
   }
   return [...by.entries()]
     .filter(([, l]) => l.length >= MISC_MIN_ROUNDS)
-    .map(([label, l]) => ({ label, rounds: l.length, winrate: percent(won(l), l.length) }));
+    .map(([label, l]) => ({ label, rounds: l.length, list: l, winrate: percent(won(l), l.length) }));
 }
 
 // ---------------------------------------------------------------------------
@@ -2472,10 +2525,14 @@ export function buildSummaryReport({ extract, sections, mapCode, teamName }) {
 // Document
 // ---------------------------------------------------------------------------
 //
-// Printed, so nothing in it is a link: a round count is a number on paper.
+// Printed, so by default nothing in it is a link: a round count is a number
+// on paper. Built with `links`, every heading and line opens the rounds it was
+// written from, for whoever checks that the sheet says what the rounds show.
 
 const TITLE_STYLE = 'font-size: 25px';
 const HEADING_STYLE = 'font-size: 19px';
+/** Rounds one link opens: a whole section, without a URL nobody can load. */
+const LINK_ROUNDS_MAX = 150;
 
 export const note = (html) => `<span style="color: ${NOTE_COLOR}">${html}</span>`;
 const negative = (html) => `<span style="color: ${NEGATIVE_COLOR}">${html}</span>`;
@@ -2483,11 +2540,31 @@ const li = (items) => (items.length ? `<ul>${items.map((x) => `<li>${x}</li>`).j
 /** The note column of a sheet, kept on the line it belongs to. */
 const aside = (text, esc) => (text ? `&nbsp;&nbsp;&nbsp;${note(`*${esc(text)}`)}` : '');
 
-function positionsHtml(esc, rows) {
-  return li(rows.map((p) => `${esc(p.name)}: ${esc(p.role || 'Unknown')}`));
+/**
+ * The writer the section renderers share: `esc` for text, `link` to wrap
+ * already-escaped html in a timeline link over round files (or leave it as it
+ * is when links are off or there are no rounds).
+ */
+function docWriter(esc, links) {
+  const link = (html, files) => {
+    const list = [...new Set(files || [])].filter(Boolean).slice(0, LINK_ROUNDS_MAX);
+    if (!links || !list.length) return html;
+    return `<a href="${esc(`/demos?rounds=${list.map(encodeURIComponent).join(',')}`)}">${html}</a>`;
+  };
+  /** A sheet line: a string, a { text, files } line, or "Others: " with parts. */
+  const lineHtml = (l) => {
+    if (typeof l === 'string') return esc(l);
+    if (l.parts) return `${esc(l.text)}${l.parts.map((p) => link(esc(p.text), p.files)).join(', ')}${esc(l.tail || '')}`;
+    return link(esc(l.text), l.files);
+  };
+  return { esc, link, lineHtml };
 }
 
-function paceHtml(esc, pace) {
+function positionsHtml(w, rows) {
+  return li(rows.map((p) => `${w.esc(p.name)}: ${w.esc(p.role || 'Unknown')}`));
+}
+
+function paceHtml(w, pace) {
   if (!pace?.basis) return '';
   return li(
     pace.rows.map((row) => {
@@ -2495,73 +2572,82 @@ function paceHtml(esc, pace) {
         FAST.includes(row.pace) && row.siteA + row.siteB > 0
           ? `, ${row.siteB} towards B, ${row.siteA} towards A`
           : '';
-      return `${esc(row.label)}: ${row.share}% (${row.count}${sites})${aside(row.note, esc)}`;
+      return `${w.link(w.esc(row.label), row.files)}: ${row.share}% (${row.count}${sites})${aside(row.note, w.esc)}`;
     })
   );
 }
 
-function callsHtml(esc, setups) {
+function callsHtml(w, setups) {
   if (!setups?.calls?.length) return '';
   return li(
     setups.calls.map(
-      (c) => `${esc(c.label)}: ${c.share}% (${c.count}${c.clock ? `, usually ${esc(c.clock)}` : ''}, ${c.winrate}% won)`
+      (c) =>
+        `${w.link(w.esc(c.label), c.files)}: ${c.share}% (${c.count}${c.clock ? `, usually ${w.esc(c.clock)}` : ''}, ${c.winrate}% won)`
     )
   );
 }
 
-function tellsHtml(esc, tells) {
-  const rows = tells.tells.map(
-    (t) => `${esc(capitalize(t.utility))}: ${note(esc(`${t.freq} ${t.outcome}`))} (${t.hits} of ${t.rounds})`
-  );
+/** "Xbox smoke: Always short pop (5 of 5)": the utility opens the rounds it was in, the answer the rounds it was right. */
+function tellHtml(w, t, lead = '') {
+  return `${lead}${w.link(w.esc(lead ? t.utility : capitalize(t.utility)), t.files)}: ${w.link(
+    note(w.esc(`${t.freq || 'Mostly'} ${t.outcome}`)),
+    t.hitFiles
+  )} (${t.hits} of ${t.rounds})`;
+}
+
+function tellsHtml(w, tells) {
+  const rows = tells.tells.map((t) => tellHtml(w, t));
   for (const g of tells.siteGroups || []) {
-    const items = g.items.map((t) => `${t.utility} (${t.hits} of ${t.rounds})`);
-    rows.push(`${esc(capitalize(joinList(items)))}: ${note(esc(`${g.freq} ${g.outcome}`))}`);
+    const items = g.items.map((t, i) => `${w.link(w.esc(i ? t.utility : capitalize(t.utility)), t.files)} (${t.hits} of ${t.rounds})`);
+    const hit = g.items.flatMap((t) => t.hitFiles || []);
+    rows.push(`${joinList(items)}: ${w.link(note(w.esc(`${g.freq} ${g.outcome}`)), hit)}`);
   }
   for (const t of tells.absent || []) {
     rows.push(
-      `No ${esc(t.utility)} (thrown in ${t.usual}% of rounds): ${note(esc(`${t.freq || 'Mostly'} ${t.outcome}`))} (${t.hits} of ${t.rounds})`
+      `${w.link(w.esc(`No ${t.utility}`), t.files)} (thrown in ${t.usual}% of rounds): ${w.link(
+        note(w.esc(`${t.freq || 'Mostly'} ${t.outcome}`)),
+        t.hitFiles
+      )} (${t.hits} of ${t.rounds})`
     );
   }
   if (tells.firstBuy) {
     if (tells.firstBuy.tells.length) {
-      for (const t of tells.firstBuy.tells) {
-        rows.push(`First buy, ${esc(t.utility)}: ${note(esc(`${t.freq} ${t.outcome}`))} (${t.hits} of ${t.rounds})`);
-      }
+      for (const t of tells.firstBuy.tells) rows.push(tellHtml(w, t, 'First buy, '));
     } else {
-      rows.push(negative(esc(say('tells-none-first-buy', 'first'))));
+      rows.push(negative(w.esc(say('tells-none-first-buy', 'first'))));
     }
   }
-  if (!rows.length) rows.push(negative(esc(say('tells-none', 'none'))));
+  if (!rows.length) rows.push(negative(w.esc(say('tells-none', 'none'))));
   return li(rows);
 }
 
-function defaultsHtml(esc, d) {
+function defaultsHtml(w, d) {
   if (!d?.rows?.length) return '';
   return li(
     d.rows.map((u) => {
       const bits = [u.clock ? `usually ${u.clock}` : '', u.thrower].filter(Boolean).join(', ');
-      return `${esc(capitalize(nadeName(u.label, u.type)))}: ${u.share}%${bits ? ` (${esc(bits)})` : ''}`;
+      return `${w.link(w.esc(capitalize(nadeName(u.label, u.type))), u.files)}: ${u.share}%${bits ? ` (${w.esc(bits)})` : ''}`;
     })
   );
 }
 
-const linesHtml = (esc, lines) => li((lines || []).map((l) => esc(l)));
+const linesHtml = (w, lines) => li((lines || []).map((l) => w.lineHtml(l)));
 
-function variationsHtml(esc, v) {
+function variationsHtml(w, v) {
   if (!v?.lines?.length) return '';
-  return `${linesHtml(esc, v.lines)}${(v.notes || []).map((n) => `<p>${note(`*${esc(n)}`)}</p>`).join('')}`;
+  return `${linesHtml(w, v.lines)}${(v.notes || []).map((n) => `<p>${note(`*${w.esc(n)}`)}</p>`).join('')}`;
 }
 
-function playersHtml(esc, list) {
+function playersHtml(w, list) {
   return list
-    .map((p) => `<h3>${esc(p.name)}${p.role ? ` (${esc(p.role)})` : ''}</h3><p>${esc(p.text)}</p>`)
+    .map((p) => `<h3>${w.link(`${w.esc(p.name)}${p.role ? ` (${w.esc(p.role)})` : ''}`, p.files)}</h3><p>${w.esc(p.text)}</p>`)
     .join('');
 }
 
-function miscHtml(esc, misc) {
+function miscHtml(w, misc) {
   const block = (items) =>
     items
-      .map((x) => (typeof x === 'string' ? `<p>${esc(x)}</p>` : `<ol>${x.list.map((i) => `<li>${esc(i)}</li>`).join('')}</ol>`))
+      .map((x) => (x.list ? `<ol>${x.list.map((i) => `<li>${w.lineHtml(i)}</li>`).join('')}</ol>` : `<p>${w.lineHtml(x)}</p>`))
       .join('');
   const t = block(misc?.T || []);
   const ct = block(misc?.CT || []);
@@ -2574,11 +2660,13 @@ function miscHtml(esc, misc) {
  *   mapCode: string,
  *   categories: string[],
  *   report: ReturnType<typeof buildSummaryReport>,
+ *   links?: boolean,
  *   results?: object
  * }} spec
  * @param {(s: string) => string} esc
  */
 export function buildSummaryDocHtml(spec, esc) {
+  const w = docWriter(esc, Boolean(spec.links));
   const mapName = MAPS[spec.mapCode]?.name || spec.mapCode;
   const cats = new Set(spec.categories || []);
   const parts = [`<h1 style="${TITLE_STYLE}">${esc(spec.teamName)}: ${esc(mapName)}</h1>`];
@@ -2587,28 +2675,29 @@ export function buildSummaryDocHtml(spec, esc) {
     const bag = spec.report?.sides?.[side];
     if (!bag) continue;
     parts.push(`<h2 style="${HEADING_STYLE}">${esc(spec.teamName)} ${SIDE_OF[side]} SIDE</h2>`);
-    const section = (key, title, html) => {
+    /** A heading opens every round the section was written from. */
+    const section = (key, title, html, files) => {
       if (!cats.has(key) || !html) return;
-      parts.push(`<h3>${esc(`${side} ${title}`)}</h3>${html}`);
+      parts.push(`<h3>${w.link(esc(`${side} ${title}`), files)}</h3>${html}`);
     };
-    section('positions', 'Positions', positionsHtml(esc, bag.positions));
-    if (side === 'T') section('pace', 'Pace', paceHtml(esc, bag.pace));
-    else section('pace', 'Calls', callsHtml(esc, bag.setups));
-    section('tells', 'Tells', tellsHtml(esc, bag.tells));
-    section('defaults', 'Default utility', defaultsHtml(esc, bag.defaults));
-    if (side === 'T') section('force', 'Force buys', variationsHtml(esc, bag.force));
-    section('danger', 'Dangerous rounds & openings', linesHtml(esc, bag.danger?.lines));
-    section('antiforce', side === 'T' ? 'Antiforces' : 'Anti-ecos', variationsHtml(esc, bag.antiforce));
-    if (side === 'CT') section('force', 'Force buys', variationsHtml(esc, bag.force));
+    section('positions', 'Positions', positionsHtml(w, bag.positions));
+    if (side === 'T') section('pace', 'Pace', paceHtml(w, bag.pace), bag.pace?.files);
+    else section('pace', 'Calls', callsHtml(w, bag.setups), bag.setups?.files);
+    section('tells', 'Tells', tellsHtml(w, bag.tells), bag.tells?.files);
+    section('defaults', 'Default utility', defaultsHtml(w, bag.defaults), bag.defaults?.files);
+    if (side === 'T') section('force', 'Force buys', variationsHtml(w, bag.force), bag.force?.files);
+    section('danger', 'Dangerous rounds & openings', linesHtml(w, bag.danger?.lines), bag.danger?.files);
+    section('antiforce', side === 'T' ? 'Antiforces' : 'Anti-ecos', variationsHtml(w, bag.antiforce), bag.antiforce?.files);
+    if (side === 'CT') section('force', 'Force buys', variationsHtml(w, bag.force), bag.force?.files);
     for (const s of bag.sites || []) {
-      section('sites', side === 'T' ? `${s.site} Rounds` : `VS ${s.site} Rounds`, linesHtml(esc, s.bullets));
+      section('sites', side === 'T' ? `${s.site} Rounds` : `VS ${s.site} Rounds`, linesHtml(w, s.bullets), s.files);
     }
-    if (side === 'CT') section('sites', 'Retakes', linesHtml(esc, bag.retakes?.bullets));
-    section('pistols', 'Pistols', variationsHtml(esc, bag.pistols));
-    if (cats.has('players') && bag.players.length) parts.push(playersHtml(esc, bag.players));
+    if (side === 'CT') section('sites', 'Retakes', linesHtml(w, bag.retakes?.bullets), bag.retakes?.files);
+    section('pistols', 'Pistols', variationsHtml(w, bag.pistols), bag.pistols?.files);
+    if (cats.has('players') && bag.players.length) parts.push(playersHtml(w, bag.players));
   }
   if (cats.has('misc')) {
-    const html = miscHtml(esc, spec.report?.misc);
+    const html = miscHtml(w, spec.report?.misc);
     if (html) parts.push(`<h2 style="${HEADING_STYLE}">MISC STATISTICS:</h2>${html}`);
   }
   return parts.join('');

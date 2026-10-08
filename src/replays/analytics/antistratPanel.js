@@ -90,6 +90,12 @@ export function createAntistratPanel({ escapeHtml }) {
     ),
     /** @type {Set<string>} demo ids marked as official games (internal mode) */
     official: new Set(),
+    /**
+     * Summary mode: every heading and line opens the rounds it was written
+     * from. Off by default: the sheet is printed for players, the links are
+     * for whoever checks it.
+     */
+    summaryLinks: false,
     destTeamId: '',
     busy: false,
     progress: '',
@@ -347,11 +353,22 @@ export function createAntistratPanel({ escapeHtml }) {
         ${rows}
       </div>`;
     }).join('');
+    const links =
+      state.mode === 'summary'
+        ? `<div class="as-cat-group">
+            <p class="an-side-title">Checking</p>
+            <label class="as-cat-main">
+              <input type="checkbox" data-as-summary-links ${state.summaryLinks ? 'checked' : ''} />
+              <span>Open rounds from the summary</span>
+            </label>
+            <p class="an-muted">Every heading and line links to the rounds it was written from.</p>
+          </div>`
+        : '';
     return `<section class="an-card as-step">
       <header class="an-card-head"><h3 class="an-section-title">Categories</h3></header>
       <div class="as-step-body">
         ${modeSwitchHtml()}
-        <div class="as-cats">${groups}</div>
+        <div class="as-cats">${groups}${links}</div>
       </div>
     </section>`;
   }
@@ -499,6 +516,7 @@ export function createAntistratPanel({ escapeHtml }) {
         );
       }
       const results = await runAntistratScan({
+        properNames: await loadProperNames(),
         payload: scanPayload,
         teamKey: state.teamKey,
         mapCode: state.mapCode,
@@ -520,7 +538,10 @@ export function createAntistratPanel({ escapeHtml }) {
           mapCode: state.mapCode,
           teamName: team.name
         });
-        html = buildSummaryDocHtml({ teamName: team.name, mapCode: state.mapCode, categories, report }, escapeHtml);
+        html = buildSummaryDocHtml(
+          { teamName: team.name, mapCode: state.mapCode, categories, report, links: state.summaryLinks },
+          escapeHtml
+        );
       } else if (mode === 'internal') {
         // Every full buy goes through the autocoach, the same pass the viewer
         // runs, and the round notes are written from its flags.
@@ -615,6 +636,10 @@ export function createAntistratPanel({ escapeHtml }) {
       render();
       return;
     }
+    if (t.matches('[data-as-summary-links]')) {
+      state.summaryLinks = t.checked;
+      return;
+    }
     const cat = t.closest('[data-as-cat]');
     if (cat) {
       const key = cat.dataset.asCat;
@@ -699,6 +724,19 @@ export function createAntistratPanel({ escapeHtml }) {
    * so generate() knows to fetch the real rounds for the demos it is about to
    * scan, rather than scanning nothing and reporting no patterns.
    */
+  /** Player id → the name they go by across the library, from the roster. */
+  let properNames = null;
+  async function loadProperNames() {
+    if (properNames) return properNames;
+    try {
+      const roster = await fetchRoster();
+      properNames = new Map((roster?.players || []).filter((p) => p.i).map((p) => [p.i, p.k || p.n || p.i]));
+    } catch {
+      properNames = new Map();
+    }
+    return properNames;
+  }
+
   function catalogFromRoster(roster) {
     const players = roster?.players || [];
     const demos = (roster?.demos || []).map((d) => {
@@ -771,6 +809,7 @@ export function createAntistratPanel({ escapeHtml }) {
       // scoped to the handful of demos the run covers.
       const roster = await fetchRoster();
       if (token !== loadToken) return;
+      properNames = new Map((roster?.players || []).filter((p) => p.i).map((p) => [p.i, p.k || p.n || p.i]));
       applyPayload(catalogFromRoster(roster));
     } catch (err) {
       if (token !== loadToken) return;

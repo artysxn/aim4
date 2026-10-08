@@ -76,21 +76,30 @@ function stampOf(records) {
 export async function buildRoster(io, user, records, opts = {}) {
   /** @type {Map<string, number>} playerId → index into `players` */
   const index = new Map();
-  /** @type {Array<{ i: string, n: string, c: number }>} */
+  /** @type {Array<{ i: string, n: string, k: string, c: number }>} */
   const players = [];
   const demos = [];
+  /** player index → name → { demos, last } — the vote behind `k` */
+  const votes = new Map();
 
-  const intern = (id, name) => {
+  const intern = (id, name, when) => {
     let at = index.get(id);
     if (at === undefined) {
       at = players.length;
       index.set(id, at);
-      players.push({ i: id, n: String(name || id), c: 0 });
+      players.push({ i: id, n: String(name || id), k: String(name || id), c: 0 });
     }
     const slot = players[at];
     slot.c += 1;
     // Keep the most recent non-empty display name; handles do change.
-    if (name && String(name).trim()) slot.n = String(name).trim();
+    if (name && String(name).trim()) {
+      slot.n = String(name).trim();
+      if (!votes.has(at)) votes.set(at, new Map());
+      const v = votes.get(at).get(slot.n) || { demos: 0, last: 0 };
+      v.demos += 1;
+      v.last = Math.max(v.last, when);
+      votes.get(at).set(slot.n, v);
+    }
     return at;
   };
 
@@ -122,8 +131,22 @@ export async function buildRoster(io, user, records, opts = {}) {
       n1: record.team1?.name || '',
       n2: record.team2?.name || '',
       // Seat list as [playerIndex, team] pairs, flattened.
-      p: roster.flatMap((p) => [intern(p.id, p.name), p.team === 2 ? 2 : 1])
+      p: roster.flatMap((p) => [
+        intern(p.id, p.name, Number(record.uploadedAt || record.parsedAt || 0) || 0),
+        p.team === 2 ? 2 : 1
+      ])
     });
+  }
+
+  // `k` is the name a player goes by: the handle on the most demos, the latest
+  // on a tie. `n` (the latest) follows a rename; `k` survives the one-off
+  // "kodak--" or a stand-in's account, which is what a written report wants.
+  for (const [at, names] of votes) {
+    let best = null;
+    for (const [name, v] of names) {
+      if (!best || v.demos > best.v.demos || (v.demos === best.v.demos && v.last > best.v.last)) best = { name, v };
+    }
+    if (best) players[at].k = best.name;
   }
 
   return { v: 1, players, demos, total: demos.length };
@@ -189,7 +212,7 @@ export function scopeRoster(roster, allowedIds) {
         if (!src) continue;
         next = players.length;
         remap.set(at, next);
-        players.push({ i: src.i, n: src.n, c: 0 });
+        players.push({ i: src.i, n: src.n, k: src.k || src.n, c: 0 });
       }
       players[next].c += 1;
       p.push(next, d.p[i + 1]);

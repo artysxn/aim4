@@ -145,4 +145,25 @@ assert.equal(grown.demos.length, 5);
   assert.deepEqual(none.players, []);
 }
 
+// `k`: the name a player goes by is the handle on the most demos (latest on a
+// tie), while `n` keeps following the latest. One match on a smurf's handle
+// must not rename him in a written report.
+{
+  const named = (id, name, uploadedAt) => ({
+    id,
+    map: 'de_dust2',
+    uploadedAt,
+    team1: { id: 't1', name: 'NAVI Junior' },
+    team2: { id: 't2', name: 'X' },
+    players: [{ id: 'k1', name, team: 1 }]
+  });
+  const cat = await buildRoster({}, 'u', [named('a', 'kodak', 1), named('b', 'kodak', 2), named('c', 'kdkk', 3)]);
+  const p = cat.players.find((x) => x.i === 'k1');
+  assert.equal(p.n, 'kdkk', 'n is the latest handle');
+  assert.equal(p.k, 'kodak', 'k is the handle on the most demos');
+  const tie = await buildRoster({}, 'u', [named('a', 'yoki7132', 1), named('b', 'yoki', 2)]);
+  assert.equal(tie.players[0].k, 'yoki', 'a tie goes to the latest');
+  assert.equal(scopeRoster(cat, new Set(['c'])).players[0].k, 'kodak', 'scoping keeps it');
+}
+
 console.log('rosterCatalogue.test.js: all assertions passed');

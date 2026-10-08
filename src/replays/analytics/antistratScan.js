@@ -2431,6 +2431,9 @@ async function eachLimit(items, limit, fn) {
  * @param {string[]} args.demoIds included matches
  * @param {string[]} args.paceKeys  pace type keys, report order
  * @param {(done: number, total: number) => void} [args.onProgress]
+ * @param {Map<string, string>} [args.properNames]  player id → the name they go
+ *   by across the library (roster `k`). Without it a player is named by the
+ *   handle on whichever demo is read first, which is one match's nickname.
  */
 export async function runAntistratScan({
   payload,
@@ -2439,7 +2442,8 @@ export async function runAntistratScan({
   demoIds,
   paceKeys,
   onProgress,
-  keepRounds = false
+  keepRounds = false,
+  properNames = null
 }) {
   const wanted = new Set(demoIds);
   const jobs = [];
@@ -2461,8 +2465,9 @@ export async function runAntistratScan({
     const opponent = (teamIdx === 1 ? demo.name2 : demo.name1) || 'Unknown';
     for (const p of demo.players || []) {
       if (p.team !== teamIdx || !p.id) continue;
-      nameOf.set(p.id, p.name || p.id);
-      const rec = playerStats.get(p.id) || { id: p.id, name: p.name || p.id, matches: 0, last: 0 };
+      const name = properNames?.get(p.id) || p.name || p.id;
+      nameOf.set(p.id, name);
+      const rec = playerStats.get(p.id) || { id: p.id, name, matches: 0, last: 0 };
       rec.matches++;
       rec.last = Math.max(rec.last, demo.uploadedAt || 0);
       playerStats.set(p.id, rec);
