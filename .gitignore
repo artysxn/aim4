@@ -12,6 +12,9 @@ dist/
 
 /server/data/*
 
+# The CloakBrowser proxy pool is tracked so a deploy picks it up.
+!/server/data/cloak-proxies.txt
+
 # ...with one exception. A fresh clone of the 3D renderer can load nothing
 # without a packed map, and re-packing needs the .vpk drop plus a 17 GB
 # intermediate. So de_nuke ships (~91 MB) and the other six do not. Git will
