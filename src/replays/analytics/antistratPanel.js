@@ -35,6 +35,7 @@ import { REPORT_MODES } from './reportModes.js';
 import {
   SUMMARY_CATEGORIES,
   SUMMARY_GROUPS,
+  buildOutlineDocHtml,
   buildSummaryDocHtml,
   buildSummaryReport
 } from './antistratSummary.js';
@@ -96,6 +97,8 @@ export function createAntistratPanel({ escapeHtml }) {
      * for whoever checks it.
      */
     summaryLinks: false,
+    /** Summary mode: the bare outline (positions, pistols, tells, buys) with empty notes sections. */
+    summaryOutline: false,
     destTeamId: '',
     busy: false,
     progress: '',
@@ -356,6 +359,13 @@ export function createAntistratPanel({ escapeHtml }) {
     const links =
       state.mode === 'summary'
         ? `<div class="as-cat-group">
+            <p class="an-side-title">Style</p>
+            <label class="as-cat-main">
+              <input type="checkbox" data-as-summary-outline ${state.summaryOutline ? 'checked' : ''} />
+              <span>Simple outline</span>
+            </label>
+          </div>
+          <div class="as-cat-group">
             <p class="an-side-title">Checking</p>
             <label class="as-cat-main">
               <input type="checkbox" data-as-summary-links ${state.summaryLinks ? 'checked' : ''} />
@@ -482,7 +492,7 @@ export function createAntistratPanel({ escapeHtml }) {
     const mapName = MAPS[state.mapCode]?.name || state.mapCode;
     const title =
       mode === 'summary'
-        ? `Summary: ${team.name} on ${mapName}`
+        ? `${state.summaryOutline ? 'Outline' : 'Summary'}: ${team.name} on ${mapName}`
         : mode === 'internal'
           ? `Internal: ${team.name} on ${mapName}`
           : `Antistrat: ${team.name} on ${mapName}`;
@@ -538,10 +548,8 @@ export function createAntistratPanel({ escapeHtml }) {
           mapCode: state.mapCode,
           teamName: team.name
         });
-        html = buildSummaryDocHtml(
-          { teamName: team.name, mapCode: state.mapCode, categories, report, links: state.summaryLinks },
-          escapeHtml
-        );
+        const spec = { teamName: team.name, mapCode: state.mapCode, categories, report, links: state.summaryLinks };
+        html = state.summaryOutline ? buildOutlineDocHtml(spec, escapeHtml) : buildSummaryDocHtml(spec, escapeHtml);
       } else if (mode === 'internal') {
         // Every full buy goes through the autocoach, the same pass the viewer
         // runs, and the round notes are written from its flags.
@@ -634,6 +642,10 @@ export function createAntistratPanel({ escapeHtml }) {
       if (match.checked) state.excluded.delete(id);
       else state.excluded.add(id);
       render();
+      return;
+    }
+    if (t.matches('[data-as-summary-outline]')) {
+      state.summaryOutline = t.checked;
       return;
     }
     if (t.matches('[data-as-summary-links]')) {

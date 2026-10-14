@@ -96,9 +96,11 @@ everyone.
    curl -s https://api.aim4.io/health
    ```
    ```bash
-   curl -s https://api.aim4.io/api/replays/diag | grep -o '"heapLimitMb":[0-9]*'
+   curl -s https://api.aim4.io/api/replays/diag | grep -o '"v8HeapLimitMb":[0-9]*'
    ```
-   The second should say 3072 or more.
+   The second should say about 3100. Not `heapLimitMb`: that one is the demo
+   parser's worker limit (`AIM4_PARSE_HEAP_MB`, default 1024) and never moves
+   with the server's heap flag.
 3. Switch DNS for aim4.io and www. Leave the Vercel project in place, without
    deleting it, until aim4.io has worked for a day: pointing DNS back is the
    rollback.

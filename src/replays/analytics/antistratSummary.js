@@ -1628,6 +1628,110 @@ function pistolsFor(ctx, side) {
 }
 
 // ---------------------------------------------------------------------------
+// CT force buys and anti-ecos, in one word each (the outline)
+// ---------------------------------------------------------------------------
+
+/** Players within this of each other move as one group. */
+const GROUP_UNITS = 700;
+/** Seconds into the round the CT shape is read at. */
+const CT_SHAPE_READS = [12, 18, 24];
+
+/** The biggest group of players standing together in one sample. */
+function biggestGroup(pts) {
+  let best = [];
+  for (const p of pts) {
+    const group = pts.filter((q) => Math.hypot(p.x - q.x, p.y - q.y) <= GROUP_UNITS);
+    if (group.length > best.length) best = group;
+  }
+  return best;
+}
+
+/**
+ * How a CT force buy played: a stack (three or more on one site), a push as
+ * a group (three or more together, off the sites), or split up.
+ */
+function ctForceShape(r) {
+  const stack = ctStackOf(r);
+  if (stack) return { kind: 'stack', where: stack };
+  for (const at of CT_SHAPE_READS) {
+    const s = sampleAtElapsed(r, at);
+    if (!s || s.pts.length < 3) continue;
+    const group = biggestGroup(s.pts);
+    const offSite = group.filter((p) => !r.siteNear(p.x, p.y, 0));
+    if (group.length >= 3 && offSite.length * 2 > group.length) {
+      return { kind: 'push', where: mostCommon(offSite, (p) => p.pos || '') };
+    }
+  }
+  return { kind: 'split', where: '' };
+}
+
+/** Where a CT anti-eco played: on and in front of the sites, or further up. */
+function ctAntiecoShape(r) {
+  let forward = [];
+  let read = false;
+  for (const at of CT_SHAPE_READS) {
+    const s = sampleAtElapsed(r, at);
+    if (!s || !s.pts.length) continue;
+    read = true;
+    const away = s.pts.filter((p) => !r.siteNear(p.x, p.y));
+    if (away.length > forward.length) forward = away;
+  }
+  if (!read) return null;
+  return forward.length >= 3
+    ? { kind: 'forward', where: forward.map((p) => p.pos).filter(Boolean) }
+    : { kind: 'sites', where: [] };
+}
+
+/** "Stack: 4 of 7 (3x B, 1x A)" lines, most played first. */
+function shapeLines(groups, total, words) {
+  return Object.entries(groups)
+    .filter(([, g]) => g.rounds.length)
+    .sort((a, b) => b[1].rounds.length - a[1].rounds.length)
+    .map(([kind, g]) => {
+      const where = tally(g.where.filter(Boolean), (x) => x)
+        .slice(0, 3)
+        .map(([x, n]) => `${n}x ${x}`)
+        .join(', ');
+      return line(`${words[kind]}: ${g.rounds.length} of ${total}${where ? ` (${where})` : ''}`, g.rounds);
+    });
+}
+
+function ctForceStyleFor(ctx) {
+  const set = ctx.rounds.filter(
+    (r) => r.side === 'CT' && r.ownEcon >= 2 && r.ownEcon <= 3 && r.oppEcon >= 4 && r.hasTicks
+  );
+  if (!set.length) return null;
+  const groups = { stack: { rounds: [], where: [] }, push: { rounds: [], where: [] }, split: { rounds: [], where: [] } };
+  for (const r of set) {
+    const shape = ctForceShape(r);
+    groups[shape.kind].rounds.push(r);
+    groups[shape.kind].where.push(shape.where);
+  }
+  return {
+    files: filesOf(set),
+    lines: shapeLines(groups, set.length, { stack: 'Stack', push: 'Push as a group', split: 'Split up' })
+  };
+}
+
+function ctAntiecoStyleFor(ctx) {
+  const set = ctx.rounds.filter((r) => r.side === 'CT' && r.ownEcon >= 4 && r.oppEcon <= 3 && r.hasTicks);
+  const groups = { sites: { rounds: [], where: [] }, forward: { rounds: [], where: [] } };
+  let total = 0;
+  for (const r of set) {
+    const shape = ctAntiecoShape(r);
+    if (!shape) continue;
+    total++;
+    groups[shape.kind].rounds.push(r);
+    groups[shape.kind].where.push(...shape.where);
+  }
+  if (!total) return null;
+  return {
+    files: filesOf(set),
+    lines: shapeLines(groups, total, { sites: 'Close to the sites', forward: 'Further up, aggressive' })
+  };
+}
+
+// ---------------------------------------------------------------------------
 // T site rounds: the kinds of hit a site player will be dealing with
 // ---------------------------------------------------------------------------
 
@@ -2509,6 +2613,8 @@ export function buildSummaryReport({ extract, sections, mapCode, teamName }) {
       force: forceFor(ctx, side),
       sites: order.map((s) => (side === 'T' ? tSiteFor(ctx, s) : ctVsSiteFor(ctx, s))),
       retakes: side === 'CT' ? retakesFor(ctx) : null,
+      forceStyle: side === 'CT' ? ctForceStyleFor(ctx) : null,
+      antiecoStyle: side === 'CT' ? ctAntiecoStyleFor(ctx) : null,
       pistols: pistolsFor(ctx, side),
       players: ctx.mains
         .map((m) => {
@@ -2699,6 +2805,88 @@ export function buildSummaryDocHtml(spec, esc) {
   if (cats.has('misc')) {
     const html = miscHtml(w, spec.report?.misc);
     if (html) parts.push(`<h2 style="${HEADING_STYLE}">MISC STATISTICS:</h2>${html}`);
+  }
+  return parts.join('');
+}
+
+// ---------------------------------------------------------------------------
+// Outline: the bare sheet the analyst fills in by hand
+// ---------------------------------------------------------------------------
+//
+// Only what the scan can fill on its own: positions, pistols, tells, default
+// utility and how they play their buys. The notes sections are left empty
+// for the analyst to write.
+
+/** "Flash into A main → most likely B (6 of 7)" */
+function outlineTellsHtml(w, tells) {
+  const rows = (tells?.tells || []).map(
+    (t) =>
+      `${w.link(w.esc(capitalize(t.utility)), t.files)} → ${w.link(w.esc(`most likely ${t.outcome}`), t.hitFiles)} (${t.hits} of ${t.rounds})`
+  );
+  for (const g of tells?.siteGroups || []) {
+    const items = g.items.map((t, i) => w.link(w.esc(i ? t.utility : capitalize(t.utility)), t.files));
+    const hits = g.items.reduce((n, t) => n + t.hits, 0);
+    const rounds = g.items.reduce((n, t) => n + t.rounds, 0);
+    const hitFiles = g.items.flatMap((t) => t.hitFiles || []);
+    rows.push(`${joinList(items)} → ${w.link(w.esc(`most likely ${g.outcome}`), hitFiles)} (${hits} of ${rounds})`);
+  }
+  for (const t of tells?.absent || []) {
+    rows.push(
+      `${w.link(w.esc(`No ${t.utility}`), t.files)} → ${w.link(w.esc(`most likely ${t.outcome}`), t.hitFiles)} (${t.hits} of ${t.rounds})`
+    );
+  }
+  return li(rows);
+}
+
+/** A labelled list inside one section ("Force:" then its rounds). */
+const labelled = (w, label, html) => (html ? `<p>${w.esc(label)}</p>${html}` : '');
+
+/**
+ * @param {{
+ *   teamName: string,
+ *   mapCode: string,
+ *   categories: string[],
+ *   report: ReturnType<typeof buildSummaryReport>,
+ *   links?: boolean
+ * }} spec
+ * @param {(s: string) => string} esc
+ */
+export function buildOutlineDocHtml(spec, esc) {
+  const w = docWriter(esc, Boolean(spec.links));
+  const mapName = MAPS[spec.mapCode]?.name || spec.mapCode;
+  const cats = new Set(spec.categories || []);
+  const parts = [`<h1 style="${TITLE_STYLE}">${esc(spec.teamName)}: ${esc(mapName)}</h1>`];
+  const heading = (title, files) => `<h2 style="${HEADING_STYLE}">${w.link(esc(title), files)}</h2>`;
+  const section = (title, html, files) => {
+    if (html) parts.push(`${heading(title, files)}${html}`);
+  };
+  /** A notes section: the heading and an empty line to type into. */
+  const empty = (title) => parts.push(`${heading(title)}<p><br></p>`);
+
+  const t = spec.report?.sides?.T;
+  if (t && cats.has('sideT')) {
+    section('T Positions', positionsHtml(w, t.positions));
+    section('T Pistol', variationsHtml(w, t.pistols), t.pistols?.files);
+    section('T Tells', outlineTellsHtml(w, t.tells), t.tells?.files);
+    empty('T Notes and preparation (our CT)');
+    section(
+      'T Force / Antiforce',
+      `${labelled(w, 'Force:', linesHtml(w, t.force?.lines))}${labelled(w, 'Antiforce:', linesHtml(w, t.antiforce?.lines))}`,
+      [...(t.force?.files || []), ...(t.antiforce?.files || [])]
+    );
+  }
+
+  const ct = spec.report?.sides?.CT;
+  if (ct && cats.has('sideCT')) {
+    section('CT Positions', positionsHtml(w, ct.positions));
+    section('CT Pistol', variationsHtml(w, ct.pistols), ct.pistols?.files);
+    section('CT Default utility', defaultsHtml(w, ct.defaults), ct.defaults?.files);
+    empty('CT Notes and preparation (our T)');
+    section(
+      'CT Force / Antiforce',
+      `${labelled(w, 'Force:', linesHtml(w, ct.forceStyle?.lines))}${labelled(w, 'Anti-eco:', linesHtml(w, ct.antiecoStyle?.lines))}`,
+      [...(ct.forceStyle?.files || []), ...(ct.antiecoStyle?.files || [])]
+    );
   }
   return parts.join('');
 }
