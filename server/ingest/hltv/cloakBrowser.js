@@ -29,10 +29,12 @@ import {
   applyProxySettings,
   DEFAULT_FALLBACK_PROXY,
   loadProxyPool,
+  isProxyCoolingDown,
   markProxyFailed,
   normalizeProxyUrl,
   probeProxyReachable,
   readWorkingProxies,
+  readProxyFailures,
   recordWorkingProxy,
   redactProxy,
   resolvePinnedProxy
@@ -440,6 +442,8 @@ export function createCloakSession(cfg = {}) {
   let activeProxy = undefined;
   let proxyCursor = 0;
   let preferredProxyCount = 0;
+  let unverifiedProxyCount = 0;
+  let recoveryProxy = undefined;
   let binaryLogged = false;
 
   const log = (message) => {
@@ -467,29 +471,88 @@ export function createCloakSession(cfg = {}) {
     return settingsPromise;
   }
 
-  async function ensurePool() {
-    if (!poolPromise) {
-      poolPromise = (async () => {
-        const pool = await loadProxyPool(cfg);
-        if (cfg.cloakProxyOnly && pool.length === 1) {
-          preferredProxyCount = 1;
-          const pin = resolvePinnedProxy(cfg);
-          log(`Proxy pinned: ${redactProxy(pin.url)} (only; ${pin.source})`);
-          return pool;
+async function ensurePool() {
+  if (!poolPromise) {
+    poolPromise = (async () => {
+      const rawPool = await loadProxyPool(cfg);
+
+      if (cfg.cloakProxyOnly && rawPool.length === 1) {
+        preferredProxyCount = 1;
+        unverifiedProxyCount = 0;
+        recoveryProxy = rawPool[0];
+
+        const pin = resolvePinnedProxy(cfg);
+        log(`Proxy pinned: ${redactProxy(pin.url)} (only; ${pin.source})`);
+        return rawPool;
+      }
+
+      const [working, failures] = await Promise.all([
+        readWorkingProxies(cfg),
+        readProxyFailures(cfg)
+      ]);
+
+      const workingByUrl = new Map(working.map((entry) => [entry.url, entry]));
+      const now = Date.now();
+      const unique = [...new Set(rawPool)];
+
+      const quarantined = new Set(
+        Object.entries(failures)
+          .filter(([, state]) => isProxyCoolingDown(state, now))
+          .map(([url]) => url)
+      );
+
+      // Try unverified proxies first, excluding recently failed proxies.
+      const unverified = unique.filter(
+        (url) => !workingByUrl.has(url) && !quarantined.has(url)
+      );
+
+      const workingEligible = unique
+        .filter((url) => workingByUrl.has(url) && !quarantined.has(url))
+        .sort((a, b) =>
+          String(workingByUrl.get(b)?.lastOkAt || '').localeCompare(
+            String(workingByUrl.get(a)?.lastOkAt || '')
+          )
+        );
+
+      const workingCooling = unique
+        .filter((url) => workingByUrl.has(url) && quarantined.has(url))
+        .sort((a, b) =>
+          String(workingByUrl.get(b)?.lastOkAt || '').localeCompare(
+            String(workingByUrl.get(a)?.lastOkAt || '')
+          )
+        );
+
+      // Preserve a known-good proxy as a recovery option.
+      recoveryProxy = workingEligible[0] || workingCooling[0];
+      preferredProxyCount =
+        workingEligible.length + (workingCooling.length ? 1 : 0);
+      unverifiedProxyCount = unverified.length;
+
+      const pool = [...unverified, ...workingEligible];
+
+      if (workingCooling.length) {
+        pool.push(workingCooling[0]);
+      }
+
+      if (!pool.length && unique.length) {
+        if (recoveryProxy) {
+          pool.push(recoveryProxy);
+        } else {
+          log(`All ${unique.length} proxy endpoint(s) are cooling down`);
         }
-        const working = await readWorkingProxies(cfg);
-        preferredProxyCount = working.length;
-        if (pool.length) {
-          log(
-            `Proxy pool: ${pool.length} endpoint(s)` +
-              (preferredProxyCount ? `, ${preferredProxyCount} preferred` : '')
-          );
-        } else log('Proxy pool: empty (direct exit IP)');
-        return pool;
-      })();
-    }
-    return poolPromise;
+      }
+
+      log(
+        `Proxy pool: ${unique.length} endpoint(s), ${unverified.length}   fresh/unverified, ` +
+        `${workingEligible.length} healthy verified, ${quarantined.size} cooling down`
+      );
+
+      return pool;
+    })();
   }
+
+  return poolPromise;
+}
 
   async function resetContext() {
     if (!contextPromise) return;
@@ -609,139 +672,237 @@ export function createCloakSession(cfg = {}) {
     return contextPromise;
   }
 
-  function pickProxy(pool, used, random) {
+  function pickProxy(pool, used, random, mode = 'any') {
     if (!pool.length) return undefined;
-    // Always drain preferred (working) proxies in order first. Random among
-    // unproven cache entries only after those are exhausted. Sticky order is
-    // what makes a successful probe's exit IP get reused by ingest.
-    for (let i = 0; i < preferredProxyCount; i++) {
-      const candidate = pool[i];
-      if (candidate && !used.has(candidate)) return candidate;
+  
+    const fresh = pool.slice(0, unverifiedProxyCount);
+    const verified = pool.slice(unverifiedProxyCount);
+  
+    const candidates =
+      mode === 'verified'
+        ? verified
+        : mode === 'fresh'
+          ? fresh
+          : [...fresh, ...verified];
+  
+    const available = candidates.filter(
+      (proxy) => proxy && !used.has(proxy)
+    );
+  
+    if (!available.length) return undefined;
+  
+    if (mode !== 'fresh' && verified.length && mode === 'verified') {
+      return available[0];
     }
-    if (!random) {
-      for (let i = 0; i < pool.length; i++) {
-        const candidate = pool[(proxyCursor + i) % pool.length];
-        if (!used.has(candidate)) return candidate;
-      }
-      return pool[proxyCursor % pool.length];
-    }
-    const unused = pool.filter((p) => !used.has(p) && pool.indexOf(p) >= preferredProxyCount);
-    const choices = unused.length ? unused : pool.filter((p) => !used.has(p));
-    if (!choices.length) return pool[0];
-    return choices[Math.floor(Math.random() * choices.length)];
+  
+    if (!random) return available[0];
+  
+    return available[Math.floor(Math.random() * available.length)];
   }
 
   async function withProxyFailover(opts, fn) {
     await ensureSettings();
+  
     const pool = await ensurePool();
     const random = Boolean(cfg.cloakProxyRandom);
     const maxAttempts = Math.max(
       1,
-      Math.min(Number(cfg.cloakProxyAttempts) || 5, pool.length || 1)
+      Math.min(Number(cfg.cloakProxyAttempts) || 5, 50)
     );
+  
     const fallbackProxy = normalizeProxyUrl(
       cfg.cloakFallbackProxy === undefined
         ? DEFAULT_FALLBACK_PROXY
         : cfg.cloakFallbackProxy
     );
-    // One bonus slot so the default exit can still run after a full 5-attempt
-    // pool burn when every public proxy is challenged.
-    const hardMax = maxAttempts + (fallbackProxy ? 1 : 0) + 1;
+  
     const used = new Set();
     let lastErr;
     let displayRetries = 0;
     let consecutiveFails = 0;
     let forceDirect = false;
     let triedDirect = false;
+    let freshAttempts = 0;
+    let triedVerifiedRecovery = false;
+  
+    const hardMax =
+      maxAttempts +
+      (recoveryProxy ? 1 : 0) +
+      (fallbackProxy ? 1 : 0) +
+      1;
+  
     for (let i = 0; i < hardMax; i++) {
       if (opts.signal?.aborted) throw abortError(opts.signal);
+  
       const wantFallback =
         !forceDirect &&
         Boolean(fallbackProxy) &&
-        consecutiveFails >= FALLBACK_AFTER_CONSECUTIVE_FAILURES &&
-        !used.has(fallbackProxy);
-      if (!forceDirect && !wantFallback && i >= maxAttempts) break;
-      const proxy = forceDirect
-        ? undefined
-        : wantFallback
-          ? fallbackProxy
-          : pickProxy(pool, used, random);
+        !used.has(fallbackProxy) &&
+        (consecutiveFails >= FALLBACK_AFTER_CONSECUTIVE_FAILURES ||
+          pool.length === 0);
+  
+      let proxy;
+  
       if (forceDirect) {
-        log('Pin/proxy failed to reach HLTV; retrying without proxy (direct exit)');
-        forceDirect = false;
+        proxy = undefined;
+      } else if (wantFallback) {
+        proxy = fallbackProxy;
+      } else if (freshAttempts < maxAttempts) {
+        proxy = pickProxy(pool, used, random, 'fresh');
+  
+        if (proxy) {
+          freshAttempts++;
+        } else if (
+          recoveryProxy &&
+          !triedVerifiedRecovery &&
+          !used.has(recoveryProxy)
+        ) {
+          proxy = recoveryProxy;
+          triedVerifiedRecovery = true;
+        } else {
+          break;
+        }
+      } else if (
+        recoveryProxy &&
+        !triedVerifiedRecovery &&
+        !used.has(recoveryProxy)
+      ) {
+        proxy = recoveryProxy;
+        triedVerifiedRecovery = true;
+      } else if (!triedDirect && pool.length === 0) {
+        proxy = undefined;
+      } else {
+        break;
       }
+  
+      if (forceDirect) {
+        log('Proxy attempts exhausted; retrying without proxy (direct exit)');
+        forceDirect = false;
+        triedDirect = true;
+      }
+  
       if (wantFallback) {
         log(
-          `${consecutiveFails} proxies failed in a row; trying default fallback ` +
-            `${redactProxy(fallbackProxy)}`
+          `${consecutiveFails} proxy failures; trying configured fallback ${redactProxy(fallbackProxy)}`
         );
       }
+  
       if (proxy) used.add(proxy);
+  
       if (proxy !== activeProxy || !contextPromise) {
         if (contextPromise) await resetContext();
         activeProxy = proxy;
       }
+  
       try {
-        // Enough rounds to clear a soft CF interstitial; not so many that one
-        // bad proxy burns two minutes before failover (probe feels "instant"
-        // because it usually hits a good exit on the first try).
         const result = await fn({
           challengeRounds: pool.length > 1 ? 10 : 24
         });
+  
         if (proxy) {
           if (!random) proxyCursor = Math.max(0, pool.indexOf(proxy));
           await recordWorkingProxy(cfg, { url: proxy }).catch(() => {});
         }
+  
         return result;
       } catch (err) {
         lastErr = err;
+  
         if (opts.signal?.aborted) throw abortError(opts.signal);
+  
         if (isSessionLimitError(err)) {
-          // One seat, one chrome. Close what we opened and surface immediately
-          // so the pipeline can wait minutes instead of opening more sessions.
           err.blocked = true;
           err.sessionLimit = true;
           await resetContext();
           throw err;
         }
+  
+        // Browser/display failures are infrastructure problems, not bad proxies.
         if (isDisplayError(err) && displayRetries < 2) {
-          displayRetries += 1;
+          displayRetries++;
+  
           log(
             `Display/Xvfb error: ${err.message}. Restarting Xvfb :${CLOAK_XVFB_DISPLAY} and retrying ` +
               `(${displayRetries}/2)`
           );
+  
           await resetHeadedDisplay();
           await resetContext();
+  
           if (proxy) used.delete(proxy);
-          i -= 1;
+  
+          if (proxy && !pool.slice(0, unverifiedProxyCount).includes(proxy)) {
+            triedVerifiedRecovery = false;
+          } else if (proxy) {
+            freshAttempts = Math.max(0, freshAttempts - 1);
+          }
+  
+          i--;
           continue;
         }
+  
         if (isInfraLaunchError(err) && displayRetries < 4) {
-          displayRetries += 1;
+          displayRetries++;
+  
           log(
             `Infra launch error (not a bad proxy): ${err.message}. ` +
               `Clearing profile lock / waiting, retry (${displayRetries}/4)`
           );
+  
           const profilePath = profilePathFor(cfg);
+  
           if (profilePath) {
-            for (const name of ['SingletonLock', 'SingletonCookie', 'SingletonSocket']) {
-              await fsp.rm(path.join(profilePath, name), { force: true }).catch(() => {});
+            for (const name of [
+              'SingletonLock',
+              'SingletonCookie',
+              'SingletonSocket'
+            ]) {
+              await fsp
+                .rm(path.join(profilePath, name), { force: true })
+                .catch(() => {});
             }
           }
+  
           await resetContext();
+  
           if (proxy) used.delete(proxy);
+  
+          if (proxy && !pool.slice(0, unverifiedProxyCount).includes(proxy)) {
+            triedVerifiedRecovery = false;
+          } else if (proxy) {
+            freshAttempts = Math.max(0, freshAttempts - 1);
+          }
+  
           await new Promise((r) => setTimeout(r, 1500 * displayRetries));
-          i -= 1;
+          i--;
           continue;
         }
-        if (proxy) await markProxyFailed(cfg, proxy).catch(() => {});
-        consecutiveFails += 1;
+  
+        const proxyFailure = Boolean(proxy) && isProxyRetryable(err);
+  
+        if (proxyFailure) {
+          await markProxyFailed(cfg, proxy, err.message).catch(() => {});
+          consecutiveFails++;
+        }
+  
         const fallbackPending =
           Boolean(fallbackProxy) &&
           consecutiveFails >= FALLBACK_AFTER_CONSECUTIVE_FAILURES &&
           !used.has(fallbackProxy);
+  
+        const freshRemain =
+          freshAttempts < maxAttempts &&
+          Boolean(pickProxy(pool, used, random, 'fresh'));
+  
+        const recoveryRemain =
+          Boolean(recoveryProxy) &&
+          !triedVerifiedRecovery &&
+          !used.has(recoveryProxy);
+  
         const canRetry =
-          isProxyRetryable(err) && (i < maxAttempts - 1 || fallbackPending);
+          isProxyRetryable(err) &&
+          (freshRemain || recoveryRemain || fallbackPending);
+  
         if (!canRetry) {
           if (!triedDirect && isProxyRetryable(err)) {
             triedDirect = true;
@@ -749,18 +910,23 @@ export function createCloakSession(cfg = {}) {
             await resetContext();
             continue;
           }
-          // Leave blocked/proxyRetryable for the pipeline to back off on the
-          // same demo id. fatal here used to kill the whole ingester.
+  
           throw err;
         }
+  
         log(
           `Proxy ${redactProxy(proxy) || 'direct'} failed: ${err.message}. ` +
-            `Trying next (${Math.min(i + 2, hardMax)}/${hardMax})`
+            `Fresh alternatives tried ${freshAttempts}/${maxAttempts}` +
+            (recoveryRemain ? '; verified recovery remains' : '')
         );
+  
         await resetContext();
       }
     }
-    throw lastErr;
+  
+    if (lastErr) throw lastErr;
+  
+    throw new Error('No eligible proxy remained and direct access was not attempted');
   }
 
   /**
@@ -938,8 +1104,6 @@ export function createCloakSession(cfg = {}) {
       // Inspect the page while we wait for a download event. Without this the
       // console only said "waiting" for up to 2 minutes with no explanation.
       const pageWatch = (async () => {
-        const rounds = Number(challengeRounds) || 30;
-        let challengeAttempts = 0;
         let htmlStableSince = 0;
         while (!downloadStarted && !opts.signal?.aborted) {
           await new Promise((resolve) => setTimeout(resolve, 1500));
@@ -962,15 +1126,9 @@ export function createCloakSession(cfg = {}) {
             waitPhase = 'challenge';
             waitDetail = title || 'Cloudflare challenge';
             reportWaiting();
-            if (challengeAttempts < rounds) {
-              challengeAttempts++;
-              log(`Challenge (${challengeAttempts}/${rounds}) on ${href || url}`);
-              await interactWithManagedChallenge(page);
-              continue;
-            }
-            // Probe succeeds by moving on; sitting here for the full download
-            // timeout on one dead proxy is why ingest looked "stuck".
-            log(`Challenge uncleared after ${rounds} rounds; trying next proxy`);
+            // Fail fast: one challenge page ends this attempt. Waiting out more
+            // rounds on the same exit never cleared it and stalled every restart.
+            log(`Challenge on ${href || url}; failing attempt`);
             const err = new Error('CloakBrowser received a Cloudflare challenge page');
             err.blocked = true;
             err.proxyRetryable = true;

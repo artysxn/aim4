@@ -76,7 +76,8 @@ export function loadConfig(overrides = {}) {
      * When true (default), ignore working-proxy cache / public list / file and
      * use only cloakPinProxy. Set AIM4_CLOAK_PROXY_ONLY=off to restore the pool.
      */
-    cloakProxyOnly: !/^(0|false|no|off)$/i.test(env.AIM4_CLOAK_PROXY_ONLY || 'true'),
+    // Pool mode is the default. Set AIM4_CLOAK_PROXY_ONLY=on to force one pin.
+    cloakProxyOnly: /^(1|true|yes|on)$/i.test(env.AIM4_CLOAK_PROXY_ONLY || 'false'),
     /** Extra wait after local chrome dies before trusting Pro seats are free. */
     sessionLimitWaitMs: num(env.AIM4_CLOAK_SESSION_LIMIT_WAIT_MS, 300_000),
     /**
@@ -94,9 +95,9 @@ export function loadConfig(overrides = {}) {
       ? ''
       : env.AIM4_CLOAK_FALLBACK_PROXY || 'http://130.17.12.137:3128',
     /** How many proxies to try per download/page before giving up. */
-    cloakProxyAttempts: num(env.AIM4_CLOAK_PROXY_ATTEMPTS, 1),
+    cloakProxyAttempts: num(env.AIM4_CLOAK_PROXY_ATTEMPTS, 5),
     /** Random pick vs sequential. Off by default while pinned to one exit. */
-    cloakProxyRandom: /^(1|true|yes|on)$/i.test(env.AIM4_CLOAK_PROXY_RANDOM || ''),
+    cloakProxyRandom: /^(1|true|yes|on)$/i.test(env.AIM4_CLOAK_PROXY_RANDOM || 'true'),
     cloakSettleMs: num(env.AIM4_CLOAK_SETTLE_MS, 5000),
     cloakDownloadDeadlineMs: num(env.AIM4_CLOAK_DOWNLOAD_DEADLINE_MS, 30 * 60_000),
 

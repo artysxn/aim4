@@ -32,6 +32,9 @@ const settingsPath = (cfg) => path.join(cfg.stateDir, 'proxy-settings.json');
 const workingPath = (cfg) => path.join(cfg.stateDir, 'working-proxies.json');
 const cachePath = (cfg) => path.join(cfg.stateDir, 'proxy-cache.json');
 const refreshPath = (cfg) => path.join(cfg.stateDir, 'proxy-refresh.json');
+const failuresPath = (cfg) => path.join(cfg.stateDir, 'proxy-failures.json');
+const FAILURE_COOLDOWN_BASE_MS = 15 * 60_000;
+const FAILURE_COOLDOWN_MAX_MS = 6 * 60 * 60_000;
 
 async function atomicWrite(file, data) {
   await fsp.mkdir(path.dirname(file), { recursive: true });
@@ -143,6 +146,24 @@ async function writeWorkingProxies(cfg, list) {
   await atomicWrite(workingPath(cfg), list);
 }
 
+export async function readProxyFailures(cfg) {
+  try {
+    const raw = JSON.parse(await fsp.readFile(failuresPath(cfg), 'utf8'));
+    return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  } catch {
+    return {};
+  }
+}
+
+async function writeProxyFailures(cfg, failures) {
+  await atomicWrite(failuresPath(cfg), failures);
+}
+
+export function isProxyCoolingDown(failure, now = Date.now()) {
+  const retryAfter = Date.parse(failure?.retryAfter || '');
+  return Number.isFinite(retryAfter) && retryAfter > now;
+}
+
 export async function recordWorkingProxy(cfg, { url, exitIp = '', country = '' } = {}) {
   if (!url || !isSupportedProxy(url)) return;
   const list = await readWorkingProxies(cfg);
@@ -168,17 +189,53 @@ export async function recordWorkingProxy(cfg, { url, exitIp = '', country = '' }
   }
   // Cap stored winners so the file stays small.
   await writeWorkingProxies(cfg, list.slice(0, 200));
+  const failures = await readProxyFailures(cfg);
+  
+  if (failures[url]) {
+    delete failures[url];
+    await writeProxyFailures(cfg, failures);
+  }
 }
 
-export async function markProxyFailed(cfg, url) {
-  if (!url) return;
+/**
+ * Persist failures and temporarily quarantine a proxy.
+ * Cooldown doubles from 15 minutes up to six hours.
+ */
+export async function markProxyFailed(cfg, url, reason = '') {
+  if (!url || !isSupportedProxy(url)) return;
+
+  const failures = await readProxyFailures(cfg);
+  const previous = failures[url] || {};
+  const fails = Math.max(0, Number(previous.fails) || 0) + 1;
+
+  const cooldownMs = Math.min(
+    FAILURE_COOLDOWN_MAX_MS,
+    FAILURE_COOLDOWN_BASE_MS * 2 ** Math.min(fails - 1, 5)
+  );
+
+  const now = Date.now();
+
+  failures[url] = {
+    fails,
+    lastFailedAt: new Date(now).toISOString(),
+    retryAfter: new Date(now + cooldownMs).toISOString(),
+    reason: String(reason || previous.reason || '').slice(0, 300)
+  };
+
+  await writeProxyFailures(cfg, failures);
+
+  // Keep a verified proxy after one failure. Demote it after repeated failures.
   const list = await readWorkingProxies(cfg);
   const idx = list.findIndex((e) => e.url === url);
-  if (idx < 0) return;
-  const fails = (list[idx].fails || 0) + 1;
-  if (fails >= 3) list.splice(idx, 1);
-  else list[idx] = { ...list[idx], fails };
-  await writeWorkingProxies(cfg, list);
+
+  if (idx >= 0) {
+    const workingFails = (Number(list[idx].fails) || 0) + 1;
+
+    if (workingFails >= 3) list.splice(idx, 1);
+    else list[idx] = { ...list[idx], fails: workingFails };
+
+    await writeWorkingProxies(cfg, list);
+  }
 }
 
 async function readCache(cfg) {
@@ -540,6 +597,19 @@ export async function refreshProxyPool(cfg, { onLog, signal } = {}) {
       String(b.lastOkAt || '').localeCompare(String(a.lastOkAt || ''))
     );
     await writeWorkingProxies(cfg, merged.slice(0, 200));
+    const failuresByUrl = await readProxyFailures(cfg);
+    let failuresChanged = false;
+    
+    for (const winner of winners) {
+      if (failuresByUrl[winner.url]) {
+        delete failuresByUrl[winner.url];
+        failuresChanged = true;
+      }
+    }
+    
+    if (failuresChanged) {
+      await writeProxyFailures(cfg, failuresByUrl);
+    }
 
     const done = {
       running: false,
@@ -570,15 +640,17 @@ export async function refreshProxyPool(cfg, { onLog, signal } = {}) {
 }
 
 export async function proxyStatus(cfg) {
-  const [settings, working, cache, refresh] = await Promise.all([
+  const [settings, working, cache, refresh, failures] = await Promise.all([
     readProxySettings(cfg),
     readWorkingProxies(cfg),
     readCache(cfg),
-    readRefreshState(cfg)
+    readRefreshState(cfg),
+    readProxyFailures(cfg)
   ]);
   return {
     settings,
     workingCount: working.length,
+    quarantinedCount: Object.values(failures).filter((e) => isProxyCoolingDown(e)).length,
     working: working.slice(0, 40).map((e) => ({
       host: redactProxy(e.url),
       country: e.country || '',
