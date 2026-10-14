@@ -19,6 +19,7 @@ import { fileURLToPath } from 'node:url';
 import { decodeReplayPackage, PACKAGE_EXT } from '../../src/replays/shared/replayPackage.js';
 import { sliceStride } from '../../src/replays/shared/tickFormat.js';
 import { decodeTickzAsync, decodeTickzStrideAsync, isTickz } from './tickCodec.js';
+import { localMode } from '../local/mode.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_SAMPLE_DIR = path.join(__dirname, '../../sampledemos');
@@ -61,15 +62,18 @@ export function sampleDemosEnabled() {
 /**
  * Fold samples into the real /api/replays library.
  *
- * On for `npm run host` (AIM4_SERVE_STATIC) or AIM4_SAMPLE_DEMOS=1. Off in
- * replay-route tests, which isolate AIM4_REPLAY_DIR and would otherwise see
- * the repo corpus as extra public demos.
+ * On for a local `npm start` (AIM4_SERVE_STATIC in local mode) or
+ * AIM4_SAMPLE_DEMOS=1. Off in replay-route tests, which isolate AIM4_REPLAY_DIR
+ * and would otherwise see the repo corpus as extra public demos, and off on the
+ * hosted site, which also serves static now but has the real library these
+ * samples were exported from: overlaying them there would list each match twice.
  */
 export function sampleLibraryOverlayEnabled() {
   const f = flag();
   if (f === 'off' || f === '0' || f === 'false') return false;
   if (f === '1' || f === 'true' || f === 'on') return true;
-  return process.env.AIM4_SERVE_STATIC === '1' || process.env.AIM4_SERVE_STATIC === 'true';
+  const serveStatic = process.env.AIM4_SERVE_STATIC === '1' || process.env.AIM4_SERVE_STATIC === 'true';
+  return serveStatic && localMode();
 }
 
 function stamp(manifest, file) {

@@ -1,13 +1,14 @@
-# The image only needs package*.json + server/ (see Dockerfile). Everything
-# else — installed deps, the client build, source, git, host-mode data — is
-# excluded to keep the build context small and the image clean.
+# Build context for both Nixpacks (what Coolify uses) and the Dockerfile.
+#
+# The client is built INSIDE the image now (npm run build), so its inputs must
+# stay in the context: index.html, train.html, cs3d.html, tools/*.html, src/,
+# public/, build/. index.html used to be excluded here, back when Vercel built
+# the client; leaving that line in makes the build fail on its first page.
 node_modules
 dist
+build/.tmp
 .git
 .gitignore
-index.html
-vite.config.js
-vercel.json
 Dockerfile
 .dockerignore
 # Host state, and nothing here can change that: Coolify mounts a named volume
@@ -20,6 +21,20 @@ server/data
 .env
 .env.*
 *.md
+# Workstation-only: the .vpk drop, the VRF binary, editor/agent config, and a
+# 2.4 MB scratch bundle. None of it is read by the build or the server.
+cs3d
+tools/vrf
+tools/cs3d-tex
+.claude
+.codex
+.cursor
+.kilo
+.agents
+.DS_Store
+test.js
+scripts/duel-cache
+scripts/round-cache
 
 # The desktop recorder is Rust source built on a developer machine and
 # published as a binary through /api/recorder. The image has no Rust toolchain

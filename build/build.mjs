@@ -514,7 +514,25 @@ const PLUGINS = [
   threeFlavors()
 ];
 
+/**
+ * A hosted build (VITE_LOCAL_MODE=0, which nixpacks.toml and the Dockerfile
+ * set) with no Supabase project bakes a client that can never sign anyone in.
+ * The credentials are inlined here, so this is the last point it can be caught:
+ * after this a deploy goes live and looks fine until somebody tries to log in.
+ */
+function checkHostedEnv() {
+  if (String(process.env.VITE_LOCAL_MODE ?? '') !== '0') return;
+  const missing = ['VITE_SUPABASE_URL', 'VITE_SUPABASE_ANON_KEY'].filter((k) => !process.env[k]);
+  if (missing.length) {
+    throw new Error(
+      `hosted build (VITE_LOCAL_MODE=0) needs ${missing.join(' and ')} at BUILD time. ` +
+        'On Coolify, tick "Build Variable" on both.'
+    );
+  }
+}
+
 async function run() {
+  checkHostedEnv();
   clean();
 
   const workers = findWorkers();

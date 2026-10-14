@@ -1,3 +1,15 @@
+# THIS is how the Hetzner box (Coolify) builds AIM4. Not the Dockerfile.
+#
+# When the app's build pack is Nixpacks, the Dockerfile is never read. That was
+# proven twice: a --max-old-space-size added only there did nothing, and the
+# Dockerfile skipped src/utils/spawnVisibility.js (imported by server/lobby.js)
+# for months without a single failed deploy. Change runtime behaviour here, or
+# change both files.
+#
+# One container serves everything on one origin: the built client (dist/), the
+# API and the WebSockets. There is no Vercel any more; server/static.js is the
+# only routing table. See DEPLOY-HETZNER.md for the host-side settings.
+
 # Pin the provider. tools/cs3d-tex/ is a local-only .NET texture exporter
 # (source in git, never built or run in the image), but nixpacks globs for
 # *.csproj recursively, detects .NET, and makes `dotnet restore` the install
@@ -11,24 +23,22 @@
 # reason, and this pin is what stops nixpacks from trying to build it.
 providers = ["node"]
 
-# The heap ceiling, set HERE and not only in the Dockerfile.
+# Hosted mode, spelled out. Real host env vars (Coolify) win over these.
 #
-# Both files describe how to run this service and only one of them is used:
-# when Nixpacks builds, the Dockerfile's CMD is never read. A --max-old-space-size
-# added there alone therefore did nothing, which was invisible until
-# /api/replays/diag still reported heapLimitMb 1024 after the deploy.
-#
-# 1 GB is not enough at this library size. The resident statistics store is a
-# few hundred MB of typed arrays built by parsing every stats index in turn;
-# against a 1 GB ceiling that becomes permanent GC pressure instead of
-# progress, and /api/replays/aggregate stops answering while it grinds. The
-# host has ~7.7 GB and the demo parser caps its own worker heap separately
-# (AIM4_PARSE_HEAP_MB, default 1536).
-#
-# Setting NODE_OPTIONS in the host's environment overrides this and is the
-# quickest way to change it without a rebuild.
-[start]
-cmd = "node --max-old-space-size=3072 server/index.js"
+#   AIM4_LOCAL=0        server: real accounts through Supabase. server/local/
+#                       mode.js also defaults OFF under NODE_ENV=production, so
+#                       forgetting this cannot make every visitor the owner.
+#   VITE_LOCAL_MODE=0   client: the real Supabase client. build/build.mjs then
+#                       refuses to build without VITE_SUPABASE_URL and
+#                       VITE_SUPABASE_ANON_KEY, which must be BUILD variables.
+#   AIM4_SERVE_STATIC=1 serve dist/ from this process (same origin as /api).
+#   AIM4_HOST=0.0.0.0   the server defaults to 127.0.0.1, unreachable from the
+#                       proxy in front of the container.
+[variables]
+AIM4_LOCAL = "0"
+VITE_LOCAL_MODE = "0"
+AIM4_SERVE_STATIC = "1"
+AIM4_HOST = "0.0.0.0"
 
 [phases.setup]
 aptPkgs = [
@@ -44,3 +54,22 @@ aptPkgs = [
   "fonts-wqy-zenhei",
   "fonts-tlwg-loma-otf"
 ]
+
+# The client build. esbuild is a devDependency, which nixpacks installs
+# (it sets NPM_CONFIG_PRODUCTION=false). Takes a few seconds.
+[phases.build]
+cmds = ["npm run build"]
+
+# The heap ceiling, set HERE and not only in the Dockerfile.
+#
+# 1 GB is not enough at this library size. The resident statistics store is a
+# few hundred MB of typed arrays built by parsing every stats index in turn;
+# against a 1 GB ceiling that becomes permanent GC pressure instead of
+# progress, and /api/replays/aggregate stops answering while it grinds. The
+# host has ~7.7 GB and the demo parser caps its own worker heap separately
+# (AIM4_PARSE_HEAP_MB, default 1536).
+#
+# Setting NODE_OPTIONS in the host's environment overrides this and is the
+# quickest way to change it without a rebuild.
+[start]
+cmd = "node --max-old-space-size=3072 server/index.js"

@@ -312,6 +312,26 @@ server.on('upgrade', (req, socket, head) => {
   }
 });
 
+// A hosted production server with no Supabase project verifies nobody: every
+// request is anonymous, so the deploy is up but nobody can sign in, upload or
+// reach admin. Refuse to come up instead, so the host keeps the previous
+// container rather than swapping in one that cannot work. The service-role key
+// only degrades things (free tier for everyone, no admin), so it is a warning.
+if (!LOCAL && process.env.NODE_ENV === 'production') {
+  const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+  const anon = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
+  if (!url || !anon) {
+    console.error('');
+    console.error('ERROR: hosted mode needs SUPABASE_URL and SUPABASE_ANON_KEY.');
+    console.error('Without them every request is anonymous. Set both, or AIM4_LOCAL=1 for a private box.');
+    console.error('');
+    process.exit(1);
+  }
+  if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    console.warn('[boot] SUPABASE_SERVICE_ROLE_KEY is not set: every account resolves to the free tier and admin is unavailable');
+  }
+}
+
 if (SERVE_STATIC && !distExists()) {
   console.error('');
   console.error('ERROR: dist/ not found. Run "npm run build" first, or use npm run host');
@@ -448,6 +468,10 @@ server.listen(PORT, HOST, async () => {
     console.log(`  AIM4 local — http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT}`);
     console.log(`  signed in as @${OWNER_NAME}, everything unlocked`);
     console.log('');
+  } else if (SERVE_STATIC && process.env.NODE_ENV === 'production') {
+    // The hosted container. The router/firewall banner below is for someone
+    // sharing their own PC, and is wrong advice behind the host's proxy.
+    console.log(`AIM4 hosted — site + API + /ws on ${HOST}:${PORT}`);
   } else if (SERVE_STATIC) {
     // Resolve the public IP first so the banner and /api/mp/status agree.
     const ip = await fetchPublicIp();

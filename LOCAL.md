@@ -125,7 +125,8 @@ listed with their reasons in `build/smoke.mjs`:
 
 ## If you put it back online
 
-`AIM4_LOCAL=0` plus real Supabase credentials, and `VITE_API_URL` pointing at
-the backend if the client ends up on a different host. `VITE_API_URL` is
-build-time, so changing it needs a rebuild. The Vercel config and the Vite build
-have been removed; nothing in the codebase depends on either.
+See `DEPLOY-HETZNER.md`. In short: one container serves the client, API and
+WebSockets on one origin, `nixpacks.toml` sets the hosted switches, and the host
+supplies the Supabase credentials (the two `VITE_` ones at build time). Under
+`NODE_ENV=production` local mode is off unless `AIM4_LOCAL=1` asks for it. The
+Vercel config and the Vite build have been removed; nothing depends on either.

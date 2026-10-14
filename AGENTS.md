@@ -45,7 +45,9 @@ Steam OpenID, HLTV/FACEIT ingestion, impersonation. Remote asset fill is off by 
 (`CS3D_FETCH_BASE`) — a missing pack file is a 404 naming the path, never a silent fetch.
 
 Both halves are one flag away from the hosted path: `AIM4_LOCAL=0` (server),
-`VITE_LOCAL_MODE=0` (client).
+`VITE_LOCAL_MODE=0` (client). Under `NODE_ENV=production` the server is hosted
+unless `AIM4_LOCAL=1` is explicit. The Hetzner deploy is `DEPLOY-HETZNER.md`;
+Coolify builds with **`nixpacks.toml`, not the Dockerfile** — keep the two in step.
 
 # Gotchas
 

@@ -33,6 +33,10 @@ const TOP_PLAN = 'team_tier1';
 
 export function localMode() {
   const flag = String(process.env.AIM4_LOCAL ?? '').toLowerCase();
+  // A production deploy (the Hetzner image sets NODE_ENV=production) must ask
+  // for local mode by name. Defaulting to it there would make every visitor the
+  // owner, admin included, the moment AIM4_LOCAL was left out of the host env.
+  if (!flag && process.env.NODE_ENV === 'production') return false;
   return flag !== '0' && flag !== 'off' && flag !== 'false';
 }
 
