@@ -45,13 +45,19 @@ export const TASKS = {
   2: 'round-describe',
   3: 'antistrat-point',
   4: 'antistrat-point',
-  5: 'opinion'
+  5: 'opinion',
+  // Not a page: aim4 eye answers an admin rated in the chat ("Good" / "Bad").
+  // bot.messages is the whole turn (tool calls and results), the shape a
+  // tool-use fine-tune trains on.
+  6: 'eye-trace'
 };
 export const STAGES = Object.keys(TASKS).map(Number);
 
 const MAX_TEXT = 4000;
 /** subject + bot together: a description with its beats, a point with its rounds. */
 const MAX_PAYLOAD = 96 * 1024;
+/** An eye turn carries its tool results; the admin body limit (256 KB) is the real cap. */
+const MAX_TRACE_PAYLOAD = 240 * 1024;
 const ENGINE = /^[a-z0-9][a-z0-9.-]{0,31}$/;
 
 export class TrainingError extends Error {
@@ -98,7 +104,7 @@ export function makeRecord(stage, body, by) {
   const subject = plain(src.subject, 'Subject');
   const bot = plain(src.bot, 'Bot output');
   if (typeof bot.text !== 'string' || !bot.text.trim()) throw new TrainingError('Bot output needs its text.');
-  if (Buffer.byteLength(JSON.stringify({ subject, bot })) > MAX_PAYLOAD) throw new TrainingError('Record is too large.');
+  if (Buffer.byteLength(JSON.stringify({ subject, bot })) > (s === 6 ? MAX_TRACE_PAYLOAD : MAX_PAYLOAD)) throw new TrainingError('Record is too large.');
   const record = {
     v: FORMAT_VERSION,
     id: crypto.randomBytes(6).toString('hex'),
@@ -115,7 +121,7 @@ export function makeRecord(stage, body, by) {
   // what is wrong after a no; stage 5 takes an optional note either way.
   if (s === 2 && verdict === 'yes') record.answer = text(src.answer, 'Your description', true);
   if (s === 4 && verdict === 'no') record.comment = text(src.comment, 'The comment', true);
-  if (s === 5) {
+  if (s === 5 || s === 6) {
     const c = text(src.comment, 'The comment');
     if (c) record.comment = c;
   }

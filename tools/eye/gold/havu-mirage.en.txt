@@ -1,0 +1,43 @@
+HAVU: MIRAGE T Positions
+- Uli: A Lurk
+- ottob: AWPer
+- alxc: B / UG
+- p3kko: Rotation
+- 8Juho8: Mid T Pistol *Pistols were corrupted when uploading demo. T Tells
+- 2+ smokes on A early by 1:30 → always A (6 of 6)
+- Smoke or molo anywhere on A site before the hit → most likely A (24 of 28)
+- Smoke or molo anywhere on B site before the hit → most likely 3Mid default trying to split B (9 of 11)
+- A Balc molo, 2x A smoke, A flash, then Con nade and Jungle molo → always A (48 of 48), 4 rounds failed
+- Short molo, Short nade and Jungle smoke → most likely 3Mid default trying to go A (25 of 31), 6 rounds failed so don't count
+- B flash → most likely B default with 3+ players B trying to commit (9 of 10) T Notes and preparation (our CT) They generally seem to play more default, 2-2-1 is very common. If not 2-2-1, 2nd most common is defaults without A lurk or without B lurk, but still defaults. Then they have set calls towards searching B and a full A execute, but nothing too advanced like a concrete 3 under walk into window boost, simple and direct CS. You can try to disrupt their T side by confirming it isn't A or B execute, then searching on sites (A ramp would be preffered), as they tend to end their defaults with core of players towards mid instead of on sites. Mid retakes recommended only if early around 1.30, after this their under players connect and seem to have success to hold it off from the rounds I saw. In 4v5 and 4v4 tend to group up instead of playing splits from mid. T Force / Antiforce Force:
+- 3x Default, no hit (the fights are at Con).
+- 3x Mixed round into A hit from A Palace.
+- 2x Default with smoke Top mid, no hit (the fights are at Top mid).
+- 2x B pop through T Aps around 1:30 with smokes Window + Top mid.
+- Others: 1x Default into A (won 1), 1x Early fight (won 0), 1x A rush (won 0), 1x Default into B (won 0). *Most common try to fight mid then go A late through palace. Antiforce:
+- 3x A pop split around 1:25 (0-4-1) with smoke Jungle.
+- 2x Default with smokes Con + Window. Open ended (1x A, 1x B).
+- 2x A rush through A Ramp with smokes Window + Con.
+- 2x B pop through Short around 1:24 (1-4-0) with smokes Ladder + Window.
+- 2x Default with smokes Window + Short into A exec from A Palace.
+- 2x Full A execute from A Ramp with smoke A.
+- Others: 1x B rush (won 1), 1x Early fight (won 1), 1x B execute (won 1), 1x Default into B (won 1). *Either a set call towards splitting A/B in 4-1, or open default with con+window smokes instead of top mid smoke, or late into full A are most common. B is exceptions. CT Positions
+- Uli: A Con
+- ottob: AWPer
+- alxc: A Anchor
+- p3kko: B Anchor
+- 8Juho8: B Short CT Pistol
+- 2x Under push + early fight Sandwich (ottob).
+- 2x 2nd timing mid fight, early fight Catwalk (alxc).
+- Others: 1x Palace search (won 1), 1x Default setup (won 0), 1x Under push, A stack (won 0), 1x B aps search (won 0). *VERY varied pistol rounds on CT, some aggressive, some passive, some stacks, some searches. Be careful for anything. Might be a good idea to hold default first THEN go into a call. CT Default utility
+- A Ramp molo: 97% (usually 1:51)
+- A Palace smoke: 65% (usually 1:43)
+- Boxes molo: 61% (usually 1:46, Uli)
+- Lower mid smoke: 59% (usually 1:39, Uli)
+- Mid flash: 57% (usually 1:49, alxc)
+- B Aps molo: 51% (usually 1:42, p3kko)
+- B Aps smoke: 52% (usually 1:37, p3kko)
+- A Ramp smoke: 51% (usually 1:44, alxc) *They are careful to vary if its anchor or rotation doing molotov ramp + smoke palace. No pattern exists to abuse lack of utility in laterounds. They do smoke con early though, too early. CT Notes and preparation (our T) Their B player is almost exclusively jumpspotting or close to aps, even after using his smoke. Other than that very often left side site (moddii / 90) or 2nd near short. AWP starts very varied, B/Mid/A everywhere but ends up either ticket, short or jungle/con in 90% of rounds. Uli is their con player. If he starts from A, he ALWAYS crosses to con instantly. These rounds, there is NO ONE 3rd on A. If A player sees him cross bench, their A anchor is solo default or ticket. alxc is their A player. He either starts balc to hold palace smoke, or he doesn't hold palace at all. Lurker might have good timings to walk through and catch him in 4v5s etc. They are very fast on rotations (def 3a 2b) if they dont see anything mid after breaking window, molotoving or spamming. You can use this for delayed short runs, contact rounds, fakes to draw B rotations or short player out mid, etc. CT Force / Antiforce Force:
+- Stack: 8 of 10 (5x A, 3x B)
+- Split up: 2 of 10 Anti-eco:
+- Close to the sites: 20 of 20

@@ -1,0 +1,32 @@
+ENCE: Mirage T Positions
+- Schwarz: Mid
+- millert: AWPer
+- teme: A Lurk
+- joeski: Rotation
+- HENU: B / UG T Pistols
+- 1x Mid to A flashing through bottom con smoke, teme ramp lurk, joeski jump window
+- 1x 5A execute, jungle + stairs smoke, fight for CT
+- 1x 5B execute, kitchen smoke + 2 flashes over, all jump from window
+- 1x 3A fake exec, 2 under walk into con. Fake has smoke jungle only, not stairs. T Tells
+- Smoke bottom con + wind + TM → some sort of set call with 3 on sides (A), 2 on mid
+- 1 or 0 flashes on mid → some sort of set call towards sites very early T Force / Antiforce Force:
+- 2x A rush through A Ramp (5A) with smokes Window + Mid.
+- 2x walk under late and try to go A All 4 of their forces have been towards A. Antiforce:
+- 2x Fast B split with smokes Con + Window.
+- 2x Default with smokes Window + A into A split (one late after A fake, one early).
+- 2x (#001) Very fast 2 mid - 3A split with window, top mid, jungle and top ropz smoke. *They have a fake of this where same nades are thrown but 2 go B. (#002)
+- Others: 1x B rush (won 1), 1x A execute (won 1), 1x A rush (won 0). Their antiforces are very hard to predict. The only round they seem to have scripted here is the fast-into-con with A smokes on, but even then there's a fake version. Honestly, i'd just suggest to stack a site. They don't seem like the type of team to change direction even if they have info that it's a bad idea to go into a site. Alternatively, searching palace worked well against them. T Notes and preparation (our CT) THEY DO NOT DEFAULT. They have some idea for every single round. I only saw a standard 2 under, 2 mid, 1 A default a few times out of 60+ buy rounds. There's either an A execute, B execute, boost top mid, 2 A lurks with zero B, B pops, fast mid into A or B, a lot of different fast paced calls but no slower defaults. It is very important to use utility early. The weakest zone in their game is B, by far. They don't hold B aps after 1.35 90% of rounds, especially after they show themselves to be active on mid (they have some slow B executes but then they are 0-1 mid only and dont flash mid). I'd suggest throwing a deep B aps smoke on CT side and pushing into B aps, then playing towards A. Starting rifle window and spamming top mid + catwalk run-up will kill all their fast rounds towards mid, too. AWP is generally better to start sites against them. Stack / rotate instead of searching on A. They are NEVER more than one player in palace. Always max 1. Searching palace for refrag is fully safe. Be careful of top mid boost even if they smoke window. They might wait for break and peek. CT Positions
+- Schwarz: A Con
+- millert: AWPer
+- teme: B Anchor
+- joeski: A Anchor
+- HENU: B Short CT Pistol
+- 1x Under push, A stack, early fight A Balc on HENU.
+- 1x Palace search
+- 1x Under push + B stack. CT Default utility
+- A Ramp molo: 97% (usually 1:51, joeski, A anchor)
+- A Palace smoke: 84% (usually 1:46, joeski, A anchor)
+- B Aps molo: 84% (usually 1:44, teme, B anchor)
+- Boxes molo: 72% (usually 1:44, Schwarz)
+- B Aps nade: 63% (usually 1:36, teme, B anchor)
+- Delpan flash: 56% (usually 1:49, joeski) CT Notes and preparation (our T) Their A anchor almost always is the first one to smoke palace. He doesn't have his gun out after flashing mid, he instead does the palace smoke. Good options are either to run out and kill him, pop ramp after ramp molotov and search him, or just go A late and know he doesn't have a defensive smoke to put up or molotov to block ramp/palace. Their first timing A is generally weak as most often, their con player will start window with the AWPer. Molotov jungle + fast round A will do wonders, i think, if called on the right round. They actually dont smoke bottom con that often, only having 1+ smoke there in 45% of buy rounds. The AWP doesnt play ticket that often, so late A splits with searching contact con is a good idea. B player jumpspots every round instead of playing offangles passive (search w/ AWP). Only one round did they start 3B to search. Other than that, HENU is VERY aggressive towards deep short. They seem like a team that want to fight mid a lot and deal with the consequences of site hits later. They tend to gamble A almost every round they need to gamble instead of B (4A-1B). Rounds: #001 #002

@@ -1,0 +1,39 @@
+EAC: Mirage T Positions
+- Fessor: B / UG
+- n1Xen: A Lurk
+- sSen: Rotation
+- bekker: AWPer
+- anber: Mid T Pistol
+- 1x bottom con smoke, 3 mid, 1a 1b, fake B split from aps → going through con to A
+- 1x jungle smoke + stairs molo, 2a 3b, fake A → 3b pop
+- 1x full execute B with short + kitchen smoke + 4 flashes, everyone through aps window
+- 1x smoke window, 2mid 3a palace split A. 1 rush con, 1 flash for him and 3 pop palace
+- 2x full A pop, 4 ramp (1 support), 1 palace. 3 ramp peek first then flash thrown (1W 1L) T Tells
+- Anything related to full A exec → always A (22 of 22 rounds, never fake in buy rounds)
+- No Window smoke → most likely 3Mid default with boost (4 of 4) T Force / Antiforce Force:
+- 4x A rush through T Outside A (0-0-5) with smokes Catwalk + Window.
+- 3x B rush through T Aps (4-1-0) with smokes Window + Kitchen.
+- Others: 1x Default into B (won 1), 1x Default, no hit (won 0), 1x Default into A (won 0). Antiforce:
+- 4x Full A execute from A Ramp with smokes Jungle + Stairs.
+- 3x A rush through A Ramp with only smoke Window.
+- 2x Default into B pop through Short around 1:24 with smokes Window + Con.
+- 2x B rush through B Aps with smokes Window + Kitchen.
+- 2x Full B execute from B Aps with smoke Kitchen.
+- Others: 1x A pop (won 1), 1x B pop (won 1), 1x Default into B (won 1). T Notes and preparation (our CT) They do some form of a round towards A about 2.5x as much as they go B. If we need to stack, stack A, not B. These guys in general play a lot more like a FACEIT pug. AWP anywhere is good against them, because at any moment 2 guys can just walk out ramp, 2 guys can run down mid, 1 can search actively on B (all independent of each other, check pic #001). Searching anywhere in midrounds and blocking the other area seems like a no-brainer, they play very split up. If they aren't split up, they play fast. Very few slow and grouped rounds. They do love to run down 4 through mid, 2 through mid, on the first timing. Very aggressive on mid in general. Pic #002 below. Try these ideas: under drop with good spawn → mid fight, search B house if silent + Ts active on mid, AWP peek stairs to ramp, and if nothing, hold while 2 riflers search, break window and aim right side walk-down by Ts from under-over inside top left back of window, or just stay AFK with 2 awps and let their round collapse. Like with ence, spam top mid smoke for rundown instead of catwalk rush this time and you will kill them on a lot of their quick rounds. The later in the round it is on equal ground, the weaker they look. They dont seem to have strong executes, and will instead resort to brute force. Their T side generally struggles against opponents that are simply not giving them any solo entries, who play deep on sites and don't panic rotate when one side gets pressured. CT Positions
+- Fessor: A Con
+- n1Xen: B Short
+- sSen: B Anchor
+- bekker: AWPer
+- anber: A Anchor CT Pistol
+- 2x Under push, A stack, early fight A Ticket (bekker).
+- Others: 1x Under push (won 1), 1x Under push, B stack (won 1), 1x Default setup, A stack (won 0), 1x B aps search (won 0). *They never ran the same pistol twice in a row. Last one was: Under push, A stack, early fight A Ticket (bekker). CT Default utility
+- B Aps molo: 75% (usually 1:43, sSen)
+- Chair flash: 67% (usually 1:50, anber)
+- B Aps smoke: 63% (usually 1:39, sSen)
+- A Palace smoke: 58% (usually 1:46, anber)
+- A Ramp molo: 58% (usually 1:51, anber)
+- Boxes molo: 58% (usually 1:45, n1Xen) CT Force / Antiforce Force:
+- Stack: 3 of 7 (3x A)
+- Split up: 3 of 7
+- Push as a group: 1 of 7 (1x Catwalk) Anti-eco:
+- Close to the sites: 11 of 11 (not really fighting for mid) CT Notes and preparation (our T) Their AWP bekker only ever starts window or A with AWP. He didn't, of the 5 demos avaliable, go B once. n1xen also never starts passive 2nd B and always intends to get as far up short as possible (or even start window). i think a great idea could be to play B contacts and trade while faking mid pressure first 2-3 rounds while they dont have 2nd AWP. Earliest B rotations come 1.32 to kitchen. They're not hyper aggro mid. They don't push it, they dont try to contest it from mid itself, they just stay short, con and window and fight from there with breaks on timings. And they do stay there to fight, but not aggressively, defensively. Keeping their rotation there is important and i recommend having some fight with them on mid no matter what the plan is. n1xen as shortplayer is much more window or ladder than short. It sometimes looks like they are playing short/con on spawns, so trusting positions blindly might not be a good idea. Anber literally never plays from CT on A, much more preferring to stay close default or balc even without smoke. Late A hits and he has no fallback. Other rounds he is near con with AWP ct, meaning there won't be anyone site. Either there is one site with nowhere to go, or there is no one site. Ssen is actually quite aggressive on B for being solo. A lot of room to punish him. If he's not jumping, careful he already jumped up balcony. They struggle a lot on their CT side against teams that play well on middle, since they eventually do let it go. Rounds #001: #002:

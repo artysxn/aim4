@@ -7222,6 +7222,20 @@ body.rv-open:has(.side-collapsed) .rv-side-show {
   background: #050505;
   box-shadow: inset 0 0 0 1px var(--accent-border);
 }
+.eye-rate {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.eye-rate-note {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+.eye-confirm p {
+  white-space: pre-line;
+}
 .eye-confirm-row {
   display: flex;
   gap: 8px;

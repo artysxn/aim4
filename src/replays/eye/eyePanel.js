@@ -11,9 +11,30 @@
 // ---------------------------------------------------------------------------
 
 import { accessToken } from '../api.js';
-import { runAgentTurn } from './eyeAgent.js';
+import { SYSTEM_PROMPT, runAgentTurn } from './eyeAgent.js';
+import { toolsFor } from './eyeTools.js';
+import { adminApi } from '../../site/admin/adminApi.js';
 
 const API_BASE = (import.meta.env?.VITE_API_URL || '').replace(/\/$/, '');
+
+/** Ratings go to the admin training store (stage 6); only admins can write there. */
+let rateable = null;
+const canRate = () => (rateable ||= adminApi.labelStats().then(() => true, () => false));
+/** A tool result kept in a rated trace is cut to this; the whole record must stay under 240 KB. */
+const TRACE_TOOL_CHARS = 6000;
+
+/** One finished turn as training data: images left out, long tool results cut. */
+export function traceOf(turn) {
+  return turn.map((m) => {
+    if (Array.isArray(m.content)) {
+      return { ...m, content: m.content.map((part) => (part.type === 'image_url' ? { type: 'text', text: '[picture]' } : part)) };
+    }
+    if (m.role === 'tool' && typeof m.content === 'string' && m.content.length > TRACE_TOOL_CHARS) {
+      return { ...m, content: `${m.content.slice(0, TRACE_TOOL_CHARS)}… [cut]` };
+    }
+    return m;
+  });
+}
 const STATUS_POLL_MS = 3000;
 
 /** The models the desktop app offers. Ids are the app's; sizes are the download. */
@@ -347,11 +368,50 @@ export function createEyePanel({ escapeHtml }) {
     return btn;
   }
 
+  /** "Good" / "Bad" under an answer, for admins: the turn becomes fine-tune data. */
+  async function offerRating(question, turn, answer) {
+    if (!(await canRate())) return;
+    const model = String((status?.devices || []).find((d) => d.model)?.model || 'unknown').toLowerCase().replace(/[^a-z0-9.-]/g, '-').slice(0, 32) || 'unknown';
+    const row = bubble(
+      'eye-rate',
+      `<span class="an-muted">Train aim4 eye on this answer:</span><button type="button" class="eye-btn" data-v="yes">Good</button><button type="button" class="eye-btn" data-v="no">Bad</button>`
+    );
+    const save = async (verdict, comment = '') => {
+      row.innerHTML = '<span class="an-muted">Saving…</span>';
+      try {
+        await adminApi.saveLabel(6, {
+          engine: model,
+          verdict,
+          comment,
+          subject: { question, model },
+          bot: { text: answer, system: SYSTEM_PROMPT, tools: toolsFor({ vision: false }), messages: traceOf(turn) }
+        });
+        row.innerHTML = `<span class="an-muted">Saved as a ${verdict === 'yes' ? 'good' : 'bad'} example.</span>`;
+      } catch (err) {
+        row.innerHTML = `<span class="eye-error">${escapeHtml(err.message || 'Could not save.')}</span>`;
+      }
+    };
+    row.addEventListener('click', (e) => {
+      const b = e.target.closest('button[data-v]');
+      if (!b) return;
+      if (b.dataset.v === 'yes') return void save('yes');
+      row.innerHTML =
+        '<input type="text" class="eye-rate-note" placeholder="What was wrong? (optional)" maxlength="2000"><button type="button" class="eye-btn is-primary" data-save>Save</button>';
+      const note = row.querySelector('input');
+      note.focus();
+      const go = () => save('no', note.value.trim());
+      row.querySelector('[data-save]').addEventListener('click', go);
+      note.addEventListener('keydown', (k) => k.key === 'Enter' && go());
+    });
+  }
+
   async function ask(text) {
     const q = String(text || '').trim();
     if (!q || running || !ready()) return;
     logEl.querySelector('.eye-intro')?.remove();
     bubble('eye-user', `<p>${escapeHtml(q)}</p>`);
+    const turnStart = messages.length;
+    let failed = false;
     messages.push({ role: 'user', content: q });
     textEl.value = '';
     const ctrl = new AbortController();
@@ -475,13 +535,16 @@ export function createEyePanel({ escapeHtml }) {
       const vision = Boolean((status?.devices || []).find((d) => d.state === 'ready')?.vision);
       await runAgentTurn(messages, { onEvent, signal: ctrl.signal, thinking: thinkLonger, vision, confirm: confirmInline });
     } catch (err) {
+      failed = true;
       hidePending();
       if (err.name !== 'AbortError') bubble('eye-error', `<p>${escapeHtml(err.message)}</p>`);
       else bubble('eye-error', '<p>Stopped.</p>');
     }
     hidePending();
     closeReasoning();
+    const finalText = replyText;
     endReply();
+    if (!failed && finalText.trim()) void offerRating(q, messages.slice(turnStart), finalText);
     for (const t of tools.values()) {
       clearInterval(t.timer);
       if (t.node.classList.contains('is-running')) t.node.classList.replace('is-running', 'is-error');

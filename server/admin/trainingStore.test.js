@@ -61,7 +61,14 @@ assert.deepEqual(stats.counts[1], { total: 1, yes: 1, no: 0 });
 
 const exported = (await exportTraining()).trim().split('\n').map((l) => JSON.parse(l));
 assert.equal(exported[0].format, 'aim4-training');
-assert.deepEqual(exported[0].counts, { 1: 1, 2: 0, 3: 0, 4: 1, 5: 0 });
+assert.deepEqual(exported[0].counts, { 1: 1, 2: 0, 3: 0, 4: 1, 5: 0, 6: 0 });
+
+// Stage 6: an aim4 eye answer rated in the chat, with its whole turn.
+const trace = makeRecord(6, { verdict: 'no', comment: 'Wrong site', engine: 'qwen3.5-4b', subject: { question: 'q' }, bot: { text: 'a', messages: [{ role: 'user', content: 'q' }] } }, 'admin');
+assert.equal(trace.task, 'eye-trace');
+assert.equal(trace.comment, 'Wrong site');
+assert.ok(makeRecord(6, { verdict: 'yes', subject: {}, bot: { text: 'a', messages: ['x'.repeat(150 * 1024)] } }, 'admin'), 'a trace may be larger than a page label');
+assert.throws(() => makeRecord(1, { verdict: 'yes', subject: {}, bot: { text: 'a', big: 'x'.repeat(150 * 1024) } }, 'admin'), /too large/);
 assert.equal(exported.length, 3, 'header + one line per record');
 const only4 = (await exportTraining(['4'])).trim().split('\n');
 assert.equal(only4.length, 2);

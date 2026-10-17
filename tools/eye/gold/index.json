@@ -1,0 +1,96 @@
+{
+ "about": "Manual antistrat sheets written by the aim4 coach: the quality bar for aim4 eye and the rule-based generators. Text extracted from the PDFs (layout flattened).",
+ "docs": [
+  {
+   "file": "havu-mirage.en.txt",
+   "team": "HAVU",
+   "map": "MIR",
+   "lang": "en",
+   "source": "HAVU_ MIRAGE.pdf"
+  },
+  {
+   "file": "havu-dust2.en.txt",
+   "team": "HAVU",
+   "map": "DD2",
+   "lang": "en",
+   "source": "HAVU_ DUST2.pdf"
+  },
+  {
+   "file": "havu-nuke.en.txt",
+   "team": "HAVU",
+   "map": "NUK",
+   "lang": "en",
+   "source": "HAVU_ NUKE.pdf"
+  },
+  {
+   "file": "navi-junior-mirage.en.txt",
+   "team": "NAVI Junior",
+   "map": "MIR",
+   "lang": "en",
+   "source": "Untitled document-3.pdf"
+  },
+  {
+   "file": "navi-junior-mirage.ru.txt",
+   "team": "NAVI Junior",
+   "map": "MIR",
+   "lang": "ru",
+   "source": "NAVI Junior_ Mirage.pdf"
+  },
+  {
+   "file": "wbt-anubis.en.txt",
+   "team": "WBT",
+   "map": "ANU",
+   "lang": "en",
+   "source": "WBT_ Anubis T.pdf"
+  },
+  {
+   "file": "infinite-nuke.en.txt",
+   "team": "INFINITE",
+   "map": "NUK",
+   "lang": "en",
+   "source": "INFINITE Nuke-1.pdf"
+  },
+  {
+   "file": "infinite-nuke.ru.txt",
+   "team": "INFINITE",
+   "map": "NUK",
+   "lang": "ru",
+   "source": "INFINITE Nuke.pdf"
+  },
+  {
+   "file": "infinite-cache.ru.txt",
+   "team": "INFINITE",
+   "map": "CCH",
+   "lang": "ru",
+   "source": "INFINITE Cache.pdf"
+  },
+  {
+   "file": "infinite-dust2.ru.txt",
+   "team": "INFINITE",
+   "map": "DD2",
+   "lang": "ru",
+   "source": "INFINITE Dust2.pdf"
+  },
+  {
+   "file": "eac-mirage.en.txt",
+   "team": "EAC",
+   "map": "MIR",
+   "lang": "en",
+   "source": "EAC_ Mirage.pdf"
+  },
+  {
+   "file": "eac-cache.en.txt",
+   "team": "EAC",
+   "map": "CCH",
+   "lang": "en",
+   "source": "EAC_ Cache.pdf"
+  },
+  {
+   "file": "ence-mirage.en.txt",
+   "team": "ENCE",
+   "map": "MIR",
+   "lang": "en",
+   "source": "ENCE_ Mirage.pdf"
+  }
+ ]
+}

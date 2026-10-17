@@ -774,7 +774,185 @@ function tellsFor(ctx, side) {
     const found = tellsOver(first, side, ctx, { minRounds: 3, minShare: 100, limit: 2 });
     firstBuy = { rounds: first.length, tells: found };
   }
-  return { rounds: set.length, files: filesOf(set), tells, siteGroups, absent, firstBuy };
+  const reads = side === 'T' ? [...fakeReads(set), ...stubbornReads(ctx, fullVsFull(ctx, 'T'))] : [];
+  return { rounds: set.length, files: filesOf(set), tells, siteGroups, absent, firstBuy, reads };
+}
+
+// ---------------------------------------------------------------------------
+// Reads a coach writes under the tells (tools/eye/GENERATOR_GAPS.md)
+// ---------------------------------------------------------------------------
+
+/** Rounds a "never fake" read needs before it is said. */
+const NEVER_FAKED_MIN = 8;
+/** Utility is the fake when it is in this many of the rounds that went the other way... */
+const FAKE_MIN = 2;
+/** ...and in at least this share of them. */
+const FAKE_SHARE = 50;
+
+/**
+ * Fakes, said outright. Every round with a smoke or molotov on a site before
+ * the hit: when all of them went to that site, "they never fake A"; when some
+ * went to the other site, the site utility those rounds share is the fake.
+ */
+function fakeReads(set) {
+  const out = [];
+  for (const site of ['A', 'B']) {
+    const other = site === 'A' ? 'B' : 'A';
+    const onSite = (f) => String(f.region || '').toUpperCase() === site;
+    const shown = set.filter((r) => [...tellFeatures(r).values()].some((f) => f.kind === 'region' && onSite(f)) && roundSite(r));
+    if (!shown.length) continue;
+    const faked = shown.filter((r) => roundSite(r) === other);
+    if (!faked.length) {
+      if (shown.length >= NEVER_FAKED_MIN) {
+        out.push(line(`They never fake ${site}: every round with a smoke or molo on ${site} before the hit went ${site} (${shown.length} of ${shown.length}).`, shown, { tone: 'note' }));
+      }
+      continue;
+    }
+    const pieces = new Map();
+    const words = new Map();
+    for (const r of faked) {
+      for (const f of tellFeatures(r).values()) {
+        if (f.kind !== 'util' || !onSite(f)) continue;
+        bump(pieces, f.key);
+        words.set(f.key, featureWords(f, 'T'));
+      }
+    }
+    const common = [...pieces]
+      .filter(([, n]) => n >= FAKE_MIN && percent(n, faked.length) >= FAKE_SHARE)
+      .sort((a, b) => b[1] - a[1] || words.get(a[0]).localeCompare(words.get(b[0])))
+      .slice(0, 2)
+      .map(([k]) => k);
+    if (!common.length) continue;
+    const both = faked.filter((r) => common.every((k) => tellFeatures(r).has(k)));
+    const used = both.length >= FAKE_MIN ? common : common.slice(0, 1);
+    const fakes = faked.filter((r) => used.every((k) => tellFeatures(r).has(k)));
+    out.push(
+      line(
+        `Fake on ${site}: ${used.map((k) => words.get(k)).join(' + ')}, then ${other} (${fakes.length} of the ${faked.length} rounds with ${site} utility that went ${other}).`,
+        fakes,
+        { tone: 'negative' }
+      )
+    );
+  }
+  return out;
+}
+
+/** Kills before this (1:00 on the clock) and before the hit are early ones. */
+const EARLY_KILLS_BY = ROUND_SECONDS - 60;
+const STUBBORN_MIN = 4;
+
+/**
+ * Do they follow their kills? An early kill on one site's side of the map
+ * while three or more of them stand on the other: "they stand 3 B, kill two on
+ * A and still go B". Kills the main group makes on its own way in are the hit
+ * itself and say nothing.
+ */
+export function stubbornReads(ctx, set) {
+  const stuck = [];
+  const followed = [];
+  for (const r of set) {
+    const site = roundSite(r);
+    if (site !== 'A' && site !== 'B') continue;
+    const commit = commitElapsed(r) ?? Infinity;
+    const away = new Map();
+    for (const k of r.kills || []) {
+      const t = ROUND_SECONDS - k.clock;
+      if (!k.attackerOurs || t > EARLY_KILLS_BY || t >= commit) continue;
+      const area = killArea(r, k, ctx);
+      if (area !== 'A' && area !== 'B') continue;
+      const s = sampleAtElapsed(r, t);
+      const there = new Map();
+      for (const p of s?.pts || []) bump(there, areaAt(r, p.x, p.y, p.pos, ctx.mapCode, ctx.laneSets));
+      const otherSite = area === 'A' ? 'B' : 'A';
+      if ((there.get(otherSite) || 0) >= 3) bump(away, area);
+    }
+    const best = top(away);
+    if (!best) continue;
+    (best[0] === site ? followed : stuck).push(r);
+  }
+  const total = stuck.length + followed.length;
+  if (total < STUBBORN_MIN) return [];
+  const share = percent(stuck.length, total);
+  const text = `After an early kill on the other side of the map (before 1:00, with 3+ of them on one site's side), they still hit their side in ${stuck.length} of ${total} rounds.`;
+  if (share >= 50) return [line(text, stuck, { tone: 'note', after: 'They stick to the call instead of following their kills' })];
+  if (share <= 20) return [line(text, followed, { after: 'They rotate to their kills' })];
+  return [line(text, stuck)];
+}
+
+/** At 1:30, in a 5v5. */
+const PAIRS_AT = 25;
+const PAIRS_MIN_ROUNDS = 12;
+/** Two players together in at least this share of rounds are a pair... */
+const PAIR_SHARE = 35;
+/** ...when most of those rounds are in one area. */
+const PAIR_AREA_SHARE = 60;
+
+/**
+ * Players who move as a pair: together at 1:30 in a third of the rounds or
+ * more, mostly in one area, with where the round goes when they are (T).
+ * "If skizzyee is in underground, FAZERY is with him."
+ * @returns {Map<string, object[]>} player id -> lines for his position row
+ */
+export function pairLinesFor(ctx, side) {
+  const set = fullVsFull(ctx, side).filter((r) => fiveOnFive(r, PAIRS_AT));
+  const mains = ctx.mains || [];
+  const found = [];
+  for (let i = 0; i < mains.length; i++) {
+    for (let j = i + 1; j < mains.length; j++) {
+      const a = mains[i];
+      const b = mains[j];
+      let seen = 0;
+      const together = [];
+      for (const r of set) {
+        const s = sampleAtElapsed(r, PAIRS_AT);
+        const pa = s?.pts.find((x) => x.id === a.id);
+        const pb = s?.pts.find((x) => x.id === b.id);
+        if (!pa || !pb) continue;
+        seen++;
+        if (Math.hypot(pa.x - pb.x, pa.y - pb.y) <= ALONE_UNITS) {
+          together.push({ r, area: areaAt(r, pa.x, pa.y, pa.pos, ctx.mapCode, ctx.laneSets) });
+        }
+      }
+      if (seen < PAIRS_MIN_ROUNDS || percent(together.length, seen) < PAIR_SHARE) continue;
+      const area = tally(together, (x) => x.area)[0];
+      if (!area?.[0] || percent(area[1], together.length) < PAIR_AREA_SHARE) continue;
+      found.push({ a, b, seen, together, area: area[0], share: percent(together.length, seen) });
+    }
+  }
+  found.sort((x, y) => y.share - x.share);
+  const out = new Map();
+  for (const p of found.slice(0, 3)) {
+    let goes = '';
+    if (side === 'T') {
+      const sites = tally(p.together.filter((x) => roundSite(x.r)), (x) => roundSite(x.r));
+      const [site, n] = sites[0] || [];
+      const hits = p.together.filter((x) => roundSite(x.r)).length;
+      if (site && hits >= 6 && percent(n, hits) >= 70) goes = `; then ${site} in ${n} of ${hits}`;
+    }
+    const text = `With ${p.b.name} at 1:30 in ${p.together.length} of ${p.seen} rounds, mostly ${p.area === 'mid' ? 'mid' : p.area}${goes}.`;
+    if (!out.has(p.a.id)) out.set(p.a.id, []);
+    out.get(p.a.id).push(line(text, p.together.map((x) => x.r)));
+  }
+  return out;
+}
+
+/** Where the sheet's rounds came from: how many demos, and against whom. (Demos carry no match date, only the upload.) */
+export function sourcesFor(ctx) {
+  const used = new Set(ctx.rounds.map((r) => r.demoId));
+  const demos = (ctx.includedDemos || [])
+    .filter(({ demo }) => used.has(demo.id))
+    .map(({ demo, teamIdx }) => ({ at: demoTimestamp(demo), opponent: (teamIdx === 1 ? demo.name2 : demo.name1) || 'Unknown' }))
+    .sort((a, b) => a.at - b.at);
+  if (!demos.length) return null;
+  // In the order played (uploaded); a team met again is counted, not repeated.
+  const seen = new Map();
+  for (const d of demos) seen.set(d.opponent, (seen.get(d.opponent) || 0) + 1);
+  const against = [...seen].map(([name, n]) => (n > 1 ? `${name} (${n})` : name));
+  return {
+    demos: demos.length,
+    opponents: [...seen.keys()],
+    text: `${demos.length} demo${demos.length === 1 ? '' : 's'}, against ${joinList(against)}.`
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -3299,7 +3477,7 @@ export function buildSummaryReport({ extract, sections, mapCode, teamName }) {
     names: [...new Set([...(extract.nameOf?.values?.() || []), ...(extract.mains || []).map((m) => m.name)])]
   };
   const players = sections?.players || [];
-  const out = { teamName, mapCode, sides: {}, misc: miscFor(ctx) };
+  const out = { teamName, mapCode, sources: sourcesFor(ctx), sides: {}, misc: miscFor(ctx) };
   for (const side of ['T', 'CT']) {
     const order = ['b', 'a'];
     const count = (s) =>
@@ -3311,8 +3489,11 @@ export function buildSummaryReport({ extract, sections, mapCode, teamName }) {
       const anchors = anchorUtilityFor(ctx);
       if (anchors.length) defaults = { rows: [], files: filesOf(fullVsFull(ctx, 'CT')), ...defaults, anchors };
     }
+    const positions = side === 'CT' ? ctPositionsFor(ctx) : positionsFor(ctx, side);
+    const pairs = pairLinesFor(ctx, side);
+    for (const row of positions) if (pairs.has(row.id)) row.sub = [...(row.sub || []), ...pairs.get(row.id)];
     out.sides[side] = {
-      positions: side === 'CT' ? ctPositionsFor(ctx) : positionsFor(ctx, side),
+      positions,
       pace: side === 'T' ? paceFor(ctx) : null,
       setups: side === 'CT' ? ctCallsFor(ctx) : null,
       tells: tellsFor(ctx, side),
@@ -3441,6 +3622,7 @@ function tellsHtml(w, tells) {
       )} (${t.hits} of ${t.rounds})`
     );
   }
+  for (const l of tells.reads || []) rows.push(w.lineHtml(l));
   if (tells.firstBuy) {
     if (tells.firstBuy.tells.length) {
       for (const t of tells.firstBuy.tells) rows.push(tellHtml(w, t, 'First buy, '));
@@ -3505,6 +3687,7 @@ export function buildSummaryDocHtml(spec, esc) {
   const mapName = MAPS[spec.mapCode]?.name || spec.mapCode;
   const cats = new Set(spec.categories || []);
   const parts = [`<h1 style="${TITLE_STYLE}">${esc(spec.teamName)}: ${esc(mapName)}</h1>`];
+  if (spec.report?.sources?.text) parts.push(`<p>${note(esc(spec.report.sources.text))}</p>`);
   for (const side of ['T', 'CT']) {
     if (!cats.has(side === 'T' ? 'sideT' : 'sideCT')) continue;
     const bag = spec.report?.sides?.[side];
@@ -3567,6 +3750,7 @@ function outlineTellsHtml(w, tells) {
       `${w.link(w.esc(`No ${t.utility}`), t.files)} → ${w.link(w.esc(`most likely ${t.outcome}`), t.hitFiles)} (${t.hits} of ${t.rounds})`
     );
   }
+  for (const l of tells?.reads || []) rows.push(w.lineHtml(l));
   return li(rows);
 }
 
@@ -3588,6 +3772,7 @@ export function buildOutlineDocHtml(spec, esc) {
   const mapName = MAPS[spec.mapCode]?.name || spec.mapCode;
   const cats = new Set(spec.categories || []);
   const parts = [`<h1 style="${TITLE_STYLE}">${esc(spec.teamName)}: ${esc(mapName)}</h1>`];
+  if (spec.report?.sources?.text) parts.push(`<p>${note(esc(spec.report.sources.text))}</p>`);
   const heading = (title, files) => `<h2 style="${HEADING_STYLE}">${w.link(esc(title), files)}</h2>`;
   const section = (title, html, files) => {
     if (html) parts.push(`${heading(title, files)}${html}`);

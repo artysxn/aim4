@@ -1,0 +1,92 @@
+NAVI Junior: Mirage NAVI Junior T SIDE T Positions
+- skizzyee: Rotation
+- karakurenai-: Mid
+- yoki7132: AWPer
+- MAHAR_-: A Lurk
+- FAZERY: B / UG T Pace
+- Rush : 32% (51, 13 towards B, 36 towards A)
+- Pop : 22% (35, 15 towards B, 14 towards A)
+- Contact : 3% (4, 3 towards B, 1 towards A) *Good balance for B and A rounds
+- Full exec : 11% (18)
+- Default : 20% (31)
+- Slow default : 6% (10) *only 26% default + slow default
+- Other : 6% (9) T Tells
+- Jungle molo: *Always A ( 51 of 51 )
+- Tetris flash: *Always A ( 43 of 43 )
+- B Bench molo: *Always B ( 19 of 19 )
+- B Site flash: *Always B ( 17 of 17 )
+- A Palace nade: *Always A default ( 10 of 10 )
+- First buy, Lower mid molo: *Always 3Mid default ( 3 of 3 ) T Dangerous rounds & openings
+- skizzyee x24 (Tetris x2 usually 1:41, rest early for A calls)
+- FAZERY x19 (Tetris x2 usually 1:41, rest early)
+- kodak x17 (Window x4 usually 1:40, rest early)
+- yoki x13 (Window x3 usually 1:32, rest early for B calls)
+- MahaR x10 (A Palace x2 usually 1:16, nothing T Palace early, rest early for B calls) T Antiforces
+- 5x Fast mid rush with smokes Con and Ladder, molo B Balc + B Car and flash Short, first fight Short at 1:24 (won 5 of 5). Anything fast through mid is 4 players.
+- 4x A rush with smokes Window, A and Bench, molo Jungle, flashes A + Tetris and nade Top con, first fight A Palace at 1:35 (won 3 of 4). Anything fast through A is 5 players.
+- 2x Default into 3-2-0 3Mid default with smokes Con and Ladder, molo B Balc + B Car, flashes Con + Boost and nade Catwalk + B Bench, first fight Boost at 1:00 (won 2 of 2).
+- 3Mid default with smoke Ladder, molo B Balc + B Car, flashes Boxes + Short and nade B Bench, first fight Short at 1:19 (lost).
+- Fast mid rush with smokes Window and Lower mid, molo Con + Ladder, flashes Catwalk + Jungle and nade Window, first fight Catwalk at 1:39 (lost). Anything fast through mid is 4 players.
+- Full A exec with smoke A and molo Mid + Stairs + Jungle, first fight T Mid at 1:41 (won). Counter with a smoke to block T Mid and play close to A.
+- A rush with smoke Con and molo A Ticket, first fight Window at 1:39 (won). If anything shows mid fast, expect 4 mid.
+- Mid rush with smokes Window and Con, molo Short + CT Spawn, flashes Boxes + Con and nade Con, first fight Window at 1:48 (won).
+- 2Mid default with smoke Window and molo Short, first fight A Balc at 1:18 (won).
+- Fast 2Mid default with smoke Window, molo Lower mid + Jungle, flashes Catwalk + Jungle and nade Ladder, first fight Short at 1:36 (won).
+- B rush with smokes Catwalk, Window and Con, molo Lower mid + B Car + B Bench, flashes Underground + Mid and nade Con + B Car, first fight Underground at 1:35 (won). If anything shows B fast, expect 4 B.
+- Default into 3-2-0 2Mid default with smoke Window, molo B Balc + B Car + B Bench and flash B, first fight Lower mid at 1:29 (won).
+- Slow default into 2-1-2 2Mid default with smoke Bench, molo Sandwich + A Balc + Jungle and flash Tetris, first fight A Ramp at 1:13 (won).
+- Full A exec with smokes Window and Jungle, molo Ladder + Sandwich + A Default, flash Catwalk and nade Con (lost). A smoke at A Palace stopped them and they lost the round. *Keep a smoke for the A exec and the 4-5B fight and keep info Short. T A Rounds
+- If A Palace nade, be very careful for an A rush
+- If CT Spawn smoke, be very careful for an A rush
+- On this, smoke Window and flash Tetris
+- 2 rounds of A palace pop: palace at 1:15 and duel at 0:57, with smokes T Spawn, Top mid and Stairs, molo Jungle + CT Spawn and flashes A + Tetris T B Rounds
+- If Underground flash, be very careful for a B contact
+- If Kitchen flash, be very careful for a B pop
+- On this, smokes Window and Kitchen, molo Lower mid + B Car and flashes Mid + B
+- 2 rounds of B fake: smoke at 1:24 and flash at 1:22, with smokes Window, Con and Kitchen, molo Lower mid + B Car + Window, flashes Mid + Underground and nade Mid Bench skizzyee (Rotation) Plays Rotation, very aggressive. Most of the fights in mid come around 1:27. Expect contact from skizzyee on A around 1:38, play it with two or with utility. karakurenai- (Mid) Plays mid, decently aggressive. First possible timing is a Lower mid molo at 1:47 with 1 teammate. Most of the fights in mid come around 1:27. yoki7132 (AWPer) Decently dynamic with AWP. 18 rounds mid, 14 rounds B, 7 rounds A and rest (13 rounds) spread out. Most of the fights in mid come around 1:21, otherwise passive and rotating around the map. MAHAR_- (A Lurk) Plays A, but never too aggressive. Earliest habit is getting to A Palace at 1:40. Tends to be most active on A around 1:32, otherwise passive and rotating around the map. Recommended to give up A early and put pressure on Catwalk. FAZERY (B / UG) Plays B / UG, but never too aggressive. Most of the fights on A come around 1:30, otherwise passive and rotating around the map. NAVI Junior CT SIDE CT Positions
+- skizzyee: B Short
+- karakurenai-: B Anchor
+- yoki7132: AWPer
+- MAHAR_-: A Anchor
+- FAZERY: A Con CT Setups (B - ee - A)
+- 2-1-2 : 51% (61, 79% won)
+- 2-0-3 : 14% (17, 65% won) *Stack A
+- 1-1-3 : 13% (16, 50% won) *Stack A
+- 2-2-1 : 9% (11, 36% won)
+- 1-2-2 : 7% (8, 63% won)
+- 1-0-4 : 2% (2, 50% won) *Stack A CT Calls
+- Under push : 75% (115, usually 1:41, 63% won)
+- B aps search : 32% (50, usually 1:36, 50% won)
+- 2nd timing mid fight : 25% (38, usually 1:28, 71% won)
+- Ramp search : 14% (21, usually 1:13, 62% won)
+- Palace search : 12% (18, usually 1:35, 67% won)
+- AWP B start : 11% (17, usually 1:43, 53% won) CT Tells
+- Mid nade: Always under push ( 9 of 9 )
+- Underground smoke: Always under push ( 7 of 7 )
+- No tells for first buy CT Dangerous rounds & openings
+- Short flash: Either under push ( 2/5 ) or 2nd timing mid fight ( 3/5 )
+- yoki x27 (Top mid x4 usually 1:37, nothing Window early, rest early)
+- skizzyee x22 (B Aps x6 usually 1:18, rest for A calls)
+- FAZERY x17 (Lower mid x4 usually 1:01, rest early for A calls)
+- MahaR x17 (A Ramp x3 usually 1:38, rest early for A calls)
+- kodak x11 (B Aps x4 usually 1:27, rest early for A calls) CT Anti-ecos
+- 6x 2nd timing mid fight with smoke A Palace, molo A Ramp and nade A Ramp, first fight Top mid at 1:39 (won 5 of 6).
+- 5x Under push with molo A Ramp and nade A Ramp, first fight apEX at 1:28 (won 2 of 5).
+- 4x Ramp search with smoke A Palace, molo A Ramp and flash Chair, first fight A at 1:32 (won 4 of 4).
+- 3x Under push with molo A Ramp and flash Chair, first fight A Ramp at 1:14 (won 3 of 3).
+- 3x B aps search with smoke A Ramp, molo A Ramp, flash Chair and nade A Ramp, first fight Top mid at 1:24 (won 2 of 3).
+- 2x Default with smokes A Palace and A Ramp, molo A Ramp + B Aps, flashes Chair + Delpan and nade A Ramp + Window, first fight Tetris at 1:33 (won 2 of 2).
+- 2x 2nd timing mid fight with smoke A Palace, molo A Ramp, flash Chair and nade A Ramp, first fight Lower mid at 1:33 (won 2 of 2).
+- Palace search with smokes Lower mid and A Ramp, molo A Ramp, flash Chair and nade A Ramp + Lower mid, first fight Empty at 1:29 (won).
+- 2nd timing mid fight with smoke A Palace, molo A Ramp and flash Chair, first fight Underground at 1:36 (won).
+- 1st timing mid fight with smoke A Palace, molo A Ramp, flash Delpan and nade A Ramp, first fight Short at 1:37 (won).
+- Default with smoke A Palace, molo A Ramp + B Aps, flash Delpan and nade T Outside A + B Aps, first fight Top mid at 1:40 (won).
+- B aps search with smokes A Palace and Lower mid and molo A Ramp + B Aps, first fight B Site at 1:19 (won).
+- Default with smoke A Ramp, molo A Ramp, flash Delpan and nade A Ramp + Top mid, first fight B Aps at 1:38 (won). CT A Rounds
+- vs A hits on full buy vs full buy: 61% won (57 rounds), 27% once planted (22)
+- A retakes: 32% won (31 rounds), from CT Spawn, Jungle and A Ticket
+- MahaR anchors A in 96% of rounds
+- Stacks A (3+ players at 1:46) in 29% of rounds CT B Rounds
+- vs B hits on full buy vs full buy: 53% won (30 rounds), 20% once planted (15)
+- B retakes: 25% won (16 rounds), from Kitchen, CT Spawn and Exit
+- kodak holds B in 89% of rounds skizzyee (B Short) Plays B Short, decently aggressive. Earliest habit is a Top mid flash at 1:43. Tends to be most active on Short around 1:08. Most rounds still holding Short to about 1:17. karakurenai- (B Anchor) Plays B Anchor, but never too aggressive. Earliest habit is getting to B Car at 1:42. Tends to be most active on B Aps around 1:03. yoki7132 (AWPer) Decently dynamic with AWP. 11 rounds CT Spawn, 11 rounds A Ticket, 8 rounds Window and rest (34 rounds) spread out. Tends to be most active on Short around 1:05. MAHAR_- (A Anchor) Plays A Anchor, decently aggressive. First possible timing is an A Palace smoke at 1:47. Most of the fights on A Balc come around 1:11. FAZERY (A Con) Plays A Con, but never too aggressive. Earliest habit is a Lower mid smoke at 1:43 with 1 teammate. Tends to be most active on Jungle around 1:06, otherwise passive and rotating around the map.

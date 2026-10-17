@@ -1,0 +1,38 @@
+WBT: Anubis WBT T SIDE T Positions
+- Psycho: Mid
+- s4ltovsk1yy: AWPer
+- Smash: A Lurk
+- tyr1k: B Lurk
+- DemQQ: Water T Pace
+- Rush: 10% (6, 5 towards B, 0 towards A) *They never rush A
+- Pop: 10% (6, 3 towards B, 1 towards A) *Only 1 round early A
+- Contact: 5% (3, 2 towards B, 0 towards A) *Still never early A
+- Full exec: 12% (7)
+- Default: 39% (23)
+- Slow default: 19% (11) *58% default + slow default
+- Other: 5% (3) T Tells
+- Top con flash: Always B (6 of 6)
+- Flash mid: Mostly mid (6 of 7)
+- Molo mid window: Mostly 1+ players mid (15 of 18)
+- A pillar nade: Mostly A (5 of 6)
+- No tells for first buy T Dangerous rounds & openings
+- B lurk smoke: Either 5B pop (2/12) or tyr1k solo B passive (10/12)
+- Smash x13 (A Main x6 usually 1:16, rest con late for B calls) *Very active A
+- s4ltovsk1yy x8 (Con x3 usually 1:42, Mid x2 usually 1:40, nothing B main early)
+- Psycho x5 but all in lateround/set calls
+- tyr1k x4 (only x1 aggressive towards B main)
+- DemQQ x2 (Con x1 usually 1:37, Water x1 usually 0:27) T Antiforces
+- 2x Full B exec with top con, left side site smokes, molo yekindar + top con + backsite, flashes and fight B main. Counter with Block B main with smoke and play close jail + spam smokes.
+- 2x Slow default into 2-3 B split, 3 con went contact (no flash) at 0.38.
+- 2x Slow default into 1-4 B split, smoked left + temple from water, molo yekindar + backsite and go con with flash.
+- Slow default into 4-1 Mid take
+- Fast B split with fast water take, 3B 2 con. Smoked bottom con, B lurk, then left side site. Molotov backsite.
+- Slow default into late full A exec from outside of A main. Enemies blocked them close to A main and spammed smoke and Ts aborted + lost round.
+- 4 mid take with molotov mid window, smoke temple, molotov camera as Ts take mid, then flash for split as 4 players go camera. If anything mid fast, care 4 mid. *If we play con on force, one needs to be antiflash and one hold. Tendency to play slow rounds and end B if given nothing. Alternatives are fast rounds / execs on either site, or full A exec. Save smoke to block A exec + save smoke to block 4-5B fight, keep info con and dont play mid too aggressive. Stacks + blocks will work better than aggressive rounds. T B Rounds
+- Never full exec on full buy vs full buy
+- Never send 1 person to aggressively play / try to open B site
+- If top con smoke, be very careful for B pop with or without B lurk smoke
+- On this, molotov temple, backsite normal and 2x flashes above main
+- Never aggressive with 1 player T A Rounds
+- One round with lurk smoke, then take A main, then exec after take A main. On this, camera + heaven smoked, 5A (no lurks), molotov 8, pillar and backsite, flashes right side pillar + default exec flashes above site.
+- Very aggressive with 1 player+ and focusing here on default Psycho (Mid rot) Plays mid, but never too aggressive. First possible timing was a flash through the smoke at 1.32 with 2 teammates. Then at 1.20 only twice at mid (2 rounds with 3 players mid). Tends to be most active mid around 1.10, otherwise passive and rotating around the map. A few early peeks bridge but rarely ever taking map control. Recommended to leave mid early and focus on water pressure. His teammates on mid boost sometimes. If taking mid, usually in script of 2-3 players. If you have info that WBT is taking somewhere else on the map, very unlikely to have mid timing. No recommendations for early punishes. s4ltovsk1yy (AWP) Decently dynamic with AWP. 8 rounds B, 5 rounds passive B or mid, 2 aggressive mid, once in A main and rest (16 rounds) towards con / stairs. Only got boosted ONCE on force buy with AWP at 1.20, no threat there. In midround very active towards searching mid or continuously holding con. Most rounds still holding con to about 1.05, then throws nades for some set call and covers flanks and rotations with AWP, not hyper aggressive. Doesn't search first in con much, only once for a 3con round. Does go through stairs smoke even if there is one a lot of the time. Only 3 rounds where holding B main later than 1.30. Recommended to NOT search stairs in midround. Either well planned and well committed round to kill players in water with stairs smoke (he will go out), or don't peek it from con. Instead, good risk to retake B main after 1.30 with flash first to bait out AWP shot. If AWP doesn't shoot, most likely round towards A. Smash (A) Plays A, decently aggressive. Often blocks stairs smoke with molotov deep into A main. Does smoke A lurk but not instantly, does on 2nd timing after A player has thrown some nades. VERY often stays behind the box near A main water entrance (good possibility for HEs) controlling and waiting until CT uses some nades. A lot of rounds with flash into A main or searching with teammates, sometimes even through utility. Does tend to stay water and carpets even if team is playing mid or B, but if the plan is con, he joins very often (leaving A main fully undefended). Recommended to wait out block nades and play awp on A a lot, boost over lurk smoke or block A at lurk smoke, then retake B information and push water deeper if there is fights on B after 1.20.

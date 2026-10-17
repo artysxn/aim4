@@ -19,6 +19,11 @@
 //   team_documents             list and read the user's team documents
 //   team_rankings              the VRS world ranking
 //   site_map                   every page of the site, with links to cite
+//   find_weaknesses            where a team loses on a map and side, measured and ranked
+//   review_antistrat_document  check a document against the data and itself
+//   rewrite_antistrat_document save a reorganised version (asks the user first)
+//   queue_antistrat_documents  several teams and maps, one document each, in a row
+//                              (asks the user once)
 //   screenshot_round           (vision only) one moment of a round, as a picture
 // ---------------------------------------------------------------------------
 
@@ -49,6 +54,8 @@ import {
 import { opinionsFrom } from '../training/opinions.js';
 import { pointsFromSummaryHtml } from '../training/trainingSources.js';
 import { QueryError, runRoundQuery, zoneNames } from './roundQuery.js';
+import { buildRewrite, outlineOfHtml, reviewOutline } from './docReview.js';
+import { findWeaknesses } from './weaknesses.js';
 
 /** A tool's answer is cut to this many characters before the model reads it. */
 const MAX_RESULT_CHARS = 12000;
@@ -339,6 +346,82 @@ TOOLS.push(
       description: 'Every page of aim4 and what it shows, with links. Use it to point the user to the right page, or to find which tool covers a question.',
       parameters: { type: 'object', properties: {} }
     }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'find_weaknesses',
+      description:
+        "Where a team loses on one map and side, measured from its rounds: sites or paces they lose more than their usual, spots where they lose their fights, where their opening deaths pile up, ranked. Also their numbers in retakes or post-plants, after losing the opening duel, anti-ecos and forces, and the exploitable tells from the antistrat. Use it for any question about weaknesses or how to beat a team.",
+      parameters: {
+        type: 'object',
+        properties: { team: { type: 'string' }, map: { type: 'string' }, side: { type: 'string', enum: ['T', 'CT', 'both'] } },
+        required: ['team', 'map']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'review_antistrat_document',
+      description:
+        "Check one of the user's antistrat documents: wrong arithmetic, impossible counts, points on too few rounds, duplicates, numbers that changed or are not in the current data, strong points it is missing, empty sections. Returns the document's outline (numbered points) and the issues.",
+      parameters: {
+        type: 'object',
+        properties: {
+          title: { type: 'string', description: 'The document title, or part of it (team_documents lists them).' },
+          team: { type: 'string', description: 'Only when the title does not say which team it is about.' },
+          maps: { type: 'array', items: { type: 'string' }, description: 'Only when the title does not say the maps.' }
+        },
+        required: ['title']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'rewrite_antistrat_document',
+      description:
+        'Save a reorganised and rewritten version of a document you reviewed. Give every section with its points, in the order they should read. Numbers must be copied from the review (the document or its "current data" lines); any other number is refused. Points keep their round links. The user confirms first.',
+      parameters: {
+        type: 'object',
+        properties: {
+          title: { type: 'string', description: 'The reviewed document.' },
+          mode: { type: 'string', enum: ['copy', 'replace'], description: 'copy (default) saves a new document next to it; replace overwrites it.' },
+          sections: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: { side: { type: 'string', description: 'For example "Nuke T side".' }, heading: { type: 'string' }, points: { type: 'array', items: { type: 'string' } } },
+              required: ['heading', 'points']
+            }
+          }
+        },
+        required: ['title', 'sections']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'queue_antistrat_documents',
+      description:
+        "Create several antistrat documents in a row: one document per job, each a team on one or more maps. maps can be [\"all\"] for every map the team has at least 3 demos on. The user confirms the whole queue once; a job that fails does not stop the rest.",
+      parameters: {
+        type: 'object',
+        properties: {
+          jobs: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: { team: { type: 'string' }, maps: { type: 'array', items: { type: 'string' } }, style: { type: 'string', enum: ['full', 'outline', 'sixpack'] } },
+              required: ['team', 'maps']
+            }
+          }
+        },
+        required: ['jobs']
+      }
+    }
   }
 );
 
@@ -382,6 +465,84 @@ function fit(value) {
   const text = typeof value === 'string' ? value : JSON.stringify(value);
   return text.length <= MAX_RESULT_CHARS ? text : `${text.slice(0, MAX_RESULT_CHARS)}… [cut: the rest did not fit]`;
 }
+
+const STYLES = ['full', 'outline', 'sixpack'];
+const styleTitle = (style) => (style === 'sixpack' ? 'Sixpack' : style === 'outline' ? 'Outline' : 'Summary');
+const mapName = (code) => MAPS[code]?.name || code;
+
+/** The team the user's documents go to. */
+async function myTeam() {
+  const myTeams = await fetchTeams();
+  const dest = myTeams?.[0];
+  if (!dest) throw new ToolError('The user is not in a team, so there is nowhere to save documents.');
+  return dest;
+}
+
+/** The sheet for a team on a map as the review compares points: fresh, with rounds. */
+function freshPoints(scan) {
+  const html = buildSummaryDocHtml(
+    { teamName: scan.team.name, mapCode: scan.mapCode, categories: SUMMARY_CATEGORIES.map((c) => c.key), report: scan.report(), links: true },
+    escapeHtml
+  );
+  return pointsFromSummaryHtml(html).map((p) => ({ ...p, side: `${mapName(scan.mapCode)} ${p.side}`.trim() }));
+}
+
+/** Build one antistrat document and save it. */
+async function writeAntistratDoc(team, maps, style, dest, onProgress) {
+  const specs = [];
+  for (const m of maps) {
+    const scan = await teamScan(team.name, m, onProgress);
+    specs.push({ teamName: team.name, mapCode: m, categories: SUMMARY_CATEGORIES.map((c) => c.key), report: scan.report(), links: false });
+  }
+  const html =
+    style === 'sixpack'
+      ? buildSixpackDocHtml(specs, escapeHtml)
+      : specs.map((sp) => (style === 'outline' ? buildOutlineDocHtml(sp, escapeHtml) : buildSummaryDocHtml(sp, escapeHtml))).join('<hr>');
+  const title = `${styleTitle(style)}: ${team.name} on ${maps.map(mapName).join(', ')}`;
+  await saveTeamDocument(dest.id, { title, html });
+  return title;
+}
+
+/** A team's maps: named ones, or "all" for every map with at least `min` demos. */
+async function mapsOf(team, maps, min = 3) {
+  const list = (Array.isArray(maps) ? maps : [maps]).filter(Boolean);
+  if (list.some((m) => String(m).toLowerCase() === 'all')) {
+    const { payload } = await library();
+    const counts = new Map();
+    for (const d of payload.demos) {
+      if (teamNameKey(d.name1, d.t1) === team.key || teamNameKey(d.name2, d.t2) === team.key) counts.set(d.map, (counts.get(d.map) || 0) + 1);
+    }
+    const all = [...counts].filter(([code, n]) => n >= min && MAPS[code]).sort((a, b) => b[1] - a[1]).map(([code]) => code);
+    if (!all.length) throw new ToolError(`${team.name} has no map with ${min}+ demos.`);
+    return all;
+  }
+  if (!list.length) throw new ToolError('Name at least one map.');
+  return [...new Set(list.map(mapCodeOf))];
+}
+
+/** A document of the user's team by title: exact, then the only one containing it. */
+async function documentOf(title) {
+  const dest = await myTeam();
+  const docs = dest.documents || [];
+  const want = String(title || '').trim().toLowerCase();
+  if (!want) throw new ToolError('Name the document (team_documents lists them).');
+  const exact = docs.filter((d) => String(d.title || '').toLowerCase() === want);
+  const near = exact.length ? exact : docs.filter((d) => String(d.title || '').toLowerCase().includes(want));
+  if (!near.length) throw new ToolError(`No document called "${title}". Call team_documents to list them.`);
+  if (near.length > 1) throw new ToolError(`"${title}" could be ${near.slice(0, 6).map((d) => `"${d.title}"`).join(', ')}. Use the full title.`);
+  const full = (await fetchTeamDocument(dest.id, near[0].id)) || near[0];
+  return { dest, doc: full };
+}
+
+/** "Summary: NAVI on Nuke, Mirage" -> the team and maps a generated title names. */
+function subjectOfTitle(title) {
+  const m = String(title || '').match(/^(?:summary|outline|sixpack|reviewed)?:?\s*(.+?)\s+on\s+(.+)$/i);
+  if (!m) return null;
+  return { team: m[1].replace(/^(summary|outline|sixpack|reviewed):\s*/i, ''), maps: m[2].split(/\s*,\s*|\s+and\s+/) };
+}
+
+/** The last review per document: what a rewrite is checked against. */
+const reviews = new Map();
 
 const roundsLink = (files) => (files?.length ? `/demos?rounds=${files.slice(0, 150).map(encodeURIComponent).join(',')}` : '');
 
@@ -453,27 +614,123 @@ export async function runTool(name, args = {}, ctx = {}) {
       }
       case 'create_antistrat_document': {
         const team = await teamOf(args.team);
-        const maps = (Array.isArray(args.maps) ? args.maps : [args.maps]).filter(Boolean).map(mapCodeOf);
-        if (!maps.length) throw new ToolError('Name at least one map.');
-        const style = ['full', 'outline', 'sixpack'].includes(args.style) ? args.style : 'full';
-        const mapNames = maps.map((m) => MAPS[m]?.name || m).join(', ');
-        const myTeams = await fetchTeams();
-        const dest = myTeams?.[0];
-        if (!dest) throw new ToolError('The user is not in a team, so there is nowhere to save documents.');
-        const ok = (await ctx.confirm?.(`Create a ${style} antistrat document for ${team.name} on ${mapNames} in ${dest.name}'s Documents?`)) ?? false;
+        const maps = await mapsOf(team, args.maps);
+        const style = STYLES.includes(args.style) ? args.style : 'full';
+        const dest = await myTeam();
+        const ok = (await ctx.confirm?.(`Create a ${style} antistrat document for ${team.name} on ${maps.map(mapName).join(', ')} in ${dest.name}'s Documents?`)) ?? false;
         if (!ok) return { content: 'The user declined. Nothing was created.', display: 'Document not created (declined)' };
-        const specs = [];
-        for (const m of maps) {
-          const scan = await teamScan(team.name, m, ctx.onProgress);
-          specs.push({ teamName: team.name, mapCode: m, categories: SUMMARY_CATEGORIES.map((c) => c.key), report: scan.report(), links: false });
-        }
-        const html =
-          style === 'sixpack'
-            ? buildSixpackDocHtml(specs, escapeHtml)
-            : specs.map((s) => (style === 'outline' ? buildOutlineDocHtml(s, escapeHtml) : buildSummaryDocHtml(s, escapeHtml))).join('<hr>');
-        const title = `${style === 'sixpack' ? 'Sixpack' : style === 'outline' ? 'Outline' : 'Summary'}: ${team.name} on ${mapNames}`;
-        await saveTeamDocument(dest.id, { title, html });
+        const title = await writeAntistratDoc(team, maps, style, dest, ctx.onProgress);
         return { content: `Saved "${title}" to ${dest.name}'s Documents.`, display: `Saved "${title}"`, link: '/team/documents' };
+      }
+      case 'queue_antistrat_documents': {
+        const raw = (Array.isArray(args.jobs) ? args.jobs : []).slice(0, 20);
+        if (!raw.length) throw new ToolError('Give at least one job: a team and its maps.');
+        const jobs = [];
+        for (const j of raw) {
+          const team = await teamOf(j.team);
+          jobs.push({ team, maps: await mapsOf(team, j.maps), style: STYLES.includes(j.style) ? j.style : 'full' });
+        }
+        const dest = await myTeam();
+        const list = jobs.map((j, i) => `${i + 1}. ${j.team.name} on ${j.maps.map(mapName).join(', ')} (${j.style})`).join('\n');
+        const ok = (await ctx.confirm?.(`Create ${jobs.length} antistrat document${jobs.length === 1 ? '' : 's'} in ${dest.name}'s Documents?\n${list}`)) ?? false;
+        if (!ok) return { content: 'The user declined. Nothing was created.', display: 'Queue not run (declined)' };
+        const done = [];
+        const failed = [];
+        for (const [i, j] of jobs.entries()) {
+          const before = new Set(scans.keys());
+          try {
+            const title = await writeAntistratDoc(j.team, j.maps, j.style, dest, (label) => ctx.onProgress?.(`Document ${i + 1} of ${jobs.length}: ${label}`));
+            done.push(title);
+          } catch (err) {
+            failed.push(`${j.team.name}: ${err.message}`);
+          }
+          // A long queue would otherwise hold every scan's rounds in memory.
+          for (const k of scans.keys()) if (!before.has(k)) scans.delete(k);
+        }
+        return {
+          content: fit({ saved: done, failed }),
+          display: `Saved ${done.length} of ${jobs.length} document${jobs.length === 1 ? '' : 's'}${failed.length ? `, ${failed.length} failed` : ''}`,
+          link: '/team/documents'
+        };
+      }
+      case 'find_weaknesses': {
+        const scan = await teamScan(args.team, args.map, ctx.onProgress);
+        const sides = args.side === 'T' || args.side === 'CT' ? [args.side] : ['T', 'CT'];
+        const { rounds, network } = scan.results.extract;
+        const found = sides.map((side) => findWeaknesses(rounds, network, { side }));
+        const out = found.map((w) => ({
+          side: w.side,
+          baseline: w.baseline.text,
+          weaknesses: w.weaknesses.slice(0, 10).map((x) => `${x.text} [${x.kind}, ${x.rounds} rounds]`),
+          situations: w.situations.map((x) => x.text)
+        }));
+        const exploits = opinionsFrom(scan.report()).slice(0, 10).map((o) => o.text);
+        const files = found.flatMap((w) => w.weaknesses.slice(0, 3).flatMap((x) => x.files));
+        const n = out.reduce((a, o) => a + o.weaknesses.length, 0);
+        return {
+          content: fit({ team: scan.team.name, map: mapName(scan.mapCode), sides: out, exploits }),
+          display: `Found ${n} weakness${n === 1 ? '' : 'es'} for ${scan.team.name} on ${mapName(scan.mapCode)}`,
+          link: roundsLink([...new Set(files)])
+        };
+      }
+      case 'review_antistrat_document': {
+        const { doc } = await documentOf(args.title);
+        const outline = outlineOfHtml(doc.html || '');
+        const subject = args.team ? { team: args.team, maps: args.maps || [] } : subjectOfTitle(doc.title);
+        let fresh = [];
+        const findings = [];
+        let note = '';
+        if (subject?.team) {
+          try {
+            const team = await teamOf(subject.team);
+            const maps = await mapsOf(team, subject.maps?.length ? subject.maps : ['all']);
+            for (const m of maps) {
+              const scan = await teamScan(team.name, m, ctx.onProgress);
+              fresh.push(...freshPoints(scan));
+              // What "Notes and preparation" may draw on: measured weaknesses and the rule-bot's exploits.
+              const { rounds, network } = scan.results.extract;
+              for (const side of ['T', 'CT']) {
+                for (const x of findWeaknesses(rounds, network, { side }).weaknesses.slice(0, 5)) {
+                  findings.push({ side: `${mapName(m)} ${side}`, section: 'Weaknesses', text: x.text, files: x.files });
+                }
+              }
+              for (const o of opinionsFrom(scan.report()).slice(0, 8)) findings.push({ side: mapName(m), section: 'Exploits', text: o.text, files: o.files || [] });
+            }
+          } catch (err) {
+            note = `Not compared with the data: ${err.message}`;
+          }
+        } else {
+          note = 'Not compared with the data: the title does not name a team and maps. Call again with team and maps.';
+        }
+        const review = reviewOutline(outline, fresh);
+        reviews.set(doc.id, { outline, fresh, findings });
+        let n = 0;
+        const numbered = outline.map((p) => (p.heading ? `## ${p.side}${p.section ? ` / ${p.section}` : ''}` : `${n++}. ${p.text}`));
+        return {
+          content: fit({ title: doc.title, note, points: review.points, issue_counts: review.counts, issues: review.issues.map((x) => `[${x.kind}] ${x.text}`), outline: numbered, for_notes: findings.map((f) => `${f.side} ${f.section}: ${f.text}`) }),
+          display: `Reviewed "${doc.title}": ${review.issues.length} issue${review.issues.length === 1 ? '' : 's'}`,
+          link: '/team/documents'
+        };
+      }
+      case 'rewrite_antistrat_document': {
+        const { dest, doc } = await documentOf(args.title);
+        const seen = reviews.get(doc.id);
+        if (!seen) throw new ToolError('Review the document first with review_antistrat_document.');
+        const replace = args.mode === 'replace';
+        const title = replace ? doc.title : `Reviewed: ${String(doc.title).replace(/^reviewed:\s*/i, '')}`;
+        let built;
+        try {
+          built = buildRewrite({ title, sections: args.sections }, [...seen.outline.filter((p) => !p.heading), ...seen.fresh, ...seen.findings], escapeHtml);
+        } catch (err) {
+          throw new ToolError(err.message);
+        }
+        const q = replace
+          ? `Overwrite "${doc.title}" with the rewritten version (${built.points} points)? The old text is not kept.`
+          : `Save the rewritten version (${built.points} points) as "${title}" in ${dest.name}'s Documents?`;
+        const ok = (await ctx.confirm?.(q)) ?? false;
+        if (!ok) return { content: 'The user declined. Nothing was saved.', display: 'Rewrite not saved (declined)' };
+        await saveTeamDocument(dest.id, replace ? { id: doc.id, title, html: built.html } : { title, html: built.html });
+        return { content: `Saved "${title}" (${built.points} points).`, display: `Saved "${title}"`, link: '/team/documents' };
       }
       case 'database_query': {
         const table = args.table === 'teams' ? 'teams' : 'players';
