@@ -2161,11 +2161,10 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
   }
 
   function sideSegHtml(enabled) {
-    if (!enabled) return '';
     const btn = (side, src, label) =>
       `<button type="button" class="rp-seg-btn${
-        filters.side === side ? ' active' : ''
-      }" data-adv-side="${side}" aria-label="${label}" title="${label}">
+        enabled && filters.side === side ? ' active' : ''
+      }" data-adv-side="${side}" aria-label="${label}" title="${label}"${enabled ? '' : ' disabled'}>
         <img src="${src}" alt="" width="18" height="18" draggable="false" />
       </button>`;
     return `<div class="rp-filter-group">
@@ -2239,7 +2238,18 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
   }
 
   function roundTypeFilterHtml() {
-    if (!roundFiltersEnabled()) return '';
+    if (!roundFiltersEnabled()) {
+      const off = (label) => `<div class="rp-filter-group">
+        <div class="rp-typeahead">
+          ${mbWrap(
+            'menu',
+            `<input type="search" class="site-input rp-filter-search" placeholder="${label}"
+            disabled title="Pick one map and a side first" aria-label="${label}" />`
+          )}
+        </div>
+      </div>`;
+      return off('Round type…') + off('vs round type…');
+    }
     const map = roundFilterMap();
     const ownSide = filters.side;
     const oppSide = ownSide === 'T' ? 'CT' : 'T';
@@ -2390,30 +2400,6 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     const sideEnabled = teamPicked || Boolean(roundFilterMap());
 
     filtersEl.innerHTML = `
-      ${libraryScopeHtml()}
-      ${tagFilterHtml()}
-      <div class="rp-filter-group${mapMenuOpen ? ' menu-open' : ''}">
-        ${mapMenuHtml()}
-      </div>
-      <div class="rp-filter-group">
-        ${rankFilterHtml({
-          own: filters.rankOwn,
-          opp: filters.rankOpp,
-          summaryClass: 'site-select st-rank-summary'
-        })}
-      </div>
-      <div class="rp-filter-group">
-        <div class="rp-econ-pair">
-          <div class="rp-econ-side">
-            ${econSelectHtml('rp-econ-a', filters.econA, "Team 1's buy")}
-            ${hasAwpCheckHtml('rp-awp-a', filters.hasAwpA)}
-          </div>
-          <div class="rp-econ-side">
-            ${econSelectHtml('rp-econ-b', filters.econB, "Team 2's buy")}
-            ${hasAwpCheckHtml('rp-awp-b', filters.hasAwpB)}
-          </div>
-        </div>
-      </div>
       ${
         teamClusters.length
           ? `<div class="rp-filter-group${teamMenuOpen ? ' menu-open' : ''}">
@@ -2430,6 +2416,22 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
             </div>`
           : ''
       }
+      <div class="rp-filter-group${mapMenuOpen ? ' menu-open' : ''}">
+        ${mapMenuHtml()}
+      </div>
+      <div class="rp-filter-group">
+        <div class="rp-econ-pair">
+          <div class="rp-econ-side">
+            ${econSelectHtml('rp-econ-a', filters.econA, "Team 1's buy")}
+            ${hasAwpCheckHtml('rp-awp-a', filters.hasAwpA)}
+          </div>
+          <div class="rp-econ-side">
+            ${econSelectHtml('rp-econ-b', filters.econB, "Team 2's buy")}
+            ${hasAwpCheckHtml('rp-awp-b', filters.hasAwpB)}
+          </div>
+        </div>
+      </div>
+      ${sideSegHtml(sideEnabled)}
       ${
         teamClusters.length
           ? `<div class="rp-filter-group">
@@ -2437,9 +2439,14 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
             </div>`
           : ''
       }
-      ${sideSegHtml(sideEnabled)}
       ${roundTypeFilterHtml()}
-      ${situationSegHtml(teamPicked)}
+      <div class="rp-filter-group">
+        ${rankFilterHtml({
+          own: filters.rankOwn,
+          opp: filters.rankOpp,
+          summaryClass: 'site-select st-rank-summary'
+        })}
+      </div>
       <div class="rp-filter-group rp-advanced-wrap">
         <div class="rp-advanced-body" id="rp-advanced-body">
           <div class="rp-filter-group">
@@ -2459,6 +2466,9 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
           </div>
         </div>
       </div>
+      ${situationSegHtml(teamPicked)}
+      ${tagFilterHtml()}
+      ${libraryScopeHtml()}
       <button type="button" class="btn btn-sm" id="rp-clear">Clear filters</button>`;
 
     const bindEcon = (id, key) => {
