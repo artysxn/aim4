@@ -2711,6 +2711,183 @@ body.is-impersonating .site-toast-stack {
   color: var(--accent-hover);
 }
 
+/* Training pages (/admin/training_1 … 5): stage picker, then the viewer with
+   the bot's words beside it. */
+.tr-head {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.tr-stages {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.tr-stage {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  color: var(--muted);
+  padding: 7px 12px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.tr-stage.is-on {
+  color: var(--text);
+  border-color: var(--accent);
+}
+.tr-help {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+.tr-actions,
+.tr-teambar,
+.tr-verdict-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.tr-teambar {
+  margin-bottom: 12px;
+}
+.tr-team-select {
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-xs);
+  color: var(--text);
+  padding: 6px 8px;
+  font: inherit;
+  max-width: 340px;
+}
+.tr-flash {
+  margin-bottom: 10px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.tr-flash.is-error {
+  color: var(--accent-hover);
+}
+.tr-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 420px);
+  gap: 16px;
+  align-items: start;
+}
+@media (max-width: 1100px) {
+  .tr-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.tr-viewer-host {
+  min-width: 0;
+}
+/* The timeline viewer is built for the full-screen overlay; here it sits in
+   the page at a fixed height instead. */
+.rv-overlay.tr-viewer {
+  position: relative;
+  inset: auto;
+  z-index: auto;
+  height: min(72vh, 760px);
+  min-height: 460px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.tr-viewer .rv-side-head .rv-back {
+  display: none;
+}
+.tr-side {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+.tr-title {
+  margin: 0;
+  font-size: 15px;
+}
+.tr-kicker {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.tr-claim {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.5;
+}
+.tr-because {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.tr-beats {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 46vh;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+}
+.tr-beat {
+  display: grid;
+  grid-template-columns: 74px minmax(0, 1fr);
+  gap: 8px;
+  padding: 6px 10px;
+  font-size: 13px;
+  line-height: 1.4;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+}
+.tr-beat:last-child {
+  border-bottom: none;
+}
+.tr-beat:hover {
+  background: var(--surface-hover);
+}
+.tr-beat.is-now {
+  background: var(--surface);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.tr-beat-kill .tr-beat-text {
+  color: var(--muted);
+}
+.tr-clock {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.tr-verdict {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+.tr-ask {
+  margin: 0;
+  font-size: 13px;
+}
+.tr-text {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-xs);
+  color: var(--text);
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 13px;
+  resize: vertical;
+}
+
 /* Performance panel. The strip of headline numbers, then two tables. */
 .perf-strip {
   display: grid;

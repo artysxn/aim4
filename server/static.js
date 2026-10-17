@@ -96,9 +96,9 @@ export const SITE_VIEW_PATHS = new Set([
   '/replays/charts'
 ]);
 
-// Shell-owned subtrees: /team/*, /account/* (sub-pages), /i/* (invites),
+// Shell-owned subtrees: /team/*, /account/* (sub-pages), /admin/* (training pages), /i/* (invites),
 // /s2/* (shared 2D rounds), /d/* (shared documents).
-export const SITE_VIEW_PREFIXES = ['/team/', '/account/', '/i/', '/s2/', '/d/', '/player/'];
+export const SITE_VIEW_PREFIXES = ['/team/', '/account/', '/admin/', '/i/', '/s2/', '/d/', '/player/'];
 
 function isSiteViewPath(rel) {
   return SITE_VIEW_PATHS.has(rel) || SITE_VIEW_PREFIXES.some((p) => rel.startsWith(p));

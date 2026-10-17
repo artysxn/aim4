@@ -2398,7 +2398,12 @@ function roundLibraryReadiness(mapCode, network, utilDb, rounds) {
  * @param {(done: number, total: number) => void} [args.onProgress]
  * @returns {Promise<{ rounds: object[], network: object|null, utilDb: object, laneSets: object }>}
  */
-export async function extractRounds({ jobs, mapCode, onProgress }) {
+/**
+ * A map's geometry and utility names, as every per-round read wants them:
+ * the zone network with its regions, key zones and bombsites, the utility
+ * database, and the T lanes. The network is null when the map has none.
+ */
+export async function loadMapContext(mapCode) {
   let network = null;
   try {
     network = await fetchZones(mapCode);
@@ -2410,6 +2415,11 @@ export async function extractRounds({ jobs, mapCode, onProgress }) {
   }
   const utilDb = await loadCoachSmokes(mapCode);
   const laneSets = resolveLaneSets(mapCode, network);
+  return { network, utilDb, laneSets };
+}
+
+export async function extractRounds({ jobs, mapCode, onProgress }) {
+  const { network, utilDb, laneSets } = await loadMapContext(mapCode);
 
   const rounds = [];
   let done = 0;

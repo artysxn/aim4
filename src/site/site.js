@@ -783,6 +783,12 @@ const ROUTES = {
   // API answers 404 to everyone else. This entry only stops the deep link from
   // falling through to the trainer.
   admin: { title: 'Admin', path: '/admin', shell: 'admin' },
+  // The training pages are the admin shell on a stage of its Training tab.
+  'admin-training-1': { title: 'Training 1', path: '/admin/training_1', shell: 'admin' },
+  'admin-training-2': { title: 'Training 2', path: '/admin/training_2', shell: 'admin' },
+  'admin-training-3': { title: 'Training 3', path: '/admin/training_3', shell: 'admin' },
+  'admin-training-4': { title: 'Training 4', path: '/admin/training_4', shell: 'admin' },
+  'admin-training-5': { title: 'Training 5', path: '/admin/training_5', shell: 'admin' },
   'not-found': { title: 'Page not found', path: '/404', shell: 'error' },
   forbidden: { title: 'No access', path: '/403', shell: 'error' }
 };

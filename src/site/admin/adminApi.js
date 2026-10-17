@@ -49,6 +49,19 @@ async function send(method, path, body) {
 export const adminApi = {
   me: () => get('/api/admin/me'),
 
+  // Training labels (/admin/training_1 … training_5). Stored as JSON Lines per
+  // stage on the server; the export is one .jsonl with a header line.
+  labelStats: () => get('/api/admin/labels'),
+  saveLabel: (stage, body) => send('POST', `/api/admin/labels/${stage}`, body),
+  undoLabel: (stage, id) => send('DELETE', `/api/admin/labels/${stage}/${id}`),
+  async exportLabels(stages = []) {
+    const q = stages.length ? `?stages=${stages.join(',')}` : '';
+    const res = await fetch(`${API_BASE}/api/admin/labels/export${q}`, { headers: await headers() });
+    if (!res.ok) await asJson(res);
+    const name = /filename="([^"]+)"/.exec(res.headers.get('Content-Disposition') || '')?.[1] || 'aim4-training.jsonl';
+    return { blob: await res.blob(), name };
+  },
+
   // Demo ingest. start/stop only signal the separate ingester process; the
   // status they return is the same shape as ingestStatus so the panel can
   // redraw from the response without a second round trip.

@@ -2671,6 +2671,20 @@ function anchorUtilityFor(ctx) {
     }
     const share = percent(used.length, n);
     const who = `${nameOf(ctx, a.id)} (${a.role})`;
+    // The same numbers as data, for the opinions built on top of the sheet.
+    const fact = {
+      kind: 'anchor',
+      id: a.id,
+      name: nameOf(ctx, a.id),
+      role: a.role,
+      n,
+      share,
+      smoke: percent(smoke, n),
+      molo: percent(molo, n),
+      both: percent(both, n),
+      spots: [...spots.entries()].sort((x, y) => y[1] - x[1]).slice(0, 3).map(([k, c]) => ({ name: k, share: percent(c, n) })),
+      files: filesOf(rounds)
+    };
     if (share >= ANCHOR_SHARE) {
       // Kinds he hardly uses are left out: "smoke 5%" says nothing.
       const kinds = [
@@ -2688,12 +2702,14 @@ function anchorUtilityFor(ctx) {
         text: `${who} uses a smoke or molo by 1:35 in ${share}% of full buys (${[`${used.length} of ${n}`, ...kinds].join(', ')})${where.length ? ': ' : '.'}`,
         files: filesOf(used),
         parts: where.map(([k, c]) => line(`${k} ${percent(c, n)}%`, spotRounds.get(k))),
-        tail: where.length ? '.' : ''
+        tail: where.length ? '.' : '',
+        fact
       });
     } else {
       out.push(
         line(`${who} keeps his utility: a smoke or molo by 1:35 in only ${share}% of full buys (${used.length} of ${n}).`, rounds, {
-          tone: 'negative'
+          tone: 'negative',
+          fact
         })
       );
     }
@@ -2771,7 +2787,31 @@ function lurkLines(ctx) {
             : share(l.stay) >= 50
               ? 'Plays the flank'
               : '';
-    return { text: `${head}: `, files: filesOf(l.list), parts: parts.map((p) => p.words), sep: '; ', tail: '.', after };
+    const fact = {
+      kind: 'lurk',
+      id: l.id,
+      name: nameOf(ctx, l.id),
+      n,
+      basis: l.basis,
+      area: l.area,
+      spots: spots.map((w) => w.replace(/ \d+$/, '')),
+      push: l.push.length
+        ? {
+            n: l.push.length,
+            where: mostCommon(l.push, (x) => x.p.where),
+            clock: clockText(ROUND_SECONDS - median(l.push.map((x) => x.p.at))),
+            before: l.push.filter((x) => x.p.when === 'before').length,
+            won: won(l.push)
+          }
+        : null,
+      rotate: l.rotate.length
+        ? { n: l.rotate.length, gap: Math.round(median(l.rotate.map((x) => x.p.at - commitElapsed(x.r))) || 0) }
+        : null,
+      stay: l.stay.length,
+      died: l.died.length,
+      files: filesOf(l.list)
+    };
+    return { text: `${head}: `, files: filesOf(l.list), parts: parts.map((p) => p.words), sep: '; ', tail: '.', after, fact };
   });
 }
 
@@ -2800,6 +2840,7 @@ function coreLines(ctx) {
     const spots = spotWords(list, (x) => x.show.pos, { limit: 2 });
     const others = [...new Set([...known, ...list.flatMap((x) => x.rest.map((p) => p.area))])].filter((a) => a && a !== area);
     const sub = [];
+    const fact = { kind: 'core', area, n, basis: set.length, clock, size, others: [], files: filesOf(list) };
     for (const other of others) {
       const counts = list.map((x) => x.rest.filter((p) => p.area === other).length);
       const players = list.flatMap((x) => x.rest.filter((p) => p.area === other).map((p) => ({ r: x.r, p })));
@@ -2807,6 +2848,14 @@ function coreLines(ctx) {
         .map(([c, k]) => `${c === '0' ? 'nobody' : c} in ${k}`)
         .join(', ');
       let text = `${areaName(other)}: ${spread}`;
+      fact.others.push({
+        area: other,
+        nobody: percent(counts.filter((c) => !c).length, n),
+        spots: spotWords(players, (x) => x.p.pos).map((w) => w.replace(/ \d+$/, '')),
+        does: Object.fromEntries(tally(players, (x) => x.p.does)),
+        joins: players.filter((x) => x.p.does === 'leave' && x.p.to === area).length,
+        files: filesOf(players.length ? players : list)
+      });
       if (players.length) {
         const where = spotWords(players, (x) => x.p.pos);
         const does = tally(players, (x) => x.p.does);
@@ -2820,7 +2869,7 @@ function coreLines(ctx) {
       line(
         `Core shows itself ${inArea(area)} in ${n} of ${set.length} full buys, usually around ${clock} with ${size} players${spots.length ? ` (first duel at ${joinList(spots)})` : ''}. Meanwhile:`,
         list,
-        { sub }
+        { sub, fact }
       )
     );
   }
@@ -2878,12 +2927,22 @@ function ctSpotLines(ctx) {
     const spots = tally(mine, (x) => x.p.pos)
       .slice(0, 3)
       .filter(([, c]) => c >= 2);
+    const fact = {
+      kind: 'spots',
+      id: m.id,
+      name: m.name,
+      role: rolesFor(ctx, 'CT').get(m.id) || '',
+      n: mine.length,
+      spots: spots.map(([pos, c]) => ({ pos, share: percent(c, mine.length), n: c, tells: [], files: filesOf(mine.filter((x) => x.p.pos === pos)) })),
+      files: filesOf(mine)
+    };
     const lines = [
       {
         text: `At 1:30 in 5v5s (${mine.length} rounds): `,
         files: filesOf(mine),
         parts: spots.map(([pos, c]) => line(`${pos} ${percent(c, mine.length)}%`, mine.filter((x) => x.p.pos === pos))),
-        tail: ''
+        tail: '',
+        fact
       }
     ];
     for (const [pos, c] of spots) {
@@ -2916,6 +2975,14 @@ function ctSpotLines(ctx) {
         if (tells.length >= 3) break;
       }
       if (!tells.length) continue;
+      fact.spots.find((x) => x.pos === pos).tells = tells.map((x) => ({
+        kind: { p: 'player', u: 'utility', s: 'stack' }[x.k[0]],
+        words: x.words,
+        share: x.share,
+        hits: x.hits.length,
+        of: c,
+        files: filesOf(x.hits)
+      }));
       lines.push({
         text: `When ${pos}: `,
         files: filesOf(rounds),
@@ -2960,13 +3027,22 @@ function awpQuietFor(ctx) {
           .map(([a, c]) => `${a === 'mid' ? 'mid' : a} ${percent(c, n)}%`)
           .join(', ')})`
       : '';
+  const id = owner && owner[1] * 10 >= n * 7 ? owner[0] : '';
   return {
-    id: owner && owner[1] * 10 >= n * 7 ? owner[0] : '',
+    id,
     line: {
       text: `At 1:15 in quiet 5v5s (nobody hurt from 1:25, ${n} rounds): `,
       files: filesOf(seen),
       parts: shown.map(([pos, c]) => line(`${pos} ${percent(c, n)}%`, seen.filter((x) => x.p.pos === pos))),
-      tail: `${rest ? `${shown.length ? ', ' : ''}${percent(rest, n)}% elsewhere` : ''}${areas}`
+      tail: `${rest ? `${shown.length ? ', ' : ''}${percent(rest, n)}% elsewhere` : ''}${areas}`,
+      fact: {
+        kind: 'awp',
+        id,
+        name: id ? nameOf(ctx, id) : '',
+        n,
+        spots: shown.map(([pos, c]) => ({ pos, share: percent(c, n), files: filesOf(seen.filter((x) => x.p.pos === pos)) })),
+        files: filesOf(seen)
+      }
     }
   };
 }
@@ -3050,12 +3126,29 @@ function reactiveFor(ctx) {
       bits.push(`set off by a single T utility: ${kinds}`);
     }
     const thrower = g.kind === 'spot' ? tally(g.list, (x) => x.n.player)[0] : null;
-    const by = thrower && thrower[1] * 10 >= n * 7 && ctx.mains.some((m) => m.id === thrower[0]) ? ` (${nameOf(ctx, thrower[0])})` : '';
+    const owns = thrower && thrower[1] * 10 >= n * 7 && ctx.mains.some((m) => m.id === thrower[0]);
+    const by = owns ? ` (${nameOf(ctx, thrower[0])})` : '';
     const freq = rx.length === n ? 'always' : `${rx.length} of ${n}`;
+    const fact = {
+      kind: 'reactive',
+      group: g.kind,
+      words: g.words,
+      label: g.kind === 'spot' ? nadeLabel(g.list[0].n) : '',
+      type: g.kind === 'spot' ? g.list[0].n.type : '',
+      thrower: owns ? nameOf(ctx, thrower[0]) : g.kind === 'player' ? nameOf(ctx, g.list[0].n.player) : '',
+      n,
+      reactive: rx.length,
+      hits: hits.length,
+      deaths: deaths.length,
+      util: util.length,
+      after: move && moves.length >= 2 && move[1] * 2 >= moves.length ? { does: move[0], n: move[1], of: moves.length } : null,
+      single: Object.fromEntries(tally(single, (x) => x.util[0].type)),
+      files: filesOf(g.list)
+    };
     return line(
       `${g.words}${by}: ${freq} thrown as an answer, ${joinList(why)}${bits.length ? `; ${bits.join('; ')}` : ''}.`,
       g.list,
-      { tone: rx.length === n ? 'note' : undefined }
+      { tone: rx.length === n ? 'note' : undefined, fact }
     );
   };
   const pick = (kind, limit) =>

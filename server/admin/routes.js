@@ -95,6 +95,14 @@ import {
 } from '../coachSmokesStore.js';
 import { countPitchEdits, getPitchText, savePitchText } from '../pitchStore.js';
 import {
+  appendRecord,
+  exportTraining,
+  makeRecord,
+  removeRecord,
+  TrainingError,
+  trainingStats
+} from './trainingStore.js';
+import {
   aimScanStatus,
   setAimScanPauseWhen,
   startAimScan,
@@ -1858,6 +1866,53 @@ async function route(req, res, url, me) {
     });
     json(res, req, 200, record);
     return true;
+  }
+
+  // ---- training labels (/admin/training_1 … training_5) ---------------------
+  // Not /api/admin/training: that prefix is the duel / round model trainer.
+  // Answers to what the rule-based bot said, kept as JSON Lines per stage and
+  // exported as one file. See trainingStore.js for the record format.
+  if (p.startsWith('/api/admin/labels')) {
+    try {
+      if (req.method === 'GET' && p === '/api/admin/labels') {
+        json(res, req, 200, await trainingStats());
+        return true;
+      }
+      if (req.method === 'GET' && p === '/api/admin/labels/export') {
+        const stages = (q.get('stages') || '')
+          .split(',')
+          .map((x) => x.trim())
+          .filter(Boolean);
+        const body = await exportTraining(stages);
+        const stamp = new Date().toISOString().slice(0, 10);
+        res.writeHead(200, {
+          ...corsHeaders(req),
+          'Content-Type': 'application/x-ndjson; charset=utf-8',
+          'Content-Disposition': `attachment; filename="aim4-training-${stamp}.jsonl"`,
+          'Content-Length': Buffer.byteLength(body)
+        });
+        res.end(body);
+        return true;
+      }
+      const one = p.match(/^\/api\/admin\/labels\/(\d)$/);
+      if (req.method === 'POST' && one) {
+        const record = await appendRecord(makeRecord(one[1], await readJson(req), me.id));
+        json(res, req, 200, { record: { id: record.id, stage: record.stage }, ...(await trainingStats()) });
+        return true;
+      }
+      const del = p.match(/^\/api\/admin\/labels\/(\d)\/([a-f0-9]{12})$/);
+      if (req.method === 'DELETE' && del) {
+        const removed = await removeRecord(del[1], del[2]);
+        json(res, req, removed ? 200 : 404, { removed, ...(await trainingStats()) });
+        return true;
+      }
+    } catch (err) {
+      if (err instanceof TrainingError) {
+        json(res, req, 400, { error: err.message });
+        return true;
+      }
+      throw err;
+    }
   }
 
   // ---- coach smokes (private basic landing spots for Autocoach) ------------

@@ -22,6 +22,7 @@ import { uploadsPanel } from './uploadsPanel.js';
 import { perfPanel } from './perfPanel.js';
 import { pitchPanel } from './pitchPanel.js';
 import { supportPanel } from './supportPanel.js';
+import { trainingPanel } from './trainingPanel.js';
 import { spinnerNode } from '../../lib/spinner.js';
 
 const TABS = [
@@ -36,8 +37,13 @@ const TABS = [
   { id: 'codes', label: 'Codes' },
   { id: 'affiliates', label: 'Affiliates' },
   { id: 'pitch', label: 'Pitch' },
+  { id: 'training', label: 'Training' },
   { id: 'audit', label: 'Audit' }
 ];
+
+/** /admin/training_<n>: the training pages are addressable, the other tabs are not. */
+const TRAINING_PATH = /^\/admin\/training_([1-5])\/?$/;
+const trainingStageOf = (pathname) => Number(TRAINING_PATH.exec(pathname || '')?.[1] || 0);
 
 /** Tabs backed by Supabase or an internet service. A local install has neither. */
 const HOSTED_ONLY_TABS = new Set(['users', 'ingest', 'codes', 'affiliates', 'audit']);
@@ -53,6 +59,8 @@ export function initAdminView(host) {
 
   let me = null;
   let tab = 'users';
+  /** Training stage on screen, 1 … 5. */
+  let stage = 1;
   let openUserId = null;
   let loaded = false;
   /** The panel currently on screen, so its polling can be shut down. */
@@ -75,6 +83,7 @@ export function initAdminView(host) {
       btn.addEventListener('click', () => {
         tab = t.id;
         openUserId = null;
+        syncPath();
         renderShell();
       });
       nav.appendChild(btn);
@@ -106,6 +115,16 @@ export function initAdminView(host) {
       panel.appendChild(codesPanel());
     } else if (tab === 'affiliates') {
       panel.appendChild(affiliatesPanel());
+    } else if (tab === 'training') {
+      livePanel = trainingPanel({
+        stage,
+        onStage: (n) => {
+          stage = n;
+          syncPath();
+          renderShell();
+        }
+      });
+      panel.appendChild(livePanel);
     } else if (tab === 'pitch') {
       // Not polling, but it registers a beforeunload guard for unsaved text and
       // uses the same hook to drop it when the tab changes.
@@ -136,12 +155,37 @@ export function initAdminView(host) {
     render(root, wrap);
   }
 
+  /**
+   * Keep the address bar on the training page that is open, and off it when
+   * another tab is. pushState, so Back steps between training stages; the
+   * router's popstate brings us back through onShow.
+   */
+  function syncPath() {
+    const want = tab === 'training' ? `/admin/training_${stage}` : '/admin';
+    if (window.location.pathname !== want) window.history.pushState({ route: 'admin' }, '', want);
+    // The router set the heading for the page it opened; keep it on this one.
+    const title = tab === 'training' ? `Training ${stage}` : 'Admin';
+    const heading = document.getElementById('page-title');
+    if (heading) heading.textContent = title;
+    document.title = `AIM4.io - ${title}`;
+  }
+
+  /** The tab and stage the address bar asks for. */
+  function readPath() {
+    const n = trainingStageOf(window.location.pathname);
+    if (n) {
+      tab = 'training';
+      stage = n;
+    }
+    return n;
+  }
+
   async function load() {
     if (loaded) return;
     render(root, spinnerNode());
     try {
       me = await adminApi.me();
-      if (me?.local && HOSTED_ONLY_TABS.has(tab)) tab = 'tools';
+      if (!readPath() && me?.local && HOSTED_ONLY_TABS.has(tab)) tab = 'tools';
       loaded = true;
       renderShell();
     } catch (err) {
@@ -156,6 +200,17 @@ export function initAdminView(host) {
 
   return {
     onShow() {
+      // Back / forward between /admin and /admin/training_<n> lands here.
+      if (loaded) {
+        const n = trainingStageOf(window.location.pathname);
+        const want = n ? 'training' : tab === 'training' ? 'users' : tab;
+        if (want !== tab || (n && n !== stage)) {
+          tab = want;
+          if (n) stage = n;
+          if (me?.local && HOSTED_ONLY_TABS.has(tab)) tab = 'tools';
+          renderShell();
+        }
+      }
       load();
     },
     onHide() {

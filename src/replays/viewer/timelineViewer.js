@@ -158,7 +158,14 @@ export function createTimelineViewer({
   /** `{ tick, zoom, panX, panY }` from a shared moment link, or null. */
   startAt = null,
   /** Closes the viewer. The back arrow lives in this view's own side panel. */
-  onBack = null
+  onBack = null,
+  /**
+   * Keep round + tick in the address bar (the shareable moment). Off when the
+   * viewer is embedded in another page, whose URL is not the viewer's.
+   */
+  syncUrl = true,
+  /** Called with `{ index, file, tick }` as the playhead moves. */
+  onTick = null
 }) {
   /**
    * True when the viewer was opened from the team's Autocoach page.
@@ -2887,7 +2894,7 @@ export function createTimelineViewer({
 
   function syncMomentUrl({ immediate = false } = {}) {
     const file = files[activeIndex];
-    if (!file || destroyed) return;
+    if (!file || destroyed || !syncUrl) return;
     const run = () => {
       if (destroyed) return;
       try {
@@ -5570,6 +5577,7 @@ export function createTimelineViewer({
       return;
     }
     draw(loc);
+    onTick?.({ index: loc.index, file: files[loc.index], tick: loc.tick });
   }
 
   function freezeKillPositions(meta, track) {
@@ -6013,6 +6021,17 @@ export function createTimelineViewer({
 
   return {
     el,
+    /** Jump to a tick of one round of the list, paused there. */
+    async seekTo(index, tick) {
+      if (destroyed || index < 0 || index >= files.length) return;
+      if (index !== activeIndex) await selectRound(index, { seek: true });
+      const item = sequence.at(index);
+      if (destroyed || !item || !Number.isFinite(tick)) return;
+      const local = Math.max(0, (tick - item.timing.startTick) / (item.timing.tickRate || 64));
+      // A jump into the buy is deliberate, same as dragging there.
+      freezeSkip = false;
+      playback.seek(sequence.offsetOf(index) + Math.min(local, roundLocalMax(item)));
+    },
     destroy() {
       destroyed = true;
       if (momentSyncTimer) {
