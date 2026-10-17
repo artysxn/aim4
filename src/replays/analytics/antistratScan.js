@@ -305,6 +305,40 @@ export function roundFeatures({ meta, track, row, teamIdx, opponent, context, ne
     }
   }
 
+  // Hits between the teams, with where both ends stood. A duel is damage
+  // traded, not only a kill: the summary asks who was fighting where and
+  // when, and whether anyone was hurt around a moment of the round.
+  const damage = [];
+  const slotOf = new Map(roster.map((p) => [p.id, p.slot]));
+  const teamOf = new Map(roster.map((p) => [p.id, p.team]));
+  const spotAt = (id, tick) => {
+    if (!track || !slotOf.has(id)) return null;
+    const s = track.sample(slotOf.get(id), tick, {});
+    return Number.isFinite(s.x) && Number.isFinite(s.y) && (s.x || s.y) ? { x: s.x, y: s.y } : null;
+  };
+  for (const d of [...(meta.events?.damage || [])].sort((a, b) => (a.tick || 0) - (b.tick || 0))) {
+    const at = teamOf.get(d.attacker) || 0;
+    const vt = teamOf.get(d.victim) || 0;
+    if (!at || !vt || at === vt) continue;
+    const tick = d.tick || 0;
+    const a = spotAt(d.attacker, tick);
+    const v = spotAt(d.victim, tick);
+    damage.push({
+      tick,
+      elapsed: elapsedOf(tick),
+      attacker: d.attacker,
+      victim: d.victim,
+      hp: Number(d.hp) || 0,
+      weapon: d.weapon || '',
+      attackerOurs: ourIds.has(d.attacker),
+      victimOurs: ourIds.has(d.victim),
+      ax: a?.x ?? null,
+      ay: a?.y ?? null,
+      vx: v?.x ?? null,
+      vy: v?.y ?? null
+    });
+  }
+
   // First visit tick per named position (new-ground reads).
   const firstVisit = new Map();
   for (const s of series) {
@@ -374,6 +408,7 @@ export function roundFeatures({ meta, track, row, teamIdx, opponent, context, ne
       type,
       tick: det,
       at: elapsedOf(det),
+      throwAt: elapsedOf(Number(g.throwTick ?? det)),
       x,
       y,
       zone,
@@ -508,6 +543,7 @@ export function roundFeatures({ meta, track, row, teamIdx, opponent, context, ne
     situation: openingSituation(meta, teamIdx),
     kills,
     firstKill,
+    damage,
     nades,
     enemyNades,
     plantTick,

@@ -28,22 +28,30 @@ import { demoTimestamp, tagTrigger } from '../shared/statsMath.js';
 import {
   ALONE_UNITS,
   aggressiveMovesOf,
+  areaAt,
   awpSpotOf,
   boostsOf,
   commitElapsed,
+  coreShowOf,
   ctStackOf,
   entryOf,
+  fiveOnFive,
   formationOf,
   killRead,
   laneOfPos,
   leanOf,
-  lurkersOf,
+  lurkPlaysOf,
   median,
   oppToward,
+  quietBetween,
+  REACT_SECONDS,
+  reactionsOf,
+  restOfMapAt,
   roundSite,
   sampleAtElapsed,
   smokeBreaksOf,
   tally,
+  teamAfter,
   tellUtility,
   throwElapsed,
   utilKey
@@ -80,6 +88,8 @@ export const SUMMARY_CATEGORIES = [
   { key: 'force', group: 'Sections', label: 'Force buys' },
   { key: 'antiforce', group: 'Sections', label: 'Anti-ecos and antiforces' },
   { key: 'sites', group: 'Sections', label: 'Site rounds and retakes' },
+  { key: 'lurks', group: 'Sections', label: 'Lurks and the rest of the map (T)' },
+  { key: 'reactive', group: 'Sections', label: 'Reactive utility (CT)' },
   { key: 'pistols', group: 'Sections', label: 'Pistols' },
   { key: 'players', group: 'Sections', label: 'Players' },
   { key: 'misc', group: 'Sections', label: 'Misc statistics' }
@@ -188,14 +198,16 @@ function namedTags(r, side) {
   return (r.tags?.[side] || []).filter((t) => t.k && t.k !== 'default');
 }
 
-/** A player's name as the sheet's header writes it: the main's own name first. */
 /**
  * A line of the sheet and the rounds it was written from. The rounds only
  * show when the document is built with links on (for checking the sheet).
+ * `extra` carries `tone` ('note' green, 'negative' red), `after` (a note in
+ * green after the text) and `sub` (lines nested under this one).
  */
-const line = (text, rounds) => ({
+const line = (text, rounds, extra) => ({
   text,
-  files: [...new Set((rounds || []).map((r) => (typeof r === 'string' ? r : r?.r?.file || r?.file)).filter(Boolean))]
+  files: [...new Set((rounds || []).map((r) => (typeof r === 'string' ? r : r?.r?.file || r?.file)).filter(Boolean))],
+  ...extra
 });
 const filesOf = (rounds) => line('', rounds).files;
 
@@ -2315,21 +2327,13 @@ export function playerFor(ctx, side, main, extras) {
     sentences.push(`Hardly ever goes in alone (${aggr.length} of ${full.length} rounds)`);
   }
 
-  // Lurks (T): away from the team when it commits, and what he does there.
-  if (side === 'T') {
-    const lurks = full.filter((r) => lurkersOf(r).has(id));
-    if (lurks.length >= 4 && percent(lurks.length, full.length) >= 8) {
-      const where = mostCommon(lurks, (r) => sampleOf(r, id, commitElapsed(r) ?? MIDROUND_ELAPSED)?.pos || '');
-      const active = lurks.filter((r) => {
-        const c = commitElapsed(r);
-        return aggressiveMovesOf(r).some((m) => m.id === id && c !== null && Math.abs(m.elapsed - c) <= 15);
-      }).length;
-      const kills = lurks.filter((r) => {
-        const c = commitElapsed(r);
-        return r.kills.some((k) => k.attacker === id && c !== null && ROUND_SECONDS - k.clock >= c - 10 && ROUND_SECONDS - k.clock <= c + 15);
-      }).length;
+  // Lurks (T): the same read as the lurks section, in one sentence.
+  if (side === 'T' && ctx.mains) {
+    const l = lurkReadsFor(ctx).find((x) => x.id === id);
+    if (l) {
+      const where = mostCommon(l.list, (x) => x.p.pos);
       sentences.push(
-        `Lurks in ${lurks.length} of ${full.length} rounds${where ? `, mostly ${where}` : ''}: pushes alone while the team hits in ${active}, gets a kill around the hit in ${kills}`
+        `Lurks in ${l.list.length} of ${l.basis} full buys${where ? `, mostly ${where}` : ''}: goes at the site himself in ${l.push.length}, holds and rotates in ${l.rotate.length}`
       );
     }
   }
@@ -2572,6 +2576,508 @@ function faced(set, ctx) {
 }
 
 // ---------------------------------------------------------------------------
+// Full buy against full buy: the anchors' utility, the lurks, the core and
+// the rest of the map, the CT shape at 1:30, the AWP at 1:15, and utility
+// thrown as an answer
+// ---------------------------------------------------------------------------
+
+/** Rounds both teams bought fully, with ticks: what the reads below are about. */
+const fullVsFull = (ctx, side) =>
+  (ctx._fvf ||= {})[side] ||= ctx.rounds.filter(
+    (r) => r.side === side && r.ownEcon >= 4 && r.oppEcon >= 4 && r.hasTicks
+  );
+
+/** "on the A side", "in mid", "at Outside": a part of the map inside a sentence. */
+const inArea = (area) => (area === 'A' || area === 'B' ? `on the ${area} side` : area === 'mid' ? 'in mid' : `at ${area}`);
+const areaName = (area) => (area === 'A' || area === 'B' ? `${area} side` : area === 'mid' ? 'Mid' : area);
+
+/** "Short 9, A Ramp 5": the positions a set of reads stood on that repeat. */
+function spotWords(list, pick, { min = 2, limit = 3 } = {}) {
+  return tally(list, pick)
+    .filter(([s, n]) => s && n >= min)
+    .slice(0, limit)
+    .map(([s, n]) => `${s} ${n}`);
+}
+
+/** Utility an anchor has thrown by 1:35 (seconds since the round went live). */
+const ANCHOR_BY = 20;
+/** In this share of rounds or more, the anchor's early utility is part of the setup. */
+const ANCHOR_SHARE = 60;
+
+/**
+ * The anchors: the players the roles name an anchor, else whoever stands on
+ * each site at 1:35 in at least half of the rounds.
+ */
+function anchorsOf(ctx, set) {
+  const roles = rolesFor(ctx, 'CT');
+  const onSite = (id) => {
+    const sites = [];
+    let n = 0;
+    for (const r of set) {
+      const p = sampleOf(r, id, ANCHOR_BY);
+      if (!p) continue;
+      n++;
+      const s = r.siteNear(p.x, p.y, 0);
+      if (s) sites.push(s.toUpperCase());
+    }
+    const [site, k] = tally(sites, (x) => x)[0] || ['', 0];
+    return { site, share: percent(k, n) };
+  };
+  const named = ctx.mains.filter((m) => /anchor/i.test(roles.get(m.id) || ''));
+  if (named.length) return named.map((m) => ({ id: m.id, role: roles.get(m.id) }));
+  const seen = ctx.mains.map((m) => ({ id: m.id, ...onSite(m.id) }));
+  const out = [];
+  for (const site of ['A', 'B']) {
+    const best = seen.filter((x) => x.site === site && x.share >= 50).sort((a, b) => b.share - a.share)[0];
+    if (best) out.push({ id: best.id, role: `${site} anchor` });
+  }
+  return out;
+}
+
+/**
+ * Does each anchor have a smoke or molotov out by 1:35? In 60% of full buys
+ * or more it is part of how they hold the site, and the line says which and
+ * where; under that the anchor keeps his utility, which is a finding too.
+ */
+function anchorUtilityFor(ctx) {
+  const set = fullVsFull(ctx, 'CT');
+  if (set.length < 6) return [];
+  const out = [];
+  for (const a of anchorsOf(ctx, set)) {
+    const rounds = set.filter((r) => r.ourIds?.includes(a.id));
+    const n = rounds.length;
+    if (n < 6) continue;
+    const used = [];
+    let smoke = 0;
+    let molo = 0;
+    let both = 0;
+    const spots = new Map();
+    const spotRounds = new Map();
+    for (const r of rounds) {
+      const mine = r.nades.filter(
+        (g) => g.player === a.id && (g.type === 'smokegrenade' || g.type === 'molotov') && throwElapsed(g) <= ANCHOR_BY
+      );
+      const s = mine.some((g) => g.type === 'smokegrenade');
+      const m = mine.some((g) => g.type === 'molotov');
+      if (s) smoke++;
+      if (m) molo++;
+      if (s && m) both++;
+      if (s || m) used.push(r);
+      for (const k of new Set(mine.map((g) => nadeLabel(g) && nadeName(nadeLabel(g), g.type)).filter(Boolean))) {
+        bump(spots, k);
+        if (!spotRounds.has(k)) spotRounds.set(k, []);
+        spotRounds.get(k).push(r);
+      }
+    }
+    const share = percent(used.length, n);
+    const who = `${nameOf(ctx, a.id)} (${a.role})`;
+    if (share >= ANCHOR_SHARE) {
+      // Kinds he hardly uses are left out: "smoke 5%" says nothing.
+      const kinds = [
+        [smoke, `smoke ${percent(smoke, n)}%`],
+        [molo, `molo ${percent(molo, n)}%`],
+        [both, `both ${percent(both, n)}%`]
+      ]
+        .filter(([k]) => percent(k, n) >= 10)
+        .map(([, w]) => w);
+      const where = [...spots.entries()]
+        .filter(([, c]) => percent(c, n) >= 25)
+        .sort((x, y) => y[1] - x[1])
+        .slice(0, 3);
+      out.push({
+        text: `${who} uses a smoke or molo by 1:35 in ${share}% of full buys (${[`${used.length} of ${n}`, ...kinds].join(', ')})${where.length ? ': ' : '.'}`,
+        files: filesOf(used),
+        parts: where.map(([k, c]) => line(`${k} ${percent(c, n)}%`, spotRounds.get(k))),
+        tail: where.length ? '.' : ''
+      });
+    } else {
+      out.push(
+        line(`${who} keeps his utility: a smoke or molo by 1:35 in only ${share}% of full buys (${used.length} of ${n}).`, rounds, {
+          tone: 'negative'
+        })
+      );
+    }
+  }
+  return out;
+}
+
+/**
+ * What each lurker does with his lurk, full buy against full buy: how often
+ * he goes at a bombsite himself (and when, against the team's hit), how
+ * often he holds and rotates once the team goes elsewhere, and how often he
+ * stays on the flank.
+ */
+function lurkReadsFor(ctx) {
+  return (ctx._lurks ||= (() => {
+    const set = fullVsFull(ctx, 'T');
+    const by = new Map();
+    for (const r of set) {
+      for (const p of lurkPlaysOf(r, ctx.mapCode, ctx.laneSets)) {
+        if (!by.has(p.id)) by.set(p.id, []);
+        by.get(p.id).push({ r, p });
+      }
+    }
+    const out = [];
+    for (const [id, list] of by) {
+      if (list.length < 4 || percent(list.length, set.length) < 8) continue;
+      const of = (does) => list.filter((x) => x.p.does === does);
+      out.push({ id, list, basis: set.length, area: mostCommon(list, (x) => x.p.area), push: of('push'), rotate: of('rotate'), stay: of('stay'), died: of('died') });
+    }
+    return out.sort((a, b) => b.list.length - a.list.length);
+  })());
+}
+
+function lurkLines(ctx) {
+  return lurkReadsFor(ctx).map((l) => {
+    const n = l.list.length;
+    const spots = spotWords(l.list.filter((x) => x.p.area === l.area), (x) => x.p.pos, { limit: 2 });
+    const head = `${nameOf(ctx, l.id)} lurks in ${n} of ${l.basis} full buys, mostly ${inArea(l.area)}${spots.length ? ` (${joinList(spots)})` : ''}, from around ${clockText(ROUND_SECONDS - median(l.list.map((x) => x.p.from)))}`;
+    const parts = [];
+    if (l.push.length) {
+      const where = mostCommon(l.push, (x) => x.p.where);
+      const clock = clockText(ROUND_SECONDS - median(l.push.map((x) => x.p.at)));
+      const when = ['before', 'with', 'after']
+        .map((w) => [w, l.push.filter((x) => x.p.when === w).length])
+        .filter(([, c]) => c)
+        .map(([w, c]) => `${c} ${{ before: 'before the team hits', with: 'with the hit', after: 'after the hit' }[w]}`)
+        .join(', ');
+      parts.push({
+        n: l.push.length,
+        words: line(`goes at the site himself in ${l.push.length}${where ? `, mostly ${where}` : ''} around ${clock} (${when}; won ${won(l.push)})`, l.push)
+      });
+    }
+    if (l.rotate.length) {
+      // When he leaves his ground, against the team's hit: what the CT
+      // holding the lurk wants to know.
+      const gap = Math.round(median(l.rotate.map((x) => x.p.at - commitElapsed(x.r))) || 0);
+      const timing =
+        Math.abs(gap) <= 1 ? 'as the team hits' : gap > 0 ? `about ${gap}s after the team hits` : `about ${-gap}s before the team hits`;
+      parts.push({
+        n: l.rotate.length,
+        words: line(`holds and rotates to the hit once the team goes elsewhere in ${l.rotate.length} (leaves ${timing})`, l.rotate)
+      });
+    }
+    if (l.stay.length) parts.push({ n: l.stay.length, words: line(`holds and stays on the flank in ${l.stay.length}`, l.stay) });
+    if (l.died.length) parts.push({ n: l.died.length, words: line(`dies holding in ${l.died.length}`, l.died) });
+    parts.sort((a, b) => b.n - a.n);
+    const share = (list) => percent(list.length, n);
+    const after =
+      !l.push.length && n >= 6
+        ? 'Never goes at a site himself'
+        : share(l.push) >= 50
+          ? 'Aggressive lurk'
+          : share(l.rotate) >= 60
+            ? 'Holds, then rotates'
+            : share(l.stay) >= 50
+              ? 'Plays the flank'
+              : '';
+    return { text: `${head}: `, files: filesOf(l.list), parts: parts.map((p) => p.words), sep: '; ', tail: '.', after };
+  });
+}
+
+/**
+ * Where the T core shows itself (three or more fighting together, or one
+ * fighting with utility thrown for him), and what the rest of the map is
+ * doing while it does: per other part of the map, how many are there, where
+ * they stand, and whether they push, hold or leave in the next seconds.
+ */
+function coreLines(ctx) {
+  const set = fullVsFull(ctx, 'T');
+  const byArea = new Map();
+  for (const r of set) {
+    const show = coreShowOf(r, ctx.mapCode, ctx.laneSets);
+    if (!show?.area) continue;
+    if (!byArea.has(show.area)) byArea.set(show.area, []);
+    byArea.get(show.area).push({ r, show, rest: restOfMapAt(r, show, ctx.mapCode, ctx.laneSets) });
+  }
+  const known = ctx.mapCode === 'NUK' ? [] : ['A', 'mid', 'B'];
+  const lines = [];
+  for (const [area, list] of [...byArea.entries()].sort((a, b) => b[1].length - a[1].length)) {
+    if (list.length < 4) continue;
+    const n = list.length;
+    const clock = clockText(ROUND_SECONDS - median(list.map((x) => x.show.elapsed)));
+    const size = Math.round(median(list.map((x) => x.show.ids.length)));
+    const spots = spotWords(list, (x) => x.show.pos, { limit: 2 });
+    const others = [...new Set([...known, ...list.flatMap((x) => x.rest.map((p) => p.area))])].filter((a) => a && a !== area);
+    const sub = [];
+    for (const other of others) {
+      const counts = list.map((x) => x.rest.filter((p) => p.area === other).length);
+      const players = list.flatMap((x) => x.rest.filter((p) => p.area === other).map((p) => ({ r: x.r, p })));
+      const spread = tally(counts, (c) => String(c))
+        .map(([c, k]) => `${c === '0' ? 'nobody' : c} in ${k}`)
+        .join(', ');
+      let text = `${areaName(other)}: ${spread}`;
+      if (players.length) {
+        const where = spotWords(players, (x) => x.p.pos);
+        const does = tally(players, (x) => x.p.does);
+        const joins = players.filter((x) => x.p.does === 'leave' && x.p.to === area).length;
+        const doesText = does.map(([d, k]) => `${k} ${d}`).join(', ');
+        text += `${where.length ? `; mostly ${joinList(where)}` : ''}. Next 10 seconds: ${doesText}${joins ? ` (${joins} to join the core)` : ''}.`;
+      } else text += '.';
+      sub.push(line(text, players.length ? players : list));
+    }
+    lines.push(
+      line(
+        `Core shows itself ${inArea(area)} in ${n} of ${set.length} full buys, usually around ${clock} with ${size} players${spots.length ? ` (first duel at ${joinList(spots)})` : ''}. Meanwhile:`,
+        list,
+        { sub }
+      )
+    );
+  }
+  return lines;
+}
+
+function lurksSectionFor(ctx) {
+  const lurks = lurkLines(ctx);
+  const core = coreLines(ctx);
+  if (!lurks.length && !core.length) return null;
+  return { lurks, core, files: filesOf(fullVsFull(ctx, 'T')) };
+}
+
+/** The CT shape is read at 1:30, in rounds still five on five. */
+const SPOTS_AT = 25;
+/** The AWP is read at 1:15, in five on fives nobody was hurt in since 1:25. */
+const AWP_QUIET_AT = 40;
+const AWP_QUIET_FROM = 30;
+/** A thing that comes with a player's spot: this often when he is there... */
+const SPOT_TELL_SHARE = 75;
+/** ...and this much more often than in the rest of the rounds. */
+const SPOT_TELL_LIFT = 20;
+
+/**
+ * Each CT player's three most played spots at 1:30 in full buy 5v5s, and
+ * what comes with each spot: where the others stand, the utility that is
+ * up, the stack. "When close sandbags: dytor CT 80%, Niko smoke 85%".
+ *
+ * @returns {Map<string, object[]>} player id -> sheet lines
+ */
+function ctSpotLines(ctx) {
+  const set = fullVsFull(ctx, 'CT').filter((r) => fiveOnFive(r, SPOTS_AT));
+  const out = new Map();
+  if (set.length < 6) return out;
+  const featsOf = new Map();
+  const base = new Map();
+  for (const r of set) {
+    const f = new Map();
+    for (const p of sampleAtElapsed(r, SPOTS_AT)?.pts || []) if (p.pos) f.set(`p\0${p.id}\0${p.pos}`, `${nameOf(ctx, p.id)} ${p.pos}`);
+    for (const g of r.nades) {
+      const label = nadeLabel(g);
+      if (!label || g.type === 'flashbang' || throwElapsed(g) > SPOTS_AT) continue;
+      f.set(`u\0${label}\0${g.type}`, nadeName(label, g.type));
+    }
+    const stack = ctStackOf(r);
+    if (stack) f.set(`s\0${stack}`, `${stack} stack`);
+    featsOf.set(r, f);
+    for (const k of f.keys()) bump(base, k);
+  }
+  for (const m of ctx.mains) {
+    const mine = set
+      .map((r) => ({ r, p: sampleAtElapsed(r, SPOTS_AT)?.pts.find((x) => x.id === m.id) }))
+      .filter((x) => x.p?.pos);
+    if (mine.length < 6) continue;
+    const spots = tally(mine, (x) => x.p.pos)
+      .slice(0, 3)
+      .filter(([, c]) => c >= 2);
+    const lines = [
+      {
+        text: `At 1:30 in 5v5s (${mine.length} rounds): `,
+        files: filesOf(mine),
+        parts: spots.map(([pos, c]) => line(`${pos} ${percent(c, mine.length)}%`, mine.filter((x) => x.p.pos === pos))),
+        tail: ''
+      }
+    ];
+    for (const [pos, c] of spots) {
+      if (c < 4) continue;
+      const rounds = mine.filter((x) => x.p.pos === pos).map((x) => x.r);
+      const t = new Map();
+      for (const r of rounds) {
+        for (const [k, words] of featsOf.get(r)) {
+          if (k.startsWith(`p\0${m.id}\0`)) continue;
+          if (!t.has(k)) t.set(k, { words, hits: [] });
+          t.get(k).hits.push(r);
+        }
+      }
+      const ranked = [...t.entries()]
+        .map(([k, v]) => {
+          const share = percent(v.hits.length, c);
+          return { k, ...v, share, lift: share - percent(base.get(k) || 0, set.length) };
+        })
+        .filter((x) => x.share >= SPOT_TELL_SHARE && x.lift >= SPOT_TELL_LIFT)
+        .sort((a, b) => b.share - a.share || b.lift - a.lift);
+      const tells = [];
+      const players = new Set();
+      for (const x of ranked) {
+        if (x.k.startsWith('p\0')) {
+          const pid = x.k.split('\0')[1];
+          if (players.has(pid)) continue;
+          players.add(pid);
+        }
+        tells.push(x);
+        if (tells.length >= 3) break;
+      }
+      if (!tells.length) continue;
+      lines.push({
+        text: `When ${pos}: `,
+        files: filesOf(rounds),
+        parts: tells.map((x) => line(`${x.words} ${x.share}% (${x.hits.length} of ${c})`, x.hits, { tone: 'note' })),
+        tail: ''
+      });
+    }
+    out.set(m.id, lines);
+  }
+  return out;
+}
+
+/**
+ * Where the CT AWP is at 1:15 in five on fives with nobody hurt since 1:25:
+ * the spot it ends up on once the opening is over and before the midround.
+ */
+function awpQuietFor(ctx) {
+  const set = fullVsFull(ctx, 'CT').filter((r) => fiveOnFive(r, AWP_QUIET_AT) && quietBetween(r, AWP_QUIET_FROM, AWP_QUIET_AT));
+  const roles = rolesFor(ctx, 'CT');
+  const awper = ctx.mains.find((m) => /awp/i.test(roles.get(m.id) || ''))?.id || '';
+  const seen = [];
+  for (const r of set) {
+    const s = sampleAtElapsed(r, AWP_QUIET_AT);
+    let p = s?.pts.find((x) => x.awp);
+    // The AWPer with a pistol out on the move still carries it.
+    if (!p && awper && r.series.some((x) => x.elapsed <= AWP_QUIET_AT && x.pts.some((q) => q.id === awper && q.awp))) {
+      p = s?.pts.find((x) => x.id === awper);
+    }
+    if (p?.pos) seen.push({ r, p });
+  }
+  if (seen.length < 5) return null;
+  const owner = tally(seen, (x) => x.p.id)[0];
+  const n = seen.length;
+  const shown = tally(seen, (x) => x.p.pos)
+    .filter(([, c]) => c >= 2)
+    .slice(0, 5);
+  const rest = n - shown.reduce((k, [, c]) => k + c, 0);
+  // Spread over many spots, the part of the map still says where it is.
+  const areas =
+    rest * 10 > n * 4
+      ? ` (by area: ${tally(seen, (x) => areaAt(x.r, x.p.x, x.p.y, x.p.pos, ctx.mapCode, ctx.laneSets) || 'elsewhere')
+          .map(([a, c]) => `${a === 'mid' ? 'mid' : a} ${percent(c, n)}%`)
+          .join(', ')})`
+      : '';
+  return {
+    id: owner && owner[1] * 10 >= n * 7 ? owner[0] : '',
+    line: {
+      text: `At 1:15 in quiet 5v5s (nobody hurt from 1:25, ${n} rounds): `,
+      files: filesOf(seen),
+      parts: shown.map(([pos, c]) => line(`${pos} ${percent(c, n)}%`, seen.filter((x) => x.p.pos === pos))),
+      tail: `${rest ? `${shown.length ? ', ' : ''}${percent(rest, n)}% elsewhere` : ''}${areas}`
+    }
+  };
+}
+
+/** CT positions: the roles, each with the spots at 1:30 and, for the AWP, at 1:15. */
+function ctPositionsFor(ctx) {
+  const rows = positionsFor(ctx, 'CT');
+  const spots = ctSpotLines(ctx);
+  const awp = awpQuietFor(ctx);
+  const awpRow = awp && (rows.find((r) => r.id === awp.id) || rows.find((r) => /awp/i.test(r.role)));
+  for (const row of rows) {
+    const sub = [];
+    if (awp && row === awpRow) sub.push(awp.line);
+    sub.push(...(spots.get(row.id) || []));
+    if (sub.length) row.sub = sub;
+  }
+  if (awp && !awpRow) rows.push({ id: '', name: 'AWP', role: '', sub: [awp.line] });
+  return rows;
+}
+
+/** A group of reactive utility is named when this share of it or more was an answer. */
+const REACTIVE_SHARE = 75;
+const REACTIVE_MIN = 4;
+const AFTER_WORDS = {
+  still: 'the team holds still',
+  in: 'they rotate into it',
+  out: 'they rotate out of it',
+  shift: 'they keep their numbers but move'
+};
+
+/**
+ * Players and spots whose smokes and molotovs only come as an answer: to a
+ * death anywhere, to a fight near the thrower or the spot, or to T utility
+ * landing there. For the deaths, what the team did next in that part of the
+ * map; for single pieces of T utility, which kind it was.
+ */
+function reactiveFor(ctx) {
+  const set = fullVsFull(ctx, 'CT');
+  const all = [];
+  for (const r of set) for (const x of reactionsOf(r)) if (x.t > 3) all.push({ r, ...x });
+  if (all.length < 10) return null;
+  const groups = new Map();
+  const add = (key, words, kind, x) => {
+    if (!groups.has(key)) groups.set(key, { words, kind, list: [] });
+    groups.get(key).list.push(x);
+  };
+  for (const x of all) {
+    if (ctx.mains.some((m) => m.id === x.n.player)) add(`pl\0${x.n.player}`, `${nameOf(ctx, x.n.player)}'s smokes and molos`, 'player', x);
+    const label = nadeLabel(x.n);
+    if (label) add(`sp\0${label}\0${x.n.type}`, capitalize(nadeName(label, x.n.type)), 'spot', x);
+  }
+  const describe = (g) => {
+    const n = g.list.length;
+    const rx = g.list.filter((x) => x.reactive);
+    const deaths = rx.filter((x) => x.deaths.length);
+    const hits = rx.filter((x) => x.hits.length);
+    const util = rx.filter((x) => x.util.length);
+    const why = [
+      [hits.length, `after a fight nearby in ${hits.length}`],
+      [deaths.length, `after a death in ${deaths.length}`],
+      [util.length, `after T utility landed nearby in ${util.length}`]
+    ]
+      .filter(([k]) => k)
+      .sort((a, b) => b[0] - a[0])
+      .map(([, w]) => w);
+    const bits = [];
+    // After a death: does the team stand still, rotate in or out of that ground?
+    const moves = deaths
+      .map((x) => teamAfter(x.r, x.t, x.n.x, x.n.y, x.n.zone, ctx.mapCode, ctx.laneSets))
+      .filter(Boolean);
+    const move = tally(moves, (m) => m)[0];
+    if (move && moves.length >= 2 && move[1] * 2 >= moves.length) {
+      bits.push(`after the deaths ${AFTER_WORDS[move[0]]} (${move[1]} of ${moves.length})`);
+    }
+    // One piece of T utility and nothing else: which kind sets it off.
+    const single = util.filter((x) => x.util.length === 1 && !x.deaths.length && !x.hits.length);
+    if (single.length >= 2) {
+      const kinds = tally(single, (x) => x.util[0].type)
+        .map(([type, k]) => `${type === 'hegrenade' ? 'an HE' : `a ${NADE_SLANG[type] || 'grenade'}`} ${k}`)
+        .join(', ');
+      bits.push(`set off by a single T utility: ${kinds}`);
+    }
+    const thrower = g.kind === 'spot' ? tally(g.list, (x) => x.n.player)[0] : null;
+    const by = thrower && thrower[1] * 10 >= n * 7 && ctx.mains.some((m) => m.id === thrower[0]) ? ` (${nameOf(ctx, thrower[0])})` : '';
+    const freq = rx.length === n ? 'always' : `${rx.length} of ${n}`;
+    return line(
+      `${g.words}${by}: ${freq} thrown as an answer, ${joinList(why)}${bits.length ? `; ${bits.join('; ')}` : ''}.`,
+      g.list,
+      { tone: rx.length === n ? 'note' : undefined }
+    );
+  };
+  const pick = (kind, limit) =>
+    [...groups.values()]
+      .filter((g) => g.kind === kind && g.list.length >= REACTIVE_MIN)
+      .filter((g) => percent(g.list.filter((x) => x.reactive).length, g.list.length) >= REACTIVE_SHARE)
+      .sort((a, b) => b.list.length - a.list.length)
+      .slice(0, limit)
+      .map(describe);
+  const reactive = all.filter((x) => x.reactive);
+  const lines = [
+    line(
+      `${percent(reactive.length, all.length)}% of their smokes and molos (${reactive.length} of ${all.length}) are thrown within ${REACT_SECONDS} seconds of a death, a fight nearby, or T utility landing nearby (near the thrower or where it lands).`,
+      reactive
+    ),
+    ...pick('player', 5),
+    ...pick('spot', 6)
+  ];
+  return { lines, files: filesOf(set) };
+}
+
+// ---------------------------------------------------------------------------
 // The report
 // ---------------------------------------------------------------------------
 
@@ -2601,9 +3107,14 @@ export function buildSummaryReport({ extract, sections, mapCode, teamName }) {
     const count = (s) =>
       ctx.rounds.filter((r) => r.side === side && (side === 'T' ? paceSite(r) : r.hitSite) === s).length;
     order.sort((x, y) => count(y) - count(x));
-    const defaults = defaultUtilityFor(ctx, side);
+    let defaults = defaultUtilityFor(ctx, side);
+    if (side === 'CT') {
+      // The anchors' utility by 1:35 belongs with the default utility.
+      const anchors = anchorUtilityFor(ctx);
+      if (anchors.length) defaults = { rows: [], files: filesOf(fullVsFull(ctx, 'CT')), ...defaults, anchors };
+    }
     out.sides[side] = {
-      positions: positionsFor(ctx, side),
+      positions: side === 'CT' ? ctPositionsFor(ctx) : positionsFor(ctx, side),
       pace: side === 'T' ? paceFor(ctx) : null,
       setups: side === 'CT' ? ctCallsFor(ctx) : null,
       tells: tellsFor(ctx, side),
@@ -2613,6 +3124,8 @@ export function buildSummaryReport({ extract, sections, mapCode, teamName }) {
       force: forceFor(ctx, side),
       sites: order.map((s) => (side === 'T' ? tSiteFor(ctx, s) : ctVsSiteFor(ctx, s))),
       retakes: side === 'CT' ? retakesFor(ctx) : null,
+      lurks: side === 'T' ? lurksSectionFor(ctx) : null,
+      reactive: side === 'CT' ? reactiveFor(ctx) : null,
       forceStyle: side === 'CT' ? ctForceStyleFor(ctx) : null,
       antiecoStyle: side === 'CT' ? ctAntiecoStyleFor(ctx) : null,
       pistols: pistolsFor(ctx, side),
@@ -2657,17 +3170,30 @@ function docWriter(esc, links) {
     if (!links || !list.length) return html;
     return `<a href="${esc(`/demos?rounds=${list.map(encodeURIComponent).join(',')}`)}">${html}</a>`;
   };
-  /** A sheet line: a string, a { text, files } line, or "Others: " with parts. */
+  const toned = (l, html) => (l.tone === 'note' ? note(html) : l.tone === 'negative' ? negative(html) : html);
+  /**
+   * A sheet line: a string, a { text, files } line, or "Others: " with parts.
+   * A line can carry a tone (green note, red finding), a note after it, and
+   * lines nested under it.
+   */
   const lineHtml = (l) => {
     if (typeof l === 'string') return esc(l);
-    if (l.parts) return `${esc(l.text)}${l.parts.map((p) => link(esc(p.text), p.files)).join(', ')}${esc(l.tail || '')}`;
-    return link(esc(l.text), l.files);
+    const body = l.parts
+      ? `${esc(l.text)}${l.parts.map((p) => toned(p, link(esc(p.text), p.files))).join(l.sep || ', ')}${esc(l.tail || '')}`
+      : link(esc(l.text), l.files);
+    const sub = l.sub?.length ? `<ul>${l.sub.map((x) => `<li>${lineHtml(x)}</li>`).join('')}</ul>` : '';
+    return `${toned(l, body)}${aside(l.after, esc)}${sub}`;
   };
   return { esc, link, lineHtml };
 }
 
 function positionsHtml(w, rows) {
-  return li(rows.map((p) => `${w.esc(p.name)}: ${w.esc(p.role || 'Unknown')}`));
+  return li(
+    rows.map(
+      (p) =>
+        `${w.esc(p.name)}${p.role || p.id ? `: ${w.esc(p.role || 'Unknown')}` : ''}${p.sub?.length ? li(p.sub.map((l) => w.lineHtml(l))) : ''}`
+    )
+  );
 }
 
 function paceHtml(w, pace) {
@@ -2728,13 +3254,17 @@ function tellsHtml(w, tells) {
 }
 
 function defaultsHtml(w, d) {
-  if (!d?.rows?.length) return '';
-  return li(
-    d.rows.map((u) => {
-      const bits = [u.clock ? `usually ${u.clock}` : '', u.thrower].filter(Boolean).join(', ');
-      return `${w.link(w.esc(capitalize(nadeName(u.label, u.type))), u.files)}: ${u.share}%${bits ? ` (${w.esc(bits)})` : ''}`;
-    })
-  );
+  if (!d?.rows?.length && !d?.anchors?.length) return '';
+  const rows = (d.rows || []).map((u) => {
+    const bits = [u.clock ? `usually ${u.clock}` : '', u.thrower].filter(Boolean).join(', ');
+    return `${w.link(w.esc(capitalize(nadeName(u.label, u.type))), u.files)}: ${u.share}%${bits ? ` (${w.esc(bits)})` : ''}`;
+  });
+  return `${li(rows)}${d.anchors?.length ? `<p>${w.esc('Anchors by 1:35:')}</p>${li(d.anchors.map((l) => w.lineHtml(l)))}` : ''}`;
+}
+
+function lurksHtml(w, l) {
+  if (!l) return '';
+  return `${linesHtml(w, l.lurks)}${l.core?.length ? `<p>${w.esc('While the core fights:')}</p>${linesHtml(w, l.core)}` : ''}`;
 }
 
 const linesHtml = (w, lines) => li((lines || []).map((l) => w.lineHtml(l)));
@@ -2799,6 +3329,8 @@ export function buildSummaryDocHtml(spec, esc) {
       section('sites', side === 'T' ? `${s.site} Rounds` : `VS ${s.site} Rounds`, linesHtml(w, s.bullets), s.files);
     }
     if (side === 'CT') section('sites', 'Retakes', linesHtml(w, bag.retakes?.bullets), bag.retakes?.files);
+    if (side === 'T') section('lurks', 'Lurks and the rest of the map', lurksHtml(w, bag.lurks), bag.lurks?.files);
+    else section('reactive', 'Reactive utility', linesHtml(w, bag.reactive?.lines), bag.reactive?.files);
     section('pistols', 'Pistols', variationsHtml(w, bag.pistols), bag.pistols?.files);
     if (cats.has('players') && bag.players.length) parts.push(playersHtml(w, bag.players));
   }

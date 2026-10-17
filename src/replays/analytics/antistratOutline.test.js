@@ -22,9 +22,23 @@ const report = {
       antiforce: null
     },
     CT: {
-      positions: [{ name: 'dytor', role: 'A Anchor' }],
+      positions: [
+        {
+          id: 'dy',
+          name: 'dytor',
+          role: 'A Anchor',
+          sub: [
+            { text: 'At 1:30 in 5v5s (40 rounds): ', files: ['s1'], parts: [{ text: 'Close sandbags 50%', files: ['s1'] }], tail: '' },
+            { text: 'When Close sandbags: ', files: ['s1'], parts: [{ text: 'Niko smoke 85% (17 of 20)', files: ['s1'], tone: 'note' }], tail: '' }
+          ]
+        }
+      ],
       pistols: null,
-      defaults: { files: ['d1'], rows: [{ label: 'A main', type: 'smokegrenade', share: 79, clock: '1:30', thrower: 'dytor', files: ['d1'] }] },
+      defaults: {
+        files: ['d1'],
+        rows: [{ label: 'A main', type: 'smokegrenade', share: 79, clock: '1:30', thrower: 'dytor', files: ['d1'] }],
+        anchors: [{ text: 'dytor (A Anchor) keeps his utility: a smoke or molo by 1:35 in only 30% of full buys (6 of 20).', files: ['d1'], tone: 'negative' }]
+      },
       forceStyle: { files: ['c1'], lines: [{ text: 'Stack: 4 of 7 (3x B, 1x A)', files: ['c1'] }] },
       antiecoStyle: { files: ['c2'], lines: [{ text: 'Further up, aggressive: 3 of 5 (2x Mid)', files: ['c2'] }] }
     }
@@ -54,6 +68,10 @@ assert.match(html, /sl3nd: AWPer/);
 assert.match(html, /Flash into A main → most likely B \(6 of 7\)/);
 assert.match(html, /No mid smoke → most likely B \(4 of 4\)/);
 assert.match(html, /A main smoke: 79% \(usually 1:30, dytor\)/);
+// A position carries its spots and what comes with them, nested under it.
+assert.match(html, /dytor: A Anchor<ul><li>At 1:30 in 5v5s \(40 rounds\): Close sandbags 50%<\/li><li>When Close sandbags: <span style="color: #6aa84f">Niko smoke 85% \(17 of 20\)<\/span>/);
+// The anchors' utility follows the default utility; keeping it is written in red.
+assert.match(html, /Anchors by 1:35:<\/p><ul><li><span style="color: #e06666">dytor \(A Anchor\) keeps his utility/);
 assert.match(html, /Stack: 4 of 7 \(3x B, 1x A\)/);
 assert.match(html, /Anti-eco:/);
 // No antiforce rounds: only the force list is labelled.

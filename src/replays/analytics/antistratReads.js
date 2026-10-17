@@ -459,6 +459,347 @@ export function lurkersOf(r) {
 }
 
 // ---------------------------------------------------------------------------
+// The map in three parts
+// ---------------------------------------------------------------------------
+
+/**
+ * The part of the map a point belongs to, the way a sheet splits it: 'A',
+ * 'B' or 'mid' (Dust2's long is A). Nuke has no mid between its sites, so it
+ * is split by its T lanes ("Outside", "Lobby"). '' when nothing places it.
+ */
+export function areaAt(r, x, y, pos, mapCode, laneSets) {
+  const lanes = FORMATIONS[mapCode]?.t || [];
+  const laneArea = () => {
+    const l = laneOfPos(pos, laneSets);
+    const lane = l >= 0 ? lanes[l] : null;
+    if (!lane) return '';
+    const short = String(lane.short || '').trim();
+    if (/^[AB]$/i.test(short)) return short.toUpperCase();
+    if (lane.key === 'long') return 'A';
+    return lane.key === 'mid' ? 'mid' : short || lane.label || '';
+  };
+  const site = (pad) => (Number.isFinite(x) && Number.isFinite(y) ? r.siteNear(x, y, pad)?.toUpperCase() || '' : '');
+  if (mapCode === 'NUK') return laneArea() || site();
+  return site() || laneArea() || site(900) || (Number.isFinite(x) ? 'mid' : '');
+}
+
+/** Still five on five this many seconds into the round. */
+export function fiveOnFive(r, elapsed) {
+  if (r.kills.some((k) => ROUND_SECONDS - k.clock <= elapsed)) return false;
+  const s = sampleAtElapsed(r, elapsed);
+  return Boolean(s && s.pts.length >= 5 && (s.opp?.length ?? 5) >= 5);
+}
+
+/** Nobody hurt between two points of the round (seconds since it went live). */
+export const quietBetween = (r, from, to) => !(r.damage || []).some((d) => d.elapsed >= from && d.elapsed <= to);
+
+// ---------------------------------------------------------------------------
+// T: the core showing itself, and the rest of the map while it does
+// ---------------------------------------------------------------------------
+
+/** A teammate fighting, or throwing for him, this close in time to a duel... */
+export const SUPPORT_SECONDS = 4;
+/** ...from or onto ground this close to him, or the same named position. */
+export const SUPPORT_UNITS = 700;
+/** Utility out of spawn in the first seconds of the round supports nobody. */
+const SPAWN_UTILITY_SECONDS = 3;
+/** What the rest of the map does is read over this long after the core shows. */
+const REST_SECONDS = 10;
+const MOVED_UNITS = 400;
+
+/** Our end of a hit: who, and where they stood. */
+const ourEnd = (d) =>
+  d.attackerOurs ? { id: d.attacker, x: d.ax, y: d.ay } : { id: d.victim, x: d.vx, y: d.vy };
+
+/**
+ * The first time a T group shows itself: one of ours in a duel while a
+ * teammate fights next to him or throws utility for him (from or onto his
+ * ground, within a few seconds), with three or more of ours in it once the
+ * players standing with him are counted. Before the plant only.
+ *
+ * @returns {null | { tick: number, elapsed: number, area: string, pos: string, ids: string[], x: number, y: number }}
+ */
+export function coreShowOf(r, mapCode, laneSets) {
+  return memo(r, `core:${mapCode}`, () => {
+    if (!r.series?.length || !r.damage?.length) return null;
+    const plantAt = plantElapsed(r);
+    const duels = r.damage.filter((d) => d.attackerOurs !== d.victimOurs && (plantAt === null || d.elapsed < plantAt));
+    for (const d of duels) {
+      const me = ourEnd(d);
+      if (!Number.isFinite(me.x) || !Number.isFinite(me.y)) continue;
+      const s = r.sampleAt(d.tick);
+      const pos = s?.pts.find((p) => p.id === me.id)?.pos || '';
+      const near = (x, y, zone) =>
+        Number.isFinite(x) && Number.isFinite(y) && (Math.hypot(x - me.x, y - me.y) <= SUPPORT_UNITS || Boolean(pos && zone === pos));
+      const support = new Set();
+      for (const o of duels) {
+        if (Math.abs(o.elapsed - d.elapsed) > SUPPORT_SECONDS) continue;
+        const them = ourEnd(o);
+        if (them.id === me.id) continue;
+        const zone = r.sampleAt(o.tick)?.pts.find((p) => p.id === them.id)?.pos || '';
+        if (near(them.x, them.y, zone)) support.add(them.id);
+      }
+      for (const n of r.nades) {
+        if (n.player === me.id || !(throwElapsed(n) > SPAWN_UTILITY_SECONDS)) continue;
+        if (Math.abs(throwElapsed(n) - d.elapsed) > SUPPORT_SECONDS && Math.abs(n.at - d.elapsed) > SUPPORT_SECONDS) continue;
+        if (near(n.fx, n.fy, n.fromZone) || near(n.x, n.y, n.zone)) support.add(n.player);
+      }
+      if (!support.size) continue;
+      const group = new Set([me.id, ...support]);
+      for (const p of s?.pts || []) if (dist(p, me) <= ALONE_UNITS) group.add(p.id);
+      if (group.size < 3) continue;
+      return {
+        tick: d.tick,
+        elapsed: d.elapsed,
+        area: areaAt(r, me.x, me.y, pos, mapCode, laneSets),
+        pos,
+        ids: [...group],
+        x: me.x,
+        y: me.y
+      };
+    }
+    return null;
+  });
+}
+
+/**
+ * What a player of ours did over the next seconds of the round: went to the
+ * core (ended up on its part of the map), pushed (fought, went alone onto
+ * held ground, or stepped onto a site), left the part of the map he was on,
+ * or held it.
+ */
+function playAfter(r, id, from, core, mapCode, laneSets, seconds = REST_SECONDS) {
+  const start = sampleAtElapsed(r, from)?.pts.find((p) => p.id === id);
+  if (!start) return null;
+  const area = areaAt(r, start.x, start.y, start.pos, mapCode, laneSets);
+  const to = from + seconds;
+  const fought = (r.damage || []).some(
+    (d) => d.elapsed > from && d.elapsed <= to && d.attackerOurs !== d.victimOurs && ourEnd(d).id === id
+  );
+  const moved = aggressiveMovesOf(r).some((m) => m.id === id && m.elapsed > from && m.elapsed <= to);
+  const wasOnSite = Boolean(r.siteNear(start.x, start.y, 0));
+  let last = start;
+  let stepped = false;
+  for (const s of r.series) {
+    if (s.elapsed <= from) continue;
+    if (s.elapsed > to) break;
+    const p = s.pts.find((x) => x.id === id);
+    if (!p) break;
+    last = p;
+    if (!wasOnSite && r.siteNear(p.x, p.y, 0)) stepped = true;
+  }
+  const lastArea = areaAt(r, last.x, last.y, last.pos, mapCode, laneSets);
+  if (lastArea === core && area !== core) return { id, area, pos: start.pos, does: 'leave', to: lastArea };
+  if (fought || moved || stepped) return { id, area, pos: start.pos, does: 'push', to: lastArea };
+  if (lastArea && lastArea !== area && dist(start, last) >= MOVED_UNITS) return { id, area, pos: start.pos, does: 'leave', to: lastArea };
+  return { id, area, pos: start.pos, does: 'hold', to: area };
+}
+
+/** Everyone of ours outside the core group when it showed itself, and what they did next. */
+export function restOfMapAt(r, show, mapCode, laneSets) {
+  if (!show) return [];
+  return memo(r, `rest:${mapCode}`, () => {
+    const s = r.sampleAt(show.tick);
+    const inGroup = new Set(show.ids);
+    return (s?.pts || [])
+      .filter((p) => !inGroup.has(p.id))
+      .map((p) => playAfter(r, p.id, s.elapsed, show.area, mapCode, laneSets))
+      .filter((x) => x && x.area);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// T: what a lurker does with his lurk
+// ---------------------------------------------------------------------------
+
+/** Seconds around the commit that count as "with the hit". */
+const WITH_HIT_SECONDS = 5;
+/** Alone on the other side of the map for this long before the commit is a lurk. */
+const LURK_SECONDS = 8;
+/** Lurking is read from here on: before it everyone is still leaving spawn. */
+const LURK_FROM = 15;
+/** ...and has to still be going on this close to the hit: earlier it was map control. */
+const LURK_HELD_UNTIL = 25;
+
+/**
+ * Each lurker of a round and what he did with it. A lurker spent eight
+ * seconds or more before the commit alone (no teammate within ALONE_UNITS)
+ * on the side of the map of the site the round did not go to. From there he either went
+ * at a bombsite himself (onto its ground, alone onto ground the CTs held
+ * near it, or into a fight there), held and then left once the team went
+ * elsewhere, stayed on his ground, or died holding it.
+ *
+ * `at` is when he pushed, left his ground for the hit, or died (seconds
+ * since the round went live), `arrive` when a rotation reached the hit;
+ * `when` places a push against the team's commit.
+ *
+ * @returns {Array<{ id: string, area: string, pos: string, from: number, does: 'push'|'rotate'|'stay'|'died', at: number|null, arrive: number|null, when: 'before'|'with'|'after'|'', where: string }>}
+ */
+export function lurkPlaysOf(r, mapCode, laneSets) {
+  return memo(r, `lurkPlay:${mapCode}`, () => {
+    const commit = commitElapsed(r);
+    const hit = roundSite(r);
+    if (commit === null || !hit || !r.series?.length) return [];
+    /** id -> samples alone away from the hit, before the commit */
+    const alone = new Map();
+    for (const s of r.series) {
+      if (s.elapsed < LURK_FROM) continue;
+      if (s.elapsed >= commit) break;
+      for (const p of s.pts) {
+        const area = areaAt(r, p.x, p.y, p.pos, mapCode, laneSets);
+        // A lurk is on a bombsite's side of the map: alone in mid is mid
+        // control. Nuke has no mid, so any lane counts there.
+        if (!area || area === hit || (mapCode !== 'NUK' && area !== 'A' && area !== 'B')) continue;
+        if (s.pts.some((q) => q.id !== p.id && dist(p, q) <= ALONE_UNITS)) continue;
+        if (!alone.has(p.id)) alone.set(p.id, []);
+        alone.get(p.id).push({ elapsed: s.elapsed, p, area });
+      }
+    }
+    const when = (t) => (t < commit - WITH_HIT_SECONDS ? 'before' : t <= commit + WITH_HIT_SECONDS ? 'with' : 'after');
+    const out = [];
+    for (const [id, samples] of alone) {
+      if (samples.length < LURK_SECONDS) continue;
+      const area = tally(samples, (x) => x.area)[0][0];
+      const mine = samples.filter((x) => x.area === area);
+      if (mine.length < LURK_SECONDS || mine[mine.length - 1].elapsed < commit - LURK_HELD_UNTIL) continue;
+      const pos = tally(mine, (x) => x.p.pos)[0]?.[0] || '';
+      const from = mine[0].elapsed;
+      const death = r.kills.find((k) => k.victim === id);
+      const deadAt = death ? ROUND_SECONDS - death.clock : Infinity;
+      const until = Math.min(deadAt, commit + 20);
+      // Rotated: two samples running on the hit's side of the map. He left
+      // his ground the last time he was seen on it before that.
+      let left = null;
+      let arrive = null;
+      let lastHome = from;
+      let there = 0;
+      for (const s of r.series) {
+        if (s.elapsed <= from || s.elapsed > until) continue;
+        const p = s.pts.find((x) => x.id === id);
+        if (!p) break;
+        const a = areaAt(r, p.x, p.y, p.pos, mapCode, laneSets);
+        if (a === area) lastHome = s.elapsed;
+        if (a === hit) {
+          if (++there === 2) {
+            arrive = s.elapsed - 1;
+            left = lastHome;
+            break;
+          }
+        } else there = 0;
+      }
+      const end = left ?? until;
+      const otherSite = (x, y, pad) => {
+        const site = Number.isFinite(x) ? r.siteNear(x, y, pad) : null;
+        return site && site.toUpperCase() !== hit ? site : null;
+      };
+      // At a bombsite while still lurking: onto the site itself, alone onto
+      // held ground in front of it, or into a fight there. The first of them.
+      let push = null;
+      const take = (t, where) => {
+        if (t >= from && t <= end && (!push || t < push.at)) push = { at: t, where };
+      };
+      for (const s of r.series) {
+        if (s.elapsed < from || s.elapsed > end) continue;
+        const p = s.pts.find((x) => x.id === id);
+        const site = p && otherSite(p.x, p.y, 0);
+        if (site && inPieces(p.x, p.y, r.sitePieces?.[site])) {
+          take(s.elapsed, p.pos);
+          break;
+        }
+      }
+      for (const m of aggressiveMovesOf(r)) {
+        if (m.id !== id) continue;
+        const p = r.sampleAt(m.tick)?.pts.find((x) => x.id === id);
+        if (p && otherSite(p.x, p.y)) take(m.elapsed, m.zone);
+      }
+      for (const d of r.damage || []) {
+        if (d.attackerOurs === d.victimOurs || ourEnd(d).id !== id || d.elapsed < from) continue;
+        const e = ourEnd(d);
+        if (otherSite(e.x, e.y)) {
+          take(d.elapsed, r.sampleAt(d.tick)?.pts.find((x) => x.id === id)?.pos || '');
+          break;
+        }
+      }
+      const base = { id, area, pos, from, arrive: null, where: '' };
+      if (push) out.push({ ...base, does: 'push', at: push.at, when: when(push.at), where: push.where });
+      else if (left !== null) out.push({ ...base, does: 'rotate', at: left, arrive, when: when(left) });
+      else if (deadAt <= commit + 20) out.push({ ...base, does: 'died', at: deadAt, when: when(deadAt) });
+      else out.push({ ...base, does: 'stay', at: null, when: '' });
+    }
+    return out;
+  });
+}
+
+// ---------------------------------------------------------------------------
+// CT: utility thrown as an answer
+// ---------------------------------------------------------------------------
+
+/** A smoke or molotov is an answer to what happened this long before it left the hand... */
+export const REACT_SECONDS = 4;
+/** ...near the thrower or where it lands. */
+export const REACT_UNITS = 800;
+/** How the team moved after it is read this long after the throw. */
+const AFTER_SECONDS = 6;
+const STILL_UNITS = 300;
+
+/**
+ * Every smoke and molotov of ours, with what it may have been an answer to:
+ * a death anywhere on the map, damage given or taken by one of ours near the
+ * thrower or the landing spot, or the other team's utility landing there.
+ *
+ * @returns {Array<{ n: object, t: number, deaths: object[], hits: object[], util: object[], reactive: boolean }>}
+ */
+export function reactionsOf(r) {
+  return memo(r, 'reactions', () => {
+    const out = [];
+    for (const n of r.nades) {
+      if (n.type !== 'smokegrenade' && n.type !== 'molotov') continue;
+      const t = throwElapsed(n);
+      if (!Number.isFinite(t)) continue;
+      const before = (e) => e <= t + 0.5 && e >= t - REACT_SECONDS;
+      const near = (x, y) =>
+        Number.isFinite(x) &&
+        Number.isFinite(y) &&
+        ((Number.isFinite(n.fx) && Math.hypot(x - n.fx, y - n.fy) <= REACT_UNITS) || Math.hypot(x - n.x, y - n.y) <= REACT_UNITS);
+      const deaths = r.kills.filter((k) => before(ROUND_SECONDS - k.clock));
+      const hits = (r.damage || []).filter((d) => {
+        if (!before(d.elapsed) || d.attackerOurs === d.victimOurs) return false;
+        const e = ourEnd(d);
+        return near(e.x, e.y) || near(d.attackerOurs ? d.vx : d.ax, d.attackerOurs ? d.vy : d.ay);
+      });
+      const util = (r.enemyNades || []).filter((e) => before(e.at) && near(e.x, e.y));
+      out.push({ n, t, deaths, hits, util, reactive: Boolean(deaths.length || hits.length || util.length) });
+    }
+    return out;
+  });
+}
+
+/**
+ * What the team did in the part of the map a piece of utility went into, over
+ * the seconds after it: more of ours there (rotating in), fewer (rotating
+ * out), the same and barely moving (standing still), or the same but moving.
+ */
+export function teamAfter(r, t, x, y, zone, mapCode, laneSets) {
+  const area = areaAt(r, x, y, zone, mapCode, laneSets);
+  const a = sampleAtElapsed(r, t);
+  const b = sampleAtElapsed(r, t + AFTER_SECONDS);
+  if (!a || !b || !area) return '';
+  const both = a.pts.filter((p) => b.pts.some((q) => q.id === p.id));
+  if (both.length < 2) return '';
+  const inArea = (s) =>
+    both.filter((p) => {
+      const q = s.pts.find((x) => x.id === p.id);
+      return q && areaAt(r, q.x, q.y, q.pos, mapCode, laneSets) === area;
+    }).length;
+  const was = inArea(a);
+  const now = inArea(b);
+  if (now > was) return 'in';
+  if (now < was) return 'out';
+  const moved = median(both.map((p) => dist(p, b.pts.find((q) => q.id === p.id))));
+  return moved !== null && moved < STILL_UNITS ? 'still' : 'shift';
+}
+
+// ---------------------------------------------------------------------------
 // Small aggregation helpers the sections share
 // ---------------------------------------------------------------------------
 
