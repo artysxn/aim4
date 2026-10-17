@@ -3,7 +3,7 @@ name = "aim4-recorder"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Records a TeamSpeak channel per speaker, transcribes it locally, and writes a .aim4comms file for the aim4 viewer."
+description = "The aim4 desktop app: the whole site in a window, the TeamSpeak comms recorder, and aim4 eye (a local analyst model reached from the site)."
 
 [[bin]]
 name = "aim4-recorder"
@@ -48,3 +48,19 @@ eframe = "0.36.1"
 
 # recordedAt timestamps in the manifest, RFC 3339 like the site writes.
 time = { version = "0.3.55", features = ["formatting"] }
+
+# The desktop window: the site itself in the system webview (WebView2 on
+# Windows, WebKit on macOS). wry is the webview alone, without Tauri's
+# installer-shaped updater, so the app stays one self-updating file.
+wry = "0.57"
+tao = "0.37"
+
+# aim4 eye: the relay socket to aim4.io (async, beside the runtime tokio
+# already brings), the system's memory for picking a model size, and unpacking
+# llama.cpp's server, which is a .tar.gz on macOS and a .zip on Windows.
+tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
+futures-util = "0.3"
+sysinfo = "0.39"
+flate2 = "1"
+tar = "0.4"
+zip = { version = "9", default-features = false, features = ["deflate"] }

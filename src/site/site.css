@@ -6202,3 +6202,19 @@ button.rt-cell:disabled {
 .lb-head .site-select + .site-select {
   margin-left: 8px;
 }
+
+/* aim4 desktop app: a newer build of the app is ready to install. */
+.desktop-update {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-solid, #111);
+  font-size: 13px;
+}

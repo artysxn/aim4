@@ -1,10 +1,52 @@
-# aim4-recorder
+# aim4-recorder (the aim4 desktop app)
 
-Records a TeamSpeak channel on the user's own PC, transcribes it locally, and
+The aim4 desktop app: the whole site in a window, aim4 eye, and the comms recorder.
+The recorder records a TeamSpeak channel on the user's own PC, transcribes it locally, and
 writes one `.aim4comms` file that gets uploaded to a game in the aim4 viewer.
 
 **Ships as a single .exe.** No installer, no zip, no folder. The user downloads
 one file, runs it, and it replaces itself whenever a newer build is published.
+
+## The aim4 desktop app (0.2.0)
+
+The same .exe is now the whole aim4 product on the desktop:
+
+| Run it… | You get |
+|---|---|
+| with no arguments | the **aim4 window**: the site itself (aim4.io) in the system webview (WebView2 on Windows, WebKit on macOS), with **aim4 eye** running behind it |
+| `--recorder` | the comms recorder window described below (also opened from the site's sidebar, *Comms recorder*, inside the app) |
+| `--eye [base-url]` | aim4 eye alone, no window |
+
+`AIM4_BASE_URL=http://localhost:3784` points the window (and the eye) at a local
+host instead of aim4.io. If the system has no webview, the recorder opens instead.
+
+### aim4 eye
+
+A local analyst model, chatted with from Pattern Finder > aim4 eye on the site,
+from any browser, while the app runs on the user's PC:
+
+- **Linking.** The site, open in the app's window and signed in, asks
+  `POST /api/eye/link` for a device token and hands it to the app over the
+  bridge (`src/desktop_bridge.js`). Stored in `<settings>/eye/settings.json`;
+  revoked from the site, the app forgets it.
+- **Relay.** The app dials out to `wss://aim4.io/eye/agent` with that token and
+  keeps the socket open; chats come down it as OpenAI-style requests and stream
+  back up (`server/eye/relay.js` has the message list). Nothing listens locally
+  except llama.cpp on 127.0.0.1.
+- **Runtime.** llama.cpp's own `llama-server` (build `b11706`, pinned by
+  SHA-256: macOS Metal, Windows Vulkan with a CPU fallback) and a Qwen3.5 GGUF
+  (2B / 4B / 9B / 35B-A3B, pinned by repo commit and SHA-256) are downloaded on
+  first use into `<settings>/eye/`, resumable and verified, then started with
+  `--fit on` (GPU) or `-ngl 0` (CPU when the GPU will not start). The model is
+  picked on the site; the app recommends one by RAM.
+- **Tools run in the page**, not here: the round query engine, the antistrat,
+  documents (`src/replays/eye/` in the site). The app only runs the model.
+- `tools/eye/dev-agent.mjs` speaks the same protocol from Node against a
+  llama-server you started, for site work without building this app.
+
+Not yet proven on Windows: this was built and run on macOS (arm64). The
+Windows build needs WebView2 (present on Windows 11 and updated Windows 10) and
+must be compiled on Windows.
 
 ## Why this lives in the aim4 repo
 

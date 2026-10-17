@@ -1,8 +1,15 @@
-//! aim4 comms recorder.
+//! The aim4 desktop app.
 //!
-//! Records a TeamSpeak channel with one track per speaker, transcribes it
-//! locally after the user stops, and writes a `.aim4comms` file they upload to
-//! a game in the aim4 viewer.
+//! One .exe with three faces:
+//!
+//!   * no arguments   the aim4 window: the whole site in the system webview,
+//!                    with aim4 eye (the local analyst model) running behind
+//!                    it — see `desktop` and `eye`
+//!   * `--recorder`   the comms recorder window: records a TeamSpeak channel
+//!                    with one track per speaker, transcribes it locally after
+//!                    the user stops, and writes a `.aim4comms` file they
+//!                    upload to a game in the aim4 viewer — see `ui`
+//!   * `--eye`        aim4 eye alone, no window, for a machine left running
 //!
 //! Ships as ONE .exe. No installer, no zip, no folder: the user downloads a
 //! file, runs it, and it replaces itself whenever aim4 publishes a new build.
@@ -27,6 +34,8 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod audio;
+mod desktop;
+mod eye;
 mod pipeline;
 mod teamspeak;
 mod transcribe;
@@ -349,6 +358,14 @@ fn main() -> ExitCode {
                 }
             }
         }
+        Some("--recorder") => match ui::run() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("could not open the recorder window: {err}");
+                ExitCode::FAILURE
+            }
+        },
+        Some("--eye") => eye_headless(args.get(2).map(String::as_str)),
         Some("--help") | Some("-h") => {
             usage();
             ExitCode::SUCCESS
@@ -358,13 +375,20 @@ fn main() -> ExitCode {
             usage();
             ExitCode::FAILURE
         }
-        // No arguments is the double-click path: open the window.
-        None => match ui::run() {
+        // No arguments is the double-click path: the aim4 window. Where the
+        // system has no webview to show it in, the recorder still works.
+        None => match desktop::run() {
             Ok(()) => ExitCode::SUCCESS,
             Err(err) => {
-                eprintln!("could not open the window: {err}");
-                usage();
-                ExitCode::FAILURE
+                eprintln!("could not open the aim4 window ({err}); opening the recorder instead");
+                match ui::run() {
+                    Ok(()) => ExitCode::SUCCESS,
+                    Err(err) => {
+                        eprintln!("could not open the window: {err}");
+                        usage();
+                        ExitCode::FAILURE
+                    }
+                }
             }
         },
     }
@@ -373,14 +397,55 @@ fn main() -> ExitCode {
 fn usage() {
     eprintln!("aim4-recorder {}", env!("CARGO_PKG_VERSION"));
     eprintln!();
-    eprintln!("Run without arguments to open the window. Command line:");
+    eprintln!("Run without arguments to open the aim4 window. Command line:");
     eprintln!();
+    eprintln!("  --recorder                            the comms recorder window");
+    eprintln!("  --eye [base-url]                      aim4 eye without a window (link it from the app first,");
+    eprintln!("                                        or set AIM4_EYE_TOKEN); AIM4_EYE_MODEL picks the model");
     eprintln!("  --record <server> [chan] [dir]        join a channel and record it");
     eprintln!("  --pack <dir> <lang> [name] [model]    transcribe a session and write .aim4comms");
     eprintln!("  --check-update [base-url]             ask aim4 for a newer build");
     eprintln!("  --update [base-url]                   download it and replace this file");
     eprintln!("  --selftest [out.aim4comms]            write a valid container and stop");
     eprintln!("  --ingest-wav <dir> <spk> <ms> <wav>   (dev) fake a captured segment from a wav");
+}
+
+/// aim4 eye without a window: connect, load the model, answer until Ctrl+C.
+fn eye_headless(base: Option<&str>) -> ExitCode {
+    let base = base.map(str::to_string).unwrap_or_else(desktop::base_url);
+    let svc = eye::Service::start(&base, Box::new(|| {}));
+    if let Ok(token) = std::env::var("AIM4_EYE_TOKEN") {
+        svc.set_token(Some(token));
+    }
+    if !svc.linked() {
+        eprintln!("this computer is not linked: open the aim4 window and sign in, or set AIM4_EYE_TOKEN");
+        return ExitCode::FAILURE;
+    }
+    if let Ok(model) = std::env::var("AIM4_EYE_MODEL") {
+        svc.use_model(&model);
+    }
+    println!("aim4 eye on {} for {base}", svc.device_name());
+    let stop = Arc::new(AtomicBool::new(false));
+    ctrl_c_handler(stop.clone()).ok();
+    let mut last = String::new();
+    while !stop.load(Ordering::Relaxed) {
+        let st = svc.state();
+        let line = format!(
+            "{} {} {}{} {}",
+            if svc.connected() { "connected" } else { "offline" },
+            st.state,
+            st.model,
+            st.progress.map(|p| format!(" {:.0}%", p * 100.0)).unwrap_or_default(),
+            st.message
+        );
+        if line != last {
+            println!("{line}");
+            last = line;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+    svc.shutdown();
+    ExitCode::SUCCESS
 }
 
 /// Transcribe and pack a recorded session from the command line.

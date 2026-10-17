@@ -96,7 +96,8 @@ const CHAPTERS = [
   { key: 'players', label: 'Search' },
   { key: 'antistrat', label: 'Teams' },
   { key: 'scout', label: 'Players' },
-  { key: 'charts', label: 'Charts', icon: sideCharts }
+  { key: 'charts', label: 'Charts', icon: sideCharts },
+  { key: 'eye', label: 'aim4 eye' }
 ];
 
 /** Format a finite number for leaderboard cells; `digits` = decimal places. */
@@ -134,7 +135,8 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     </div>
     <div class="an-chapter" data-chapter="antistrat" hidden></div>
     <div class="an-chapter" data-chapter="scout" hidden></div>
-    <div class="an-chapter" data-chapter="charts" hidden></div>`;
+    <div class="an-chapter" data-chapter="charts" hidden></div>
+    <div class="an-chapter" data-chapter="eye" hidden></div>`;
 
   const sidebarEl = el.querySelector('#an-sidebar');
   const mainEl = el.querySelector('#an-main');
@@ -155,6 +157,8 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
   let scout = null;
   /** @type {ReturnType<typeof createChartsPanel> | null} */
   let charts = null;
+  /** aim4 eye's chat, loaded on first visit (it pulls in the agent and its tools). */
+  let eye = null;
 
   function chapterEl(key) {
     return el.querySelector(`.an-chapter[data-chapter="${key}"]`);
@@ -230,12 +234,28 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     charts?.load({ params: shareParams() });
   }
 
+  async function showEye() {
+    const host = chapterEl('eye');
+    if (!eye && host) {
+      const { createEyePanel } = await import('../eye/eyePanel.js');
+      if (eye) return;
+      eye = createEyePanel({ escapeHtml });
+      host.appendChild(eye.el);
+    }
+    if (chapter === 'eye') eye?.show();
+  }
+
   function setChapter(next) {
     if (!CHAPTERS.some((c) => c.key === next)) return;
     const switching = chapter !== next;
     chapter = next;
     applyChapterChrome({ resetShare: switching });
+    if (chapter !== 'eye') eye?.hide();
 
+    if (chapter === 'eye') {
+      void showEye();
+      return;
+    }
     if (chapter === 'charts') {
       loadCharts();
       return;
@@ -1878,6 +1898,12 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     mountChapterNav();
     applyChapterChrome();
     if (chapter !== 'charts') void fetchVrsRanks().catch(() => {});
+
+    // aim4 eye needs no stats payload: its tools fetch what each question needs.
+    if (chapter === 'eye') {
+      void showEye();
+      return;
+    }
 
     // Charts spends its own quota; skip the pattern-finder fetch.
     if (chapter === 'charts') {

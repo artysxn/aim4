@@ -21,6 +21,8 @@ import { FootballServer } from './football.js';
 import { tryServeStatic, distExists } from './static.js';
 import { handleReplayRequest } from './replays/routes.js';
 import { handleRecorderRequest } from './recorder/routes.js';
+import { handleEyeRequest } from './eye/routes.js';
+import { eyeRelay } from './eye/relay.js';
 import { handleSampleDemoRequest } from './replays/sampleDemos.js';
 import { handleTeamRequest } from './replays/teamRoutes.js';
 import { handleAdminRequest } from './admin/routes.js';
@@ -145,6 +147,12 @@ const server = http.createServer(async (req, res) => {
     // reader for the same reason replays are: publishing a build streams an
     // executable through, and serving one sends binary back.
     if (url.pathname.startsWith('/api/recorder') && (await handleRecorderRequest(req, res, url))) {
+      return;
+    }
+
+    // aim4 eye: linking the desktop app, and chats relayed to it. Streams its
+    // answers back as server-sent events, so it reads its own bodies.
+    if (url.pathname.startsWith('/api/eye/') && (await handleEyeRequest(req, res, url))) {
       return;
     }
 
@@ -292,10 +300,13 @@ const mp = new MultiplayerServer();
 const football = new FootballServer();
 const wss = new WebSocketServer({ noServer: true });
 const footballWss = new WebSocketServer({ noServer: true });
+// The aim4 desktop app's line home: chats for its model come down it.
+const eyeWss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
 wss.on('connection', (ws) => mp.addConnection(ws));
 footballWss.on('connection', (ws) => football.addConnection(ws));
 
-// Route WS upgrades by path: /ws → duels, /football → the easter-egg pitch.
+// Route WS upgrades by path: /ws → duels, /football → the easter-egg pitch,
+// /eye/agent → a user's aim4 desktop app (device token required).
 server.on('upgrade', (req, socket, head) => {
   let pathname = '/';
   try {
@@ -307,6 +318,8 @@ server.on('upgrade', (req, socket, head) => {
     wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
   } else if (pathname === '/football') {
     footballWss.handleUpgrade(req, socket, head, (ws) => footballWss.emit('connection', ws, req));
+  } else if (pathname === '/eye/agent') {
+    void eyeRelay.handleUpgrade(eyeWss, req, socket, head);
   } else {
     socket.destroy();
   }

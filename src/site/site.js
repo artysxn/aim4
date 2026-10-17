@@ -1189,6 +1189,8 @@ document.getElementById('error-back')?.addEventListener('click', () => {
 
 // A "view as" session must be unmissable on every page, not only on /admin.
 void import('./admin/impersonate.js').then((m) => m.mountImpersonationBanner());
+// Inside the aim4 desktop app: the recorder entry and the update notice.
+if (window.aim4Desktop) void import('./desktop.js').then((m) => m.mountDesktopExtras());
 
 document.querySelectorAll('[data-nav]').forEach((el) => {
   el.addEventListener('click', (e) => {

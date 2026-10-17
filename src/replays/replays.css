@@ -6724,6 +6724,155 @@ body.rv-open:has(.side-collapsed) .rv-side-show {
   z-index: 5;
 }
 
+/* ---- Pattern Finder: aim4 eye (chat with the model on your own computer) ---- */
+
+.eye-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 980px;
+}
+.eye-status {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px;
+}
+.eye-status p {
+  margin: 0;
+}
+.eye-status-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.eye-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+.eye-dot.is-on {
+  background: var(--ok, #58c08a);
+}
+.eye-dot.is-bad {
+  background: var(--danger, #e06c6c);
+}
+.eye-chat {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+}
+.eye-log {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 260px;
+  max-height: 62vh;
+  overflow-y: auto;
+}
+.eye-intro ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+.eye-example {
+  background: none;
+  border: none;
+  padding: 2px 0;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-color: var(--border-strong);
+}
+.eye-msg {
+  font-size: 14px;
+  line-height: 1.55;
+}
+.eye-msg p {
+  margin: 0 0 6px;
+}
+.eye-msg ul {
+  margin: 0 0 6px;
+  padding-left: 18px;
+}
+.eye-user {
+  align-self: flex-end;
+  max-width: 80%;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-hover, #141414);
+}
+.eye-bot {
+  max-width: 92%;
+}
+.eye-tool,
+.eye-thinking {
+  font-size: 12px;
+  color: var(--muted);
+  padding-left: 10px;
+  border-left: 2px solid var(--border-strong);
+}
+.eye-tool.is-running {
+  border-left-color: var(--accent);
+}
+.eye-tool.is-error {
+  border-left-color: var(--danger, #e06c6c);
+}
+.eye-tool-name {
+  color: var(--text);
+  font-family: var(--font-mono, monospace);
+}
+.eye-tool a {
+  color: var(--accent);
+}
+.eye-thinking summary {
+  cursor: pointer;
+}
+.eye-thinking p {
+  white-space: pre-wrap;
+}
+.eye-confirm {
+  padding: 10px 12px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+}
+.eye-confirm-row {
+  display: flex;
+  gap: 8px;
+}
+.eye-error {
+  color: var(--danger, #e06c6c);
+}
+.eye-input {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.eye-input textarea {
+  resize: vertical;
+  min-height: 52px;
+}
+.eye-input-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.eye-spacer {
+  flex: 1;
+}
+.eye-think {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
 /* Summary queue: team and map pairs that go into one document. */
 .as-queue {
   display: flex;
