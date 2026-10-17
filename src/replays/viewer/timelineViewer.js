@@ -643,6 +643,16 @@ export function createTimelineViewer({
   /** 3D spectate hotkey (1-9, 0) → demo slot. Rebuilt with the roster. */
   const specToSlot = new Map();
   const files = rounds.map((r) => r.file);
+  // A list opened from a link or a playlist is already each round's full meta
+  // (the opener fetched it to resolve the files); library rows are summaries
+  // with no players or events. Full ones are resident from the start, so no
+  // round waits on a second fetch of what it was handed.
+  for (const r of rounds) {
+    if (r?.file && r.events && r.players?.length && !metaReady.has(r.file)) {
+      metaReady.set(r.file, r);
+      metaCache.set(r.file, Promise.resolve(r));
+    }
+  }
 
   let sequence = new RoundSequence(rounds.map(() => ({})));
   let activeIndex = -1;
@@ -4253,13 +4263,16 @@ export function createTimelineViewer({
     const file = files[index];
     if (!file) return null;
     if (coachCache.has(file)) return coachCache.get(file);
-    // The resolved meta from metaFor when it has landed, else whatever the
-    // caller vouches for. activeMeta alone is NOT trusted for caching below:
-    // during a first visit it can still be fallbackMeta (summary fields, maybe
-    // players) while the full track is already warm, and an analysis built
-    // from that pair must not be remembered as this round's answer.
+    // The caller's meta or the resolved one from metaFor, never activeMeta:
+    // during a first visit that can still be fallbackMeta (summary fields,
+    // maybe players) while the full track is already warm. An analysis built
+    // from it could not be cached, so the draw loop asked for it again every
+    // frame until the real meta landed: hundreds of ms a frame, which froze
+    // the page a few seconds into each round of a list opened from a link
+    // (whose fallback metas carry players, so the build ran; library rows
+    // have none and it bailed).
     const real = peekMeta(file);
-    const roundMeta = meta || real || (index === activeIndex ? activeMeta : null);
+    const roundMeta = meta || real;
     if (!roundMeta?.players?.length) return null;
     // Full ticks only — never analyse against a missing / coarse buffer.
     const track = store.get(file)?.full || null;
@@ -4286,7 +4299,7 @@ export function createTimelineViewer({
     // the contract above, or the resolved one). This is what lets selectRound
     // KEEP the cache across revisits — the win chart used to be recomputed
     // from the full track on every switch back to a round already watched.
-    if (meta || real) coachCache.set(file, result);
+    coachCache.set(file, result);
     return result;
   }
 
@@ -4705,13 +4718,10 @@ export function createTimelineViewer({
     const file = files[index];
     if (!file) return null;
     if (mapControlCache.has(file)) return mapControlCache.get(file);
-    // Same trust rule as coachFor: prefer the resolved meta, and only a series
-    // built from it is cached further down. Cone-casting the whole track is
-    // the most expensive thing a round switch can trigger, so the cache must
-    // survive revisits — and it can only do that safely if a fallback-meta
-    // build can never be mistaken for the real one.
-    const real = peekMeta(file);
-    const roundMeta = real || (index === activeIndex ? activeMeta : null);
+    // Same trust rule as coachFor: the resolved meta only. Cone-casting the
+    // whole track is the most expensive thing a round switch can trigger, so
+    // it runs once, from the real meta, and the cache survives revisits.
+    const roundMeta = peekMeta(file);
     if (!roundMeta?.players?.length) return null;
     const track = store.get(file)?.full || null;
     if (!track) return null;
@@ -4737,7 +4747,7 @@ export function createTimelineViewer({
     } catch {
       return null;
     }
-    if (series?.length && real) mapControlCache.set(file, series);
+    if (series?.length) mapControlCache.set(file, series);
     return series;
   }
 
