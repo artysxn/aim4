@@ -40,6 +40,106 @@ const LANGUAGES: &[(&str, &str)] = &[
     ("zh", "Chinese"),
 ];
 
+// The site's tokens (src/site/site.css), so this window reads as part of aim4.
+const SURFACE: egui::Color32 = egui::Color32::from_rgb(0x0c, 0x0c, 0x0c);
+const FIELD: egui::Color32 = egui::Color32::from_rgb(0x05, 0x05, 0x05);
+const TEXT: egui::Color32 = egui::Color32::from_rgb(0xf2, 0xf2, 0xf2);
+const MUTED: egui::Color32 = egui::Color32::from_rgb(0x9c, 0x9c, 0xa2);
+const ACCENT: egui::Color32 = egui::Color32::from_rgb(0xe6, 0x06, 0x11);
+const ACCENT_DOWN: egui::Color32 = egui::Color32::from_rgb(0xc4, 0x05, 0x0e);
+const OK: egui::Color32 = egui::Color32::from_rgb(0x58, 0xc0, 0x8a);
+
+/// Flat fields with no outline, segment-style buttons, the site's text colors.
+/// Fields are 8px round and 32px high; buttons are 6px (see the control rules).
+pub fn apply_theme(ctx: &egui::Context) {
+    use egui::{CornerRadius, FontId, Stroke, TextStyle};
+    let mut v = egui::Visuals::dark();
+    v.panel_fill = SURFACE;
+    v.window_fill = SURFACE;
+    v.extreme_bg_color = FIELD;
+    v.faint_bg_color = egui::Color32::from_white_alpha(6);
+    v.override_text_color = None;
+    v.selection.bg_fill = egui::Color32::from_white_alpha(46);
+    v.selection.stroke = Stroke::NONE;
+    v.hyperlink_color = TEXT;
+    let field_radius = CornerRadius::same(8);
+    for (w, fill, fg) in [
+        (&mut v.widgets.noninteractive, SURFACE, MUTED),
+        (&mut v.widgets.inactive, egui::Color32::from_white_alpha(8), MUTED),
+        (&mut v.widgets.hovered, egui::Color32::from_white_alpha(10), TEXT),
+        (&mut v.widgets.active, egui::Color32::from_white_alpha(26), TEXT),
+        (&mut v.widgets.open, egui::Color32::from_white_alpha(26), TEXT),
+    ] {
+        w.bg_fill = fill;
+        w.weak_bg_fill = fill;
+        w.bg_stroke = Stroke::NONE;
+        w.fg_stroke = Stroke::new(1.0, fg);
+        w.corner_radius = field_radius;
+        w.expansion = 0.0;
+    }
+    v.widgets.noninteractive.fg_stroke = Stroke::new(1.0, TEXT);
+    v.widgets.noninteractive.bg_stroke = Stroke::new(1.0, egui::Color32::from_rgb(0x18, 0x18, 0x18));
+    // The site is dark only; do not follow a light system theme.
+    ctx.set_theme(egui::ThemePreference::Dark);
+    ctx.set_visuals(v);
+    ctx.all_styles_mut(|s| {
+        s.spacing.item_spacing = egui::vec2(8.0, 8.0);
+        s.spacing.button_padding = egui::vec2(14.0, 7.0);
+        s.spacing.interact_size.y = 32.0;
+        s.text_styles.insert(TextStyle::Heading, FontId::proportional(19.0));
+        s.text_styles.insert(TextStyle::Body, FontId::proportional(13.5));
+        s.text_styles.insert(TextStyle::Button, FontId::proportional(13.5));
+        s.text_styles.insert(TextStyle::Small, FontId::proportional(12.0));
+    });
+}
+
+/// A flat 32px field with its hint inside; no label above it.
+fn field(ui: &mut egui::Ui, value: &mut String, hint: &str, password: bool) {
+    ui.add(
+        egui::TextEdit::singleline(value)
+            .hint_text(egui::RichText::new(hint).color(egui::Color32::from_rgb(0x5c, 0x5c, 0x62)))
+            .password(password)
+            .margin(egui::Margin::symmetric(10, 8))
+            .desired_width(ui.available_width()),
+    );
+}
+
+/// A button in the analyzer control theme. `primary` is the filled one.
+fn button(ui: &mut egui::Ui, text: &str, primary: bool, enabled: bool) -> egui::Response {
+    let rich = egui::RichText::new(text).strong().color(if primary { TEXT } else { MUTED });
+    let mut b = egui::Button::new(rich).corner_radius(6.0).min_size(egui::vec2(0.0, 32.0));
+    if primary {
+        b = b.fill(egui::Color32::from_white_alpha(26));
+    }
+    ui.add_enabled(enabled, b)
+}
+
+/// The red record button: the site's accent, since it starts something that cannot be undone.
+fn record_button(ui: &mut egui::Ui, enabled: bool) -> egui::Response {
+    let b = egui::Button::new(egui::RichText::new("Record").strong().color(egui::Color32::WHITE))
+        .fill(ACCENT_DOWN)
+        .corner_radius(6.0)
+        .min_size(egui::vec2(ui.available_width(), 36.0));
+    ui.add_enabled(enabled, b)
+}
+
+/// A flat card, the window's equivalent of `.an-card`.
+fn card<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    egui::Frame::new()
+        .fill(FIELD)
+        .corner_radius(8.0)
+        .inner_margin(egui::Margin::symmetric(12, 10))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            add(ui)
+        })
+        .inner
+}
+
+fn muted(text: impl Into<String>) -> egui::RichText {
+    egui::RichText::new(text.into()).color(MUTED)
+}
+
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -50,7 +150,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     eframe::run_native(
         "aim4 comms recorder",
         options,
-        Box::new(|_cc| Ok(Box::new(App::new()))),
+        Box::new(|cc| {
+            apply_theme(&cc.egui_ctx);
+            Ok(Box::new(App::new()))
+        }),
     )
     .map_err(|e| format!("{e}").into())
 }
@@ -285,9 +388,9 @@ impl App {
                 lines.push(match report.anchor {
                     Some((ms, true)) => format!("sync anchor found at {}", mmss(ms)),
                     Some((ms, false)) => {
-                        format!("possible anchor at {} — no cue word, the viewer will ask", mmss(ms))
+                        format!("possible anchor at {}, no cue word, the viewer will ask", mmss(ms))
                     }
-                    None => "no countdown found — the viewer will ask for the anchor".into(),
+                    None => "no countdown found, the viewer will ask for the anchor".into(),
                 });
                 if report.over_budget {
                     lines.push("over the 2 MB target even at the floor bitrate; still fine to upload".into());
@@ -315,7 +418,7 @@ impl eframe::App for App {
                 Ok(Ok((dir, interrupted))) => {
                     self.notice = Some(match interrupted {
                         Some(why) => format!(
-                            "recording saved: {} — the session ended on its own ({why}); \
+                            "recording saved: {}. The session ended on its own ({why}); \
                              everything up to that point is in it",
                             dir.display()
                         ),
@@ -364,7 +467,7 @@ impl eframe::App for App {
             .store(matches!(self.busy, Busy::Recording { .. }), Ordering::Relaxed);
 
         if !matches!(self.busy, Busy::Idle) {
-            ctx.request_repaint_after(std::time::Duration::from_millis(250));
+            ctx.request_repaint_after(std::time::Duration::from_millis(120));
         }
     }
 
@@ -382,10 +485,14 @@ impl eframe::App for App {
         // The bare root Ui has no margins or background; this is 0.36's
         // replacement for wrapping everything in a CentralPanel.
         egui::Frame::central_panel(ui.style().as_ref()).show(ui, |ui| {
-            ui.heading("aim4 comms recorder");
-            ui.label(format!("v{}", env!("CARGO_PKG_VERSION")));
+            ui.horizontal(|ui| {
+                ui.heading(egui::RichText::new("aim4 comms").strong().color(TEXT));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(muted(format!("v{}", env!("CARGO_PKG_VERSION"))));
+                });
+            });
             self.update_banner(ui);
-            ui.separator();
+            ui.add_space(4.0);
 
             match &self.busy {
                 Busy::Recording { .. } => self.recording_panel(ui),
@@ -393,18 +500,26 @@ impl eframe::App for App {
                 Busy::Idle => self.idle_panels(ui),
             }
 
-            if let Some(err) = &self.error {
-                ui.add_space(8.0);
-                ui.colored_label(egui::Color32::from_rgb(220, 80, 80), err);
+            if let Some(err) = self.error.clone() {
+                card(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        dot(ui, egui::Color32::from_rgb(0xe0, 0x6c, 0x6c), 1.0);
+                        ui.add(egui::Label::new(egui::RichText::new(err).color(egui::Color32::from_rgb(0xe0, 0x6c, 0x6c))).wrap());
+                    });
+                });
             }
             if let Some(notice) = self.notice.clone() {
-                ui.add_space(8.0);
-                ui.label(notice);
-                if let Some(path) = self.last_packed.clone() {
-                    if path.exists() && ui.button("Show the file").clicked() {
-                        reveal(&path);
+                card(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        dot(ui, OK, 1.0);
+                        ui.add(egui::Label::new(notice).wrap());
+                    });
+                    if let Some(path) = self.last_packed.clone() {
+                        if path.exists() && button(ui, "Show the file", false, true).clicked() {
+                            reveal(&path);
+                        }
                     }
-                }
+                });
             }
         });
     }
@@ -423,28 +538,36 @@ impl App {
         };
 
         if let Some(v) = installed {
-            ui.colored_label(
-                egui::Color32::from_rgb(120, 190, 120),
-                format!("updated to {v} — close and reopen the app to use it"),
-            );
+            card(ui, |ui| {
+                ui.horizontal(|ui| {
+                    dot(ui, OK, 1.0);
+                    ui.label(format!("Updated to {v}. Close and reopen the app to use it."));
+                });
+            });
             return;
         }
         if let Ok(UpdateState::Failed(why)) = self.update.lock().as_deref() {
             // Small and grey on purpose: a dead network must never look like
             // a problem with recording.
-            ui.small(format!("update check failed: {why}"));
+            ui.label(egui::RichText::new(format!("Update check failed: {why}")).small().color(MUTED));
             return;
         }
         if installing {
-            ui.label("installing the update…");
+            card(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label("Installing the update");
+                });
+            });
             return;
         }
         if let Ok(Some((version, size))) = state {
-            ui.horizontal(|ui| {
-                ui.label(format!("update {version} available ({:.1} MB)", size as f64 / 1024.0 / 1024.0));
+            card(ui, |ui| {
+              ui.horizontal(|ui| {
+                ui.label(format!("Update {version} available ({:.1} MB)", size as f64 / 1024.0 / 1024.0));
                 // Never mid-recording: the update swaps the running exe.
                 let recording = matches!(self.busy, Busy::Recording { .. });
-                if ui.add_enabled(!recording, egui::Button::new("Install")).clicked() {
+                if button(ui, "Install", true, !recording).clicked() {
                     let update = self.update.clone();
                     let recording_now = self.recording_now.clone();
                     if let Ok(mut u) = update.lock() {
@@ -472,111 +595,86 @@ impl App {
                         }
                     });
                 }
+              });
             });
         }
     }
 
     fn idle_panels(&mut self, ui: &mut egui::Ui) {
-        ui.strong("Record a TeamSpeak channel");
-        ui.add_space(4.0);
-        egui::Grid::new("connect").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
-            ui.label("Server");
-            ui.add(
-                egui::TextEdit::singleline(&mut self.settings.server)
-                    .hint_text("ts.example.com")
-                    .desired_width(260.0),
-            );
-            ui.end_row();
-            ui.label("Channel");
-            ui.add(
-                egui::TextEdit::singleline(&mut self.settings.channel)
-                    .hint_text("leave empty for the default channel")
-                    .desired_width(260.0),
-            );
-            ui.end_row();
-            ui.label("Bot name");
-            ui.add(egui::TextEdit::singleline(&mut self.settings.nickname).desired_width(260.0));
-            ui.end_row();
-        });
-        ui.collapsing("Passwords (if the server needs them)", |ui| {
-            egui::Grid::new("pw").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
-                ui.label("Server");
-                ui.add(egui::TextEdit::singleline(&mut self.server_password).password(true).desired_width(220.0));
-                ui.end_row();
-                ui.label("Channel");
-                ui.add(egui::TextEdit::singleline(&mut self.channel_password).password(true).desired_width(220.0));
-                ui.end_row();
+        field(ui, &mut self.settings.server, "TeamSpeak server", false);
+        field(ui, &mut self.settings.channel, "Channel (empty for the default)", false);
+        field(ui, &mut self.settings.nickname, "Bot name", false);
+        egui::CollapsingHeader::new(muted("Passwords"))
+            .default_open(false)
+            .show(ui, |ui| {
+                field(ui, &mut self.server_password, "Server password", true);
+                field(ui, &mut self.channel_password, "Channel password", true);
+                ui.label(egui::RichText::new("Used for this session only, never saved.").small().color(MUTED));
             });
-            ui.small("used for this session only, never saved");
-        });
-        ui.add_space(6.0);
         let can_record = !self.settings.server.trim().is_empty();
-        if ui
-            .add_enabled(can_record, egui::Button::new("●  Record").min_size([120.0, 28.0].into()))
-            .clicked()
-        {
+        if record_button(ui, can_record).clicked() {
             self.start_recording();
         }
         if !can_record {
-            ui.small("enter the TeamSpeak server address first");
+            ui.label(egui::RichText::new("Enter the TeamSpeak server address first.").small().color(MUTED));
         }
-        ui.small("in round 1, say \"record, three, two, one\" on the freeze-time clock's 3, 2, 1");
+        ui.label(
+            egui::RichText::new("In round 1, say \"record, three, two, one\" on the freeze-time clock's 3, 2, 1.")
+                .small()
+                .color(MUTED),
+        );
 
-        ui.add_space(10.0);
+        ui.add_space(8.0);
         ui.separator();
-        ui.strong("Transcribe and pack a recording");
         ui.add_space(4.0);
+        ui.label(egui::RichText::new("Recordings").strong().color(TEXT));
 
         if self.sessions.is_empty() {
-            ui.label("no recordings yet — they appear here after the first one");
+            ui.label(muted("No recordings yet."));
             return;
         }
 
-        egui::Grid::new("pack").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
-            ui.label("Recording");
-            let selected = self
-                .sessions
-                .get(self.selected_session)
-                .and_then(|p| p.file_name())
-                .and_then(|f| f.to_str())
-                .unwrap_or("—")
-                .to_string();
-            egui::ComboBox::from_id_salt("session")
-                .selected_text(selected)
-                .width(260.0)
-                .show_ui(ui, |ui| {
-                    for (i, s) in self.sessions.iter().enumerate() {
-                        let label = s.file_name().and_then(|f| f.to_str()).unwrap_or("—");
-                        ui.selectable_value(&mut self.selected_session, i, label);
-                    }
-                });
-            ui.end_row();
+        let width = ui.available_width();
+        let selected = self
+            .sessions
+            .get(self.selected_session)
+            .and_then(|p| p.file_name())
+            .and_then(|f| f.to_str())
+            .unwrap_or("none")
+            .to_string();
+        egui::ComboBox::from_id_salt("session")
+            .selected_text(selected)
+            .width(width)
+            .show_ui(ui, |ui| {
+                for (i, s) in self.sessions.iter().enumerate() {
+                    let label = s.file_name().and_then(|f| f.to_str()).unwrap_or("none");
+                    ui.selectable_value(&mut self.selected_session, i, label);
+                }
+            });
 
-            ui.label("Language");
-            let lang_label = LANGUAGES
-                .iter()
-                .find(|(code, _)| *code == self.settings.lang)
-                .map(|(_, name)| *name)
-                .unwrap_or("English");
+        let lang_label = LANGUAGES
+            .iter()
+            .find(|(code, _)| *code == self.settings.lang)
+            .map(|(_, name)| *name)
+            .unwrap_or("English");
+        let model_label = MODELS
+            .iter()
+            .find(|m| m.key == self.settings.model)
+            .map(|m| m.label)
+            .unwrap_or("none");
+        ui.horizontal(|ui| {
+            let half = (ui.available_width() - ui.spacing().item_spacing.x) / 2.0;
             egui::ComboBox::from_id_salt("lang")
-                .selected_text(lang_label)
-                .width(260.0)
+                .selected_text(format!("Language: {lang_label}"))
+                .width(half)
                 .show_ui(ui, |ui| {
                     for (code, name) in LANGUAGES {
                         ui.selectable_value(&mut self.settings.lang, code.to_string(), *name);
                     }
                 });
-            ui.end_row();
-
-            ui.label("Model");
-            let model_label = MODELS
-                .iter()
-                .find(|m| m.key == self.settings.model)
-                .map(|m| m.label)
-                .unwrap_or("—");
             egui::ComboBox::from_id_salt("model")
-                .selected_text(model_label)
-                .width(260.0)
+                .selected_text(format!("Model: {model_label}"))
+                .width(half)
                 .show_ui(ui, |ui| {
                     for m in MODELS {
                         ui.selectable_value(
@@ -586,68 +684,97 @@ impl App {
                         );
                     }
                 });
-            ui.end_row();
-
-            ui.label("File name");
-            ui.add(
-                egui::TextEdit::singleline(&mut self.pack_name)
-                    .hint_text("defaults to the recording's name")
-                    .desired_width(260.0),
-            );
-            ui.end_row();
         });
+        field(ui, &mut self.pack_name, "File name (defaults to the recording's name)", false);
 
         let model_missing = transcribe::model_spec(&self.settings.model)
             .map(|m| !crate::settings_dir().join("models").join(m.file).exists())
             .unwrap_or(false);
-        ui.add_space(6.0);
-        if ui.button("Transcribe & pack").clicked() {
+        if button(ui, "Transcribe and pack", true, true).clicked() {
             self.start_packing();
         }
         if model_missing {
             if let Some(m) = transcribe::model_spec(&self.settings.model) {
-                ui.small(format!("first run downloads the model once (~{} MB)", m.approx_mb));
+                ui.label(
+                    egui::RichText::new(format!("First run downloads the model once (~{} MB).", m.approx_mb))
+                        .small()
+                        .color(MUTED),
+                );
             }
         }
-        ui.small("then upload the .aim4comms file with the mic button in the aim4 viewer");
     }
 
     fn recording_panel(&mut self, ui: &mut egui::Ui) {
         let Busy::Recording { stop, live, started, .. } = &self.busy else { return };
         let elapsed = started.elapsed().as_secs();
         let status = live.lock().map(|l| l.clone()).unwrap_or_default();
+        let t = ui.ctx().input(|i| i.time) as f32;
 
-        ui.horizontal(|ui| {
-            ui.colored_label(egui::Color32::from_rgb(220, 80, 80), "●");
-            ui.strong(if status.connected { "recording" } else { "connecting…" });
-            ui.label(format!("{:02}:{:02}", elapsed / 60, elapsed % 60));
+        card(ui, |ui| {
+            ui.horizontal(|ui| {
+                // The dot breathes while connected and holds steady while it connects.
+                let pulse = if status.connected { 0.55 + 0.45 * (t * 3.0).sin().abs() } else { 0.35 };
+                dot(ui, ACCENT, pulse);
+                ui.label(egui::RichText::new(if status.connected { "Recording" } else { "Connecting" }).strong().color(TEXT));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(
+                        egui::RichText::new(format!("{:02}:{:02}", elapsed / 60, elapsed % 60))
+                            .size(22.0)
+                            .monospace()
+                            .color(TEXT),
+                    );
+                });
+            });
         });
-        ui.add_space(4.0);
+
         if status.speakers.is_empty() {
-            ui.label("nobody has spoken yet");
+            ui.label(muted("Nobody has spoken yet."));
         } else {
-            for (name, talk) in &status.speakers {
-                ui.label(format!("{}  {}", name, mmss(*talk)));
-            }
-            ui.small(format!("total speech {}", mmss(status.total_talk_ms)));
+            let top = status.speakers.iter().map(|(_, ms)| *ms).max().unwrap_or(1).max(1) as f32;
+            card(ui, |ui| {
+                for (name, talk) in &status.speakers {
+                    ui.horizontal(|ui| {
+                        ui.add_sized([140.0, 18.0], egui::Label::new(name.as_str()).truncate());
+                        ui.add(
+                            egui::ProgressBar::new(*talk as f32 / top)
+                                .desired_height(4.0)
+                                .desired_width((ui.available_width() - 56.0).max(40.0))
+                                .fill(egui::Color32::from_gray(225))
+                                .corner_radius(2.0),
+                        );
+                        ui.label(muted(mmss(*talk)));
+                    });
+                }
+                ui.label(egui::RichText::new(format!("Total speech {}", mmss(status.total_talk_ms))).small().color(MUTED));
+            });
         }
-        ui.add_space(8.0);
-        if ui.button("■  Stop").clicked() {
+        if button(ui, "Stop", true, true).clicked() {
             stop.store(true, Ordering::Relaxed);
         }
-        ui.small("say \"record, three, two, one\" on round 1's freeze-time clock if you haven't");
+        ui.label(
+            egui::RichText::new("Say \"record, three, two, one\" on round 1's freeze-time clock if you haven't.")
+                .small()
+                .color(MUTED),
+        );
     }
 
     fn packing_panel(&mut self, ui: &mut egui::Ui) {
         let Busy::Packing { status, .. } = &self.busy else { return };
         let line = status.lock().map(|s| s.clone()).unwrap_or_default();
-        ui.horizontal(|ui| {
-            ui.spinner();
-            ui.strong("packing");
+        card(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(egui::RichText::new("Packing").strong().color(TEXT));
+            });
+            ui.add(egui::Label::new(muted(line)).wrap());
         });
-        ui.label(line);
-        ui.small("transcription runs on your machine; nothing is uploaded");
     }
+}
+
+/// A small filled circle, `alpha` 0..=1.
+fn dot(ui: &mut egui::Ui, color: egui::Color32, alpha: f32) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+    ui.painter().circle_filled(rect.center(), 4.5, color.gamma_multiply(alpha.clamp(0.0, 1.0)));
 }
 
 // --- the small helpers -------------------------------------------------------

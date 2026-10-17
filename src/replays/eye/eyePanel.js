@@ -70,6 +70,40 @@ export function replyHtml(text, escapeHtml) {
   return out.join('');
 }
 
+const TOOL_VERBS = {
+  list_teams: 'Listing teams',
+  map_zones: 'Reading map callouts',
+  query_rounds: 'Querying rounds',
+  antistrat_summary: 'Reading antistrat',
+  create_antistrat_document: 'Creating document'
+};
+
+/** The arguments of a tool call on one line: scalars as "key value", lists and objects as a count. */
+export function argsLine(args) {
+  const out = [];
+  for (const [k, v] of Object.entries(args || {})) {
+    if (v == null || v === '') continue;
+    if (Array.isArray(v)) out.push(`${k.replace(/_/g, ' ')} x${v.length}`);
+    else if (typeof v === 'object') out.push(`${k.replace(/_/g, ' ')} set`);
+    else out.push(`${k.replace(/_/g, ' ')} ${v}`);
+  }
+  return out.join(' · ');
+}
+
+const seconds = (ms) => (ms < 950 ? `${Math.max(1, Math.round(ms / 100)) / 10}s` : `${(ms / 1000).toFixed(ms < 10000 ? 1 : 0)}s`);
+
+/** What the desktop app is doing to get a model ready, as a short list of stages. */
+function bootStages(dev) {
+  const downloading = dev.state === 'downloading';
+  const loading = dev.state === 'loading';
+  const hasModel = Boolean(dev.model);
+  return [
+    { label: 'App connected', done: true },
+    { label: downloading ? `Downloading model${Number.isFinite(dev.progress) ? ` (${Math.round(dev.progress * 100)}%)` : ''}` : 'Model downloaded', done: hasModel && !downloading, active: downloading },
+    { label: 'Loading model into memory', done: hasModel && !downloading && !loading, active: loading }
+  ];
+}
+
 /**
  * @param {{ escapeHtml: (s: string) => string }} deps
  */
@@ -78,26 +112,29 @@ export function createEyePanel({ escapeHtml }) {
   el.className = 'eye-panel';
   el.innerHTML = `
     <section class="an-card eye-status" id="eye-status"></section>
-    <section class="an-card eye-chat">
-      <div class="eye-log" id="eye-log"></div>
+    <section class="an-card eye-chat" id="eye-chat">
+      <div class="eye-log" id="eye-log" aria-live="polite"></div>
       <form class="eye-input" id="eye-form">
-        <textarea class="site-input" id="eye-text" rows="2" placeholder="Ask aim4 eye about a team…"></textarea>
+        <textarea class="site-input" id="eye-text" rows="2" placeholder="Ask about a team" aria-label="Message"></textarea>
         <div class="eye-input-row">
-          <label class="eye-think"><input type="checkbox" id="eye-think" /> Think longer</label>
+          <button type="button" class="eye-toggle" id="eye-think" aria-pressed="false">Think longer</button>
           <span class="eye-spacer"></span>
-          <button type="button" class="btn btn-sm" id="eye-new">New chat</button>
-          <button type="button" class="btn btn-sm" id="eye-stop" hidden>Stop</button>
-          <button type="submit" class="btn primary btn-sm" id="eye-send">Send</button>
+          <div class="eye-actions">
+            <button type="button" class="eye-btn" id="eye-new">New chat</button>
+            <button type="button" class="eye-btn" id="eye-stop" hidden>Stop</button>
+            <button type="submit" class="eye-btn is-primary" id="eye-send">Send</button>
+          </div>
         </div>
       </form>
     </section>`;
   const statusEl = el.querySelector('#eye-status');
+  const chatEl = el.querySelector('#eye-chat');
   const logEl = el.querySelector('#eye-log');
   const form = el.querySelector('#eye-form');
   const textEl = el.querySelector('#eye-text');
   const sendBtn = el.querySelector('#eye-send');
   const stopBtn = el.querySelector('#eye-stop');
-  const thinkEl = el.querySelector('#eye-think');
+  const thinkBtn = el.querySelector('#eye-think');
 
   /** OpenAI-style history, without the system prompt. */
   let messages = [];
@@ -107,6 +144,7 @@ export function createEyePanel({ escapeHtml }) {
   let running = null;
   let shown = false;
   let linking = false;
+  let thinkLonger = false;
 
   // ---- status: is the app running, which model ----------------------------------
 
@@ -128,67 +166,95 @@ export function createEyePanel({ escapeHtml }) {
     // starts the poll again.
     if (!el.isConnected || el.offsetParent === null) shown = false;
     if (!shown) return;
+    // Faster while a model is on its way, so the progress bar moves.
+    const busy = status?.devices?.some((d) => d.state === 'downloading' || d.state === 'loading');
     pollTimer = setTimeout(async () => {
       await refreshStatus();
       schedulePoll();
-    }, STATUS_POLL_MS);
+    }, busy ? 1200 : STATUS_POLL_MS);
   }
 
   const ready = () => Boolean(status?.ready);
 
-  function renderStatus() {
-    const app = desktop();
-    if (statusError) {
-      statusEl.innerHTML = `<p class="an-muted">${escapeHtml(statusError)}</p>`;
-      return;
-    }
-    if (!status) {
-      statusEl.innerHTML = '<p class="an-muted">Checking for aim4 eye…</p>';
-      return;
-    }
-    const dev = status.devices.find((d) => d.state === 'ready') || status.devices[0];
-    if (!dev) {
-      const linkRow = app
-        ? `<p>This is the aim4 desktop app${app.info?.eyeLinked ? ', and it is linked to your account. It will appear here once it has connected.' : '. Link it to your account to run aim4 eye on this computer.'}</p>
-           ${app.info?.eyeLinked ? '' : `<button type="button" class="btn primary btn-sm" data-eye-link ${linking ? 'disabled' : ''}>${linking ? 'Linking…' : 'Link this computer'}</button>`}`
-        : `<p>aim4 eye runs on your own computer, inside the aim4 desktop app. Download it, open it and sign in: while it runs you can chat with it here, from any browser.</p>
-           <a class="btn primary btn-sm" href="/api/recorder/download">Download the aim4 desktop app</a>`;
-      statusEl.innerHTML = `<h3 class="an-section-title">aim4 eye is not running</h3>${linkRow}`;
-      return;
-    }
-    const model = EYE_MODELS.find((m) => m.id === dev.model);
-    const ram = dev.hardware?.ramGb ? `${dev.hardware.ramGb} GB RAM` : '';
-    const state =
-      dev.state === 'ready'
-        ? `ready, running ${model?.label || dev.model}`
-        : dev.state === 'downloading'
-          ? `downloading ${model?.label || dev.model}${Number.isFinite(dev.progress) ? ` (${Math.round(dev.progress * 100)}%)` : ''}`
-          : dev.state === 'loading'
-            ? `loading ${model?.label || dev.model}…`
-            : dev.state === 'busy'
-              ? 'answering…'
-              : dev.state === 'error'
-                ? `error: ${dev.message || 'something went wrong'}`
-                : 'running, no model loaded';
+  function modelOptions(dev) {
     const recommended = dev.hardware?.recommended || '';
-    const options = EYE_MODELS.map(
+    return EYE_MODELS.map(
       (m) =>
         `<option value="${m.id}"${m.id === (dev.model || recommended) ? ' selected' : ''}>${escapeHtml(m.label)}, ${m.size}${
           m.id === recommended ? ' (recommended)' : ''
         }</option>`
     ).join('');
+  }
+
+  function renderStatus() {
+    const app = desktop();
+    chatEl.hidden = false;
+    if (statusError) {
+      chatEl.hidden = true;
+      statusEl.innerHTML = `<div class="eye-status-row"><span class="eye-dot is-bad"></span><span>${escapeHtml(statusError)}</span></div>`;
+      return;
+    }
+    if (!status) {
+      chatEl.hidden = true;
+      statusEl.innerHTML = `<div class="eye-boot" role="status">
+        <div class="eye-boot-head"><span class="eye-spinner" aria-hidden="true"></span><strong>Connecting to aim4 eye</strong></div>
+        <div class="eye-skeleton"><span></span><span></span><span></span></div>
+      </div>`;
+      return;
+    }
+    const dev = status.devices.find((d) => d.state === 'ready') || status.devices[0];
+    if (!dev) {
+      chatEl.hidden = true;
+      const action = app
+        ? app.info?.eyeLinked
+          ? '<span class="an-muted">Waiting for the app to connect</span>'
+          : `<button type="button" class="eye-btn is-primary" data-eye-link ${linking ? 'disabled' : ''}>${linking ? 'Linking…' : 'Link this computer'}</button>`
+        : '<a class="eye-btn is-primary" href="/api/recorder/download">Download the aim4 desktop app</a>';
+      statusEl.innerHTML = `<div class="eye-status-row"><span class="eye-dot"></span><strong>aim4 eye is not running</strong><span class="eye-spacer"></span>${action}</div>`;
+      return;
+    }
+    const model = EYE_MODELS.find((m) => m.id === dev.model);
+    const ram = dev.hardware?.ramGb ? `${dev.hardware.ramGb} GB RAM` : '';
+    const booting = dev.state === 'downloading' || dev.state === 'loading' || (dev.state !== 'ready' && dev.state !== 'busy' && dev.state !== 'error');
+    const stateText =
+      dev.state === 'ready' || dev.state === 'busy'
+        ? model?.label || dev.model || 'ready'
+        : dev.state === 'error'
+          ? `Error: ${dev.message || 'something went wrong'}`
+          : dev.model
+            ? 'Starting'
+            : 'No model loaded';
+    const dot = dev.state === 'ready' || dev.state === 'busy' ? 'is-on' : dev.state === 'error' ? 'is-bad' : 'is-wait';
+    const pick = `
+      <div class="eye-pick">
+        <select class="site-select eye-select" id="eye-model" aria-label="Model">${modelOptions(dev)}</select>
+        <button type="button" class="eye-btn" data-eye-use>${dev.model ? 'Switch model' : 'Download and start'}</button>
+      </div>`;
+    let boot = '';
+    if (booting) {
+      chatEl.hidden = true;
+      const stages = bootStages(dev);
+      const pct = dev.state === 'downloading' && Number.isFinite(dev.progress) ? Math.round(dev.progress * 100) : null;
+      boot = dev.model
+        ? `<div class="eye-boot" role="status">
+            <ol class="eye-stages">${stages
+              .map((st) => `<li class="${st.done ? 'is-done' : st.active ? 'is-active' : ''}"><span class="eye-stage-mark"></span>${escapeHtml(st.label)}</li>`)
+              .join('')}</ol>
+            <div class="eye-progress${pct == null ? ' is-indeterminate' : ''}"><span style="width:${pct == null ? 40 : pct}%"></span></div>
+            ${dev.message ? `<p class="an-muted">${escapeHtml(dev.message)}</p>` : ''}
+          </div>`
+        : '';
+    }
     statusEl.innerHTML = `
       <div class="eye-status-row">
-        <span class="eye-dot ${dev.state === 'ready' ? 'is-on' : dev.state === 'error' ? 'is-bad' : ''}"></span>
-        <strong>aim4 eye on ${escapeHtml(dev.name || 'your computer')}</strong>
-        <span class="an-muted">${escapeHtml(state)}${ram ? ` · ${escapeHtml(ram)}` : ''}</span>
+        <span class="eye-dot ${dot}"></span>
+        <strong>${escapeHtml(dev.name || 'Your computer')}</strong>
+        <span class="an-muted">${escapeHtml(stateText)}${ram ? ` · ${escapeHtml(ram)}` : ''}</span>
+        <span class="eye-spacer"></span>
+        ${pick}
       </div>
-      ${dev.message && dev.state !== 'error' ? `<p class="an-muted">${escapeHtml(dev.message)}</p>` : ''}
-      <div class="eye-status-row">
-        <select class="site-select an-select" id="eye-model" aria-label="Model">${options}</select>
-        <button type="button" class="btn btn-sm" data-eye-use>${dev.model ? 'Switch model' : 'Download and start'}</button>
-        <span class="an-muted" id="eye-model-need">${escapeHtml(EYE_MODELS.find((m) => m.id === (dev.model || recommended))?.needs || '')}</span>
-      </div>`;
+      ${boot}`;
+    syncSend();
   }
 
   async function linkThisComputer() {
@@ -212,24 +278,29 @@ export function createEyePanel({ escapeHtml }) {
     sendBtn.disabled = Boolean(running) || !ready();
     sendBtn.title = ready() ? '' : 'aim4 eye is not ready';
     stopBtn.hidden = !running;
+    thinkBtn.disabled = Boolean(running);
   }
 
   function renderEmpty() {
     if (logEl.childElementCount) return;
     const intro = document.createElement('div');
     intro.className = 'eye-intro';
-    intro.innerHTML = `<p>Ask about any team in the library. aim4 eye looks the answer up in the rounds, and every number links to the rounds it came from.</p>
-      <p class="an-muted">For example:</p>
-      <ul>${EXAMPLES.map((q) => `<li><button type="button" class="eye-example" data-eye-example>${escapeHtml(q)}</button></li>`).join('')}</ul>`;
+    intro.innerHTML = EXAMPLES.map((q) => `<button type="button" class="eye-example" data-eye-example>${escapeHtml(q)}</button>`).join('');
     logEl.appendChild(intro);
   }
 
+  const nearBottom = () => logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 90;
+  const toBottom = () => {
+    logEl.scrollTop = logEl.scrollHeight;
+  };
+
   function bubble(cls, html = '') {
+    const stick = nearBottom();
     const node = document.createElement('div');
     node.className = `eye-msg ${cls}`;
     node.innerHTML = html;
     logEl.appendChild(node);
-    logEl.scrollTop = logEl.scrollHeight;
+    if (stick) toBottom();
     return node;
   }
 
@@ -238,7 +309,7 @@ export function createEyePanel({ escapeHtml }) {
     return new Promise((resolve) => {
       const node = bubble(
         'eye-confirm',
-        `<p>${escapeHtml(question)}</p><div class="eye-confirm-row"><button type="button" class="btn primary btn-sm">Yes</button><button type="button" class="btn btn-sm">No</button></div>`
+        `<p>${escapeHtml(question)}</p><div class="eye-confirm-row"><button type="button" class="eye-btn is-primary">Yes</button><button type="button" class="eye-btn">No</button></div>`
       );
       const [yes, no] = node.querySelectorAll('button');
       const done = (answer) => {
@@ -252,6 +323,23 @@ export function createEyePanel({ escapeHtml }) {
     });
   }
 
+  function copyButton(getText) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'eye-copy';
+    btn.textContent = 'Copy';
+    btn.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(getText());
+        btn.textContent = 'Copied';
+      } catch {
+        btn.textContent = 'Could not copy';
+      }
+      setTimeout(() => (btn.textContent = 'Copy'), 1500);
+    });
+    return btn;
+  }
+
   async function ask(text) {
     const q = String(text || '').trim();
     if (!q || running || !ready()) return;
@@ -262,49 +350,132 @@ export function createEyePanel({ escapeHtml }) {
     const ctrl = new AbortController();
     running = ctrl;
     syncSend();
+    toBottom();
 
     let reply = null;
     let replyText = '';
-    let thinking = null;
+    let reasoning = null;
+    let pending = null;
     const tools = new Map();
+
+    /** The "working" row shown between events, so the page never looks stuck. */
+    const showPending = (label) => {
+      if (!pending) {
+        pending = bubble('eye-pending', '<span class="eye-dots" aria-hidden="true"><i></i><i></i><i></i></span><span class="eye-pending-text"></span>');
+      }
+      pending.querySelector('.eye-pending-text').textContent = label;
+      logEl.appendChild(pending);
+    };
+    const hidePending = () => {
+      pending?.remove();
+      pending = null;
+    };
+    const closeReasoning = () => {
+      if (!reasoning) return;
+      const r = reasoning;
+      reasoning = null;
+      clearInterval(r.timer);
+      r.node.open = false;
+      r.node.classList.remove('is-live');
+      r.label.textContent = `Thought for ${seconds(Date.now() - r.t0)}`;
+    };
+    const endReply = () => {
+      if (reply && replyText.trim()) {
+        const text = replyText;
+        reply.appendChild(copyButton(() => text));
+      } else if (reply) {
+        reply.remove();
+      }
+      reply = null;
+      replyText = '';
+    };
+
+    showPending(thinkLonger ? 'Thinking' : 'Working');
+
     const onEvent = (e) => {
       if (e.type === 'step') {
-        reply = null;
-        replyText = '';
-        thinking = null;
+        closeReasoning();
+        endReply();
+        showPending(e.step === 0 ? (thinkLonger ? 'Thinking' : 'Working') : `Reading results, step ${e.step + 1}`);
       } else if (e.type === 'thinking') {
-        thinking ||= bubble('eye-thinking', '<details><summary>Thinking</summary><p></p></details>');
-        thinking.querySelector('p').textContent += e.text;
+        hidePending();
+        if (!reasoning) {
+          const node = document.createElement('details');
+          node.className = 'eye-msg eye-reason is-live';
+          node.open = true;
+          node.innerHTML = '<summary><span class="eye-reason-label">Thinking</span></summary><div class="eye-reason-body"></div>';
+          const stick = nearBottom();
+          logEl.appendChild(node);
+          if (stick) toBottom();
+          const label = node.querySelector('.eye-reason-label');
+          const t0 = Date.now();
+          const timer = setInterval(() => (label.textContent = `Thinking ${seconds(Date.now() - t0)}`), 200);
+          reasoning = { node, label, body: node.querySelector('.eye-reason-body'), t0, timer };
+        }
+        const stick = nearBottom();
+        reasoning.body.textContent += e.text;
+        reasoning.body.scrollTop = reasoning.body.scrollHeight;
+        if (stick) toBottom();
       } else if (e.type === 'text') {
+        hidePending();
+        closeReasoning();
+        const stick = nearBottom();
         reply ||= bubble('eye-bot');
         replyText += e.text;
         reply.innerHTML = replyHtml(replyText, escapeHtml);
-        logEl.scrollTop = logEl.scrollHeight;
+        if (stick) toBottom();
       } else if (e.type === 'tool-start') {
+        hidePending();
+        closeReasoning();
         // A tool call ends whatever text came before it in this step.
-        if (reply && !replyText.trim()) reply.remove();
-        reply = null;
-        replyText = '';
-        tools.set(e.id, bubble('eye-tool is-running', `<span class="eye-tool-name">${escapeHtml(e.name)}</span> <span class="an-muted">working…</span>`));
+        endReply();
+        const node = bubble(
+          'eye-tool is-running',
+          `<div class="eye-tool-head">
+            <span class="eye-tool-mark" aria-hidden="true"></span>
+            <span class="eye-tool-name">${escapeHtml(TOOL_VERBS[e.name] || e.name)}</span>
+            <span class="eye-tool-args">${escapeHtml(argsLine(e.args))}</span>
+            <span class="eye-tool-time">0.0s</span>
+          </div>
+          <div class="eye-tool-status an-muted">Working</div>`
+        );
+        const timeEl = node.querySelector('.eye-tool-time');
+        const t0 = Date.now();
+        const timer = setInterval(() => (timeEl.textContent = seconds(Date.now() - t0)), 150);
+        tools.set(e.id, { node, t0, timer, timeEl });
       } else if (e.type === 'tool-progress') {
-        const node = tools.get(e.id);
-        if (node) node.querySelector('.an-muted').textContent = e.label;
+        const t = tools.get(e.id);
+        if (t) t.node.querySelector('.eye-tool-status').textContent = e.label;
       } else if (e.type === 'tool-done') {
-        const node = tools.get(e.id);
-        if (!node) return;
-        node.classList.remove('is-running');
-        node.classList.toggle('is-error', e.result.content.startsWith('Error'));
-        const link = e.result.link
-          ? ` <a href="${escapeHtml(e.result.link)}" target="_blank" rel="noopener">open the rounds</a>`
-          : '';
-        node.innerHTML = `<span class="eye-tool-name">${escapeHtml(e.name)}</span> <span class="an-muted">${escapeHtml(e.result.display || '')}</span>${link}`;
+        const t = tools.get(e.id);
+        if (!t) return;
+        clearInterval(t.timer);
+        t.timeEl.textContent = seconds(Date.now() - t.t0);
+        const failed = String(e.result.content || '').startsWith('Error');
+        t.node.classList.remove('is-running');
+        t.node.classList.toggle('is-error', failed);
+        const link = e.result.link ? `<a href="${escapeHtml(e.result.link)}" target="_blank" rel="noopener">Open the rounds</a>` : '';
+        const raw = String(e.result.content || '');
+        const detail = `<details class="eye-tool-detail"><summary>Details</summary>
+          <pre>${escapeHtml(JSON.stringify(e.args || {}, null, 2))}</pre>
+          <pre>${escapeHtml(raw.length > 1500 ? `${raw.slice(0, 1500)}\n...` : raw)}</pre></details>`;
+        t.node.querySelector('.eye-tool-status').outerHTML = `<div class="eye-tool-result"><span class="an-muted">${escapeHtml(e.result.display || '')}</span>${link}</div>${detail}`;
+        showPending('Reading results');
       }
     };
     try {
-      await runAgentTurn(messages, { onEvent, signal: ctrl.signal, thinking: thinkEl.checked, confirm: confirmInline });
+      await runAgentTurn(messages, { onEvent, signal: ctrl.signal, thinking: thinkLonger, confirm: confirmInline });
     } catch (err) {
+      hidePending();
       if (err.name !== 'AbortError') bubble('eye-error', `<p>${escapeHtml(err.message)}</p>`);
       else bubble('eye-error', '<p>Stopped.</p>');
+    }
+    hidePending();
+    closeReasoning();
+    endReply();
+    for (const t of tools.values()) {
+      clearInterval(t.timer);
+      if (t.node.classList.contains('is-running')) t.node.classList.replace('is-running', 'is-error');
     }
     running = null;
     syncSend();
@@ -322,6 +493,10 @@ export function createEyePanel({ escapeHtml }) {
       e.preventDefault();
       void ask(textEl.value);
     }
+  });
+  thinkBtn.addEventListener('click', () => {
+    thinkLonger = !thinkLonger;
+    thinkBtn.setAttribute('aria-pressed', String(thinkLonger));
   });
   stopBtn.addEventListener('click', () => running?.abort());
   el.querySelector('#eye-new').addEventListener('click', () => {
@@ -352,17 +527,12 @@ export function createEyePanel({ escapeHtml }) {
       void refreshStatus();
     }
   });
-  el.addEventListener('change', (e) => {
-    if (e.target.id === 'eye-model') {
-      const need = el.querySelector('#eye-model-need');
-      if (need) need.textContent = EYE_MODELS.find((m) => m.id === e.target.value)?.needs || '';
-    }
-  });
   // The desktop app tells the page when its link or state changes.
   window.addEventListener('aim4-desktop', () => {
     if (shown) renderStatus();
   });
 
+  renderStatus();
   renderEmpty();
   syncSend();
 

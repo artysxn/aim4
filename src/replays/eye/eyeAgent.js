@@ -118,7 +118,7 @@ export async function runAgentTurn(messages, { onEvent, signal, thinking = false
     const last = step === MAX_STEPS - 1;
     const convo = [{ role: 'system', content: SYSTEM_PROMPT }, ...messages];
     if (last) convo.push({ role: 'system', content: 'Answer now with what the tools have shown. No more tool calls.' });
-    onEvent?.({ type: 'step', step });
+    onEvent?.({ type: 'step', step, max: MAX_STEPS });
     const { content, toolCalls } = await streamReply(convo, { onEvent, signal, thinking });
     const calls = last ? [] : toolCalls;
     messages.push({
