@@ -112,6 +112,14 @@ pub fn ensure_model(spec: &ModelSpec, progress: Progress) -> Result<PathBuf, Err
     Ok(path)
 }
 
+/// The vision projector for a model, downloading it first if needed. Verified
+/// the same way the model is.
+pub fn ensure_mmproj(spec: &ModelSpec, progress: Progress) -> Result<PathBuf, Error> {
+    let path = eye_dir().join("models").join(format!("{}-{}", spec.id, spec.mmproj_file));
+    download_verified(&spec.mmproj_url(), &path, Some(spec.mmproj_size), spec.mmproj_sha256, progress)?;
+    Ok(path)
+}
+
 pub fn model_downloaded(spec: &ModelSpec) -> bool {
     eye_dir().join("models").join(spec.file).exists()
 }
@@ -172,6 +180,8 @@ pub struct Server {
     child: Child,
     pub port: u16,
     pub gpu: bool,
+    /// Started with the vision projector: the model can read pictures.
+    pub vision: bool,
 }
 
 impl Drop for Server {
@@ -219,7 +229,7 @@ fn free_port() -> Result<u16, Error> {
 /// Start the server on a model and wait until it answers. With `gpu`, it is
 /// left to fit as much of the model on the GPU as memory allows; without, it
 /// runs on the CPU only.
-pub fn start_server(exe: &Path, model: &Path, gpu: bool) -> Result<Server, Error> {
+pub fn start_server(exe: &Path, model: &Path, mmproj: Option<&Path>, gpu: bool) -> Result<Server, Error> {
     let port = free_port()?;
     let log = std::fs::File::create(eye_dir().join("llama-server.log"))?;
     let mut cmd = Command::new(exe);
@@ -229,6 +239,9 @@ pub fn start_server(exe: &Path, model: &Path, gpu: bool) -> Result<Server, Error
         .stdin(Stdio::null())
         .stdout(log.try_clone()?)
         .stderr(log);
+    if let Some(proj) = mmproj {
+        cmd.arg("--mmproj").arg(proj);
+    }
     if gpu {
         cmd.args(["--fit", "on"]);
     } else {
@@ -242,7 +255,7 @@ pub fn start_server(exe: &Path, model: &Path, gpu: bool) -> Result<Server, Error
     }
     let child = cmd.spawn()?;
     std::fs::write(pid_file(), child.id().to_string()).ok();
-    let mut server = Server { child, port, gpu };
+    let mut server = Server { child, port, gpu, vision: mmproj.is_some() };
     let started = Instant::now();
     let health = format!("{}/health", server.base_url());
     loop {
@@ -271,6 +284,12 @@ pub fn bring_up(spec: &ModelSpec, on: &mut dyn FnMut(&str, Option<f32>)) -> Resu
     let model = ensure_model(spec, &mut |done, total| {
         on("downloading", (total > 0).then(|| done as f32 / total as f32));
     })?;
+    // Vision is a bonus, never a requirement: a failed download or a server
+    // that will not take the projector leaves a working text-only model.
+    let mmproj = ensure_mmproj(spec, &mut |done, total| {
+        on("downloading-vision", (total > 0).then(|| done as f32 / total as f32));
+    })
+    .ok();
     let mut last_err: Option<Error> = None;
     for build in builds {
         let exe = ensure_server(build, &mut |done, total| {
@@ -280,9 +299,15 @@ pub fn bring_up(spec: &ModelSpec, on: &mut dyn FnMut(&str, Option<f32>)) -> Resu
         // then the same build on the CPU, then the next build.
         for gpu in if build.gpu { vec![true, false] } else { vec![false] } {
             on("loading", None);
-            match start_server(&exe, &model, gpu) {
-                Ok(server) => return Ok(server),
-                Err(err) => last_err = Some(err),
+            let attempts: Vec<Option<&Path>> = match &mmproj {
+                Some(p) => vec![Some(p.as_path()), None],
+                None => vec![None],
+            };
+            for proj in attempts {
+                match start_server(&exe, &model, proj, gpu) {
+                    Ok(server) => return Ok(server),
+                    Err(err) => last_err = Some(err),
+                }
             }
         }
     }

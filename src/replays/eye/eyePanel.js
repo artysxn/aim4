@@ -74,6 +74,13 @@ const TOOL_VERBS = {
   list_teams: 'Listing teams',
   map_zones: 'Reading map callouts',
   query_rounds: 'Querying rounds',
+  database_query: 'Querying the Database',
+  find_rounds: 'Finding rounds',
+  round_details: 'Reading a round',
+  team_documents: 'Reading team documents',
+  team_rankings: 'Reading the ranking',
+  site_map: 'Reading the site map',
+  screenshot_round: 'Looking at a round',
   antistrat_summary: 'Reading antistrat',
   create_antistrat_document: 'Creating document'
 };
@@ -249,7 +256,7 @@ export function createEyePanel({ escapeHtml }) {
       <div class="eye-status-row">
         <span class="eye-dot ${dot}"></span>
         <strong>${escapeHtml(dev.name || 'Your computer')}</strong>
-        <span class="an-muted">${escapeHtml(stateText)}${ram ? ` · ${escapeHtml(ram)}` : ''}</span>
+        <span class="an-muted">${escapeHtml(stateText)}${ram ? ` · ${escapeHtml(ram)}` : ''}${dev.vision ? ' · Vision' : ''}</span>
         <span class="eye-spacer"></span>
         ${pick}
       </div>
@@ -459,12 +466,14 @@ export function createEyePanel({ escapeHtml }) {
         const detail = `<details class="eye-tool-detail"><summary>Details</summary>
           <pre>${escapeHtml(JSON.stringify(e.args || {}, null, 2))}</pre>
           <pre>${escapeHtml(raw.length > 1500 ? `${raw.slice(0, 1500)}\n...` : raw)}</pre></details>`;
-        t.node.querySelector('.eye-tool-status').outerHTML = `<div class="eye-tool-result"><span class="an-muted">${escapeHtml(e.result.display || '')}</span>${link}</div>${detail}`;
+        const shots = (e.result.images || []).map((url) => `<img class="eye-shot" src="${escapeHtml(url)}" alt="${escapeHtml(e.result.display || 'Round screenshot')}" />`).join('');
+        t.node.querySelector('.eye-tool-status').outerHTML = `<div class="eye-tool-result"><span class="an-muted">${escapeHtml(e.result.display || '')}</span>${link}</div>${shots}${detail}`;
         showPending('Reading results');
       }
     };
     try {
-      await runAgentTurn(messages, { onEvent, signal: ctrl.signal, thinking: thinkLonger, confirm: confirmInline });
+      const vision = Boolean((status?.devices || []).find((d) => d.state === 'ready')?.vision);
+      await runAgentTurn(messages, { onEvent, signal: ctrl.signal, thinking: thinkLonger, vision, confirm: confirmInline });
     } catch (err) {
       hidePending();
       if (err.name !== 'AbortError') bubble('eye-error', `<p>${escapeHtml(err.message)}</p>`);
@@ -506,6 +515,11 @@ export function createEyePanel({ escapeHtml }) {
     renderEmpty();
   });
   el.addEventListener('click', async (e) => {
+    const shot = e.target.closest('.eye-shot');
+    if (shot) {
+      shot.classList.toggle('is-large');
+      return;
+    }
     const ex = e.target.closest('[data-eye-example]');
     if (ex) {
       textEl.value = ex.textContent;

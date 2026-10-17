@@ -13,9 +13,26 @@
 //   antistrat_summary          the antistrat sheet for a team on a map, as points
 //   create_antistrat_document  write antistrat documents into the user's team docs
 //                              (asks the user first)
+//   database_query             the Database: players and teams, pooled over any filter
+//   find_rounds                search the library's rounds (teams, players, map, buys)
+//   round_details              one round's record: kills, grenades, bomb, score
+//   team_documents             list and read the user's team documents
+//   team_rankings              the VRS world ranking
+//   site_map                   every page of the site, with links to cite
+//   screenshot_round           (vision only) one moment of a round, as a picture
 // ---------------------------------------------------------------------------
 
-import { fetchRoster, fetchTeams, saveTeamDocument } from '../api.js';
+import {
+  fetchAggregate,
+  fetchRoster,
+  fetchRoundMeta,
+  fetchTeamDocument,
+  fetchTeams,
+  fetchVrsRanks,
+  findRounds,
+  saveTeamDocument
+} from '../api.js';
+import { screenshotRound } from './eyeVision.js';
 import { getStatsPayload } from '../statsCache.js';
 import { MAPS } from '../shared/roundId.js';
 import { teamNameKey } from '../shared/statsMath.js';
@@ -233,6 +250,133 @@ export const TOOLS = [
   }
 ];
 
+const BUYS = ['full', 'force', 'half', 'eco', 'pistol', 'any'];
+const BUY_CODE = { eco: 0, pistol: 1, half: 2, force: 3, full: 4 };
+
+/** The Database's columns an answer usually needs; others can be named in `columns`. */
+const PLAYER_COLUMNS = ['name', 'teamLabel', 'rounds', 'rating', 'kast', 'adr', 'kills', 'deaths', 'kd', 'impact', 'openKills', 'openDeaths', 'a4r', 'a4aim', 'utilDmgPerRound', 'flashHitRate', 'awpAccuracy'];
+const TEAM_COLUMNS = ['name', 'rounds', 'matches', 'avgRating', 'winrate', 'ctWinrate', 'tWinrate'];
+
+TOOLS.push(
+  {
+    type: 'function',
+    function: {
+      name: 'database_query',
+      description:
+        "The Database page: one row per player or per team, pooled over every match that fits the filters. Use it for ratings, ADR, KAST, opening duels, utility damage, AWP accuracy and the like. " +
+        `Default player columns: ${PLAYER_COLUMNS.join(', ')}. Default team columns: ${TEAM_COLUMNS.join(', ')}. Name other columns in "columns" (for example mk3, mk4, hits, headshots, tfw, ratingT, ratingCT).`,
+      parameters: {
+        type: 'object',
+        properties: {
+          table: { type: 'string', enum: ['players', 'teams'] },
+          map: { type: 'string', description: 'One map, or omit for all maps.' },
+          side: { type: 'string', enum: ['T', 'CT', 'any'] },
+          buy: { type: 'string', enum: BUYS, description: "The subject's buy." },
+          vs_buy: { type: 'string', enum: BUYS, description: "The other team's buy." },
+          result: { type: 'string', enum: ['won', 'lost', 'any'], description: 'Only rounds the subject won or lost.' },
+          team: { type: 'string', description: "Only this team's rounds (players: their stats while playing for it)." },
+          date_from: { type: 'string', description: 'YYYY-MM-DD' },
+          date_to: { type: 'string', description: 'YYYY-MM-DD' },
+          rank_own: { type: 'string', description: 'World rank of the subject team, for example "20" or "10-30".' },
+          rank_opp: { type: 'string', description: 'World rank of the other team.' },
+          min_rounds: { type: 'number' },
+          columns: { type: 'array', items: { type: 'string' } },
+          sort_by: { type: 'string' },
+          limit: { type: 'number', description: 'Rows to return, at most 40.' }
+        },
+        required: ['table']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'find_rounds',
+      description:
+        'Search the round library. Returns rounds with their file (for screenshot_round and round_details), map, round number, teams, buys and who won. Filter by team, opponent, player, map, who won and buys.',
+      parameters: {
+        type: 'object',
+        properties: {
+          team: { type: 'string' },
+          opponent: { type: 'string' },
+          player: { type: 'string', description: 'A player name (any team).' },
+          map: { type: 'string' },
+          won_by: { type: 'string', enum: ['team', 'opponent', 'any'], description: 'Relative to "team".' },
+          buy: { type: 'string', enum: BUYS, description: "The team's buy." },
+          limit: { type: 'number', description: 'At most 30.' }
+        }
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'round_details',
+      description: "One round's record: the score line, each player, kills with weapons and clock times, grenades thrown, the bomb. Use a file from find_rounds.",
+      parameters: { type: 'object', properties: { round: { type: 'string' } }, required: ['round'] }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'team_documents',
+      description: "The user's team documents (antistrat sheets, notes). Without \"title\" lists them; with it reads that document as text.",
+      parameters: { type: 'object', properties: { title: { type: 'string' } } }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'team_rankings',
+      description: 'The VRS world ranking (rank, team, points). Use it for who is a top 10 or top 30 team.',
+      parameters: { type: 'object', properties: { query: { type: 'string', description: 'Part of a team name.' }, top: { type: 'number', description: 'How many to list, default 20.' } } }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'site_map',
+      description: 'Every page of aim4 and what it shows, with links. Use it to point the user to the right page, or to find which tool covers a question.',
+      parameters: { type: 'object', properties: {} }
+    }
+  }
+);
+
+/** Offered only when the running model can read pictures. */
+export const VISION_TOOLS = [
+  {
+    type: 'function',
+    function: {
+      name: 'screenshot_round',
+      description:
+        'Look at one moment of a round: a picture of the radar with every player, their facing, weapons, grenades and the bomb, and the same moment as text. Use a file from find_rounds and a round clock time (1:55 is the start of the live round). Use it to check positions, setups and what a utility lineup did. Take a second picture at another clock to see what changed.',
+      parameters: {
+        type: 'object',
+        properties: {
+          round: { type: 'string', description: 'A round file from find_rounds.' },
+          clock: { type: 'string', description: 'Round clock, for example 1:20.' },
+          view: { type: 'string', enum: ['players', 'map'], description: 'players (default) zooms onto where the players are; map shows the whole radar.' }
+        },
+        required: ['round', 'clock']
+      }
+    }
+  }
+];
+
+/** The tool definitions for a model, with or without vision. */
+export const toolsFor = ({ vision = false } = {}) => (vision ? [...TOOLS, ...VISION_TOOLS] : TOOLS);
+
+const SITE_PAGES = [
+  { page: 'Demo library', link: '/demos', about: 'Every uploaded match and round, with the round viewer (2D and 3D).' },
+  { page: 'Database', link: '/database', about: 'Player and team tables with filters and columns (database_query reads this).' },
+  { page: 'Pattern Finder', link: '/patterns', about: 'Search rounds by position, utility and timing.' },
+  { page: 'Antistrat', link: '/patterns?chapter=antistrat', about: 'Team scouting sheets per map (antistrat_summary reads this).' },
+  { page: 'Player scouting', link: '/patterns?chapter=scout', about: 'One player at a time: roles, positions, habits.' },
+  { page: 'Charts', link: '/patterns?chapter=charts', about: 'Scatter and bar charts over the Database columns.' },
+  { page: 'Team documents', link: '/team/documents', about: "The team's written notes and generated sheets (team_documents reads these)." },
+  { page: 'Aim trainer', link: '/trainer', about: 'Aim scenarios and routines.' }
+];
+
 /** Cut a result to what fits the model's context, saying so when it was cut. */
 function fit(value) {
   const text = typeof value === 'string' ? value : JSON.stringify(value);
@@ -330,6 +474,165 @@ export async function runTool(name, args = {}, ctx = {}) {
         const title = `${style === 'sixpack' ? 'Sixpack' : style === 'outline' ? 'Outline' : 'Summary'}: ${team.name} on ${mapNames}`;
         await saveTeamDocument(dest.id, { title, html });
         return { content: `Saved "${title}" to ${dest.name}'s Documents.`, display: `Saved "${title}"`, link: '/team/documents' };
+      }
+      case 'database_query': {
+        const table = args.table === 'teams' ? 'teams' : 'players';
+        const filter = {};
+        if (args.map) filter.maps = [mapCodeOf(args.map)];
+        if (args.side === 'T' || args.side === 'CT') filter.side = args.side;
+        if (args.buy && args.buy !== 'any') filter.econ = BUY_CODE[args.buy];
+        if (args.vs_buy && args.vs_buy !== 'any') filter.oppEcon = BUY_CODE[args.vs_buy];
+        if (args.result === 'won' || args.result === 'lost') filter.result = args.result;
+        if (args.team) filter.teamName = (await teamOf(args.team)).name;
+        if (args.date_from) filter.dateFrom = String(args.date_from);
+        if (args.date_to) filter.dateTo = String(args.date_to);
+        if (args.rank_own) filter.rankOwn = String(args.rank_own);
+        if (args.rank_opp) filter.rankOpp = String(args.rank_opp);
+        if (Number.isFinite(args.min_rounds) && args.min_rounds > 0) filter.minRounds = args.min_rounds;
+        ctx.onProgress?.('Reading the Database…');
+        const res = await fetchAggregate(filter, { tables: table, limit: 400 });
+        let rows = res[table] || [];
+        if (!rows.length) {
+          return { content: `No ${table} match these filters.`, display: `Database: no ${table} match` };
+        }
+        const sortKey = args.sort_by && args.sort_by in rows[0] ? args.sort_by : table === 'players' ? 'rating' : 'avgRating';
+        rows = [...rows].sort((a, b) => (Number(b[sortKey]) || 0) - (Number(a[sortKey]) || 0));
+        const total = rows.length;
+        rows = rows.slice(0, Math.max(1, Math.min(40, Math.round(args.limit) || 15)));
+        const base = table === 'players' ? PLAYER_COLUMNS : TEAM_COLUMNS;
+        const wanted = [...new Set([...base, ...(Array.isArray(args.columns) ? args.columns : [])])].filter((c) => c in rows[0]);
+        const round = (v) => (typeof v === 'number' && !Number.isInteger(v) ? Math.round(v * 1000) / 1000 : v);
+        const out = rows.map((r) => Object.fromEntries(wanted.map((c) => [c, round(r[c])])));
+        return {
+          content: fit({ table, filters: filter, sorted_by: sortKey, rows_total: total, rows: out }),
+          display: `Database: ${out.length} of ${total} ${table}, by ${sortKey}`,
+          link: '/database'
+        };
+      }
+      case 'find_rounds': {
+        const { payload } = await library();
+        const idsOf = (team) =>
+          new Set(
+            payload.demos.flatMap((d) => [
+              teamNameKey(d.name1, d.t1) === team.key ? d.t1 : '',
+              teamNameKey(d.name2, d.t2) === team.key ? d.t2 : ''
+            ]).filter(Boolean)
+          );
+        const query = {};
+        if (args.map) query.maps = [mapCodeOf(args.map)];
+        let team = null;
+        if (args.team) {
+          team = await teamOf(args.team);
+          query.teams = [...idsOf(team)];
+          if (args.opponent) {
+            const opp = await teamOf(args.opponent);
+            query.teams = [...query.teams, ...idsOf(opp)];
+          }
+          if (args.won_by === 'team') {
+            query.wonBy = query.teams.slice(0, idsOf(team).size);
+          }
+          if (args.buy && args.buy !== 'any') {
+            query.teamEconomyOf = [...idsOf(team)][0];
+            query.teamEconomies = [BUY_CODE[args.buy]];
+          }
+        }
+        if (args.player) {
+          const roster = await fetchRoster();
+          const q = String(args.player).trim().toLowerCase();
+          const hit = (roster?.players || []).find((p) => String(p.n || '').toLowerCase() === q || String(p.k || '').toLowerCase() === q);
+          if (!hit) throw new ToolError(`No player called "${args.player}" in the library.`);
+          query.players = [hit.i];
+        }
+        const limit = Math.max(1, Math.min(30, Math.round(args.limit) || 12));
+        const res = await findRounds(query, 400);
+        let list = res.rounds || [];
+        if (args.won_by === 'opponent' && team) {
+          const mine = idsOf(team);
+          list = list.filter((r) => !mine.has(r.winner === 1 ? r.team1 : r.team2));
+        }
+        const total = list.length;
+        const rows = list.slice(0, limit).map((r) => ({
+          round: r.file,
+          map: r.mapName,
+          number: r.round,
+          team1: r.team1,
+          team2: r.team2,
+          winner: r.winner === 1 ? r.team1 : r.team2,
+          buys: `${r.econ1}-${r.econ2}`
+        }));
+        return {
+          content: fit({ total_matching: total, shown: rows.length, rounds: rows, buys: '0 eco, 1 pistol, 2 half, 3 force, 4 full, 5 full with AWP' }),
+          display: `Found ${total} round${total === 1 ? '' : 's'}${total > rows.length ? `, showing ${rows.length}` : ''}`,
+          link: roundsLink(list.map((r) => r.file))
+        };
+      }
+      case 'round_details': {
+        const meta = await fetchRoundMeta(String(args.round || ''));
+        if (!meta) throw new ToolError('That round was not found. Use a file from find_rounds.');
+        const name = new Map((meta.players || []).map((p) => [p.id, p.name]));
+        const tickRate = meta.tickRate || 64;
+        const clock = (tick) => {
+          const left = 115 - (tick - meta.freezeEndTick) / tickRate;
+          const s = Math.max(0, Math.round(left));
+          return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+        };
+        const weapons = meta.weapons || [];
+        const out = {
+          map: meta.mapName,
+          round: meta.round,
+          team1: `${meta.team1?.name} (${meta.team1Side})`,
+          team2: `${meta.team2?.name} (${meta.team2Side})`,
+          winner: meta.winner === 1 ? meta.team1?.name : meta.team2?.name,
+          buys: { team1: meta.econ1, team2: meta.econ2 },
+          players: (meta.players || []).map((p) => `${p.name} (team ${p.team})`),
+          kills: (meta.events?.kills || []).map((k) => `${clock(k.tick)} ${name.get(k.attacker) || k.attacker} > ${name.get(k.victim) || k.victim} ${k.weapon}${k.headshot ? ' hs' : ''}`),
+          grenades: (meta.events?.grenades || []).slice(0, 60).map((g) => `${clock(g.tick ?? g.throwTick ?? meta.freezeEndTick)} ${name.get(g.player || g.thrower) || g.player || ''} ${weapons[g.weapon] || g.type || g.kind || ''}`.trim()),
+          bomb: (meta.events?.bomb || []).map((b) => `${clock(b.tick)} ${b.type || b.event || ''}`.trim())
+        };
+        return { content: fit(out), display: `Round ${meta.round} on ${meta.mapName}`, link: `/demos?rounds=${encodeURIComponent(String(args.round))}` };
+      }
+      case 'team_documents': {
+        const myTeams = await fetchTeams();
+        const team = myTeams?.[0];
+        if (!team) throw new ToolError('The user is not in a team, so there are no team documents.');
+        const docs = team.documents || [];
+        const want = String(args.title || '').trim().toLowerCase();
+        if (!want) {
+          return {
+            content: fit({ team: team.name, documents: docs.map((d) => ({ title: d.title, updated: d.updatedAt || d.updated || '' })) }),
+            display: `${docs.length} document${docs.length === 1 ? '' : 's'} in ${team.name}`,
+            link: '/team/documents'
+          };
+        }
+        const doc = docs.find((d) => String(d.title || '').toLowerCase() === want) || docs.find((d) => String(d.title || '').toLowerCase().includes(want));
+        if (!doc) throw new ToolError(`No document called "${args.title}". Call team_documents without a title to list them.`);
+        const full = (await fetchTeamDocument(team.id, doc.id)) || doc;
+        const text = String(full.html || '')
+          .replace(/<(br|\/p|\/li|\/h[1-6]|\/tr)[^>]*>/gi, '\n')
+          .replace(/<[^>]+>/g, '')
+          .replace(/&nbsp;/g, ' ')
+          .replace(/&amp;/g, '&')
+          .replace(/&lt;/g, '<')
+          .replace(/&gt;/g, '>')
+          .replace(/\n{3,}/g, '\n\n')
+          .trim();
+        return { content: fit({ title: full.title, text }), display: `Read "${full.title}"`, link: '/team/documents' };
+      }
+      case 'team_rankings': {
+        const table = await fetchVrsRanks();
+        const rows = table instanceof Map ? [...table.values()] : [];
+        const q = String(args.query || '').trim().toLowerCase();
+        const list = rows
+          .filter((r) => !q || String(r.name || '').toLowerCase().includes(q))
+          .sort((a, b) => (a.rank ?? 1e9) - (b.rank ?? 1e9))
+          .slice(0, Math.max(1, Math.min(50, Math.round(args.top) || 20)));
+        return { content: fit(list.map((r) => ({ rank: r.rank, team: r.name, points: r.points, region: r.region }))), display: `World ranking: ${list.length} team${list.length === 1 ? '' : 's'}` };
+      }
+      case 'site_map':
+        return { content: fit(SITE_PAGES), display: 'Read the site map' };
+      case 'screenshot_round': {
+        ctx.onProgress?.('Drawing the round…');
+        return await screenshotRound({ round: args.round, clock: args.clock, view: args.view });
       }
       default:
         throw new ToolError(`There is no tool called "${name}".`);

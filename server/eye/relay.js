@@ -31,7 +31,8 @@ import { deviceForToken, touchDevice } from './eyeStore.js';
 
 /** A chat request's own fields; anything else in the body is dropped. */
 const CHAT_FIELDS = ['messages', 'tools', 'tool_choice', 'temperature', 'top_p', 'top_k', 'max_tokens', 'stop', 'chat_template_kwargs'];
-export const MAX_CHAT_BYTES = 768 * 1024;
+/** A chat carries the whole conversation each step, and round screenshots ride along as images. */
+export const MAX_CHAT_BYTES = 8 * 1024 * 1024;
 const MAX_MESSAGE_BYTES = 1024 * 1024;
 const HEARTBEAT_MS = 25_000;
 /** An answer that has said nothing for this long is treated as lost. */
@@ -141,7 +142,8 @@ export class EyeRelay {
           state: STATES.has(msg.state) ? msg.state : 'idle',
           model: String(msg.model || '').slice(0, 80),
           progress: Number.isFinite(msg.progress) ? Math.max(0, Math.min(1, msg.progress)) : null,
-          message: String(msg.message || '').slice(0, 300)
+          message: String(msg.message || '').slice(0, 300),
+          vision: msg.vision === true
         };
         return;
       case 'chunk': {

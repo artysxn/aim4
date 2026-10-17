@@ -67,6 +67,8 @@ pub struct State {
     pub model: String,
     pub progress: Option<f32>,
     pub message: String,
+    /// The running model can read pictures.
+    pub vision: bool,
 }
 
 pub struct Hardware {
@@ -116,7 +118,7 @@ impl Service {
                 base: base.trim_end_matches('/').to_string(),
                 hardware: hardware(),
                 settings: Mutex::new(settings.clone()),
-                state: Mutex::new(State { state: "idle".into(), model: String::new(), progress: None, message: String::new() }),
+                state: Mutex::new(State { state: "idle".into(), model: String::new(), progress: None, message: String::new(), vision: false }),
                 server: Mutex::new(None),
                 out: Mutex::new(None),
                 wake: Notify::new(),
@@ -184,7 +186,7 @@ impl Service {
             s.message = message.into();
             s.clone()
         };
-        self.send_raw(json!({ "type": "status", "state": snapshot.state, "model": snapshot.model, "progress": snapshot.progress, "message": snapshot.message }).to_string());
+        self.send_raw(json!({ "type": "status", "state": snapshot.state, "model": snapshot.model, "progress": snapshot.progress, "message": snapshot.message, "vision": snapshot.vision }).to_string());
         (self.inner.on_change)();
     }
 
@@ -231,12 +233,14 @@ impl Service {
                 match what {
                     "downloading" => svc.set_state("downloading", Some(spec.id), progress, &format!("downloading {}", spec.label)),
                     "downloading-server" => svc.set_state("downloading", Some(spec.id), progress, "downloading the model runtime (llama.cpp)"),
+                    "downloading-vision" => svc.set_state("downloading", Some(spec.id), progress, "downloading the vision add-on"),
                     other => svc.set_state(other, Some(spec.id), progress, ""),
                 }
             });
             match result {
                 Ok(server) => {
                     let note = if server.gpu { "" } else { "running on the CPU" };
+                    svc.inner.state.lock().unwrap().vision = server.vision;
                     *svc.inner.server.lock().unwrap() = Some(server);
                     {
                         let mut s = svc.inner.settings.lock().unwrap();
@@ -384,7 +388,7 @@ impl Service {
         *self.inner.out.lock().unwrap() = Some(tx);
         let hello = self.hello();
         let st = self.state();
-        let status = json!({ "type": "status", "state": st.state, "model": st.model, "progress": st.progress, "message": st.message }).to_string();
+        let status = json!({ "type": "status", "state": st.state, "model": st.model, "progress": st.progress, "message": st.message, "vision": st.vision }).to_string();
         if sink.send(Message::Text(hello.into())).await.is_err() || sink.send(Message::Text(status.into())).await.is_err() {
             *self.inner.out.lock().unwrap() = None;
             return;

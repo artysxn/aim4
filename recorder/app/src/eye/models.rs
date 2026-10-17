@@ -16,6 +16,10 @@ pub struct ModelSpec {
     pub file: &'static str,
     pub size: u64,
     pub sha256: &'static str,
+    /// The vision projector that lets the model read pictures (llama.cpp `--mmproj`).
+    pub mmproj_file: &'static str,
+    pub mmproj_size: u64,
+    pub mmproj_sha256: &'static str,
     /// System memory below which this model is not the recommended one.
     pub min_ram_gb: u64,
 }
@@ -23,6 +27,10 @@ pub struct ModelSpec {
 impl ModelSpec {
     pub fn url(&self) -> String {
         format!("https://huggingface.co/{}/resolve/{}/{}", self.repo, self.revision, self.file)
+    }
+
+    pub fn mmproj_url(&self) -> String {
+        format!("https://huggingface.co/{}/resolve/{}/{}", self.repo, self.revision, self.mmproj_file)
     }
 }
 
@@ -35,6 +43,9 @@ pub const MODELS: &[ModelSpec] = &[
         file: "Qwen3.5-2B-Q4_K_M.gguf",
         size: 1_280_835_840,
         sha256: "aaf42c8b7c3cab2bf3d69c355048d4a0ee9973d48f16c731c0520ee914699223",
+        mmproj_file: "mmproj-F16.gguf",
+        mmproj_size: 668_227_264,
+        mmproj_sha256: "7035e9cb8d7c6a9681d07eef9a364783e86ea4cd73faab2eabb4f43a101830c7",
         min_ram_gb: 0,
     },
     ModelSpec {
@@ -45,6 +56,9 @@ pub const MODELS: &[ModelSpec] = &[
         file: "Qwen3.5-4B-Q4_K_M.gguf",
         size: 2_740_937_888,
         sha256: "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4",
+        mmproj_file: "mmproj-F16.gguf",
+        mmproj_size: 672_423_616,
+        mmproj_sha256: "cd88edcf8d031894960bb0c9c5b9b7e1fea6ebee02b9f7ce925a00d12891f864",
         min_ram_gb: 8,
     },
     ModelSpec {
@@ -55,6 +69,9 @@ pub const MODELS: &[ModelSpec] = &[
         file: "Qwen3.5-9B-Q4_K_M.gguf",
         size: 5_680_522_464,
         sha256: "03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8",
+        mmproj_file: "mmproj-F16.gguf",
+        mmproj_size: 918_166_080,
+        mmproj_sha256: "f70dc3509053962b0d0d3ee8a7eacebf5d60aa560cad78254ae8698516ae029f",
         min_ram_gb: 16,
     },
     ModelSpec {
@@ -65,6 +82,9 @@ pub const MODELS: &[ModelSpec] = &[
         file: "Qwen3.5-35B-A3B-Q4_K_M.gguf",
         size: 22_016_023_168,
         sha256: "3b46d1066bc91cc2d613e3bc22ce691dd77e6f0d33c9060690d24ce6de494375",
+        mmproj_file: "mmproj-F16.gguf",
+        mmproj_size: 899_283_648,
+        mmproj_sha256: "a516ab92e8240da4734d68352bdfba84c16e830ee40010b8fac80d69c77272ff",
         min_ram_gb: 32,
     },
 ];
@@ -148,6 +168,8 @@ mod tests {
     fn pins_are_whole() {
         for m in MODELS {
             assert_eq!(m.sha256.len(), 64, "{}", m.id);
+            assert_eq!(m.mmproj_sha256.len(), 64, "{}", m.id);
+            assert!(m.mmproj_url().contains(m.revision));
             assert_eq!(m.revision.len(), 40, "{}", m.id);
             assert!(m.url().contains(m.revision));
         }

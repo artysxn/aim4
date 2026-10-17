@@ -9,7 +9,8 @@
 // ---------------------------------------------------------------------------
 
 import { accessToken } from '../api.js';
-import { TOOLS, runTool } from './eyeTools.js';
+import { limitImages } from './eyeImages.js';
+import { runTool, toolsFor } from './eyeTools.js';
 
 const API_BASE = (import.meta.env?.VITE_API_URL || '').replace(/\/$/, '');
 /** Tool rounds per question before the agent is made to answer with what it has. */
@@ -29,6 +30,9 @@ Rules:
   query_rounds {"team":"HAVU","map":"Nuke","side":"T","buy":"full","where":[{"players_in":{"zone":"Silo","who":"team","min":1,"from":"1:55","to":"1:20"}}],"group_by":"site"}
   then report matched of considered, and each group's count and wins.
 - For broad questions ("biggest weaknesses", "review the antistrat"), read antistrat_summary for each relevant map first, then check anything surprising with query_rounds.
+- For player or team numbers (rating, ADR, KAST, opening duels, utility damage, AWP accuracy), call database_query. It pools every match that fits the filters.
+- To find specific rounds call find_rounds, and read one with round_details. team_documents reads the user's notes and sheets, team_rankings the world ranking, site_map the pages to point to.
+- When screenshot_round is available, use it to check a position or setup before stating it: find a round with find_rounds, take a picture at the clock time that matters, and describe only what the picture and its text show. Take a second picture at another clock time to see what changed. Do not describe anything you cannot see.
 - To create documents, call create_antistrat_document; the user confirms it.
 - Answer in plain, short sentences a CS2 coach would use. Lead with the answer, then the numbers behind it.`;
 
@@ -36,14 +40,14 @@ Rules:
  * Stream one model reply through the relay.
  * @returns {Promise<{ content: string, toolCalls: Array<{ id: string, name: string, arguments: string }> }>}
  */
-async function streamReply(messages, { onEvent, signal, thinking }) {
+async function streamReply(messages, { onEvent, signal, thinking, vision }) {
   const token = await accessToken();
   const res = await fetch(`${API_BASE}/api/eye/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     body: JSON.stringify({
       messages,
-      tools: TOOLS,
+      tools: toolsFor({ vision }),
       temperature: 0.3,
       chat_template_kwargs: { enable_thinking: Boolean(thinking) }
     }),
@@ -110,16 +114,17 @@ async function streamReply(messages, { onEvent, signal, thinking }) {
  *   onEvent?: (e: object) => void,
  *   signal?: AbortSignal,
  *   thinking?: boolean,
+ *   vision?: boolean,
  *   confirm?: (question: string) => Promise<boolean>
  * }} opts
  */
-export async function runAgentTurn(messages, { onEvent, signal, thinking = false, confirm } = {}) {
+export async function runAgentTurn(messages, { onEvent, signal, thinking = false, vision = false, confirm } = {}) {
   for (let step = 0; step < MAX_STEPS; step++) {
     const last = step === MAX_STEPS - 1;
     const convo = [{ role: 'system', content: SYSTEM_PROMPT }, ...messages];
     if (last) convo.push({ role: 'system', content: 'Answer now with what the tools have shown. No more tool calls.' });
     onEvent?.({ type: 'step', step, max: MAX_STEPS });
-    const { content, toolCalls } = await streamReply(convo, { onEvent, signal, thinking });
+    const { content, toolCalls } = await streamReply(convo, { onEvent, signal, thinking, vision });
     const calls = last ? [] : toolCalls;
     messages.push({
       role: 'assistant',
@@ -132,6 +137,8 @@ export async function runAgentTurn(messages, { onEvent, signal, thinking = false
       onEvent?.({ type: 'done' });
       return content;
     }
+    /** Pictures a tool returned: a tool message cannot carry one, so they follow as a user message. */
+    const pictures = [];
     for (const call of calls) {
       if (signal?.aborted) throw new DOMException('Stopped', 'AbortError');
       let args = {};
@@ -148,7 +155,18 @@ export async function runAgentTurn(messages, { onEvent, signal, thinking = false
       });
       onEvent?.({ type: 'tool-done', id: call.id, name: call.name, args, result });
       messages.push({ role: 'tool', tool_call_id: call.id, content: result.content });
+      if (vision && result.images?.length) pictures.push({ name: call.name, images: result.images });
     }
+    for (const pic of pictures) {
+      messages.push({
+        role: 'user',
+        content: [
+          { type: 'text', text: `The picture from ${pic.name}, as the tool result describes. Read it and answer from what it shows.` },
+          ...pic.images.map((url) => ({ type: 'image_url', image_url: { url } }))
+        ]
+      });
+    }
+    limitImages(messages);
   }
   onEvent?.({ type: 'done' });
   return '';

@@ -7204,6 +7204,18 @@ body.rv-open:has(.side-collapsed) .rv-side-show {
   word-break: break-word;
 }
 
+.eye-shot {
+  display: block;
+  width: 100%;
+  max-width: 320px;
+  margin: 8px 0 0 20px;
+  border-radius: 6px;
+  cursor: zoom-in;
+}
+.eye-shot.is-large {
+  max-width: min(100%, 640px);
+  cursor: zoom-out;
+}
 .eye-confirm {
   padding: 10px 12px;
   border-radius: var(--radius-sm);
