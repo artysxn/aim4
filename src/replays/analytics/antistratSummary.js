@@ -90,6 +90,7 @@ export const SUMMARY_CATEGORIES = [
   { key: 'sites', group: 'Sections', label: 'Site rounds and retakes' },
   { key: 'lurks', group: 'Sections', label: 'Lurks and the rest of the map (T)' },
   { key: 'reactive', group: 'Sections', label: 'Reactive utility (CT)' },
+  { key: 'repeats', group: 'Sections', label: 'Repeated smokes' },
   { key: 'pistols', group: 'Sections', label: 'Pistols' },
   { key: 'players', group: 'Sections', label: 'Players' },
   { key: 'misc', group: 'Sections', label: 'Misc statistics' }
@@ -3170,6 +3171,110 @@ function reactiveFor(ctx) {
   return { lines, files: filesOf(set) };
 }
 
+
+// ---------------------------------------------------------------------------
+// Repeated smokes
+// ---------------------------------------------------------------------------
+
+/** A smoke has to be in this many rounds before its pattern is worth a line. */
+const REPEAT_MIN_ROUNDS = 4;
+/** ...and thrown twice or more in this share of them to count as a repeat. */
+const REPEAT_SHARE = 60;
+/** Set-call throws within this many seconds of each other are one timing. */
+const TIMING_GAP = 6;
+/** A second timing is named when it holds this share of the rounds (and 2 or more). */
+const TIMING_SHARE = 15;
+
+/**
+ * Smokes thrown again on the same spot in the same round (Window twice every
+ * round), and smokes whose first throw comes at two or more set clocks
+ * (usually 1:40, some rounds 1:20). Only throws before the midround count for
+ * the clocks; a smoke thrown later follows what the other team showed.
+ */
+export function repeatSmokesFor(ctx, side) {
+  const set = fullVsFull(ctx, side);
+  const spots = new Map();
+  for (const r of set) {
+    const byLabel = new Map();
+    for (const n of r.nades) {
+      if (n.type !== 'smokegrenade') continue;
+      const label = nadeLabel(n);
+      const t = throwElapsed(n);
+      if (!label || !Number.isFinite(t)) continue;
+      if (!byLabel.has(label)) byLabel.set(label, []);
+      byLabel.get(label).push({ n, t });
+    }
+    for (const [label, throws] of byLabel) {
+      throws.sort((a, b) => a.t - b.t);
+      if (!spots.has(label)) spots.set(label, []);
+      spots.get(label).push({ r, throws });
+    }
+  }
+  const lines = [];
+  const groups = [...spots.entries()].filter(([, list]) => list.length >= REPEAT_MIN_ROUNDS);
+  groups.sort((a, b) => b[1].length - a[1].length);
+  for (const [label, list] of groups) {
+    const name = capitalize(nadeName(label, 'smokegrenade'));
+    const rounds = list.length;
+    const again = list.filter((x) => x.throws.length >= 2);
+    if (again.length >= 3 && percent(again.length, rounds) >= REPEAT_SHARE) {
+      const gap = median(again.map((x) => x.throws[1].t - x.throws[0].t));
+      const first = clockText(ROUND_SECONDS - median(again.map((x) => x.throws[0].t)));
+      const second = clockText(ROUND_SECONDS - median(again.map((x) => x.throws[1].t)));
+      const sameMan = again.filter((x) => x.throws[0].n.player === x.throws[1].n.player).length;
+      const who = sameMan * 2 >= again.length ? 'by the same player' : 'by different players';
+      const freq = again.length === rounds ? 'every round' : `${again.length} of ${rounds} rounds`;
+      const late = median(again.map((x) => x.throws[0].t)) > SET_CALL_ELAPSED;
+      lines.push(
+        line(
+          `${name} is thrown twice ${freq} it is used (${who}${late ? '' : `, around ${first} then ${second}`}, ${Math.round(gap)}s apart).`,
+          again,
+          {
+            tone: again.length === rounds ? 'note' : undefined,
+            fact: { kind: 'repeat', label, type: 'smokegrenade', n: rounds, twice: again.length, gap: Math.round(gap), files: filesOf(again.map((x) => x.r)) }
+          }
+        )
+      );
+    }
+    // Where the first throw of the spot lands on the clock, set calls only.
+    const firsts = list.filter((x) => x.throws[0].t <= SET_CALL_ELAPSED + 0.5);
+    if (firsts.length >= REPEAT_MIN_ROUNDS) {
+      const sorted = [...firsts].sort((a, b) => a.throws[0].t - b.throws[0].t);
+      const clusters = [];
+      for (const x of sorted) {
+        const c = clusters[clusters.length - 1];
+        if (c && x.throws[0].t - c[c.length - 1].throws[0].t <= TIMING_GAP) c.push(x);
+        else clusters.push([x]);
+      }
+      const real = clusters
+        .filter((c) => c.length >= 2 && percent(c.length, firsts.length) >= TIMING_SHARE)
+        .sort((a, b) => b.length - a.length);
+      if (real.length >= 2) {
+        const clockOf = (c) => clockText(ROUND_SECONDS - median(c.map((x) => x.throws[0].t)));
+        const [main, ...others] = real;
+        const rest = others.map((c) => `${clockOf(c)} (${c.length})`);
+        lines.push(
+          line(
+            `${name} is usually thrown at ${clockOf(main)} (${main.length} of ${firsts.length}), but some rounds at ${joinList(rest)}.`,
+            real.flat(),
+            {
+              fact: {
+                kind: 'repeat-timing',
+                label,
+                type: 'smokegrenade',
+                n: firsts.length,
+                timings: real.map((c) => ({ clock: clockOf(c), n: c.length })),
+                files: filesOf(real.flat().map((x) => x.r))
+              }
+            }
+          )
+        );
+      }
+    }
+  }
+  return lines.length ? { lines, files: filesOf(set) } : null;
+}
+
 // ---------------------------------------------------------------------------
 // The report
 // ---------------------------------------------------------------------------
@@ -3219,6 +3324,7 @@ export function buildSummaryReport({ extract, sections, mapCode, teamName }) {
       retakes: side === 'CT' ? retakesFor(ctx) : null,
       lurks: side === 'T' ? lurksSectionFor(ctx) : null,
       reactive: side === 'CT' ? reactiveFor(ctx) : null,
+      repeats: repeatSmokesFor(ctx, side),
       forceStyle: side === 'CT' ? ctForceStyleFor(ctx) : null,
       antiecoStyle: side === 'CT' ? ctAntiecoStyleFor(ctx) : null,
       pistols: pistolsFor(ctx, side),
@@ -3424,6 +3530,7 @@ export function buildSummaryDocHtml(spec, esc) {
     if (side === 'CT') section('sites', 'Retakes', linesHtml(w, bag.retakes?.bullets), bag.retakes?.files);
     if (side === 'T') section('lurks', 'Lurks and the rest of the map', lurksHtml(w, bag.lurks), bag.lurks?.files);
     else section('reactive', 'Reactive utility', linesHtml(w, bag.reactive?.lines), bag.reactive?.files);
+    section('repeats', 'Repeated smokes', linesHtml(w, bag.repeats?.lines), bag.repeats?.files);
     section('pistols', 'Pistols', variationsHtml(w, bag.pistols), bag.pistols?.files);
     if (cats.has('players') && bag.players.length) parts.push(playersHtml(w, bag.players));
   }
