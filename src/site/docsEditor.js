@@ -38,6 +38,9 @@ const ALLOWED = new Set([
   'TABLE', 'THEAD', 'TBODY', 'TR', 'TH', 'TD', 'SMALL'
 ]);
 
+/** Page layouts a generated table may name (`<table data-layout="…">`). */
+const LAYOUTS = new Set(['sixpack']);
+
 /** Inline styles worth keeping. Everything else is dropped on save. */
 const SAFE_STYLE = /^(font-size|line-height|font-weight|font-style|text-decoration|text-align|margin-left|padding-left|color|background-color)$/;
 
@@ -180,6 +183,9 @@ export function sanitizeHtml(html) {
           continue;
         }
         if (name === 'rel' || name === 'target') continue;
+        // A generated page layout (the antistrat sixpack): one named value,
+        // nothing free-form, so it can only ever select a stylesheet rule.
+        if (name === 'data-layout' && el.tagName === 'TABLE' && LAYOUTS.has(attr.value)) continue;
         el.removeAttribute(attr.name);
       }
       walk(el);

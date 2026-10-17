@@ -3515,3 +3515,102 @@ export function buildOutlineDocHtml(spec, esc) {
   }
   return parts.join('');
 }
+
+// ---------------------------------------------------------------------------
+// Sixpack: one page per side of one map, in six boxes
+// ---------------------------------------------------------------------------
+//
+//   Positions        | Default utility
+//   Force buys       | Anti-ecos
+//   Biggest tells    | General notes (empty, written in by hand)
+//
+// Every box is written the way the outline writes it. A page is one table the
+// document keeps as a layout (data-layout="sixpack"); several teams and maps
+// queue into one document, a page after a page.
+
+/** Tells on a sixpack page: the ones backed by the most rounds. */
+const SIXPACK_TELLS = 6;
+
+/** "dytor = A Anchor": the box is a roster, not a list of sentences. */
+function sixpackPositionsHtml(w, rows) {
+  return li((rows || []).filter((p) => p.id || p.role).map((p) => `${w.esc(p.name)} = ${w.esc(p.role || 'Unknown')}`));
+}
+
+/** The outline's tells, ranked by how many rounds back them, the biggest first. */
+function sixpackTellsHtml(w, tells) {
+  const rows = [];
+  for (const t of tells?.tells || []) {
+    rows.push({
+      hits: t.hits,
+      share: percent(t.hits, t.rounds),
+      html: `${w.link(w.esc(capitalize(t.utility)), t.files)} → ${w.link(w.esc(`most likely ${t.outcome}`), t.hitFiles)} (${t.hits} of ${t.rounds})`
+    });
+  }
+  for (const g of tells?.siteGroups || []) {
+    const hits = g.items.reduce((n, t) => n + t.hits, 0);
+    const rounds = g.items.reduce((n, t) => n + t.rounds, 0);
+    const items = g.items.map((t, i) => w.link(w.esc(i ? t.utility : capitalize(t.utility)), t.files));
+    rows.push({
+      hits,
+      share: percent(hits, rounds),
+      html: `${joinList(items)} → ${w.link(w.esc(`most likely ${g.outcome}`), g.items.flatMap((t) => t.hitFiles || []))} (${hits} of ${rounds})`
+    });
+  }
+  for (const t of tells?.absent || []) {
+    rows.push({
+      hits: t.hits,
+      share: percent(t.hits, t.rounds),
+      html: `${w.link(w.esc(`No ${t.utility}`), t.files)} → ${w.link(w.esc(`most likely ${t.outcome}`), t.hitFiles)} (${t.hits} of ${t.rounds})`
+    });
+  }
+  rows.sort((a, b) => b.hits - a.hits || b.share - a.share);
+  return li(rows.slice(0, SIXPACK_TELLS).map((r) => r.html));
+}
+
+/** One box: its heading, then what goes in it, or a dash when there is nothing. */
+const sixpackBox = (w, title, html) => `<h3>${w.esc(title)}</h3>${html || '<p>-</p>'}`;
+
+/** One page: a side of one team on one map. */
+function sixpackPageHtml(w, spec, side) {
+  const bag = spec.report?.sides?.[side];
+  if (!bag) return '';
+  const mapName = MAPS[spec.mapCode]?.name || spec.mapCode;
+  const force = side === 'T' ? linesHtml(w, bag.force?.lines) : linesHtml(w, bag.forceStyle?.lines);
+  const anti = side === 'T' ? linesHtml(w, bag.antiforce?.lines) : linesHtml(w, bag.antiecoStyle?.lines);
+  const files = side === 'T' ? bag.tells?.files : bag.defaults?.files || bag.tells?.files;
+  const cell = (html) => `<td>${html}</td>`;
+  // No whitespace between table tags: the parser would move it out of the table.
+  const rows = [
+    [sixpackBox(w, `${side} Positions`, sixpackPositionsHtml(w, bag.positions)), sixpackBox(w, `${side} Default utility`, defaultsHtml(w, bag.defaults))],
+    [sixpackBox(w, `${side} Force buys`, force), sixpackBox(w, `${side} Anti-ecos`, anti)],
+    [sixpackBox(w, `${side} Biggest tells`, sixpackTellsHtml(w, bag.tells)), `<h3>${w.esc('General notes')}</h3><p><br></p>`]
+  ];
+  return (
+    `<h2 style="${HEADING_STYLE}">${w.link(w.esc(`${spec.teamName}: ${mapName}, ${SIDE_OF[side]} side`), files)}</h2>` +
+    `<table data-layout="sixpack"><tbody>${rows.map((r) => `<tr>${r.map(cell).join('')}</tr>`).join('')}</tbody></table>`
+  );
+}
+
+/**
+ * Sixpack pages for one or more teams and maps, in one document: for each,
+ * the T page then the CT page (whichever sides the categories keep).
+ *
+ * @param {Array<{ teamName: string, mapCode: string, categories: string[], report: object, links?: boolean }>} specs
+ * @param {(s: string) => string} esc
+ */
+export function buildSixpackDocHtml(specs, esc) {
+  const list = (specs || []).filter((s) => s?.report);
+  if (!list.length) return '';
+  const names = [...new Set(list.map((s) => s.teamName))];
+  const maps = [...new Set(list.map((s) => MAPS[s.mapCode]?.name || s.mapCode))];
+  const parts = [`<h1 style="${TITLE_STYLE}">${esc(`${joinList(names)}: ${joinList(maps)}`)}</h1>`];
+  for (const spec of list) {
+    const w = docWriter(esc, Boolean(spec.links));
+    const cats = new Set(spec.categories || ['sideT', 'sideCT']);
+    for (const side of ['T', 'CT']) {
+      if (!cats.has(side === 'T' ? 'sideT' : 'sideCT')) continue;
+      parts.push(sixpackPageHtml(w, spec, side));
+    }
+  }
+  return parts.join('');
+}

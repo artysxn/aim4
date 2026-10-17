@@ -1,6 +1,6 @@
 // Summary mode, simple outline: what buildOutlineDocHtml prints from a report.
 import assert from 'node:assert/strict';
-import { buildOutlineDocHtml } from './antistratSummary.js';
+import { buildOutlineDocHtml, buildSixpackDocHtml } from './antistratSummary.js';
 
 const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
@@ -101,3 +101,43 @@ const linked = buildOutlineDocHtml(
 assert.match(linked, /<a href="\/demos\?rounds=d1">CT Default utility<\/a>/);
 
 console.log('antistratOutline.test.js: ok');
+
+// ---- sixpack: one page per side, six boxes ---------------------------------
+
+const six = buildSixpackDocHtml(
+  [
+    { teamName: 'Mouz', mapCode: 'DD2', categories: ['sideT', 'sideCT'], report },
+    { teamName: 'Vitality', mapCode: 'DD2', categories: ['sideCT'], report }
+  ],
+  esc
+);
+// One title, then a page per side per team: Mouz T, Mouz CT, Vitality CT.
+assert.equal((six.match(/<h1/g) || []).length, 1);
+assert.match(six, /<h1[^>]*>Mouz and Vitality: Dust2<\/h1>/);
+const pages = [...six.matchAll(/<h2[^>]*>(.*?)<\/h2>/g)].map((m) => m[1]);
+assert.deepEqual(pages, ['Mouz: Dust2, T side', 'Mouz: Dust2, CT side', 'Vitality: Dust2, CT side']);
+assert.equal((six.match(/<table data-layout="sixpack">/g) || []).length, 3);
+
+// Each page is three rows of two boxes, in the order of the sheet.
+const firstPage = six.split('<table data-layout="sixpack">')[1].split('</table>')[0];
+assert.equal((firstPage.match(/<tr>/g) || []).length, 3);
+assert.equal((firstPage.match(/<td>/g) || []).length, 6);
+assert.deepEqual(
+  [...firstPage.matchAll(/<h3>(.*?)<\/h3>/g)].map((m) => m[1]),
+  ['T Positions', 'T Default utility', 'T Force buys', 'T Anti-ecos', 'T Biggest tells', 'General notes']
+);
+assert.match(firstPage, /sl3nd = AWPer/, 'positions read player = role');
+assert.match(firstPage, /2x A rush\./, 'force buys as the outline writes them');
+assert.match(firstPage, /Flash into A main → most likely B \(6 of 7\)/);
+assert.match(firstPage, /<h3>General notes<\/h3><p><br><\/p><\/td>/, 'the notes box is left empty to write in');
+// A box with nothing in it says so rather than vanishing.
+assert.match(firstPage, /<h3>T Anti-ecos<\/h3><p>-<\/p>/);
+
+const ctPage = six.split('<table data-layout="sixpack">')[2];
+assert.match(ctPage, /dytor = A Anchor/);
+assert.match(ctPage, /A main smoke: 79% \(usually 1:30, dytor\)/);
+assert.match(ctPage, /Stack: 4 of 7/);
+assert.match(ctPage, /Further up, aggressive: 3 of 5/);
+assert.equal(buildSixpackDocHtml([], esc), '');
+
+console.log('antistratOutline.test.js: sixpack ok');

@@ -6724,6 +6724,36 @@ body.rv-open:has(.side-collapsed) .rv-side-show {
   z-index: 5;
 }
 
+/* Summary queue: team and map pairs that go into one document. */
+.as-queue {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 12px;
+}
+.as-queue-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  font-size: 13px;
+}
+.as-queue-x {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 0 4px;
+}
+.as-queue-x:hover:not(:disabled) {
+  color: var(--text);
+}
+
 .as-status {
   margin: 0;
   font-size: 13px;
@@ -10299,6 +10329,51 @@ table.rp-mine-table td.rp-mine-match {
   font: 600 11px var(--font-body);
   letter-spacing: 0.02em;
   text-transform: uppercase;
+}
+
+/* Sixpack page: one side of one map in six boxes, two columns by three rows.
+   Unlike the data tables above it fills the page and wraps its text. */
+.doc-surface table[data-layout='sixpack'] {
+  display: table;
+  width: 100%;
+  max-width: none;
+  table-layout: fixed;
+  margin: 6px 0 28px;
+  font-size: 13px;
+  font-variant-numeric: normal;
+}
+
+.doc-surface table[data-layout='sixpack'] td {
+  width: 50%;
+  padding: 10px 14px 12px;
+  border: 1px solid var(--border-strong);
+  white-space: normal;
+  vertical-align: top;
+  line-height: 1.5;
+}
+
+.doc-surface table[data-layout='sixpack'] td h3 {
+  margin: 0 0 6px;
+  font-size: 14px;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.doc-surface table[data-layout='sixpack'] td ul {
+  padding-left: 18px;
+  margin: 0;
+}
+
+/* The notes box is written in by hand: give it room. */
+.doc-surface table[data-layout='sixpack'] tr:last-child td:last-child {
+  height: 180px;
+}
+
+@media print {
+  .doc-surface table[data-layout='sixpack'] {
+    break-inside: avoid;
+    break-after: page;
+  }
 }
 
 /* The count that rides under a winrate, and the timings column. */

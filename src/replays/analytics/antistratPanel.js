@@ -34,6 +34,7 @@ import { runAntistratScan } from './antistratScan.js';
 import { REPORT_MODES } from './reportModes.js';
 import {
   SUMMARY_CATEGORIES,
+  buildSixpackDocHtml,
   SUMMARY_GROUPS,
   buildOutlineDocHtml,
   buildSummaryDocHtml,
@@ -49,6 +50,7 @@ import {
   internalCoachFiles
 } from './antistratInternal.js';
 import { PACE_TYPES } from './patternDefs.js';
+import { joinList } from './reportProse.js';
 import { setSpinnerLabel, spinnerHtml, statsProgressLabel } from '../../lib/spinner.js';
 import { mbWrap } from '../../icons/menubuttons.js';
 
@@ -57,6 +59,13 @@ const MODE_CATALOGUE = {
   summary: { categories: SUMMARY_CATEGORIES, groups: SUMMARY_GROUPS },
   internal: { categories: INTERNAL_CATEGORIES, groups: INTERNAL_GROUPS }
 };
+
+/** Summary mode document styles. `title` starts the saved document's name. */
+const SUMMARY_STYLES = [
+  { key: 'full', label: 'Full summary', title: 'Summary' },
+  { key: 'outline', label: 'Simple outline', title: 'Outline' },
+  { key: 'sixpack', label: 'Sixpack', title: 'Sixpack' }
+];
 
 /**
  * @param {{ escapeHtml: (s: string) => string }} deps
@@ -97,8 +106,20 @@ export function createAntistratPanel({ escapeHtml }) {
      * for whoever checks it.
      */
     summaryLinks: false,
-    /** Summary mode: the bare outline (positions, pistols, tells, buys) with empty notes sections. */
-    summaryOutline: false,
+    /**
+     * Summary mode, what the document looks like:
+     *   'full'     the whole sheet
+     *   'outline'  the bare outline (positions, pistols, tells, buys) with
+     *              empty notes sections
+     *   'sixpack'  one page per side of a map in six boxes
+     */
+    summaryStyle: 'full',
+    /**
+     * Summary mode: team and map pairs waiting to go into one document, in
+     * order. Each keeps the matches that were ticked when it was added.
+     * @type {Array<{ teamKey: string, teamName: string, mapCode: string, demoIds: string[] }>}
+     */
+    queue: [],
     destTeamId: '',
     busy: false,
     progress: '',
@@ -193,12 +214,23 @@ export function createAntistratPanel({ escapeHtml }) {
     return `vs ${d.opponent}${when ? ` (${when})` : ''}`;
   }
 
+  /** The team and map on screen, with its ticked matches, as a queue entry. */
+  function currentJob() {
+    const team = selectedTeam();
+    const ids = includedMatches().map((d) => d.id);
+    if (!team || !state.mapCode || !ids.length) return null;
+    return { teamKey: state.teamKey, teamName: team.name, mapCode: state.mapCode, demoIds: ids };
+  }
+
+  /** The summary can run off its queue even with nothing picked on screen. */
+  const queueing = () => state.mode === 'summary' && state.queue.length > 0;
+
   function canGenerate() {
     return (
       !locked() &&
       !state.busy &&
-      Boolean(state.teamKey && state.mapCode && state.destTeamId) &&
-      includedMatches().length > 0 &&
+      Boolean(state.destTeamId) &&
+      (queueing() || Boolean(currentJob())) &&
       [...state.cats[state.mode]].some((k) => catalogue().categories.some((c) => c.key === k))
     );
   }
@@ -339,7 +371,7 @@ export function createAntistratPanel({ escapeHtml }) {
   }
 
   function categoriesStepHtml() {
-    if (!state.teamKey || !state.mapCode) return '';
+    if ((!state.teamKey || !state.mapCode) && !queueing()) return '';
     const { categories, groups: groupNames } = catalogue();
     const picked = state.cats[state.mode];
     const groups = groupNames.map((group) => {
@@ -360,10 +392,15 @@ export function createAntistratPanel({ escapeHtml }) {
       state.mode === 'summary'
         ? `<div class="as-cat-group">
             <p class="an-side-title">Style</p>
-            <label class="as-cat-main">
-              <input type="checkbox" data-as-summary-outline ${state.summaryOutline ? 'checked' : ''} />
-              <span>Simple outline</span>
-            </label>
+            ${SUMMARY_STYLES.map(
+              (s) => `<label class="as-cat-main">
+                <input type="radio" name="as-summary-style" data-as-summary-style="${s.key}" ${
+                  state.summaryStyle === s.key ? 'checked' : ''
+                } />
+                <span>${escapeHtml(s.label)}</span>
+              </label>`
+            ).join('')}
+            <p class="an-muted">Sixpack: one page per side of each map, positions, default utility, force buys, anti-ecos, the biggest tells and an empty box for notes.</p>
           </div>
           <div class="as-cat-group">
             <p class="an-side-title">Checking</p>
@@ -383,8 +420,38 @@ export function createAntistratPanel({ escapeHtml }) {
     </section>`;
   }
 
+  /** Summary mode: the queue of teams and maps that go into one document. */
+  function queueHtml() {
+    if (state.mode !== 'summary') return '';
+    const job = currentJob();
+    const queued = job && state.queue.some((q) => q.teamKey === job.teamKey && q.mapCode === job.mapCode);
+    const rows = state.queue
+      .map(
+        (q, i) => `<div class="as-queue-row">
+          <span>${i + 1}. ${escapeHtml(q.teamName)} on ${escapeHtml(MAPS[q.mapCode]?.name || q.mapCode)}
+            <span class="an-muted">(${q.demoIds.length} ${q.demoIds.length === 1 ? 'match' : 'matches'})</span></span>
+          <button type="button" class="as-queue-x" data-as-unqueue="${i}" aria-label="Remove from the queue" ${
+            state.busy ? 'disabled' : ''
+          }>×</button>
+        </div>`
+      )
+      .join('');
+    const add = job
+      ? `<button type="button" class="btn btn-sm" data-as-queue ${state.busy ? 'disabled' : ''}>${
+          queued ? 'Update in the queue' : `Add ${escapeHtml(job.teamName)} on ${escapeHtml(MAPS[job.mapCode]?.name || job.mapCode)} to the queue`
+        }</button>`
+      : '';
+    return `<div class="as-queue">
+      <p class="an-side-title">Queue${state.queue.length ? ` <small>${state.queue.length}</small>` : ''}</p>
+      ${rows || '<p class="an-muted">Queue several teams and maps to put them all in one document.</p>'}
+      <div class="as-controls">${add}${
+        state.queue.length ? `<button type="button" class="btn btn-sm" data-as-queue-clear ${state.busy ? 'disabled' : ''}>Clear queue</button>` : ''
+      }</div>
+    </div>`;
+  }
+
   function outputStepHtml() {
-    if (!state.teamKey || !state.mapCode) return '';
+    if ((!state.teamKey || !state.mapCode) && !queueing()) return '';
     let dest;
     if (myTeams === null) {
       dest = `<p class="an-muted">${myTeamsError ? escapeHtml(myTeamsError) : 'Loading your teams…'}</p>`;
@@ -416,9 +483,10 @@ export function createAntistratPanel({ escapeHtml }) {
           ${dest}
           <button type="button" class="btn primary btn-sm" data-as-generate ${
             canGenerate() ? '' : 'disabled'
-          }>${state.busy ? 'Analyzing…' : 'Analyze and save'}</button>
+          }>${state.busy ? 'Analyzing…' : queueing() ? `Analyze ${state.queue.length} and save` : 'Analyze and save'}</button>
           ${allowanceHtml()}
         </div>
+        ${queueHtml()}
         ${status}
       </div>
     </section>`;
@@ -460,6 +528,7 @@ export function createAntistratPanel({ escapeHtml }) {
 
   async function generate() {
     if (!canGenerate()) return;
+    if (state.mode === 'summary') return generateSummary();
     const team = selectedTeam();
     const dest = (myTeams || []).find((t) => t.id === state.destTeamId);
     if (!team || !dest) return;
@@ -490,12 +559,7 @@ export function createAntistratPanel({ escapeHtml }) {
     const included = includedMatches();
     const mode = state.mode;
     const mapName = MAPS[state.mapCode]?.name || state.mapCode;
-    const title =
-      mode === 'summary'
-        ? `${state.summaryOutline ? 'Outline' : 'Summary'}: ${team.name} on ${mapName}`
-        : mode === 'internal'
-          ? `Internal: ${team.name} on ${mapName}`
-          : `Antistrat: ${team.name} on ${mapName}`;
+    const title = mode === 'internal' ? `Internal: ${team.name} on ${mapName}` : `Antistrat: ${team.name} on ${mapName}`;
     const categories = [...state.cats[mode]];
     try {
       // The picker runs on the catalogue, which carries no rounds. Fetch them
@@ -539,18 +603,7 @@ export function createAntistratPanel({ escapeHtml }) {
         }
       });
       let html;
-      if (mode === 'summary') {
-        state.progress = 'Writing the summary…';
-        renderProgress();
-        const report = buildSummaryReport({
-          extract: results.extract,
-          sections: results.sections,
-          mapCode: state.mapCode,
-          teamName: team.name
-        });
-        const spec = { teamName: team.name, mapCode: state.mapCode, categories, report, links: state.summaryLinks };
-        html = state.summaryOutline ? buildOutlineDocHtml(spec, escapeHtml) : buildSummaryDocHtml(spec, escapeHtml);
-      } else if (mode === 'internal') {
+      if (mode === 'internal') {
         // Every full buy goes through the autocoach, the same pass the viewer
         // runs, and the round notes are written from its flags.
         const coached = await coachRounds({
@@ -603,6 +656,106 @@ export function createAntistratPanel({ escapeHtml }) {
     render();
   }
 
+  /**
+   * Summary mode: every queued team and map (or the one on screen), each
+   * scanned and summarised, written into ONE document in the chosen style.
+   * Each one spends a run of the allowance; running out stops the queue and
+   * saves what was done.
+   */
+  async function generateSummary() {
+    const dest = (myTeams || []).find((t) => t.id === state.destTeamId);
+    const jobs = state.queue.length ? [...state.queue] : [currentJob()].filter(Boolean);
+    if (!dest || !jobs.length) return;
+    const style = SUMMARY_STYLES.find((s) => s.key === state.summaryStyle) || SUMMARY_STYLES[0];
+    const categories = [...state.cats.summary];
+    const mapName = (code) => MAPS[code]?.name || code;
+
+    state.busy = true;
+    state.outcome = '';
+    state.outcomeMsg = '';
+    state.progress = 'Checking the allowance…';
+    render();
+
+    const specs = [];
+    let stopped = '';
+    let rounds = 0;
+    try {
+      for (const [i, job] of jobs.entries()) {
+        const tag = jobs.length > 1 ? `${job.teamName} on ${mapName(job.mapCode)} (${i + 1} of ${jobs.length}): ` : '';
+        state.progress = `${tag}checking the allowance…`;
+        renderProgress();
+        const granted = await useMeteredFeature(CAP.ANALYTICS_ANTISTRAT);
+        await ent()?.refresh?.();
+        if (!granted) {
+          stopped = `${job.teamName} on ${mapName(job.mapCode)} and after were not run: no analyses left.`;
+          break;
+        }
+        let scanPayload = payload;
+        if (payload?.identityOnly) {
+          state.progress = `${tag}loading rounds…`;
+          renderProgress();
+          // Round-library tags and the roles the Positions section names.
+          scanPayload = await getStatsPayload(job.demoIds, {
+            columns: ['roundLibrary', 'roles'],
+            onProgress: (p) => {
+              state.progress = `${tag}${statsProgressLabel(p)}`;
+              renderProgress();
+            }
+          });
+        }
+        const results = await runAntistratScan({
+          properNames: await loadProperNames(),
+          payload: scanPayload,
+          teamKey: job.teamKey,
+          mapCode: job.mapCode,
+          demoIds: job.demoIds,
+          paceKeys: PACE_TYPES.map((p) => p.key),
+          keepRounds: true,
+          onProgress: (done, total) => {
+            state.progress = `${tag}scanning round ${done} of ${total}…`;
+            renderProgress();
+          }
+        });
+        rounds += results.rounds;
+        state.progress = `${tag}writing…`;
+        renderProgress();
+        const report = buildSummaryReport({
+          extract: results.extract,
+          sections: results.sections,
+          mapCode: job.mapCode,
+          teamName: job.teamName
+        });
+        specs.push({ teamName: job.teamName, mapCode: job.mapCode, categories, report, links: state.summaryLinks });
+      }
+      if (!specs.length) throw new Error(stopped || 'Nothing was analysed.');
+      const html =
+        style.key === 'sixpack'
+          ? buildSixpackDocHtml(specs, escapeHtml)
+          : specs
+              .map((spec) => (style.key === 'outline' ? buildOutlineDocHtml(spec, escapeHtml) : buildSummaryDocHtml(spec, escapeHtml)))
+              .join('<hr>');
+      // "Sixpack: NAVI Junior on Mirage and Dust2; WBT on Cache"
+      const byTeam = new Map();
+      for (const s of specs) {
+        if (!byTeam.has(s.teamName)) byTeam.set(s.teamName, []);
+        byTeam.get(s.teamName).push(mapName(s.mapCode));
+      }
+      const what = [...byTeam].map(([team, maps]) => `${team} on ${joinList(maps)}`).join('; ');
+      const title = `${style.title}: ${what}`;
+      await saveTeamDocument(dest.id, { title, html });
+      state.outcome = 'ok';
+      state.outcomeMsg = `Saved "${title}" to ${dest.name}. ${rounds} rounds scanned.${stopped ? ` ${stopped}` : ''}`;
+      // What was written is done; anything the allowance stopped stays queued.
+      state.queue = state.queue.slice(specs.length);
+    } catch (err) {
+      state.outcome = 'error';
+      state.outcomeMsg = formatApiError(err).message || String(err);
+    }
+    state.busy = false;
+    state.progress = '';
+    render();
+  }
+
   // ---- events -------------------------------------------------------------
 
   el.addEventListener('input', (e) => {
@@ -644,8 +797,8 @@ export function createAntistratPanel({ escapeHtml }) {
       render();
       return;
     }
-    if (t.matches('[data-as-summary-outline]')) {
-      state.summaryOutline = t.checked;
+    if (t.matches('[data-as-summary-style]')) {
+      state.summaryStyle = t.dataset.asSummaryStyle;
       return;
     }
     if (t.matches('[data-as-summary-links]')) {
@@ -707,6 +860,29 @@ export function createAntistratPanel({ escapeHtml }) {
       const id = official.dataset.asOfficial;
       if (state.official.has(id)) state.official.delete(id);
       else state.official.add(id);
+      render();
+      return;
+    }
+    if (e.target.closest('[data-as-queue]')) {
+      const job = currentJob();
+      if (!job || state.busy) return;
+      const at = state.queue.findIndex((q) => q.teamKey === job.teamKey && q.mapCode === job.mapCode);
+      if (at >= 0) state.queue[at] = job;
+      else state.queue.push(job);
+      state.outcome = '';
+      render();
+      return;
+    }
+    const unqueue = e.target.closest('[data-as-unqueue]');
+    if (unqueue) {
+      if (state.busy) return;
+      state.queue.splice(Number(unqueue.dataset.asUnqueue), 1);
+      render();
+      return;
+    }
+    if (e.target.closest('[data-as-queue-clear]')) {
+      if (state.busy) return;
+      state.queue = [];
       render();
       return;
     }
