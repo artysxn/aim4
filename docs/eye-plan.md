@@ -722,6 +722,10 @@ These come from the user's list of 11 capabilities. Items 1, 8, 9 and 10 already
   - If the upstream can't be reached (6 s connect timeout), the server answers everything itself. The remembered account is used when the token's `sub` matches it, and the library is the demos on this PC.
   - A demo uploaded offline is parsed locally and its raw upload queued in `server/data/offline/queue`. When the upstream answers again (checked every 10 s), the queue is sent there with the account's next token.
   - Tested end to end against a stand-in cloud on :3785: remembered login, refusing another account, a 412 MB offline upload parsed locally, then sent on reconnect.
-- **Not done:** the public exe still loads aim4.io directly, so offline works only where the app runs a local server: `aim4-local.json`, or the planned pack.
-  - The pack: `server/run-pack.js` is its entry point. Still to build: a script that bundles Node, the server and the slim `dist-account` into the exe, and the Rust side to unpack and start it.
+- **The pack** (`scripts/build-pack.mjs`) bundles this Node, the server, `shared`, `src`, `scripts`, its modules and the slim `dist-account` into `recorder/app/pack/aim4-pack.zip`, which `build.rs` embeds in the exe (126 MB).
+  - Without `aim4-local.json`, the app unpacks it to `<settings>/pack` on first run and after an update; `server/data` is kept between versions. It starts `node.exe server/run-pack.js` on port 37840 and opens the window there.
+  - Online, the pages and data come from aim4.io; offline, the pack's own site and this PC's library are used.
+  - Checked: the unpacked pack serves the site, `/api/me` and the library against aim4.io, and serves the site and the library with the upstream unreachable.
+  - Not checked: a double-click launch of the new exe on a clean PC.
+  - Build order: `npm run build:account`, `node scripts/build-pack.mjs`, `cargo build --release`.
 - **Shipping:** publish the exe from Admin > App builds. The download buttons serve the newest build from `/api/recorder/download`.

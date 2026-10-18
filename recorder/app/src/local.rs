@@ -50,6 +50,42 @@ pub fn config() -> Result<Option<Config>, String> {
     serde_json::from_str(&text).map(Some).map_err(|e| format!("{} is not valid: {e}", path.display()))
 }
 
+/// The server pack built into this .exe (empty when none was built): Node, the
+/// server and the site, so offline works on any PC (server/run-pack.js).
+static PACK: &[u8] = include_bytes!(env!("AIM4_PACK"));
+/// The pack's port: fixed, because the sign-in lives in this origin's storage.
+const PACK_PORT: u16 = 37840;
+
+/// The built-in pack as a local server to start, unpacked on first run and after an update.
+/// Its folder is kept between versions: the library and the offline queue live in it (server/data).
+pub fn pack_config() -> Result<Option<Config>, String> {
+    if PACK.is_empty() {
+        return Ok(None);
+    }
+    let dir = crate::settings_dir().join("pack");
+    let marker = dir.join(".version");
+    let version = env!("CARGO_PKG_VERSION");
+    if std::fs::read_to_string(&marker).ok().as_deref() != Some(version) {
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(PACK)).map_err(|e| format!("the built-in server is damaged: {e}"))?;
+        for i in 0..zip.len() {
+            let mut entry = zip.by_index(i).map_err(|e| e.to_string())?;
+            let Some(rel) = entry.enclosed_name() else { continue };
+            let out = dir.join(rel);
+            if entry.is_dir() {
+                std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
+                continue;
+            }
+            if let Some(parent) = out.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            }
+            let mut f = std::fs::File::create(&out).map_err(|e| format!("could not write {}: {e}", out.display()))?;
+            std::io::copy(&mut entry, &mut f).map_err(|e| e.to_string())?;
+        }
+        std::fs::write(&marker, version).map_err(|e| e.to_string())?;
+    }
+    Ok(Some(Config { node: Some(dir.join("node.exe").display().to_string()), repo: dir, port: Some(PACK_PORT), script: Some("server/run-pack.js".into()) }))
+}
+
 /// The running local server: the address the window opens, and the process if this run started it.
 pub struct Host {
     pub base: String,

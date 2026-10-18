@@ -382,7 +382,11 @@ fn main() -> ExitCode {
         // With an aim4-local.json beside the .exe it opens this PC's own aim4
         // instead of aim4.io, starting that server first (see `local`).
         None => {
-            let _host = match local::config() {
+            // Otherwise the server pack built into this .exe, when it has one.
+            let _host = match local::config().and_then(|c| match c {
+                Some(c) => Ok(Some(c)),
+                None => local::pack_config(),
+            }) {
                 Ok(None) => None,
                 Ok(Some(cfg)) => match local::start(&cfg) {
                     Ok(host) => {

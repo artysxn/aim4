@@ -80,3 +80,7 @@ scripts/round-cache/
 recorder/target
 
 server/data/replays/
+
+# Built server pack embedded in the desktop app (scripts/build-pack.mjs)
+recorder/app/pack/
+build/.pack/
