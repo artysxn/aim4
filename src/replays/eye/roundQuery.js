@@ -42,7 +42,9 @@
 import { ROUND_SECONDS } from '../viewer/roundClock.js';
 import { classifyPace, paceSite } from '../analytics/antistratScan.js';
 
-const BUYS = { pistol: [0], eco: [1], half: [2], force: [3], full: [4] };
+// "bought" is half, force or full: the pool the antistrat's pace section counts,
+// so a document's "Rush 11% (12 rounds)" can be checked with the same rounds.
+const BUYS = { pistol: [0], eco: [1], half: [2], force: [3], full: [4], bought: [2, 3, 4] };
 const NADE_TYPES = { smoke: 'smokegrenade', molotov: 'molotov', flash: 'flashbang', he: 'hegrenade' };
 const GROUPS = new Set(['site', 'won', 'pace', 'plant', 'first_kill', 'buy', 'side']);
 const MAX_FILES = 150;
@@ -108,7 +110,7 @@ function sideOk(r, side) {
 function buyOk(econ, buy) {
   if (!buy || buy === 'any') return true;
   const want = BUYS[buy];
-  if (!want) throw new QueryError(`Unknown buy "${buy}". Use full, force, half, eco, pistol or any.`);
+  if (!want) throw new QueryError(`Unknown buy "${buy}". Use full, force, half, eco, pistol, bought or any.`);
   return want.includes(econ);
 }
 
@@ -242,7 +244,7 @@ function compile(raw, zones, unknown) {
 }
 
 const siteOf = (r) => String((r.side === 'T' ? paceSite(r) : r.hitSite) || '').toUpperCase();
-const econWord = (e) => Object.entries(BUYS).find(([, v]) => v.includes(e))?.[0] || 'unknown';
+const econWord = (e) => Object.entries(BUYS).find(([k, v]) => k !== 'bought' && v.includes(e))?.[0] || 'unknown';
 
 function groupKey(r, by) {
   switch (by) {
@@ -289,6 +291,8 @@ export function runRoundQuery(rounds, network, query = {}) {
   }
   const pct = (a, b) => (b ? Math.round((a / b) * 1000) / 10 : 0);
   return {
+    // The pool in words, so a count is never compared with one taken over different rounds.
+    counted: `${q.side && q.side !== 'any' ? `${q.side} side` : 'both sides'}, their buy ${q.buy || 'any'}, opponent buy ${q.vs_buy || 'any'}, rounds with positions`,
     considered: pool.length,
     matched: matched.length,
     share: pct(matched.length, pool.length),
@@ -297,6 +301,8 @@ export function runRoundQuery(rounds, network, query = {}) {
       .map(([key, list]) => ({ key, rounds: list.length, share: pct(list.length, matched.length), won: list.filter((r) => r.won).length }))
       .sort((a, b) => b.rounds - a.rounds || String(a.key).localeCompare(String(b.key))),
     unknownZones: [...unknown],
-    files: matched.slice(0, MAX_FILES).map((r) => r.file)
+    files: matched.slice(0, MAX_FILES).map((r) => r.file),
+    // The matched rounds as match and number, so a tool can name them and the model can open one.
+    refs: matched.slice(0, MAX_FILES).map((r) => ({ demoId: r.demoId, round: r.round, won: Boolean(r.won) }))
   };
 }

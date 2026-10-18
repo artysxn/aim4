@@ -11,7 +11,11 @@ import { fileURLToPath } from 'url';
 import { cs3dMapForPath } from '../shared/cs3d/maps.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-export const DIST_DIR = path.join(__dirname, '..', 'dist');
+// AIM4_DIST_DIR serves another build of the client, e.g. dist-account/, the
+// signed-in build server/run-account.js serves beside the local-owner one.
+export const DIST_DIR = process.env.AIM4_DIST_DIR
+  ? path.resolve(__dirname, '..', process.env.AIM4_DIST_DIR)
+  : path.join(__dirname, '..', 'dist');
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -72,6 +76,7 @@ export const SITE_VIEW_PATHS = new Set([
   '/database',
   '/charts',
   '/patterns',
+  '/eye',
   '/performance',
   '/changelog',
   '/docs',

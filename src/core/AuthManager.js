@@ -23,6 +23,7 @@ import {
   validateUsername
 } from '../lib/supabase.js';
 import * as Storage from '../utils/Storage.js';
+import { leaveSite } from '../lib/leaveSite.js';
 import { clampElo, DEFAULT_ELO } from '../multiplayer/elo.js';
 
 /** Same resolution the rest of the client uses; empty means same origin. */
@@ -408,11 +409,12 @@ export class AuthManager {
   async signInWithProvider(provider) {
     if (!this.isConfigured) throw new Error('Accounts are not configured on this deployment.');
     const sb = getSupabase();
-    const { error } = await sb.auth.signInWithOAuth({
+    const { data, error } = await sb.auth.signInWithOAuth({
       provider,
-      options: { redirectTo: authRedirectUrl() }
+      options: { redirectTo: authRedirectUrl(), skipBrowserRedirect: true }
     });
     if (error) throw new Error(error.message || `${PROVIDER_LABELS[provider] || provider} sign-in failed.`);
+    if (data?.url) leaveSite(data.url);
   }
 
   /** @deprecated call signInWithProvider('google'); kept for existing callers. */
@@ -431,9 +433,9 @@ export class AuthManager {
     if (this.hasProviderLinked(provider)) return;
     const label = PROVIDER_LABELS[provider] || provider;
     const sb = getSupabase();
-    const { error } = await sb.auth.linkIdentity({
+    const { data, error } = await sb.auth.linkIdentity({
       provider,
-      options: { redirectTo: authRedirectUrl() }
+      options: { redirectTo: authRedirectUrl(), skipBrowserRedirect: true }
     });
     if (error) {
       if (/manual linking is disabled/i.test(error.message)) {
@@ -443,6 +445,7 @@ export class AuthManager {
       }
       throw new Error(error.message || `Could not link ${label}.`);
     }
+    if (data?.url) leaveSite(data.url);
   }
 
   /**
@@ -483,7 +486,7 @@ export class AuthManager {
   signInWithSteam(next = `${window.location.pathname}${window.location.search}`) {
     if (!this.isConfigured) throw new Error('Accounts are not configured on this deployment.');
     const url = `${API_BASE}/api/auth/steam?next=${encodeURIComponent(next || '/')}`;
-    window.location.assign(url);
+    leaveSite(url);
   }
 
   /**

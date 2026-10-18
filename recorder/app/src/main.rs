@@ -36,7 +36,9 @@
 mod audio;
 mod desktop;
 mod eye;
+mod local;
 mod pipeline;
+mod signin;
 mod teamspeak;
 mod transcribe;
 mod ui;
@@ -377,20 +379,46 @@ fn main() -> ExitCode {
         }
         // No arguments is the double-click path: the aim4 window. Where the
         // system has no webview to show it in, the recorder still works.
-        None => match desktop::run() {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(err) => {
-                eprintln!("could not open the aim4 window ({err}); opening the recorder instead");
-                match ui::run() {
-                    Ok(()) => ExitCode::SUCCESS,
-                    Err(err) => {
-                        eprintln!("could not open the window: {err}");
-                        usage();
-                        ExitCode::FAILURE
+        // With an aim4-local.json beside the .exe it opens this PC's own aim4
+        // instead of aim4.io, starting that server first (see `local`).
+        None => {
+            let _host = match local::config() {
+                Ok(None) => None,
+                Ok(Some(cfg)) => match local::start(&cfg) {
+                    Ok(host) => {
+                        std::env::set_var("AIM4_BASE_URL", &host.base);
+                        Some(host)
                     }
+                    Err(err) => {
+                        local::alert(&format!("aim4 could not start on this PC: {err}"));
+                        return ExitCode::FAILURE;
+                    }
+                },
+                Err(err) => {
+                    local::alert(&err);
+                    return ExitCode::FAILURE;
+                }
+            };
+            open_window()
+        }
+    }
+}
+
+/// The aim4 window, or the recorder where there is no webview to show it in.
+fn open_window() -> ExitCode {
+    match desktop::run() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("could not open the aim4 window ({err}); opening the recorder instead");
+            match ui::run() {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(err) => {
+                    eprintln!("could not open the window: {err}");
+                    usage();
+                    ExitCode::FAILURE
                 }
             }
-        },
+        }
     }
 }
 

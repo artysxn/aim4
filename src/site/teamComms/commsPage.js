@@ -203,7 +203,7 @@ export function mountTeamComms({ host, team, getTeamDemos }) {
     const meta = el('[data-dl-meta]');
     if (!meta) return;
     if (!release) {
-      meta.textContent = 'No build is published yet — ask the site admin.';
+      meta.textContent = 'No build is published yet. Ask the site admin.';
       return;
     }
     const mb = (release.sizeBytes / (1024 * 1024)).toFixed(1);

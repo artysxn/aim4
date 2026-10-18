@@ -5,6 +5,10 @@
 //   GET    /api/eye/devices         this account's linked apps, online or not
 //   DELETE /api/eye/devices/:id     unlink one (its live connection drops)
 //   GET    /api/eye/status          is aim4 eye running for me, and doing what
+//   GET    /api/eye/chats           my saved conversations, newest first
+//   GET    /api/eye/chats/:id       one conversation's messages
+//   PUT    /api/eye/chats/:id       save (create or replace) one conversation
+//   DELETE /api/eye/chats/:id       forget one
 //   POST   /api/eye/chat            one chat completion, streamed back (SSE)
 //   POST   /api/eye/command         tell my app to download/load/unload a model
 //
@@ -16,6 +20,7 @@
 // ---------------------------------------------------------------------------
 
 import { whoami } from '../replays/identity.js';
+import { MAX_CHAT_FILE_BYTES, deleteChat, getChat, listChats, saveChat } from './chatStore.js';
 import { linkDevice, listDevices, revokeDevice } from './eyeStore.js';
 import { MAX_CHAT_BYTES, eyeRelay } from './relay.js';
 
@@ -101,6 +106,28 @@ export async function handleEyeRequest(req, res, url, relay = eyeRelay) {
       const body = await readJson(req, 4096);
       const sent = relay.command(me.id, String(body.command || ''), body.args || {}, String(body.deviceId || ''));
       json(res, sent ? 200 : 409, sent ? { sent: true } : { error: 'aim4 eye is not running, or that is not a command it knows.' });
+      return true;
+    }
+
+    if (req.method === 'GET' && p === '/api/eye/chats') {
+      json(res, 200, { chats: await listChats(me.id) });
+      return true;
+    }
+
+    const saved = p.match(/^\/api\/eye\/chats\/([a-f0-9]{16})$/);
+    if (saved && req.method === 'GET') {
+      const chat = await getChat(me.id, saved[1]);
+      json(res, chat ? 200 : 404, chat || { error: 'That chat is gone.' });
+      return true;
+    }
+    if (saved && req.method === 'PUT') {
+      const body = await readJson(req, MAX_CHAT_FILE_BYTES + 4096);
+      json(res, 200, { chat: await saveChat(me.id, saved[1], body) });
+      return true;
+    }
+    if (saved && req.method === 'DELETE') {
+      const removed = await deleteChat(me.id, saved[1]);
+      json(res, removed ? 200 : 404, { removed });
       return true;
     }
 

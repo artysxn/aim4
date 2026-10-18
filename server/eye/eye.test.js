@@ -130,6 +130,25 @@ assert.equal(res.status, 200);
 assert.equal(await closed, 4001, 'a revoked device is disconnected');
 assert.equal(await store.deviceForToken(linked.token), null, 'and its token no longer works');
 
+// ---- saved chats -------------------------------------------------------------------
+
+const chatId = 'a1b2c3d4e5f60718';
+assert.deepEqual((await (await api('/api/eye/chats')).json()).chats, [], 'no chats yet');
+res = await api(`/api/eye/chats/${chatId}`, { method: 'PUT', body: JSON.stringify({ title: 'Best map for fnatic', messages: [{ role: 'user', content: 'hi' }] }) });
+assert.equal(res.status, 200);
+res = await api(`/api/eye/chats/${chatId}`, { method: 'PUT', body: JSON.stringify({ title: 'Best map for fnatic', messages: [{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'hello' }] }) });
+const listed = (await (await api('/api/eye/chats')).json()).chats;
+assert.equal(listed.length, 1, 'saving the same chat again replaces it');
+assert.equal(listed[0].title, 'Best map for fnatic');
+assert.equal((await (await api(`/api/eye/chats/${chatId}`)).json()).messages.length, 2);
+res = await api('/api/eye/chats/not-an-id', { method: 'PUT', body: JSON.stringify({ messages: [{}] }) });
+assert.equal(res.status, 404, 'a malformed id is not a route');
+res = await api(`/api/eye/chats/${chatId}`, { method: 'PUT', body: JSON.stringify({ messages: [] }) });
+assert.equal(res.status, 400, 'an empty chat is not saved');
+res = await api(`/api/eye/chats/${chatId}`, { method: 'DELETE' });
+assert.equal(res.status, 200);
+assert.equal((await api(`/api/eye/chats/${chatId}`)).status, 404, 'a deleted chat is gone');
+
 server.close();
 await fsp.rm(dir, { recursive: true, force: true });
 console.log('eye.test.js ok');

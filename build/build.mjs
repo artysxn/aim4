@@ -44,7 +44,8 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const OUT = path.join(ROOT, 'dist');
+// AIM4_DIST_DIR builds somewhere other than dist/ (build/build-account.mjs builds dist-account/).
+const OUT = path.resolve(ROOT, process.env.AIM4_DIST_DIR || 'dist');
 const ASSETS = path.join(OUT, 'assets');
 const TMP = path.join(ROOT, 'build', '.tmp');
 

@@ -15,6 +15,38 @@ Most of what "knowing how to scout" means is in code the model calls, not in its
 
 The ordering and fixing rules (which issue matters most, the section order of a rewrite) live in `SYSTEM_PROMPT` in `src/replays/eye/eyeAgent.js`. Change behaviour there first: it costs nothing, and it works on every model size.
 
+## Judging a round: the models are the teacher
+
+eye can say whether a move was good or bad because it can price it, not because it was told a rule. `round_value` and `moment_value` (`src/replays/eye/roundValue.js`) read the two models that were fitted on the library's own rounds:
+
+- **Round win chance** (`rounds/roundModel.js`), before and after every kill, plant and defuse. The change is the move's swing for the side that made it, with the factors that moved it (players alive, health, equipment, bomb, map control...).
+- **xK in the moment** (`duels/duelScanner.js`): at any tick of any open gunfight, each player's win chance in it, summed over the fights they are in (a 1v1 is just the win chance). `round_value` follows each fight as it turned (win chance when it opened, just before the kill, and a trace between), so a fight lost at 70% reads as variance and one that started at 10% reads as behind from the start.
+
+A kill that cost nothing is not a mistake, and one that looked wrong but moved the round is. Neither the PDF nor the coach rules decide that; the numbers do. `costliest_flags` carries the coach rules' own flags, priced the same way.
+
+**Training data from every round, with no rating needed:**
+
+```bash
+node --max-old-space-size=4096 tools/eye/build-value-sft.mjs value-out/ --dir sampledemos
+#   value-out/value-sft.jsonl    traces: question -> round_value / moment_value -> answer
+#   value-out/value-eval.jsonl   one demo in five held out, with what the numbers say is true
+```
+
+The tool results in a trace are exactly what the tools return, and the answer is written from them alone (every number in an answer is in a tool result; the builder's grounding check is `0 of N` ungrounded). Question types: what decided the round, best and worst player, was a death a losing fight from the start, what went wrong for the losing side. Point `--dir` at a folder of `.aim4replay` packages; more demos is more traces. `value-eval.jsonl` is split by demo, never by round.
+
+**Scoring a model on the held-out rounds** (`tools/eye/eval-value.mjs`): runs any OpenAI-compatible server through the same loop and system prompt as the app, with the value tools backed by the same code, and grades the runs.
+
+```bash
+llama-server -m model.gguf --jinja -c 16384 --port 8899
+node --max-old-space-size=4096 tools/eye/eval-value.mjs --llama http://127.0.0.1:8899 --model qwen3.5-4b
+#   -> tools/eye/value-out/run-<time>/summary.json and results.jsonl (every answer, the calls it made, why it failed)
+node tools/eye/eval-value.mjs --oracle     # no model: replays the reference answers; must read 100%
+```
+
+What is graded (`valueScore.mjs`): the first call is `round_value` on the right round; every number and every clock time in the answer is in a tool result (rounding to a whole number is allowed and counted); the answer names at least two thirds of the biggest swings; the verdict matches (best and worst player in order, a death read as behind / close / favoured, at least half of the loser's costly moments). Calls to any other eye tool count as wrong tools, because the default offers all of them. Run the base model first, then each fine-tune, and only ship one that beats the base on `pass` without losing `grounded`. The verdict check is keyword voting on the answer, so read a few `results.jsonl` failures before trusting a low `take` score.
+
+The doctrine in the Counter-Strike 101 PDF is not copied in. Where it makes a claim that can be measured ("the first pick converts at ~82%", "block at 1:00 and 0:40"), test it against `query_rounds` and the win model before it goes anywhere near a prompt or a training set.
+
 ## 2. Fine-tuning, from what admins rate
 
 Data comes from two places. Both end up in the admin training store (`/api/admin/labels`, JSON Lines):

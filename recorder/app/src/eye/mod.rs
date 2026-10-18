@@ -136,10 +136,17 @@ impl Service {
             })
             .expect("eye relay thread");
         // The model used last time comes back up on its own, if it is already here.
-        if let Some(spec) = settings.model.as_deref().and_then(models::model) {
-            if runtime::model_downloaded(spec) {
-                svc.use_model(spec.id);
+        // A retired one is swapped for its replacement, which downloads once.
+        match settings.model.as_deref().and_then(models::model) {
+            Some(spec) => {
+                let here = runtime::model_downloaded(spec);
+                let replaced = settings.model.as_deref() != Some(spec.id);
+                runtime::log(&format!("start: last model {} downloaded={here} replaced={replaced}", spec.id));
+                if here || replaced {
+                    svc.use_model(spec.id);
+                }
             }
+            None => runtime::log(&format!("start: no last model (settings say {:?})", settings.model)),
         }
         svc
     }
@@ -223,8 +230,10 @@ impl Service {
             return;
         };
         if self.inner.bringing_up.swap(true, Ordering::SeqCst) {
+            runtime::log(&format!("use-model {id}: already bringing one up, ignored"));
             return;
         }
+        runtime::log(&format!("use-model {id}: downloaded={}", runtime::model_downloaded(spec)));
         let svc = self.clone();
         std::thread::spawn(move || {
             svc.inner.server.lock().unwrap().take();
@@ -249,7 +258,10 @@ impl Service {
                     }
                     svc.set_state("ready", Some(spec.id), None, note);
                 }
-                Err(err) => svc.set_state("error", Some(spec.id), None, &err.to_string()),
+                Err(err) => {
+                    runtime::log(&format!("use-model {}: failed: {err}", spec.id));
+                    svc.set_state("error", Some(spec.id), None, &err.to_string())
+                }
             }
             svc.inner.bringing_up.store(false, Ordering::SeqCst);
         });

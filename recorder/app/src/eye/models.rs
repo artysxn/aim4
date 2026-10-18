@@ -75,21 +75,27 @@ pub const MODELS: &[ModelSpec] = &[
         min_ram_gb: 16,
     },
     ModelSpec {
-        id: "qwen3.5-35b-a3b",
-        label: "Large (Qwen3.5 35B-A3B)",
-        repo: "unsloth/Qwen3.5-35B-A3B-GGUF",
-        revision: "bc014a17be43adabd7066b7a86075ff935c6a4e2",
-        file: "Qwen3.5-35B-A3B-Q4_K_M.gguf",
-        size: 22_016_023_168,
-        sha256: "3b46d1066bc91cc2d613e3bc22ce691dd77e6f0d33c9060690d24ce6de494375",
+        // Dense, so every weight works on every token: slower than the 35B-A3B it
+        // replaced, and better at the long tool-calling turns the eye runs.
+        id: "qwen3.8-27b",
+        label: "Large (Qwen3.8 27B)",
+        repo: "unsloth/Qwen3.8-27B-GGUF",
+        revision: "4ca720788d1e01f1bff70c033e0d0028fd02e502",
+        file: "Qwen3.8-27B-UD-Q4_K_M.gguf",
+        size: 16_464_440_224,
+        sha256: "322e194ff79741c7baa497c240f677f54b201b0efab44ca8e50f122b39123482",
         mmproj_file: "mmproj-F16.gguf",
-        mmproj_size: 899_283_648,
-        mmproj_sha256: "a516ab92e8240da4734d68352bdfba84c16e830ee40010b8fac80d69c77272ff",
+        mmproj_size: 927_607_488,
+        mmproj_sha256: "cbb841a9ee0636b2ec172f5bb8df2ea8dfeb01e90fe7c6126581d662a0b4e43e",
         min_ram_gb: 32,
     },
 ];
 
+/// Ids that were retired, and the model that took their place.
+const RETIRED: &[(&str, &str)] = &[("qwen3.5-35b-a3b", "qwen3.8-27b")];
+
 pub fn model(id: &str) -> Option<&'static ModelSpec> {
+    let id = RETIRED.iter().find(|(old, _)| *old == id).map_or(id, |(_, new)| *new);
     MODELS.iter().find(|m| m.id == id)
 }
 
@@ -161,7 +167,12 @@ mod tests {
         assert_eq!(recommended(4).id, "qwen3.5-2b");
         assert_eq!(recommended(8).id, "qwen3.5-4b");
         assert_eq!(recommended(16).id, "qwen3.5-9b");
-        assert_eq!(recommended(64).id, "qwen3.5-35b-a3b");
+        assert_eq!(recommended(64).id, "qwen3.8-27b");
+    }
+
+    #[test]
+    fn retired_ids_find_their_replacement() {
+        assert_eq!(model("qwen3.5-35b-a3b").unwrap().id, "qwen3.8-27b");
     }
 
     #[test]

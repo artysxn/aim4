@@ -11,8 +11,25 @@
 // ---------------------------------------------------------------------------
 
 import { accessToken } from '../api.js';
-import { SYSTEM_PROMPT, runAgentTurn } from './eyeAgent.js';
-import { toolsFor } from './eyeTools.js';
+import { SYSTEM_PROMPT, runAgentTurn, summarizeChat } from './eyeAgent.js';
+import { HISTORY_BUDGET } from './eyeContext.js';
+import {
+  COMMANDS,
+  SUMMARY_PROMPT,
+  compactedMessages,
+  contextStats,
+  exportJson,
+  exportMarkdown,
+  exportName,
+  matchCommands,
+  parseCommand,
+  transcriptOf
+} from './eyeCommands.js';
+import { attachChoices, roundsOfTeam, toolsFor } from './eyeTools.js';
+import { noteRounds, roundIdsIn } from './roundRefs.js';
+import { createRoundPlayer } from './eyeRoundPlayer.js';
+import './eye.css';
+import chatsIcon from '../../icons/sideicons/sideicon_chats.svg?raw';
 import { adminApi } from '../../site/admin/adminApi.js';
 
 const API_BASE = (import.meta.env?.VITE_API_URL || '').replace(/\/$/, '');
@@ -25,7 +42,10 @@ const TRACE_TOOL_CHARS = 6000;
 
 /** One finished turn as training data: images left out, long tool results cut. */
 export function traceOf(turn) {
-  return turn.map((m) => {
+  return turn.map(({ compacted, callsCompacted, ui, full, fullCalls, ...m }) => {
+    // A result shortened to fit the model's context is kept whole here.
+    if (full !== undefined) m = { ...m, content: full };
+    if (fullCalls) m = { ...m, tool_calls: fullCalls };
     if (Array.isArray(m.content)) {
       return { ...m, content: m.content.map((part) => (part.type === 'image_url' ? { type: 'text', text: '[picture]' } : part)) };
     }
@@ -41,7 +61,7 @@ const STATUS_POLL_MS = 3000;
 export const EYE_MODELS = [
   { id: 'qwen3.5-4b', label: 'Light (Qwen3.5 4B)', size: '2.7 GB', needs: '8 GB RAM' },
   { id: 'qwen3.5-9b', label: 'Standard (Qwen3.5 9B)', size: '5.7 GB', needs: '16 GB RAM or an 8 GB GPU' },
-  { id: 'qwen3.5-35b-a3b', label: 'Large (Qwen3.5 35B-A3B)', size: '22 GB', needs: '32 GB RAM, or a 24 GB GPU' }
+  { id: 'qwen3.8-27b', label: 'Large (Qwen3.8 27B)', size: '17 GB', needs: '32 GB RAM, or a 24 GB GPU' }
 ];
 
 const EXAMPLES = [
@@ -96,11 +116,20 @@ const TOOL_VERBS = {
   map_zones: 'Reading map callouts',
   query_rounds: 'Querying rounds',
   database_query: 'Querying the Database',
+  list_matches: 'Listing matches',
+  match_summary: 'Reading a match',
   find_rounds: 'Finding rounds',
   round_details: 'Reading a round',
+  round_timeline: 'Watching a round',
+  show_round: 'Showing a round',
+  strategy_draft: 'Drafting a strategy',
+  save_strategy: 'Saving a strategy',
   team_documents: 'Reading team documents',
   team_rankings: 'Reading the ranking',
   site_map: 'Reading the site map',
+  recall_earlier: 'Looking back at an earlier question',
+  classify_rounds: 'Sorting rounds by kind of hit',
+  player_patterns: 'Reading how the players play',
   screenshot_round: 'Looking at a round',
   antistrat_summary: 'Reading antistrat',
   create_antistrat_document: 'Creating document'
@@ -139,22 +168,36 @@ export function createEyePanel({ escapeHtml }) {
   const el = document.createElement('div');
   el.className = 'eye-panel';
   el.innerHTML = `
-    <section class="an-card eye-status" id="eye-status"></section>
-    <section class="an-card eye-chat" id="eye-chat">
+    <section class="eye-status" id="eye-status"></section>
+    <section class="eye-chat" id="eye-chat">
       <div class="eye-log" id="eye-log" aria-live="polite"></div>
-      <form class="eye-input" id="eye-form">
-        <textarea class="site-input" id="eye-text" rows="2" placeholder="Ask about a team" aria-label="Message"></textarea>
-        <div class="eye-input-row">
-          <button type="button" class="eye-toggle" id="eye-think" aria-pressed="false">Think longer</button>
-          <span class="eye-spacer"></span>
-          <div class="eye-actions">
-            <button type="button" class="eye-btn" id="eye-new">New chat</button>
-            <button type="button" class="eye-btn" id="eye-stop" hidden>Stop</button>
-            <button type="submit" class="eye-btn is-primary" id="eye-send">Send</button>
+      <form class="eye-composer" id="eye-form">
+        <div class="eye-pop eye-cmd-pop" id="eye-cmd-pop" role="listbox" aria-label="Commands" hidden></div>
+        <div class="eye-chips" id="eye-chips" hidden></div>
+        <div class="eye-composer-main">
+          <div class="eye-menu-host">
+            <button type="button" class="eye-icon-btn" id="eye-plus" aria-label="Attach context" aria-haspopup="true"><span class="eye-plus"></span></button>
+            <div class="eye-pop" id="eye-attach-pop" hidden></div>
           </div>
+          <textarea class="site-input" id="eye-text" rows="1" placeholder="Ask about a team" aria-label="Message"></textarea>
+          <button type="button" class="eye-send-btn" id="eye-stop" aria-label="Stop" hidden><span class="eye-stop-mark"></span></button>
+          <button type="submit" class="eye-send-btn" id="eye-send" aria-label="Send">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+          </button>
         </div>
       </form>
-    </section>`;
+      <div class="eye-bar">
+        <span class="eye-spacer"></span>
+        <div class="eye-menu-host">
+          <button type="button" class="eye-model-btn" id="eye-model-btn" aria-haspopup="true"></button>
+          <div class="eye-pop is-right" id="eye-model-pop" hidden></div>
+        </div>
+        <button type="button" class="eye-icon-btn eye-history-btn" id="eye-history-btn" aria-label="Past chats" title="Past chats">${chatsIcon}</button>
+        <button type="button" class="eye-icon-btn" id="eye-new" aria-label="New chat" title="New chat"><span class="eye-plus"></span></button>
+      </div>
+      <input type="file" id="eye-file" accept="image/*" multiple hidden />
+    </section>
+    <aside class="eye-history" id="eye-history" hidden aria-label="Past chats"></aside>`;
   const statusEl = el.querySelector('#eye-status');
   const chatEl = el.querySelector('#eye-chat');
   const logEl = el.querySelector('#eye-log');
@@ -162,7 +205,16 @@ export function createEyePanel({ escapeHtml }) {
   const textEl = el.querySelector('#eye-text');
   const sendBtn = el.querySelector('#eye-send');
   const stopBtn = el.querySelector('#eye-stop');
-  const thinkBtn = el.querySelector('#eye-think');
+  const chipsEl = el.querySelector('#eye-chips');
+  const plusBtn = el.querySelector('#eye-plus');
+  const attachPop = el.querySelector('#eye-attach-pop');
+  const cmdPop = el.querySelector('#eye-cmd-pop');
+  const modelBtn = el.querySelector('#eye-model-btn');
+  const modelPop = el.querySelector('#eye-model-pop');
+  const fileEl = el.querySelector('#eye-file');
+  const historyEl = el.querySelector('#eye-history');
+  const newBtn = el.querySelector('#eye-new');
+  const historyBtn = el.querySelector('#eye-history-btn');
 
   /** OpenAI-style history, without the system prompt. */
   let messages = [];
@@ -172,7 +224,15 @@ export function createEyePanel({ escapeHtml }) {
   let running = null;
   let shown = false;
   let linking = false;
-  let thinkLonger = false;
+  /** The saved-chat id of this conversation, made with its first question. */
+  let chatId = '';
+  /** A title for the chat when its first message is not a question (a compacted chat). */
+  let titleOverride = '';
+  /** The command picked in the list under the cursor. */
+  let cmdIndex = 0;
+  /** What the user attached to the message being written: { kind, label, value, url? }. */
+  let attachments = [];
+  let choices = null;
 
   // ---- status: is the app running, which model ----------------------------------
 
@@ -203,12 +263,22 @@ export function createEyePanel({ escapeHtml }) {
   }
 
   const ready = () => Boolean(status?.ready);
+  const liveDevice = () => (status?.devices || []).find((d) => d.state === 'ready' || d.state === 'busy') || null;
+  const visionOn = () => Boolean(liveDevice()?.vision);
+
+  /** The model chosen in the status card's list; kept so the 3-second refresh does not undo the choice. */
+  let pickedModel = '';
+  const pickOf = (dev) => pickedModel || dev.model || dev.hardware?.recommended || '';
+  /** The app says which models are already on this computer: those start without a download. */
+  const onDisk = (dev, id) => Boolean(dev.hardware?.models?.find((m) => m.id === id)?.downloaded);
+  const useLabel = (dev, id) => (dev.model ? 'Switch model' : onDisk(dev, id) ? 'Start' : 'Download and start');
 
   function modelOptions(dev) {
     const recommended = dev.hardware?.recommended || '';
+    const pick = pickOf(dev);
     return EYE_MODELS.map(
       (m) =>
-        `<option value="${m.id}"${m.id === (dev.model || recommended) ? ' selected' : ''}>${escapeHtml(m.label)}, ${m.size}${
+        `<option value="${m.id}"${m.id === pick ? ' selected' : ''}>${escapeHtml(m.label)}, ${onDisk(dev, m.id) ? 'downloaded' : m.size}${
           m.id === recommended ? ' (recommended)' : ''
         }</option>`
     ).join('');
@@ -256,7 +326,7 @@ export function createEyePanel({ escapeHtml }) {
     const pick = `
       <div class="eye-pick">
         <select class="site-select eye-select" id="eye-model" aria-label="Model">${modelOptions(dev)}</select>
-        <button type="button" class="eye-btn" data-eye-use>${dev.model ? 'Switch model' : 'Download and start'}</button>
+        <button type="button" class="eye-btn" data-eye-use>${useLabel(dev, pickOf(dev))}</button>
       </div>`;
     let boot = '';
     if (booting) {
@@ -272,6 +342,11 @@ export function createEyePanel({ escapeHtml }) {
             ${dev.message ? `<p class="an-muted">${escapeHtml(dev.message)}</p>` : ''}
           </div>`
         : '';
+    }
+    if (dev.state === 'ready' || dev.state === 'busy') {
+      statusEl.innerHTML = '';
+      renderModelButton();
+      return;
     }
     statusEl.innerHTML = `
       <div class="eye-status-row">
@@ -300,13 +375,322 @@ export function createEyePanel({ escapeHtml }) {
     await refreshStatus();
   }
 
+  // ---- the composer: model, attachments ------------------------------------------------
+
+  const popups = [attachPop, modelPop, cmdPop];
+  function closePops(except) {
+    for (const pop of popups) if (pop !== except) pop.hidden = true;
+  }
+
+  function renderModelButton() {
+    const dev = liveDevice();
+    const m = EYE_MODELS.find((x) => x.id === dev?.model);
+    const [short, detail] = m ? [m.label.replace(/\s*\(.*\)$/, ''), /\((.*)\)/.exec(m.label)?.[1] || ''] : ['Model', ''];
+    modelBtn.innerHTML = `<span>${escapeHtml(short)}</span>${detail ? `<span class="eye-model-detail">${escapeHtml(detail)}</span>` : ''}<span class="eye-caret" aria-hidden="true"></span>`;
+    modelBtn.disabled = !dev;
+  }
+
+  function openModelMenu() {
+    const dev = liveDevice();
+    const recommended = dev?.hardware?.recommended || '';
+    modelPop.innerHTML = EYE_MODELS.map(
+      (m) => `<button type="button" class="eye-pop-item${m.id === dev?.model ? ' is-current' : ''}" data-eye-model="${m.id}">
+        <span class="eye-pop-main">${escapeHtml(m.label)}${m.id === recommended ? ' <em>recommended</em>' : ''}</span>
+        <span class="eye-pop-sub">${escapeHtml(m.size)} download, ${escapeHtml(m.needs)}</span>
+      </button>`
+    ).join('');
+    closePops(modelPop);
+    modelPop.hidden = false;
+  }
+
+  async function useModel(id) {
+    modelPop.hidden = true;
+    if (!id || id === liveDevice()?.model) return;
+    try {
+      await call('POST', '/api/eye/command', { command: 'use-model', args: { model: id } });
+    } catch (err) {
+      statusError = err.message;
+    }
+    void refreshStatus();
+  }
+
+  const KIND_LABEL = { image: 'Image', round: 'Round', team: 'Team', player: 'Player' };
+
+  function renderChips() {
+    chipsEl.hidden = !attachments.length;
+    chipsEl.innerHTML = attachments
+      .map(
+        (a, i) => `<span class="eye-chip" title="${escapeHtml(KIND_LABEL[a.kind])}">
+          ${a.kind === 'image' ? `<img src="${escapeHtml(a.value)}" alt="" />` : `<span class="eye-chip-kind">${KIND_LABEL[a.kind]}</span>`}
+          <span class="eye-chip-label">${escapeHtml(a.label)}</span>
+          <button type="button" class="eye-chip-x" data-eye-unattach="${i}" aria-label="Remove">×</button>
+        </span>`
+      )
+      .join('');
+  }
+
+  function attach(item) {
+    if (attachments.some((a) => a.kind === item.kind && a.value === item.value)) return;
+    attachments.push(item);
+    attachPop.hidden = true;
+    renderChips();
+    textEl.focus();
+  }
+
+  function openAttachMenu() {
+    closePops(attachPop);
+    const vision = visionOn();
+    const hint = {
+      image: vision ? 'A screenshot or a photo' : 'Needs a model that reads pictures',
+      round: 'One round of a team',
+      team: 'A team of the library',
+      player: 'A player of the library'
+    };
+    attachPop.innerHTML = ['image', 'round', 'team', 'player']
+      .map((k) => {
+        const off = k === 'image' && !vision;
+        return `<button type="button" class="eye-pop-item" data-eye-attach="${k}"${off ? ' disabled' : ''}>
+          <span class="eye-pop-main">${KIND_LABEL[k]}</span>
+          <span class="eye-pop-sub">${hint[k]}</span>
+        </button>`;
+      })
+      .join('');
+    attachPop.hidden = false;
+  }
+
+  /** A search box and a list, for choosing a team, a player or a round. */
+  function openPicker(kind, team = '') {
+    const title = kind === 'round' && team ? `${team}, pick a round` : kind === 'round' ? 'Pick the team of the round' : `Pick a ${kind}`;
+    attachPop.innerHTML = `<div class="eye-pick-head"><button type="button" class="eye-pick-back" data-eye-back aria-label="Back">‹</button><span>${escapeHtml(title)}</span></div>
+      <input type="text" class="eye-pick-search" placeholder="${kind === 'round' && team ? 'Filter the rounds' : 'Search'}" aria-label="Search" />
+      <div class="eye-pick-list"><p class="eye-pop-sub">Loading…</p></div>`;
+    const search = attachPop.querySelector('.eye-pick-search');
+    const list = attachPop.querySelector('.eye-pick-list');
+    let rows = [];
+    const draw = () => {
+      const q = search.value.trim().toLowerCase();
+      // A pasted round id can be attached as it is.
+      const pasted = kind === 'round' ? roundIdsIn(search.value)[0] || '' : '';
+      const hits = rows.filter((r) => r.label.toLowerCase().includes(q)).slice(0, 40);
+      list.innerHTML =
+        (pasted ? `<button type="button" class="eye-pop-item" data-i="paste"><span class="eye-pop-main">Use this round id</span><span class="eye-pop-sub">${escapeHtml(pasted)}</span></button>` : '') +
+        (hits.length
+          ? hits.map((r) => `<button type="button" class="eye-pop-item" data-i="${rows.indexOf(r)}"><span class="eye-pop-main">${escapeHtml(r.label)}</span></button>`).join('')
+          : pasted
+            ? ''
+            : '<p class="eye-pop-sub">Nothing found.</p>');
+    };
+    list.onclick = (e) => {
+      const b = e.target.closest('[data-i]');
+      if (!b) return;
+      if (b.dataset.i === 'paste') {
+        const id = roundIdsIn(search.value)[0];
+        return attach({ kind: 'round', label: `${id.slice(0, 18)}…`, value: id });
+      }
+      const row = rows[Number(b.dataset.i)];
+      if (kind === 'round' && !team) return openPicker('round', row.value);
+      attach({ kind, label: row.label, value: row.value });
+    };
+    search.addEventListener('input', draw);
+    search.focus();
+    (async () => {
+      try {
+        if (kind === 'round' && team) {
+          rows = (await roundsOfTeam(team)).map((r) => ({ label: r.label, value: r.file }));
+        } else {
+          choices ||= await attachChoices();
+          rows = kind === 'player' ? choices.players.map((pl) => ({ label: pl.name, value: pl.id })) : choices.teams.map((t) => ({ label: t, value: t }));
+        }
+        draw();
+      } catch (err) {
+        choices = null;
+        list.innerHTML = `<p class="eye-error">${escapeHtml(err.message || 'Could not load the library.')}</p>`;
+      }
+    })();
+  }
+
+  /** A picture shrunk to what a model reads, as a JPEG data URL. */
+  async function shrinkImage(file) {
+    const bitmap = await createImageBitmap(file);
+    const scale = Math.min(1, 1280 / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    bitmap.close?.();
+    return canvas.toDataURL('image/jpeg', 0.85);
+  }
+
+  async function addImages(files) {
+    for (const file of files) {
+      if (!file.type.startsWith('image/') || attachments.filter((a) => a.kind === 'image').length >= 4) continue;
+      try {
+        attach({ kind: 'image', label: file.name || 'Image', value: await shrinkImage(file) });
+      } catch {
+        /* an unreadable picture is skipped */
+      }
+    }
+  }
+
+  /** The message the model reads: the question, plus what was attached as plain text and pictures. */
+  function messageWith(question, atts) {
+    const lines = atts
+      .filter((a) => a.kind !== 'image')
+      .map((a) => (a.kind === 'round' ? `- Round: ${a.value} (${a.label})` : a.kind === 'player' ? `- Player: ${a.label} (id ${a.value})` : `- Team: ${a.label}`));
+    const text = lines.length ? `${question}\n\nAttached by the user:\n${lines.join('\n')}` : question;
+    noteRounds(atts.filter((a) => a.kind === 'round').map((a) => a.value));
+    const images = atts.filter((a) => a.kind === 'image');
+    const content = images.length ? [{ type: 'text', text }, ...images.map((a) => ({ type: 'image_url', image_url: { url: a.value } }))] : text;
+    return { role: 'user', content, ui: { text: question, chips: atts.map((a) => ({ kind: a.kind, label: a.label })) } };
+  }
+
+  // ---- past chats -------------------------------------------------------------------
+
+  const newChatId = () => [...crypto.getRandomValues(new Uint8Array(8))].map((b) => b.toString(16).padStart(2, '0')).join('');
+
+  const chatTitle = () =>
+    titleOverride || String(messages.find((m) => m.ui && m.ui.text !== '/compact')?.ui.text || messages.find((m) => typeof m.content === 'string')?.content || 'New chat').slice(0, 60);
+
+  function saveChat() {
+    if (!messages.length) return;
+    chatId ||= newChatId();
+    const title = chatTitle();
+    const saved = traceOf(messages).map((m, i) => (messages[i].ui ? { ...m, ui: messages[i].ui } : m));
+    void call('PUT', `/api/eye/chats/${chatId}`, { title, messages: saved }).catch(() => {});
+  }
+
+  const when = (t) => new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+
+  async function openHistory() {
+    historyEl.hidden = false;
+    historyEl.innerHTML = '<p class="eye-pop-sub">Loading…</p>';
+    try {
+      const { chats } = await call('GET', '/api/eye/chats');
+      historyEl.innerHTML = chats.length
+        ? chats
+            .map(
+              (c) => `<div class="eye-hist-row${c.id === chatId ? ' is-current' : ''}">
+                <button type="button" class="eye-hist-item" data-eye-open="${c.id}"><span>${escapeHtml(c.title)}</span><span class="eye-pop-sub">${escapeHtml(when(c.updatedAt))}</span></button>
+                <button type="button" class="eye-chip-x" data-eye-delete="${c.id}" aria-label="Delete this chat">×</button>
+              </div>`
+            )
+            .join('')
+        : '<p class="eye-pop-sub">No past chats yet.</p>';
+    } catch (err) {
+      historyEl.innerHTML = `<p class="eye-error">${escapeHtml(err.message)}</p>`;
+    }
+  }
+
+  function startNewChat() {
+    if (running) return;
+    messages = [];
+    chatId = '';
+    titleOverride = '';
+    attachments = [];
+    renderChips();
+    historyEl.hidden = true;
+    logEl.replaceChildren();
+    renderEmpty();
+  }
+
+  async function openChat(id) {
+    if (running) return;
+    try {
+      const chat = await call('GET', `/api/eye/chats/${id}`);
+      messages = Array.isArray(chat.messages) ? chat.messages : [];
+      chatId = id;
+      titleOverride = '';
+      historyEl.hidden = true;
+      noteRounds(messages.flatMap((m) => (typeof m.content === 'string' ? roundIdsIn(m.content) : [])));
+      renderSaved();
+    } catch (err) {
+      historyEl.innerHTML = `<p class="eye-error">${escapeHtml(err.message)}</p>`;
+    }
+  }
+
+  /** A saved conversation back on screen. */
+  function renderSaved() {
+    logEl.replaceChildren();
+    const results = new Map(messages.filter((m) => m.role === 'tool').map((m) => [m.tool_call_id, String(m.full ?? m.content ?? '')]));
+    const widgets = new Map(messages.filter((m) => m.role === 'tool' && m.ui?.widget).map((m) => [m.tool_call_id, m.ui.widget]));
+    for (const m of messages) {
+      if (m.role === 'user' && (m.ui || typeof m.content === 'string')) {
+        userBubble(m.ui?.text ?? m.content, m.ui?.chips);
+      } else if (m.role === 'assistant') {
+        if (String(m.content || '').trim()) {
+          if (m.tool_calls?.length) {
+            bubble('eye-note').textContent = noteText(m.content);
+          } else {
+            const node = bubble('eye-bot', replyHtml(m.content, escapeHtml));
+            node.appendChild(copyButton(() => m.content));
+          }
+        }
+        for (const tc of m.tool_calls || []) {
+          let args = {};
+          try {
+            args = JSON.parse(tc.function?.arguments || '{}');
+          } catch {
+            /* shown without arguments */
+          }
+          const node = bubble('eye-tool', toolHtml(tc.function?.name, args), 'details');
+          node.querySelector('.eye-tool-time').remove();
+          const raw = results.get(tc.id) || '';
+          node.classList.toggle('is-error', raw.startsWith('Error'));
+          fillTool(node, { args, raw });
+          if (widgets.has(tc.id)) showWidget(widgets.get(tc.id));
+        }
+      }
+    }
+    toBottom();
+  }
+
+  /** A round the model put in the chat: a small player, or a still of one moment that plays on. */
+  function showWidget(spec) {
+    if (!spec?.file) return;
+    const stick = nearBottom();
+    const node = createRoundPlayer(spec, escapeHtml);
+    node.classList.add('eye-msg');
+    logEl.appendChild(node);
+    if (stick) toBottom();
+  }
+
+  /** The first line of what the model said before a tool call, cut short. */
+  const noteText = (text) => {
+    const line = String(text).trim().split('\n')[0].replace(/[*_`#>]/g, '').trim();
+    return line.length > 120 ? `${line.slice(0, 117)}…` : line;
+  };
+
+  /** One tool call's gray line, with a body the user can open. */
+  const toolHtml = (name, args) => `<summary>
+      <span class="eye-tool-mark" aria-hidden="true"></span>
+      <span class="eye-tool-name">${escapeHtml(TOOL_VERBS[name] || name || 'Tool')}</span>
+      <span class="eye-tool-time">0.0s</span>
+    </summary>
+    <div class="eye-tool-body"><div class="eye-tool-status">Working</div></div>`;
+
+  function fillTool(node, { args, raw, display = '', link = '', images = [] }) {
+    const shots = images.map((url) => `<img class="eye-shot" src="${escapeHtml(url)}" alt="${escapeHtml(display || 'Round screenshot')}" />`).join('');
+    const open = link ? `<a href="${escapeHtml(link)}" target="_blank" rel="noopener">Open the rounds</a>` : '';
+    const argLine = argsLine(args);
+    node.querySelector('.eye-tool-body').innerHTML = `${argLine ? `<div class="eye-tool-argline">${escapeHtml(argLine)}</div>` : ''}${display || open ? `<div class="eye-tool-result"><span>${escapeHtml(display)}</span>${open}</div>` : ''}${shots}
+      <pre>${escapeHtml(JSON.stringify(args || {}, null, 2))}</pre>
+      <pre>${escapeHtml(raw.length > 1500 ? `${raw.slice(0, 1500)}\n...` : raw)}</pre>`;
+  }
+
+  /** The user's message: what they attached, then the words, in a bubble. */
+  function userBubble(text, chips = []) {
+    const sent = (chips || []).map((c) => `${KIND_LABEL[c.kind] || ''}: ${c.label}`).join(', ');
+    return bubble('eye-user-wrap', `<div class="eye-user"><p>${escapeHtml(text)}</p></div>${sent ? `<div class="eye-sent">${escapeHtml(sent)}</div>` : ''}`);
+  }
+
   // ---- the conversation -----------------------------------------------------------
 
   function syncSend() {
-    sendBtn.disabled = Boolean(running) || !ready();
+    sendBtn.disabled = !ready();
     sendBtn.title = ready() ? '' : 'aim4 eye is not ready';
+    sendBtn.hidden = Boolean(running);
     stopBtn.hidden = !running;
-    thinkBtn.disabled = Boolean(running);
+    renderModelButton();
   }
 
   function renderEmpty() {
@@ -317,38 +701,41 @@ export function createEyePanel({ escapeHtml }) {
     logEl.appendChild(intro);
   }
 
-  const nearBottom = () => logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 90;
+  // Follow the output only while the reader wants it: scrolling up lets go, reaching the bottom again re-attaches.
+  let pinned = true;
+  const atBottom = () => logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 40;
+  logEl.addEventListener('wheel', (e) => {
+    if (e.deltaY < 0) pinned = false;
+  }, { passive: true });
+  logEl.addEventListener('touchmove', () => {
+    pinned = false;
+  }, { passive: true });
+  logEl.addEventListener('keydown', (e) => {
+    if (['ArrowUp', 'PageUp', 'Home'].includes(e.key)) pinned = false;
+  });
+  logEl.addEventListener('scroll', () => {
+    if (atBottom()) pinned = true;
+    else if (!programmatic) pinned = false;
+  }, { passive: true });
+  let programmatic = false;
+  const nearBottom = () => pinned;
   const toBottom = () => {
+    pinned = true;
+    programmatic = true;
     logEl.scrollTop = logEl.scrollHeight;
+    requestAnimationFrame(() => {
+      programmatic = false;
+    });
   };
 
-  function bubble(cls, html = '') {
+  function bubble(cls, html = '', tag = 'div') {
     const stick = nearBottom();
-    const node = document.createElement('div');
+    const node = document.createElement(tag);
     node.className = `eye-msg ${cls}`;
     node.innerHTML = html;
     logEl.appendChild(node);
     if (stick) toBottom();
     return node;
-  }
-
-  /** Ask the user, inline in the conversation, before the agent writes anything. */
-  function confirmInline(question) {
-    return new Promise((resolve) => {
-      const node = bubble(
-        'eye-confirm',
-        `<p>${escapeHtml(question)}</p><div class="eye-confirm-row"><button type="button" class="eye-btn is-primary">Yes</button><button type="button" class="eye-btn">No</button></div>`
-      );
-      const [yes, no] = node.querySelectorAll('button');
-      const done = (answer) => {
-        yes.disabled = true;
-        no.disabled = true;
-        node.classList.add(answer ? 'is-yes' : 'is-no');
-        resolve(answer);
-      };
-      yes.addEventListener('click', () => done(true));
-      no.addEventListener('click', () => done(false));
-    });
   }
 
   function copyButton(getText) {
@@ -405,15 +792,216 @@ export function createEyePanel({ escapeHtml }) {
     });
   }
 
-  async function ask(text) {
+  // ---- slash commands ---------------------------------------------------------------
+
+  /** A line from the panel itself (a command's answer), not from the model. It is not part of the chat. */
+  function info(html) {
+    logEl.querySelector('.eye-intro')?.remove();
+    return bubble('eye-info', html);
+  }
+
+  function download(name, text, mime) {
+    const url = URL.createObjectURL(new Blob([text], { type: mime }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  }
+
+  /** What a reviewer needs to reproduce the chat: model, prompt, tools. */
+  function chatMeta() {
+    const dev = liveDevice() || (status?.devices || []).find((d) => d.model) || null;
+    return {
+      title: chatTitle(),
+      chatId,
+      exportedAt: new Date().toISOString(),
+      page: location.origin,
+      model: dev?.model || '',
+      reasoning: true,
+      vision: visionOn(),
+      systemPrompt: SYSTEM_PROMPT,
+      tools: toolsFor({ vision: visionOn() }).map((t) => t.function.name)
+    };
+  }
+
+  async function exportChat(args) {
+    if (!messages.length) return void info('Nothing to export yet.');
+    const chat = { messages, meta: chatMeta() };
+    const mode = args.toLowerCase();
+    if (mode === 'copy') {
+      try {
+        await navigator.clipboard.writeText(exportJson(chat));
+        info('Copied the chat as JSON.');
+      } catch {
+        info('Could not copy. Use <code>/export</code> to download it instead.');
+      }
+      return;
+    }
+    const md = mode === 'md' || mode === 'markdown';
+    const text = md ? exportMarkdown(chat) : exportJson(chat);
+    const name = exportName(chat.meta.title, md ? 'md' : 'json');
+    download(name, text, md ? 'text/markdown' : 'application/json');
+    info(`Saved <code>${escapeHtml(name)}</code> (${Math.max(1, Math.round(text.length / 1024))} KB) to your downloads. If nothing appeared, <code>/export copy</code> puts it on the clipboard.`);
+  }
+
+  async function copyLastAnswer() {
+    const last = [...messages].reverse().find((m) => m.role === 'assistant' && !m.tool_calls?.length && String(m.content || '').trim());
+    if (!last) return void info('No answer to copy yet.');
+    try {
+      await navigator.clipboard.writeText(last.content);
+      info('Copied the last answer.');
+    } catch {
+      info('Could not copy.');
+    }
+  }
+
+  /** Replace the chat with the model's summary of it. The full chat stays in the past chats. */
+  async function compactChat() {
+    if (running) return void info('Wait for the answer, or stop it first.');
+    if (!ready()) return void info('aim4 eye is not ready.');
+    if (messages.length < 4) return void info('There is not enough to summarise yet.');
+    const before = contextStats(messages, HISTORY_BUDGET).chars;
+    const title = chatTitle();
+    saveChat();
+    const ctrl = new AbortController();
+    running = ctrl;
+    syncSend();
+    const row = bubble('eye-pending', '<span class="eye-dots" aria-hidden="true"><i></i><i></i><i></i></span><span class="eye-pending-text">Summarising the chat</span>');
+    try {
+      const summary = await summarizeChat(transcriptOf(messages), SUMMARY_PROMPT, { signal: ctrl.signal });
+      if (!summary) throw new Error('The model returned no summary.');
+      messages = compactedMessages(summary);
+      chatId = '';
+      titleOverride = `${title} (compacted)`.slice(0, 60);
+      renderSaved();
+      const after = contextStats(messages, HISTORY_BUDGET).chars;
+      info(`Compacted from ${before.toLocaleString()} to ${after.toLocaleString()} characters. The full chat is still in your past chats.`);
+      saveChat();
+    } catch (err) {
+      row.remove();
+      info(err.name === 'AbortError' ? 'Stopped. The chat is unchanged.' : `Could not summarise: ${escapeHtml(err.message)}. The chat is unchanged.`);
+    } finally {
+      row.remove();
+      running = null;
+      syncSend();
+    }
+  }
+
+  /** Ask the last question again, with what was attached to it; the answer to it is dropped. */
+  function retryLast() {
+    if (running) return void info('Wait for the answer, or stop it first.');
+    if (!ready()) return void info('aim4 eye is not ready.');
+    let at = -1;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'user' && messages[i].ui && messages[i].ui.text !== '/compact') {
+        at = i;
+        break;
+      }
+    }
+    if (at < 0) return void info('There is no question to ask again.');
+    const again = messages[at];
+    messages = messages.slice(0, at);
+    if (messages.length) renderSaved();
+    else logEl.replaceChildren();
+    void ask(again.ui.text, again);
+  }
+
+  function showContext() {
+    const s = contextStats(messages, HISTORY_BUDGET);
+    info(
+      `${s.messages} messages, ${s.questions} question${s.questions === 1 ? '' : 's'}, ${s.toolCalls} tool result${s.toolCalls === 1 ? '' : 's'}. ` +
+        `About ${s.chars.toLocaleString()} of ${s.budget.toLocaleString()} characters (${s.percent}%) before old results are shortened${s.shortened ? `; ${s.shortened} already shortened` : ''}. ` +
+        (s.folded ? `${s.folded} earlier question${s.folded === 1 ? ' is' : 's are'} folded into a summary. ` : '') +
+        'Older questions are summarised on their own when the chat gets long.'
+    );
+  }
+
+  function showHelp() {
+    info(
+      `<div class="eye-help">${COMMANDS.map(
+        (c) => `<div><code>/${c.name}${c.args ? ` ${escapeHtml(c.args)}` : ''}</code><span>${escapeHtml(c.about)}${c.aliases?.length ? ` (also /${c.aliases.join(', /')})` : ''}</span></div>`
+      ).join('')}</div>`
+    );
+  }
+
+  function runCommand(parsed) {
+    if ('unknown' in parsed) return void info(`There is no command <code>/${escapeHtml(parsed.unknown)}</code>. <code>/help</code> lists them.`);
+    switch (parsed.command.name) {
+      case 'export':
+        return void exportChat(parsed.args);
+      case 'compact':
+        return void compactChat();
+      case 'retry':
+        return retryLast();
+      case 'copy':
+        return void copyLastAnswer();
+      case 'context':
+        return showContext();
+      case 'new':
+        return startNewChat();
+      default:
+        return showHelp();
+    }
+  }
+
+  /** A line from the composer: a command, or a question. */
+  function submit(text) {
+    const parsed = parseCommand(text);
+    if (!parsed) return void ask(text);
+    textEl.value = '';
+    textEl.style.height = '';
+    renderCommands();
+    runCommand(parsed);
+  }
+
+  /** The list under the cursor while a line starts with "/" and no command has been completed. */
+  function renderCommands() {
+    const list = matchCommands(textEl.value);
+    if (!list.length) {
+      cmdPop.hidden = true;
+      return;
+    }
+    cmdIndex = Math.min(cmdIndex, list.length - 1);
+    cmdPop.hidden = false;
+    cmdPop.innerHTML = list
+      .map(
+        (c, i) => `<button type="button" class="eye-pop-item${i === cmdIndex ? ' is-current' : ''}" role="option" data-eye-cmd="${c.name}">
+          <span class="eye-pop-main"><code>/${c.name}</code>${c.args ? `<em>${escapeHtml(c.args)}</em>` : ''}</span>
+          <span class="eye-pop-sub">${escapeHtml(c.about)}</span>
+        </button>`
+      )
+      .join('');
+  }
+
+  /** @param {string} name */
+  function completeCommand(name) {
+    textEl.value = `/${name}`;
+    textEl.focus();
+    cmdPop.hidden = true;
+  }
+
+  /**
+   * @param {string} text
+   * @param {object} [again]  a user message to send as it was (the /retry command), attachments and all
+   */
+  async function ask(text, again) {
     const q = String(text || '').trim();
     if (!q || running || !ready()) return;
     logEl.querySelector('.eye-intro')?.remove();
-    bubble('eye-user', `<p>${escapeHtml(q)}</p>`);
+    const atts = again ? [] : attachments;
+    if (!again) {
+      attachments = [];
+      renderChips();
+    }
+    userBubble(q, again ? again.ui?.chips : atts.map((a) => ({ kind: a.kind, label: a.label })));
     const turnStart = messages.length;
     let failed = false;
-    messages.push({ role: 'user', content: q });
+    messages.push(again || messageWith(q, atts));
     textEl.value = '';
+    textEl.style.height = '';
     const ctrl = new AbortController();
     running = ctrl;
     syncSend();
@@ -456,14 +1044,30 @@ export function createEyePanel({ escapeHtml }) {
       reply = null;
       replyText = '';
     };
+    /** Text written before a tool call is narration, not the answer: one gray line. */
+    const demoteReply = () => {
+      if (reply && replyText.trim()) {
+        reply.className = 'eye-msg eye-note';
+        reply.textContent = noteText(replyText);
+        reply = null;
+        replyText = '';
+      } else endReply();
+    };
 
-    showPending(thinkLonger ? 'Thinking' : 'Working');
+    showPending('Thinking');
 
     const onEvent = (e) => {
       if (e.type === 'step') {
         closeReasoning();
         endReply();
-        showPending(e.step === 0 ? (thinkLonger ? 'Thinking' : 'Working') : `Reading results, step ${e.step + 1}`);
+        showPending(e.step === 0 ? 'Thinking' : `Reading results, step ${e.step + 1}`);
+      } else if (e.type === 'folding') {
+        showPending(`Summarising ${e.questions} earlier question${e.questions === 1 ? '' : 's'} to make room`);
+      } else if (e.type === 'folded') {
+        hidePending();
+        const note = bubble('eye-note');
+        note.textContent = `Summarised ${e.questions} earlier question${e.questions === 1 ? '' : 's'} to make room. They stay in this chat and the eye can look them up.`;
+        showPending('Thinking');
       } else if (e.type === 'thinking') {
         hidePending();
         if (!reasoning) {
@@ -495,17 +1099,8 @@ export function createEyePanel({ escapeHtml }) {
         hidePending();
         closeReasoning();
         // A tool call ends whatever text came before it in this step.
-        endReply();
-        const node = bubble(
-          'eye-tool is-running',
-          `<div class="eye-tool-head">
-            <span class="eye-tool-mark" aria-hidden="true"></span>
-            <span class="eye-tool-name">${escapeHtml(TOOL_VERBS[e.name] || e.name)}</span>
-            <span class="eye-tool-args">${escapeHtml(argsLine(e.args))}</span>
-            <span class="eye-tool-time">0.0s</span>
-          </div>
-          <div class="eye-tool-status an-muted">Working</div>`
-        );
+        demoteReply();
+        const node = bubble('eye-tool is-running', toolHtml(e.name, e.args), 'details');
         const timeEl = node.querySelector('.eye-tool-time');
         const t0 = Date.now();
         const timer = setInterval(() => (timeEl.textContent = seconds(Date.now() - t0)), 150);
@@ -521,19 +1116,14 @@ export function createEyePanel({ escapeHtml }) {
         const failed = String(e.result.content || '').startsWith('Error');
         t.node.classList.remove('is-running');
         t.node.classList.toggle('is-error', failed);
-        const link = e.result.link ? `<a href="${escapeHtml(e.result.link)}" target="_blank" rel="noopener">Open the rounds</a>` : '';
-        const raw = String(e.result.content || '');
-        const detail = `<details class="eye-tool-detail"><summary>Details</summary>
-          <pre>${escapeHtml(JSON.stringify(e.args || {}, null, 2))}</pre>
-          <pre>${escapeHtml(raw.length > 1500 ? `${raw.slice(0, 1500)}\n...` : raw)}</pre></details>`;
-        const shots = (e.result.images || []).map((url) => `<img class="eye-shot" src="${escapeHtml(url)}" alt="${escapeHtml(e.result.display || 'Round screenshot')}" />`).join('');
-        t.node.querySelector('.eye-tool-status').outerHTML = `<div class="eye-tool-result"><span class="an-muted">${escapeHtml(e.result.display || '')}</span>${link}</div>${shots}${detail}`;
+        fillTool(t.node, { args: e.args, raw: String(e.result.content || ''), display: e.result.display || '', link: e.result.link || '', images: e.result.images || [] });
+        if (e.result.widget) showWidget(e.result.widget);
         showPending('Reading results');
       }
     };
     try {
       const vision = Boolean((status?.devices || []).find((d) => d.state === 'ready')?.vision);
-      await runAgentTurn(messages, { onEvent, signal: ctrl.signal, thinking: thinkLonger, vision, confirm: confirmInline });
+      await runAgentTurn(messages, { onEvent, signal: ctrl.signal, vision });
     } catch (err) {
       failed = true;
       hidePending();
@@ -551,6 +1141,7 @@ export function createEyePanel({ escapeHtml }) {
     }
     running = null;
     syncSend();
+    saveChat();
     void refreshStatus();
   }
 
@@ -558,26 +1149,126 @@ export function createEyePanel({ escapeHtml }) {
 
   form.addEventListener('submit', (e) => {
     e.preventDefault();
-    void ask(textEl.value);
+    submit(textEl.value);
   });
   textEl.addEventListener('keydown', (e) => {
+    // The command list: arrows pick, Tab (or Enter on a partial word) completes, Escape closes.
+    if (!cmdPop.hidden) {
+      const list = matchCommands(textEl.value);
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        cmdIndex = (cmdIndex + (e.key === 'ArrowDown' ? 1 : -1) + list.length) % list.length;
+        renderCommands();
+        return;
+      }
+      const picked = list[cmdIndex];
+      const typed = textEl.value.slice(1).toLowerCase();
+      const exact = list.some((c) => c.name === typed || c.aliases?.includes(typed));
+      if (picked && (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey && !exact))) {
+        e.preventDefault();
+        completeCommand(picked.name);
+        return;
+      }
+      if (e.key === 'Escape') {
+        cmdPop.hidden = true;
+        return;
+      }
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      void ask(textEl.value);
+      submit(textEl.value);
     }
   });
-  thinkBtn.addEventListener('click', () => {
-    thinkLonger = !thinkLonger;
-    thinkBtn.setAttribute('aria-pressed', String(thinkLonger));
-  });
   stopBtn.addEventListener('click', () => running?.abort());
-  el.querySelector('#eye-new').addEventListener('click', () => {
-    if (running) return;
-    messages = [];
-    logEl.replaceChildren();
-    renderEmpty();
+  newBtn.addEventListener('click', startNewChat);
+  historyBtn.addEventListener('click', () => (historyEl.hidden ? void openHistory() : (historyEl.hidden = true)));
+  plusBtn.addEventListener('click', () => (attachPop.hidden ? openAttachMenu() : (attachPop.hidden = true)));
+  modelBtn.addEventListener('click', () => (modelPop.hidden ? openModelMenu() : (modelPop.hidden = true)));
+  statusEl.addEventListener('change', (e) => {
+    if (e.target.id !== 'eye-model') return;
+    pickedModel = e.target.value;
+    const dev = (status?.devices || []).find((d) => d.state === 'ready') || status?.devices?.[0];
+    const btn = statusEl.querySelector('[data-eye-use]');
+    if (dev && btn) btn.textContent = useLabel(dev, pickedModel);
+  });
+  fileEl.addEventListener('change', () => {
+    void addImages([...fileEl.files]);
+    fileEl.value = '';
+  });
+  textEl.addEventListener('input', () => {
+    textEl.style.height = 'auto';
+    textEl.style.height = `${Math.min(textEl.scrollHeight, 200)}px`;
+    cmdIndex = 0;
+    renderCommands();
+  });
+  textEl.addEventListener('paste', (e) => {
+    const pics = [...(e.clipboardData?.files || [])].filter((f) => f.type.startsWith('image/'));
+    if (pics.length && visionOn()) {
+      e.preventDefault();
+      void addImages(pics);
+    }
+  });
+  // A click elsewhere closes the open menu.
+  document.addEventListener('click', (e) => {
+    if (!el.isConnected) return;
+    // The path is read at dispatch, so it still holds a menu that a click just redrew.
+    const inside = (cls) => e.composedPath().some((n) => n.classList?.contains(cls));
+    if (!inside('eye-menu-host')) closePops();
+    if (!historyEl.hidden && !inside('eye-history') && !inside('eye-history-btn')) historyEl.hidden = true;
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      closePops();
+      historyEl.hidden = true;
+    }
   });
   el.addEventListener('click', async (e) => {
+    const cmd = e.target.closest('[data-eye-cmd]')?.dataset.eyeCmd;
+    if (cmd) {
+      completeCommand(cmd);
+      return;
+    }
+    const kind = e.target.closest('[data-eye-attach]')?.dataset.eyeAttach;
+    if (kind) {
+      if (kind === 'image') {
+        attachPop.hidden = true;
+        fileEl.click();
+      } else {
+        openPicker(kind);
+      }
+      return;
+    }
+    if (e.target.closest('[data-eye-back]')) {
+      openAttachMenu();
+      return;
+    }
+    const model = e.target.closest('[data-eye-model]')?.dataset.eyeModel;
+    if (model) {
+      void useModel(model);
+      return;
+    }
+    const unattach = e.target.closest('[data-eye-unattach]');
+    if (unattach) {
+      attachments.splice(Number(unattach.dataset.eyeUnattach), 1);
+      renderChips();
+      return;
+    }
+    const open = e.target.closest('[data-eye-open]');
+    if (open) {
+      void openChat(open.dataset.eyeOpen);
+      return;
+    }
+    const del = e.target.closest('[data-eye-delete]');
+    if (del) {
+      try {
+        await call('DELETE', `/api/eye/chats/${del.dataset.eyeDelete}`);
+        if (del.dataset.eyeDelete === chatId) startNewChat();
+      } catch {
+        /* the list below shows what is left */
+      }
+      void openHistory();
+      return;
+    }
     const shot = e.target.closest('.eye-shot');
     if (shot) {
       shot.classList.toggle('is-large');
@@ -626,6 +1317,8 @@ export function createEyePanel({ escapeHtml }) {
     },
     hide() {
       shown = false;
+      closePops();
+      historyEl.hidden = true;
       clearTimeout(pollTimer);
     }
   };

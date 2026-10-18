@@ -21,20 +21,48 @@ pub type Progress<'a> = &'a mut dyn FnMut(u64, u64);
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 
 /// Context the server is started with: enough for a conversation with tool
-/// results in it, small enough to fit beside the model on modest machines.
-const CONTEXT: &str = "16384";
+/// results in it (16k overflowed after three database answers), small enough
+/// to fit beside the model on modest machines.
+const CONTEXT: &str = "32768";
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(180);
 
 pub fn eye_dir() -> PathBuf {
     crate::settings_dir().join("eye")
 }
 
+/// One line in `eye/eye.log`: what the eye saw and decided, so a model that
+/// would not start (or a download nobody asked for) can be traced afterwards.
+/// Kept under 1 MB by starting over when it grows past that.
+pub fn log(line: &str) {
+    let path = eye_dir().join("eye.log");
+    if std::fs::metadata(&path).is_ok_and(|m| m.len() > 1 << 20) {
+        std::fs::remove_file(&path).ok();
+    }
+    std::fs::create_dir_all(eye_dir()).ok();
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        let _ = writeln!(f, "{secs} {line}");
+    }
+}
+
+/// Whether a file is on disk. Only "not found" counts as missing: a file the
+/// app cannot read right now (held by another program, say) is reported as an
+/// error rather than taken as a reason to download 20 GB again.
+fn present(path: &Path) -> Result<bool, Error> {
+    match std::fs::metadata(path) {
+        Ok(_) => Ok(true),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(format!("could not read {}: {e}", path.display()).into()),
+    }
+}
+
 /// Download `url` to `dest`, resuming a `.part` left by an earlier attempt,
 /// and keep it only if it is exactly `size` bytes hashing to `sha256`.
 pub fn download_verified(url: &str, dest: &Path, size: Option<u64>, sha256: &str, progress: Progress) -> Result<(), Error> {
-    if dest.exists() {
+    if present(dest)? {
         return Ok(());
     }
+    log(&format!("download start {} ({url})", dest.display()));
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -121,7 +149,15 @@ pub fn ensure_mmproj(spec: &ModelSpec, progress: Progress) -> Result<PathBuf, Er
 }
 
 pub fn model_downloaded(spec: &ModelSpec) -> bool {
-    eye_dir().join("models").join(spec.file).exists()
+    let path = eye_dir().join("models").join(spec.file);
+    match present(&path) {
+        Ok(here) => here,
+        Err(err) => {
+            // There but unreadable: say so, and let starting it report the error.
+            log(&format!("model check {}: {err}", spec.id));
+            true
+        }
+    }
 }
 
 /// The llama-server executable of one build, downloading and unpacking it first if needed.

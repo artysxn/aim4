@@ -1,5 +1,6 @@
 node_modules/
 dist/
+dist-account/
 
 # Scratch from driving the renderer headlessly (captured frames and the little
 # HTTP sink they are POSTed to) and from one-off measurement probes against the

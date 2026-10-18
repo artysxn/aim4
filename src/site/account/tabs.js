@@ -9,6 +9,7 @@
 // Copy follows CLAUDE.md throughout: no em dashes, no explanatory subtitles.
 // ---------------------------------------------------------------------------
 
+import { leaveSite } from '../../lib/leaveSite.js';
 import {
   CAPABILITIES,
   PLAN_BANDS,
@@ -160,7 +161,7 @@ export function overviewTab(state, { reload, auth }) {
         connected: Boolean(linked.steam),
         connect: async () => {
           const res = await accountApi.steamStart();
-          window.location.href = res.url;
+          leaveSite(res.url);
         },
         unlink: () => accountApi.steamUnlink()
       },
@@ -661,7 +662,7 @@ function manageRow(sub, { reload, billing }) {
         async () => {
           try {
             const res = await accountApi.billingPortal();
-            if (res?.url) window.location.href = res.url;
+            if (res?.url) leaveSite(res.url);
           } catch (err) {
             notice(row, err.message, 'error');
           }
@@ -920,7 +921,7 @@ function planCard(
           // Hosted page. Reached when Paddle.js cannot load at all, and worth
           // keeping: a blocked CDN should cost the overlay, not the sale.
           if (res?.checkoutUrl) {
-            window.location.href = res.checkoutUrl;
+            leaveSite(res.checkoutUrl);
             return;
           }
           throw new Error('Checkout did not return a payment page.');

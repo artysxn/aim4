@@ -23,6 +23,7 @@ import { readTicketHeader, verifyTicket } from '../admin/impersonation.js';
 import { freeEntitlements, loadEntitlements } from '../entitlements/load.js';
 import { db, isSiteAdmin } from '../entitlements/service.js';
 import { OWNER, ownerEntitlements, localMode } from '../local/mode.js';
+import { CONNECT_TIMEOUT_MS, isNetworkError, isOnline, markOffline, noteToken, offlineUser, rememberMe, userFromMe } from '../offline.js';
 
 /**
  * Read at call time rather than at import: the .env loader and the test
@@ -128,6 +129,8 @@ async function resolveActor(req) {
   // verify. Answering here means every route below keeps its own sign-in checks
   // and simply never sees an anonymous request.
   if (localMode()) return Object.freeze({ ...OWNER, entitlements: ownerEntitlements() });
+  // The desktop app's server: the online aim4 says who this is (server/offline.js).
+  if (process.env.AIM4_UPSTREAM) return resolveViaUpstream(req);
 
   const token = bearer(req);
   const { url, key } = supabase();
@@ -207,6 +210,34 @@ async function resolveActor(req) {
     }
   }
   return user;
+}
+
+/**
+ * Who the caller is, as the online aim4 answers /api/me for their token. That
+ * needs no database key here, which is what lets the desktop app run this
+ * server on anyone's PC. Offline (or the upstream unreachable), the last
+ * account that signed in here, when the token names it.
+ */
+async function resolveViaUpstream(req) {
+  const token = bearer(req);
+  if (!token) return ANONYMOUS;
+  noteToken(req);
+  if (!isOnline()) return offlineUser(req) || ANONYMOUS;
+  const hit = cache.get(token);
+  if (hit && hit.expires > Date.now()) return hit.user;
+  const base = String(process.env.AIM4_UPSTREAM).trim().replace(/\/$/, '');
+  try {
+    const res = await fetch(`${base}/api/me`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(CONNECT_TIMEOUT_MS) });
+    if (res.status >= 500 || res.status === 429) return offlineUser(req) || ANONYMOUS;
+    const me = await res.json().catch(() => null);
+    const user = res.ok ? userFromMe(me) : null;
+    if (user) rememberMe(me);
+    cache.set(token, { user: user || ANONYMOUS, expires: Date.now() + CACHE_MS });
+    return user || ANONYMOUS;
+  } catch (err) {
+    if (isNetworkError(err) || err?.name === 'TimeoutError' || err?.cause) markOffline(err?.cause?.code || err?.message || 'unreachable');
+    return offlineUser(req) || ANONYMOUS;
+  }
 }
 
 async function usernameFor(userId) {

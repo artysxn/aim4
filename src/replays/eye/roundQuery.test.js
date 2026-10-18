@@ -105,4 +105,11 @@ assert.throws(() => runRoundQuery(rounds, network, { where: [{ teleport: {} }] }
 assert.equal(zoneIndex(network).get('outside').positions.size, 2);
 assert.deepEqual(zoneNames(network).positions, ['Heaven', 'Hut', 'Secret', 'Silo']);
 
+// "bought" is the pace section's pool: the force-buy round r6 counts, the full-buy-only pool skips it.
+const bought = runRoundQuery(rounds, network, { side: 'T', buy: 'bought' });
+assert.equal(bought.considered, 5);
+assert.equal(runRoundQuery(rounds, network, { side: 'T', buy: 'full' }).considered, 4);
+assert.match(bought.counted, /T side, their buy bought, opponent buy any/);
+assert.deepEqual(runRoundQuery(rounds, network, { side: 'T', buy: 'bought', group_by: 'buy' }).groups.map((g) => g.key), ['full', 'force']);
+
 console.log('roundQuery.test.js ok');

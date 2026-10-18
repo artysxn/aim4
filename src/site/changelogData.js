@@ -14,6 +14,18 @@
 
 export const CHANGELOG = Object.freeze([
   {
+    date: '2026-10-18',
+    title: 'aim4 eye: longer chats, kinds of hit, player habits',
+    tag: 'new',
+    points: [
+      'aim4 eye now runs Qwen3.8 27B as its large model. Long chats no longer run out of room: older questions are summarised on their own, and the eye can still look any of them up.',
+      'The eye tells an execute from a split by where the players came from, and finds the best rounds of each kind for any team.',
+      'Player notes describe how each player plays: where he starts, early fights, trades, utility timing, rotations and lurks, with what to do against him.',
+      'The desktop app keeps working offline with the last account that signed in and the demos on your PC. Demos added offline are uploaded when the connection is back.',
+      'Admins can publish desktop app builds from the admin page, which is what the download buttons serve.'
+    ]
+  },
+  {
     date: '2026-08-31',
     title: 'See which keys a player is holding',
     tag: 'new',

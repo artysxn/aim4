@@ -34,8 +34,8 @@ from any browser, while the app runs on the user's PC:
   back up (`server/eye/relay.js` has the message list). Nothing listens locally
   except llama.cpp on 127.0.0.1.
 - **Runtime.** llama.cpp's own `llama-server` (build `b11706`, pinned by
-  SHA-256: macOS Metal, Windows Vulkan with a CPU fallback) and a Qwen3.5 GGUF
-  (2B / 4B / 9B / 35B-A3B, pinned by repo commit and SHA-256) are downloaded on
+  SHA-256: macOS Metal, Windows Vulkan with a CPU fallback) and a Qwen GGUF
+  (Qwen3.5 2B / 4B / 9B, Qwen3.8 27B, pinned by repo commit and SHA-256) are downloaded on
   first use into `<settings>/eye/`, resumable and verified, then started with
   `--fit on` (GPU) or `-ngl 0` (CPU when the GPU will not start). The model is
   picked on the site; the app recommends one by RAM.

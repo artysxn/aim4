@@ -10,39 +10,17 @@
 // round viewer.
 // ---------------------------------------------------------------------------
 
-import { fetchRoundPacks } from '../api.js';
-import { TickTrack } from '../tickStore.js';
 import { RadarRenderer } from '../viewer/radarRenderer.js';
 import { RADAR_SIZE, worldToRadar } from '../viewer/mapCalibration.js';
 import { ROUND_SECONDS, timingFor } from '../viewer/roundClock.js';
 import { MAPS } from '../shared/roundId.js';
 import { clockLabel, parseClock } from './eyeImages.js';
+import { loadRound } from './eyeRound.js';
+import { momentLines } from './eyeValue.js';
 
 /** Edge of the square picture, in pixels. Big enough to read names, small enough to stay cheap to send. */
 export const SHOT_SIZE = 768;
 const SHOT_QUALITY = 0.8;
-/** One sample per this many demo ticks (an eighth of a second at 64 tick). */
-const PACK_STRIDE = 8;
-const CACHE_SIZE = 4;
-
-/** @type {Map<string, { meta: object, track: TickTrack }>} */
-const cache = new Map();
-
-async function loadRound(file) {
-  if (cache.has(file)) {
-    const hit = cache.get(file);
-    cache.delete(file);
-    cache.set(file, hit);
-    return hit;
-  }
-  const packs = await fetchRoundPacks([file], { stride: PACK_STRIDE, ticks: true });
-  const pack = packs.get(file);
-  if (!pack?.meta || !pack.ticks) throw new Error(`Round "${file}" could not be loaded. Use a file from find_rounds.`);
-  const loaded = { meta: pack.meta, track: new TickTrack(pack.ticks) };
-  cache.set(file, loaded);
-  while (cache.size > CACHE_SIZE) cache.delete(cache.keys().next().value);
-  return loaded;
-}
 
 const sideOf = (meta, team) => (team === 1 ? meta.team1Side : meta.team2Side) || '';
 const teamName = (meta, team) => (team === 1 ? meta.team1?.name : meta.team2?.name) || `Team ${team}`;
@@ -163,8 +141,10 @@ export async function screenshotRound(args) {
   ctx.fillText(caption, 18, 22, size - 36);
 
   const dataUrl = canvas.toDataURL('image/jpeg', SHOT_QUALITY);
+  // What the models say this moment is worth, so a picture is read against numbers and not on its own.
+  const worth = await momentLines(file, tick);
   return {
-    content: describeMoment(meta, states, tick, secondsLeft),
+    content: [describeMoment(meta, states, tick, secondsLeft), ...worth].join('\n'),
     display: `Round ${meta.round} on ${MAPS[meta.map]?.name || meta.map} at ${clockLabel(secondsLeft)}`,
     images: [dataUrl],
     link: `/demos?rounds=${encodeURIComponent(file)}`

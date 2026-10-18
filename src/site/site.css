@@ -617,6 +617,35 @@ a {
   padding: 36px 28px 64px;
 }
 
+/* aim4 eye: a chat column that fills the page, the box pinned to the bottom.
+   The same viewport lock as the demo library: only the conversation scrolls. */
+.site-shell:has(.view.active[data-view='eye']) {
+  height: 100vh;
+  max-height: 100vh;
+  overflow: hidden;
+}
+.site-shell:has(.view.active[data-view='eye']) .site-footer {
+  display: none;
+}
+.site-shell:has(.view.active[data-view='eye']) .site-main,
+.site-shell:has(.view.active[data-view='eye']) .page-body {
+  min-height: 0;
+  overflow: hidden;
+}
+.view.active[data-view='eye'] {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.view.active[data-view='eye'] > .view-pad-fill {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  padding: 0 24px 20px;
+}
+
 /* Full-bleed content for Demo Manager / analytics / leaderboards */
 .view-pad-fill {
   max-width: none;

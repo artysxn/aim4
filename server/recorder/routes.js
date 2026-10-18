@@ -151,7 +151,15 @@ export async function handleRecorderRequest(req, res, url) {
     try {
       const release = await publishRelease({
         version,
-        notes: String(req.headers['x-aim4-notes'] || ''),
+        // Sent URI-encoded by the admin page: a header carries ASCII only.
+        notes: (() => {
+          const raw = String(req.headers['x-aim4-notes'] || '');
+          try {
+            return decodeURIComponent(raw);
+          } catch {
+            return raw;
+          }
+        })(),
         bytes: Buffer.concat(chunks),
         publishedBy: me.id
       });

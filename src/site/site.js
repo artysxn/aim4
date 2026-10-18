@@ -28,6 +28,7 @@ import sideDatabase from '../icons/sideicons/sideicon_database.svg?raw';
 import sideCharts from '../icons/sideicons/sideicon_charts.svg?raw';
 import sideInspector from '../icons/sideicons/sideicon_inspector.svg?raw';
 import sideUpload from '../icons/sideicons/sideicon_upload.svg?raw';
+import sideEye from '../icons/sideicons/sideicon_eye.svg?raw';
 import sidePerformance from '../icons/sideicons/sideicon_performance.svg?raw';
 import sideGamemodes from '../icons/sideicons/sideicon_gamemodes.svg?raw';
 import sideLeaderboards from '../icons/sideicons/sideicon_leaderboards.svg?raw';
@@ -177,6 +178,7 @@ const ICONS = {
   'demo-playlists': sidePlaylists,
   database: sideDatabase,
   charts: sideCharts,
+  eye: sideEye,
   performance: sidePerformance,
   'pattern-inspector': sideInspector,
   'pf-players': pfPlayers,
@@ -673,6 +675,12 @@ const ROUTES = {
     page: 'analytics',
     requires: 'analytics.pattern_finder'
   },
+  eye: {
+    title: 'aim4 eye',
+    path: '/eye',
+    shell: 'eye',
+    requires: 'analytics.pattern_finder'
+  },
   performance: { title: 'Performance', path: '/performance', shell: 'performance' },
   uploads: { title: 'My Uploads', path: '/uploads', shell: 'replays', page: 'upload' },
   // The team pages carry `requires` so the shared upgrade banner appears on
@@ -1150,6 +1158,12 @@ viewControllers.replays = lazyController(async () => {
       setView(routeName, true, params);
     }
   });
+});
+viewControllers.eye = lazyController(async () => {
+  const { createEyePanel } = await import('../replays/eye/eyePanel.js');
+  const panel = createEyePanel({ escapeHtml });
+  document.querySelector('.view[data-view="eye"] .view-pad').appendChild(panel.el);
+  return { onShow: () => panel.show(), onHide: () => panel.hide() };
 });
 viewControllers.performance = lazyController(async () => {
   const { initPerformanceView } = await import('./performanceView.js');

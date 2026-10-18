@@ -23,6 +23,7 @@ import { perfPanel } from './perfPanel.js';
 import { pitchPanel } from './pitchPanel.js';
 import { supportPanel } from './supportPanel.js';
 import { trainingPanel } from './trainingPanel.js';
+import { releasesPanel } from './releasesPanel.js';
 import { spinnerNode } from '../../lib/spinner.js';
 
 const TABS = [
@@ -32,6 +33,7 @@ const TABS = [
   { id: 'support', label: 'Support' },
   { id: 'tools', label: 'Tools' },
   { id: 'models', label: 'Models' },
+  { id: 'app', label: 'App builds' },
   { id: 'smokes', label: 'Utility' },
   { id: 'perf', label: 'Performance' },
   { id: 'codes', label: 'Codes' },
@@ -100,6 +102,8 @@ export function initAdminView(host) {
       panel.appendChild(supportPanel());
     } else if (tab === 'audit') {
       panel.appendChild(auditPanel());
+    } else if (tab === 'app') {
+      panel.appendChild(releasesPanel());
     } else if (tab === 'tools') {
       panel.appendChild(toolsPanel());
     } else if (tab === 'models') {

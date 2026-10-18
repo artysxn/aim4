@@ -182,7 +182,7 @@ dependencies = [
 
 [[package]]
 name = "aim4-recorder"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "aim4-recorder-core",
  "audiopus",
@@ -205,13 +205,14 @@ dependencies = [
  "tsproto-packets",
  "ureq",
  "whisper-rs",
+ "windows-sys 0.61.2",
  "wry",
  "zip",
 ]
 
 [[package]]
 name = "aim4-recorder-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "flate2",
  "serde",

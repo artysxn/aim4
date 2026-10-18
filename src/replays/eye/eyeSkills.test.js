@@ -4,7 +4,7 @@
 // an antistrat document.
 
 import assert from 'node:assert/strict';
-import { buildRewrite, numbersIn, reviewOutline, similarity } from './docReview.js';
+import { buildRewrite, numbersIn, reviewOutline, similarity, statedShares } from './docReview.js';
 import { findWeaknesses } from './weaknesses.js';
 
 const network = { positions: [{ id: 'p1', name: 'Ramp', pieces: [{}] }, { id: 'p2', name: 'Silo', pieces: [{}] }], zones: [], areas: [] };
@@ -63,6 +63,28 @@ for (const kind of ['arithmetic', 'impossible', 'duplicate', 'changed', 'unbacke
 }
 assert.ok(review.issues.find((x) => x.kind === 'changed').text.includes('9 of 12'));
 assert.ok(review.issues.find((x) => x.kind === 'missing').text.includes('Ramp'));
+
+// A percentage is checked against the count beside it, not one about something else
+// (both were flagged in the 17 Oct chat: "3 of 4 is 81%", where 81% was how often a smoke is thrown).
+assert.deepEqual(statedShares('No B main smoke (thrown in 81% of rounds): Mostly AWP B start (3 of 4)'), []);
+assert.deepEqual(statedShares('Win 45% against A hits (9 of 20).'), [{ a: 9, b: 20, pct: 45 }]);
+assert.deepEqual(statedShares('5 of 8 won (63%)'), [{ a: 5, b: 8, pct: 63 }]);
+assert.deepEqual(statedShares('Smoke Tree, 5 of 8, 88%'), [{ a: 5, b: 8, pct: 88 }]);
+const pointsOf = (texts) => [{ side: 'T', section: 'Openings', text: '', files: [], heading: true }, ...texts.map((text) => ({ side: 'T', section: 'Openings', text, files: [] }))];
+const unrelated = reviewOutline(pointsOf(['No B main smoke (thrown in 81% of rounds): Mostly AWP B start (3 of 4)']), []);
+assert.ok(!unrelated.counts.arithmetic, 'an unrelated percentage is not arithmetic');
+// A and B points are different points, even when each mentions the other site.
+const sites = reviewOutline(pointsOf(['A contact around 1:33, 5 times, won 3 (then 2x A, 2x no hit, 1x B).', 'B contact around 1:34, 6 times, won 3 (then 5x B, 1x no hit).']), []);
+assert.ok(!sites.counts.duplicate, 'A contact and B contact are not duplicates');
+assert.ok(similarity('They rush A ramp', 'They rush B ramp') < 0.6);
+// All-zero points ("Contact: 0% (0)") are not called unbacked.
+assert.ok(!reviewOutline(pointsOf(['Contact: 0% (0)']), fresh).counts.unbacked);
+// The rewrite takes a percentage worked out from counts in the same point.
+const worked = buildRewrite({ title: 'X', sections: [{ heading: 'Default', points: ['They smoke Heaven early in 7 of 10 rounds (70%).'] }] }, known0(), String);
+assert.equal(worked.points, 1);
+function known0() {
+  return [...doc.filter((p) => !p.heading), ...fresh];
+}
 
 // The rewrite may only use numbers it was shown, and carries the rounds over.
 const known = [...doc.filter((p) => !p.heading), ...fresh];

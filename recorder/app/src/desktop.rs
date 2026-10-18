@@ -19,7 +19,7 @@ use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy};
 use tao::window::WindowBuilder;
 use wry::{WebContext, WebViewBuilder};
 
-use crate::{eye, update};
+use crate::{eye, signin, update};
 
 enum UserEvent {
     /// A message the page posted to the bridge.
@@ -45,7 +45,11 @@ fn open_external(url: &str) {
         return;
     }
     #[cfg(target_os = "windows")]
-    let _ = std::process::Command::new("cmd").args(["/C", "start", "", url]).spawn();
+    {
+        use std::os::windows::process::CommandExt;
+        // CREATE_NO_WINDOW, or `cmd` flashes a console window on every link opened.
+        let _ = std::process::Command::new("cmd").args(["/C", "start", "", url]).creation_flags(0x0800_0000).spawn();
+    }
     #[cfg(target_os = "macos")]
     let _ = std::process::Command::new("open").arg(url).spawn();
     #[cfg(all(unix, not(target_os = "macos")))]
@@ -126,9 +130,20 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         })
         .with_navigation_handler({
             let base = base.clone();
+            let landing_proxy = Mutex::new(proxy.clone());
             move |url: String| {
-                // The window stays on the site; anything else goes to the browser.
-                if same_site(&url, &base) || url.starts_with("about:") || url.starts_with("blob:") || url.starts_with("data:") {
+                // A sign-in Supabase sent back to aim4.io finishes on this window's own host.
+                if let Some(local) = signin::local_landing(&url, &base) {
+                    let _ = landing_proxy.lock().unwrap().send_event(UserEvent::Navigate(local));
+                    return false;
+                }
+                // The window stays on the site and in its sign-in pages; anything else goes to the browser.
+                if same_site(&url, &base)
+                    || signin::is_sign_in_page(&url)
+                    || url.starts_with("about:")
+                    || url.starts_with("blob:")
+                    || url.starts_with("data:")
+                {
                     true
                 } else {
                     open_external(&url);
@@ -176,6 +191,13 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     Some("get-info") => {}
                     Some("eye-link") => eye.set_token(msg["token"].as_str().map(str::to_string)),
                     Some("eye-unlink") => eye.set_token(None),
+                    // A sign-in started inside a tab: the window itself goes to the provider.
+                    Some("navigate") => {
+                        let url = msg["url"].as_str().unwrap_or("");
+                        if signin::is_sign_in_page(url) || same_site(url, &base) {
+                            let _ = webview.load_url(url);
+                        }
+                    }
                     Some("open-recorder") => open_recorder(),
                     Some("open-external") => open_external(msg["url"].as_str().unwrap_or("")),
                     Some("apply-update") => {

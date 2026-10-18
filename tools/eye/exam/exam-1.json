@@ -1,0 +1,105 @@
+{
+  "title": "aim4 eye exam 1",
+  "note": "Option a is the key in the source document; the runner shuffles the order per run. 'why' is the grader's note and is never shown to the model.",
+  "questions": [
+    {
+      "topic": "Utility patterns and exploitation",
+      "q": "You find that the enemy B anchor on mirage uses his smoke, molotov and HE before 1.35 every single full buy round. His B short player is far away from him and both players always do the same thing.",
+      "options": [
+        "He has no utility left for lateround. Suggest to play B late.",
+        "He is distracted with throwing grenades early. Suggest to contact B early to try to kill him.",
+        "B is being blocked hard by one player early. Smoke the molotov and pop out.",
+        "Try to go short alone since he isn't being aggressive with a teammate."
+      ],
+      "why": "A is the biggest weakness. Not B: the molotov and HE block early aggression. C is possible but riskier (nades, short player may not rotate without mid pressure). Not D: short means going through connector and window."
+    },
+    {
+      "topic": "Micro and macro observation",
+      "q": "In the matchup of FaZe vs FNATIC on Ancient, FNATIC's player KRIMZ is dropped 2 smoke grenades on A site as CT on one eco round, while the rest of the team stacks B. KRIMZ is jiggling A main and instantly blocks on contact. What is the correct micro analysis + macro analysis / observation here?",
+      "options": [
+        "Micro: Krimz spots A main early with block utility, instantly throwing a smoke as soon as he gets confirmation that Ts try to enter his site. Macro: FNATIC stack B with 4 players, dropping 2 smokes for the solo A player to be able to block with, because he should be good for 2-3 kills if FaZe go through a smoke, and if not, this buys time for FNATIC to rotate and take the rest of the map away in the case of an execute.",
+        "Micro: Krimz stands close A main ready to take on any defenders. Macro: FNATIC drop grenades to the A player in order to have the enemy fear going into the bombsite.",
+        "Micro: Krimz spots A main early with block utility, instantly throwing a smoke as soon as he gets confirmation that Ts try to enter his site. Macro: FNATIC stack B with 4 players.",
+        "Micro: The B players stay in close positions in order to maximize the advantage of their weaker guns against AKs, playing in potential crossfires if Ts decide to play into their bombsite. Macro: FNATIC stack B because FaZe have went B in 9 out of 10 of the last antiecos."
+      ],
+      "why": "Micro is each player's pattern, macro is the team structure including the why. A is the most true and best written; C lacks the why."
+    },
+    {
+      "topic": "Strategic understanding",
+      "q": "Using the previous example of FaZe vs FNATIC (FNATIC on an eco as CT on Ancient: KRIMZ alone on A with 2 dropped smokes to block, the other 4 stacking B); which of the following strategic doctrines fits best for winning the round as FaZe in said antieco?",
+      "options": [
+        "Cover for most possibilities in the safest, most general and versatile way by splitting up into a passive default first.",
+        "Pick any strategy and focus on the quality of it.",
+        "Play a split up default for information, then rush the other side as soon as a stack is spotted.",
+        "Throw a fake execute on one side, then take information on the other. Go where there is a lesser response."
+      ],
+      "why": "Low-buy CTs stack, push or play default. Passive default first handles pushes safely, then prod a site and read the reaction before committing; molotovs must be thrown before entering. B has no backup against a stack. C is aggressive against a low buy. D depends entirely on whether they bite and can feed a gun."
+    },
+    {
+      "topic": "Strategic understanding (antistrat notes)",
+      "q": "5 full buy vs full buy rounds spotted for the Ancient CT defense of Team Spirit, focusing on the early rounds, can be summarized like this:\n#1, 3 mid start with 2 molotovs, runboost heaven.\n#2, 3 mid start with smoke, 1 molotov, 2 HEs, 1 flash, clear mid then going up heaven.\n#3, 2 mid start with smoke elbow, molotov, HE and flash, early check then going back to passive setup.\n#4, 1 mid start solo window with AWP, with 2 HEs dropped to break window 3 times. 1 molotov, 1 flash and 1 smoke thrown early.\n#5, 2 mid start with first spawn jumping donut and 2nd staying window to spam. Ts dont go mid, and window player flashes mid so donut guy can check close. They then leave and play passive setup.\nWhat are the most important notes, and which of these should be written if this were to be an antistrat?",
+      "options": [
+        "1. If there is a heaven fight, there was a 3 mid start. If you are to react, play on sites within 10 seconds before they can rotate. 2. You can pop out mid after the first flash due to never throwing a followup. 3. Starting in a 4A 1B or 4B 1Mid default, letting the solo player take information on aggression, allows an instant reaction on either bombsite if he is pushed from heaven.",
+        "1. If there is a heaven fight, playing slow and calming down is recommended to not give up any opening kills. 2. A good idea can be to nadestack heaven the first round, considering they runboost and climb it quite often. 3. Starting default, nading mid, and giving up potential mid fights is best as to keep an equal man advantage at all times while doing some damage to them.",
+        "1. Going out mid early is not an option due to risk of a heavy mid fight. 2. CTs never push down elbow. 3. Playing the laterounds is extremely advantageous.",
+        "1. Going out mid is necessary, to maintain the early information for how many are mid. 2. CTs use only one flash on mid, so you can go out early and dodge it. 3. There was never anything in terms of starting 4 on B, meaning a B rush or B contact instantly is a good idea."
+      ],
+      "why": "CTs never pushing down elbow is true in every round, so that note is void. A's reasons and information are superior."
+    },
+    {
+      "topic": "Self review and quality control",
+      "q": "You have rewritten 20 tool-generated player tendencies. On review, 8 claims have no cited round IDs, two use 'always' despite exceptions, and three mix CT and T side behaviors. What should you do before delivery?",
+      "options": [
+        "Run a structured review: add traceable round evidence, soften claims with exceptions, split side-specific behaviors, and re-check every corrected claim against the source rounds.",
+        "Ask the model to make the prose more confident.",
+        "Remove the round IDs to make the report cleaner.",
+        "Deliver now; the overall themes are likely right and the thing that matters most is that the user is able to do something with the information."
+      ],
+      "why": "A second pass should improve traceability and scope, not style. Uncited claims and mixed sides make fluent summaries unreliable."
+    },
+    {
+      "topic": "Determining round types",
+      "q": "The tool labels a round 'B execute' because four Ts are near B at 1:00. Video shows two hold B main, one watches mid, one lurks connector, and the bomb carrier later rotates A after CT utility. What is the best correction?",
+      "options": [
+        "Reclassify as B presence/default transitioning to A, unless further evidence shows a genuine B commitment before the rotation.",
+        "Mark as a B execute that failed.",
+        "Keep B execute because player count near B is enough.",
+        "Delete the round from the tactical dataset."
+      ],
+      "why": "Proximity is not intention. Movement and the later rotation show no committed B hit; the label follows sequence and route, not a static zone count."
+    },
+    {
+      "topic": "Player summary",
+      "q": "The tool says player M is 'an aggressive AWPer' because 70% of his opening duels are with an AWP. The demos show he takes only safe opening angles, rarely re-peeks after a miss, and retreats if no teammate can trade. Best rewrite?",
+      "options": [
+        "M frequently takes AWP opening duels but appears risk-controlled: he favors safe angles, usually avoids a second peek after missing, and backs off when unsupported; test him with coordinated pressure rather than isolated dry peeks.",
+        "M is an aggressive AWPer and should be challenged early.",
+        "M is passive and never takes opening duels.",
+        "M always saves his AWP."
+      ],
+      "why": "A matches the demo evidence and turns it into an exploit."
+    },
+    {
+      "topic": "Round type classification",
+      "q": "A round is labeled 'B split'. The T team throws B-main smokes, three players enter B main, and the other two stay mid to stop rotations; no one uses water/connector to enter B from a second lane. What is the correct classification?",
+      "options": [
+        "A B main execute with mid rotation-control/lurk roles, not a true B split, because the target-site entry does not come from a second coordinated route.",
+        "A split, because any lurker makes a split.",
+        "B split, because some players stay mid.",
+        "A fake A execute."
+      ],
+      "why": "A split is about attack geometry into the target site. The mid players support the hit but give no second B entry lane."
+    },
+    {
+      "topic": "Statistics correctness",
+      "q": "A player is reported to 'rotate to A after B utility' in 9 of 12 rounds. In four of those 12 rounds, the T team had already planted A before the player moved. What is the correct analytical treatment?",
+      "options": [
+        "Separate pre-execute rotations from post-plant retake movements; recalculate the specific trigger metric using only rounds where the proposed trigger could cause the rotation.",
+        "Delete all four rounds from the database.",
+        "Count every movement to A, regardless of timing.",
+        "Keep 9/12 as the rotation trigger rate."
+      ],
+      "why": "Temporal order matters. Post-plant movement cannot support a claim that B utility triggered the rotation, so the metric needs an eligibility window."
+    }
+  ]
+}

@@ -11,6 +11,8 @@
 
 // First, so every module below sees SUPABASE_* and friends from .env.
 import './env.js';
+import { ANSWER_HERE, UPSTREAM, goesUpstream, proxyUpstream } from './upstream.js';
+import { isOnline, offlineMe, offlineStatus, offlineUser, queueUpload } from './offline.js';
 import http from 'http';
 import { WebSocketServer } from 'ws';
 import { saveConfig, getConfig } from './store.js';
@@ -72,7 +74,7 @@ let publicHost = null;
 // CSP here — a strict policy can break Three.js / WebSocket without care.
 function setSecurityHeaders(res) {
   res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
 }
 
@@ -124,6 +126,47 @@ const server = http.createServer(async (req, res) => {
   });
 
   try {
+    // With AIM4_UPSTREAM set, the data comes from the online aim4 (server/upstream.js).
+    if (goesUpstream(url.pathname)) {
+      if ((await proxyUpstream(req, res, url)) !== ANSWER_HERE) return;
+    }
+
+    // The desktop app's server while the online aim4 is out of reach (server/offline.js).
+    if (UPSTREAM && url.pathname === '/api/offline/status') {
+      const body = JSON.stringify(offlineStatus(req));
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+      res.end(body);
+      return;
+    }
+    if (UPSTREAM && !isOnline() && url.pathname.startsWith('/api/')) {
+      const reply = (status, value) => {
+        res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify(value));
+      };
+      // The last account that signed in here, as the online aim4 last described it.
+      if (req.method === 'GET' && url.pathname === '/api/me') {
+        const me = offlineMe(req);
+        reply(me ? 200 : 401, me || { error: 'You are offline, and this account has not signed in on this PC before.' });
+        return;
+      }
+      // A demo added offline goes into the library here and into the queue for the cloud.
+      if (req.method === 'POST' && url.pathname === '/api/replays/demos') {
+        const user = offlineUser(req);
+        if (!user) {
+          reply(401, { error: 'You are offline: sign in on this PC while online once, then demos can be added offline.' });
+          return;
+        }
+        const copy = await queueUpload(req, user);
+        if (!(await handleReplayRequest(copy, res, url))) reply(404, { error: 'Not found.' });
+        return;
+      }
+      // What needs the online account (billing, plans, sessions, admin) waits for the connection.
+      if (/^\/api\/(account|billing|entitlements|admin|support|affiliates|referrals|ingest)\b/.test(url.pathname) && req.method !== 'GET') {
+        reply(503, { error: 'You are offline. This needs the online aim4; it will work again when the connection is back.' });
+        return;
+      }
+    }
+
     // Local mode's own profile mirror. Ahead of everything else because it is
     // the only route that exists purely because there is no database.
     if (await handleLocalRequest(req, res, url)) {
