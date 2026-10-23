@@ -25,7 +25,7 @@ import * as THREE from 'three/webgpu';
 import '../../cs3d/cs3d.css';
 import { MapPack, assetBase } from '../../cs3d/mapLoader.js';
 import { MapLighting } from '../../cs3d/sky.js';
-import { patchWebGPUPartialAttributeUpload, patchNodeMaterialTypeLookup } from '../../cs3d/threePatches.js';
+import { patchWebGPUPartialAttributeUpload, patchNodeMaterialTypeLookup, patchSharedBatchShaders } from '../../cs3d/threePatches.js';
 import { createLook, createMapRenderer, loadPostLut, installMapGrade, setupBloom } from '../../cs3d/look.js';
 import { createBootScreen } from '../../cs3d/bootScreen.js';
 import { sharedPlayerModels } from '../../cs3d/playerModels.js';
@@ -463,6 +463,9 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange }) {
     if (repaired) {
       console.log(`cs3d: node material lookup repaired for ${repaired} material types (minified build)`);
     }
+    // One shader build per material SHAPE instead of one per batch: most of
+    // what opening the map used to cost (see threePatches.js).
+    if (!patchSharedBatchShaders(renderer, THREE)) console.warn('cs3d: shared batch shaders unavailable, every batch compiles on its own');
 
     try {
       bodyShadows = new BodyShadows(renderer);
@@ -603,7 +606,7 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange }) {
     const warm = createShaderWarmup({
       batches: () => pack.batches.values(),
       ready: (b) => pack.materials?.final?.get(b.userData?.matId) === b.material,
-      render: () => mapRenderer.render(camera)
+      render: () => mapRenderer.warm(camera)
     });
     let geometryIn = false;
     let loadError = null;
@@ -629,10 +632,26 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange }) {
         boot.setStage(Math.round((100 * warm.built) / Math.max(1, total)), `Shaders ${warm.built} / ${total}`);
         if (left === 0 || performance.now() - settledAt > WARM_MAX_MS) break;
       }
-      if (left > 0 && (settled || warm.pending() > 0)) await yieldNow();
-      else await new Promise((r) => setTimeout(r, 25));
+      // Straight on after a frame that built something; a short sleep when
+      // nothing was ready, rather than spinning the loop while the textures
+      // and tiles it is waiting for need the main thread to arrive.
+      if (left > 0 && warm.drew) await yieldNow();
+      else await new Promise((r) => setTimeout(r, settled ? 4 : 12));
     }
     await loading;
+    // One whole frame behind the screen: the warm-up skipped the composite,
+    // the bloom chain and the overlay, and their pipelines (and any tile
+    // uploads still pending) belong here rather than in the first frame seen.
+    mapRenderer.render(camera);
+    // The CPU side is done; the GPU may not be. On the first open after an
+    // update (the browser's shader cache is cold) it is still compiling and
+    // uploading what the warm-up handed it for a second or so, and lifting
+    // the screen now would show that as a stall. Capped: a slow GPU still
+    // gets the map.
+    const device = renderer.backend?.device;
+    if (device?.queue?.onSubmittedWorkDone) {
+      await Promise.race([device.queue.onSubmittedWorkDone(), new Promise((r) => setTimeout(r, 4000))]);
+    }
     if (DEBUG_3D) {
       // `?c3debug=1`: the scene for the console, and a frame timer that does
       // not depend on rAF (which a hidden tab throttles to nothing).

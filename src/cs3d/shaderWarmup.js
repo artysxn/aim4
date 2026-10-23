@@ -29,8 +29,13 @@
 export function createShaderWarmup({ batches, ready, render, budgetMs = 40 }) {
   /** batch -> the material it was last drawn with */
   const drawn = new WeakMap();
+  /** batch -> its geometry's version when last drawn (see step). */
+  const uploaded = new WeakMap();
+  const geometryVersion = (b) => b.geometry?.attributes?.position?.version ?? 0;
   let perFrame = 6;
   let built = 0;
+  /** Whether the last step drew a frame (false: nothing was ready to warm). */
+  let drew = false;
 
   function pendingOf() {
     const out = [];
@@ -47,24 +52,41 @@ export function createShaderWarmup({ batches, ready, render, budgetMs = 40 }) {
     get built() {
       return built;
     },
+    /** Whether the last step() drew anything; when not, there is no point stepping again at once. */
+    get drew() {
+      return drew;
+    },
     /** Batches still to build, of the ones that exist. */
     pending() {
       return pendingOf().length;
     },
     /**
      * One warm-up frame.
+     *
+     * Drawn: the batches being warmed, and the built ones whose geometry grew
+     * since they were last drawn (a draw is what uploads a batch's new tiles;
+     * left alone, the whole map's vertex data went up in the first real frame,
+     * two seconds of it on Inferno). Everything else is hidden for the frame:
+     * drawing it again builds and uploads nothing, and late in a big map's
+     * load that was four hundred draws per warm-up frame, all of it in the way
+     * of the tiles still streaming in.
      * @param {{ all?: boolean }} [opts]  `all`: stop waiting for final
      *   materials (the textures are as done as they will get)
      * @returns {number} batches still waiting after this frame
      */
     step({ all = false } = {}) {
+      drew = false;
       const pending = pendingOf();
       const want = pending.filter((b) => all || ready(b));
-      if (!want.length) return pending.length;
       const take = new Set(want.slice(0, perFrame));
+      const show = new Set(take);
+      for (const b of batches()) {
+        if (b.visible && drawn.get(b) === b.material && uploaded.get(b) !== geometryVersion(b)) show.add(b);
+      }
+      if (!show.size) return pending.length;
       const hidden = [];
-      for (const b of pending) {
-        if (take.has(b)) continue;
+      for (const b of batches()) {
+        if (show.has(b) || !b.visible) continue;
         b.visible = false;
         hidden.push(b);
       }
@@ -74,7 +96,9 @@ export function createShaderWarmup({ batches, ready, render, budgetMs = 40 }) {
       } finally {
         for (const b of hidden) b.visible = true;
       }
+      drew = true;
       const ms = performance.now() - t;
+      for (const b of show) uploaded.set(b, geometryVersion(b));
       for (const b of take) {
         drawn.set(b, b.material);
         built++;

@@ -15,6 +15,8 @@ export { mapBloomParams };
 
 export const LOOK_DEFAULTS = {
   sun: 5,
+  /** The sun's highlight on world surfaces, × the physical amount (materials.js SunLobeLightingModel). */
+  spec: 1,
   bake: 0.9,
   sky: 0.1,
   brightness: 1,
@@ -48,7 +50,7 @@ export function installMapGrade(renderer, params, post) {
 }
 
 /** The knobs that are lights (applied to the scene) rather than grade (uniforms). */
-export const LIGHT_KEYS = new Set(['sun', 'bake', 'sky']);
+export const LIGHT_KEYS = new Set(['sun', 'spec', 'bake', 'sky']);
 
 /**
  * The look, as one object both entry points drive — the explorer's grade
@@ -65,6 +67,8 @@ export const LIGHT_KEYS = new Set(['sun', 'bake', 'sky']);
  *          labels this "sun ×" and its slider ends at 5 — as a multiplier
  *          over sunIntensity (~60 on Nuke) 5 would be 300, a white-out, and
  *          that is precisely the bug an earlier "faithful" reading produced.
+ *   spec   a MULTIPLIER on the sun's highlight over lit world surfaces, 1 =
+ *          the physical amount for that sun.
  *   sky    ABSOLUTE `scene.environmentIntensity`; likewise replaces the value
  *          MapLighting works out (and works out again when the real skybox
  *          lands — hence `apply('sky')` after loadSkybox).
@@ -91,6 +95,8 @@ export function createLook({ scene, getPack, getLighting, slug, knobs = null }) 
     if (key === 'sun') {
       if (mats?.sun) mats.sun.intensity.value = v;
       if (lighting?.sun) lighting.sun.intensity = v;
+    } else if (key === 'spec') {
+      if (mats?.sun?.specular) mats.sun.specular.value = v;
     } else if (key === 'bake') {
       if (!mats?.lightmapIntensity) return;
       // A new library (re-pack, re-mount) starts from its own value again.
@@ -157,7 +163,16 @@ export function setupBloom(renderer, manifest, params = new URLSearchParams()) {
   const fxStrength = FX_BLOOM.strength * fxScale;
   // Nothing to composite with every term at zero. The smoke no longer needs
   // this pass — it is ordinary scene geometry now (src/cs3d/smokeCards.js).
-  const noop = { render: (draw) => draw(), resize() {}, enabled: false, setActive() {}, get active() { return false; } };
+  const noop = {
+    render: (draw) => draw(),
+    renderScene: (draw) => draw(),
+    resize() {},
+    enabled: false,
+    setActive() {},
+    get active() {
+      return false;
+    }
+  };
   if (!(mapStrength > 0) && !(fxStrength > 0)) return noop;
   let sceneRT = null;
   let composite = null;
@@ -181,7 +196,7 @@ export function setupBloom(renderer, manifest, params = new URLSearchParams()) {
   } catch (e) {
     console.warn('cs3d: bloom unavailable, rendering direct', e);
     sceneRT?.dispose?.();
-    return { render: (draw) => draw(), resize() {}, enabled: false, setActive() {}, get active() { return false; } };
+    return noop;
   }
   let active = !bloomOff;
   const pass = {
@@ -206,6 +221,16 @@ export function setupBloom(renderer, manifest, params = new URLSearchParams()) {
       renderer.setRenderTarget(null);
       composite.render();
       if (stamp) stamp.bloom = active ? performance.now() - t : 0;
+    },
+    /**
+     * The scene into its HDR target and nothing after it: for frames nobody
+     * sees (the shader warm-up), which need the scene's pipelines built
+     * against this target and have no use for a dozen blur passes.
+     */
+    renderScene(draw) {
+      renderer.setRenderTarget(sceneRT);
+      draw();
+      renderer.setRenderTarget(null);
     },
     resize() {
       const s = renderer.getDrawingBufferSize(new THREE.Vector2());
@@ -263,12 +288,25 @@ export function drawSkyWorld(renderer, scene, camera, pack, lighting, opts = {})
   sky.visible = false;
   if (dome) dome.visible = false;
   if (shadow) shadow.needsUpdate = wantShadow;
-  const background = scene.background;
-  scene.background = null;
+  // The background already went down in the sky pass; it must not be drawn
+  // again over it. It is skipped at draw time rather than by clearing
+  // `scene.background`: three drops its background node when the background
+  // goes null and makes a new one when it comes back, and a new node is a new
+  // shader — the sky's material was rebuilt twice a frame, every frame
+  // (185 NodeBuilder runs just while Inferno loaded).
+  const outer = renderer.getRenderObjectFunction();
+  renderer.setRenderObjectFunction((object, ...rest) => {
+    if (object.name === 'Background.mesh') return;
+    if (outer) outer(object, ...rest);
+    else renderer.renderObject(object, ...rest);
+  });
   renderer.autoClear = false;
-  mark('world', () => renderer.render(scene, camera));
-  renderer.autoClear = true;
-  scene.background = background;
+  try {
+    mark('world', () => renderer.render(scene, camera));
+  } finally {
+    renderer.autoClear = true;
+    renderer.setRenderObjectFunction(outer);
+  }
   sky.visible = skyWas;
   if (dome) dome.visible = domeWas;
 }
@@ -329,6 +367,21 @@ export function createMapRenderer({
       // what to look at next.
       if (overlayAfter) drawOverlay();
       afterComposite?.(camera);
+    },
+    /**
+     * A frame for the shader warm-up: the sky and world passes into the same
+     * target a real frame draws them into (so the pipelines built are the
+     * ones it will use), without the composite, the bloom chain or the
+     * overlay. A full frame here was ~20 GPU passes and several submits;
+     * a map's warm-up draws a few hundred of them, and that queue was still
+     * draining a second after the CPU had finished loading.
+     */
+    warm(camera) {
+      const pass = (typeof bloom === 'function' ? bloom() : bloom) || fallback;
+      const draw = () =>
+        drawSkyWorld(renderer, scene, camera, getPack(), getLighting(), { twoPass: getTwoPass ? getTwoPass() : true });
+      if (pass.renderScene) pass.renderScene(draw);
+      else pass.render(draw);
     },
     resize() {
       const pass = (typeof bloom === 'function' ? bloom() : bloom) || fallback;

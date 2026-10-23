@@ -40,21 +40,37 @@
 
 import * as THREE from 'three/webgpu';
 import {
+  BRDF_GGX,
   IrradianceNode,
+  NodeUpdateType,
+  PhysicalLightingModel,
+  TextureNode,
   attribute,
+  cameraViewMatrix,
   clamp,
   dot,
   float,
+  fwidth,
+  length,
   lights,
   max,
   mix,
   luminance,
+  materialReference,
   min,
+  nodeObject,
   normalMap,
+  normalWorld,
   normalize,
+  positionWorld,
+  sqrt,
+  roughness as roughnessNode,
   smoothstep,
+  specularColor,
   texture,
+  transformDirection,
   transformNormalToView,
+  transformedNormalView,
   transformedNormalWorld,
   uniform,
   uv,
@@ -65,6 +81,69 @@ import {
 } from 'three/webgpu';
 import { packFetchOk } from './packFetch.js';
 
+/** Distinguishes one library's shaders from another's; see _structureKey. */
+let librarySeq = 0;
+
+/**
+ * One of a material's own textures inside a custom node, read from the
+ * material being drawn rather than fixed at build time.
+ *
+ * Every vmat on a map is its own material, so a `texture(base)` in a
+ * colorNode made every one of them a different shader, and three built each
+ * from scratch (several hundred NodeBuilder runs, most of the time it took to
+ * open a map). Read through a slot, materials that differ only in WHICH
+ * textures they use compile to the same program — `Cs3dMaterial` reports a
+ * structural cache key — and each one binds its own textures at its own draw:
+ * the node takes `material.cs3dTex[slot]` from the frame before the bindings
+ * are refreshed, the way three's `materialReference` does for `map`.
+ *
+ * Bound by slot name, never by texture: two slots of one material may hold
+ * the same texture while another material sharing the program holds two.
+ */
+export class SlotTextureNode extends TextureNode {
+  static get type() {
+    return 'Cs3dSlotTextureNode';
+  }
+
+  constructor(slot = '', value = null, uvNode = null) {
+    super(value, uvNode);
+    this.slot = slot;
+    /** The building material's texture: what a clone without slots of its own draws. */
+    this.own = value;
+    this.updateMatrix = false;
+    this.updateType = NodeUpdateType.OBJECT;
+  }
+
+  getUniformHash() {
+    return `cs3d-slot:${this.slot}`;
+  }
+
+  update(frame) {
+    const t = frame.material?.cs3dTex?.[this.slot] || this.own;
+    if (t) this.value = t;
+  }
+}
+
+/**
+ * `name`, or — if `table` already holds something different under it — the
+ * first free `name#n`. A slot or parameter name is one value per material; a
+ * second, different one under the same name would otherwise read the first.
+ */
+function freeName(table, name, value, same) {
+  if (table[name] === undefined || same(table[name], value)) return name;
+  let n = 1;
+  while (table[`${name}#${n}`] !== undefined && !same(table[`${name}#${n}`], value)) n++;
+  return `${name}#${n}`;
+}
+
+/** Manifest fields that never reach a shader: names, counts, and values three reads through uniforms. */
+const KEY_DROP = new Set(['id', 'name', 'shader', 'tris', 'verts', 'idx', 'tiles', 'wrap', 'roughness', 'metalness', 'opacity', 'alphaCutoff', 'avg']);
+/** Texture indices: for the shader only whether one is there matters. */
+const KEY_TEX = new Set(['base', 'normal', 'orm', 'emissiveMask', 'tintMask']);
+const KEY_BLEND_TEX = new Set(['base', 'normal', 'heights', 'mod', 'tintMask']);
+/** Per-material numbers the wiring reads as uniforms (_param / the material's own colour). */
+const KEY_UNIFORM = ['color', 'cc1', 'cc2', 'tintMaskBright', 'emissive', 'emissiveIntensity', 'emissiveAlbedo'];
+
 /**
  * Baked irradiance → three irradiance units. The atlas stores outgoing light
  * for a white Lambert surface (radiance); three's indirect diffuse expects
@@ -72,6 +151,93 @@ import { packFetchOk } from './packFetch.js';
  * remaining factor is a taste knob the lighting sets per map.
  */
 const LM_TO_IRRADIANCE = Math.PI;
+
+/** sin(5°): how close to the surface plane a baked light direction may lean (Valve's LIGHTMAP_DIRECTION_MIN_Z). */
+const LM_DIR_MIN_Z = 0.0872;
+const LM_DIR_MAX_XY = Math.sqrt(1 - LM_DIR_MIN_Z * LM_DIR_MIN_Z);
+
+/**
+ * The baked indirect light as the surface's NORMAL MAP sees it, from the
+ * directional atlas (scripts/lib/directionalLightmap.mjs). Without this the
+ * irradiance lights every texel of a wall in shade the same whatever its bumps
+ * do, which is why everything out of the sun read flat.
+ *
+ * Valve's ComputeLightmapShading, as the ValveResourceFormat renderer carries
+ * it, step for step: rebuild the tangent-space light direction from RG, tilt
+ * it by the surface's flatness the way the game does, then split the
+ * irradiance into the share that is directional (re-lit by N·L against the
+ * normal map, normalised so a flat texel gets exactly the baked value back)
+ * and the share that is not (B), which passes through.
+ *
+ * Both vectors are in the normal map's own tangent frame, so no TBN is needed:
+ * the dot is taken between the packed direction and the raw normal-map texel.
+ *
+ * @param irr        baked irradiance (vec3 node)
+ * @param dir        the directional atlas sample at the lightmap UV (vec4 node, 0..1)
+ * @param normalTS   the decoded tangent-space normal (vec3 node, unit length)
+ */
+function directionalLightmapShading(irr, dir, normalTS) {
+  let xy = dir.xy.mul(2).sub(1);
+  xy = xy.mul(float(LM_DIR_MAX_XY).div(max(float(LM_DIR_MAX_XY), length(xy))));
+  const sinTheta = dot(xy, xy);
+  const cosTheta = sqrt(float(1).sub(sinTheta));
+  // Curvature from the GEOMETRIC normal: flat walls get their light leaned in.
+  const curvature = length(fwidth(normalWorld)).div(max(length(fwidth(positionWorld)), float(1e-6)));
+  // smoothstep(0.1, 0.01, c), written out: edge0 > edge1 is fine in HLSL and
+  // undefined in WGSL.
+  const s = clamp(curvature.sub(0.1).div(-0.09), 0, 1);
+  const flatness = s.mul(s).mul(float(3).sub(s.mul(2))).mul(0.8);
+  const zScale = mix(float(1), mix(float(0.1), float(2), clamp(float(1).sub(cosTheta).mul(1.5), 0, 1)), flatness);
+  const L = normalize(vec3(xy, cosTheta.mul(zScale)));
+  const nonDirectional = irr.mul(clamp(dir.z, 0, 1));
+  const NoL = max(dot(L, normalTS), float(0));
+  const lightmapZ = max(L.z, float(0.05));
+  return NoL.mul(irr.sub(nonDirectional)).div(lightmapZ).add(nonDirectional);
+}
+
+/**
+ * The narrowest roughness the sun's highlight is drawn with. The sun is a
+ * disc, not a point, and a near-mirror lobe on a normal-mapped floor turns
+ * into single-pixel sparkle; a few legacy props also pack an empty roughness
+ * channel (0, chrome). Glass and puddles still read as glossy at this.
+ */
+const SUN_LOBE_MIN_ROUGHNESS = 0.2;
+
+/**
+ * Three's physical lighting plus the sun's specular lobe, for surfaces whose
+ * sun arrives as baked-visibility irradiance (setupLightMap) rather than as a
+ * scene light.
+ *
+ * CS2 bakes only the sun's VISIBILITY (direct_light_shadows) and lights every
+ * surface with it at runtime, highlight included: a wet tile or a car roof in
+ * the sun glints in the game. Going through IrradianceNode gave the map the
+ * diffuse half of that and nothing else, which is a large part of why the
+ * world read flat next to the game. The lobe uses the same sun, the same
+ * N·L and the same visibility (mask × body shade) as the diffuse term, so the
+ * two can never disagree about where the sun reaches.
+ */
+class SunLobeLightingModel extends PhysicalLightingModel {
+  constructor(sun, visibility) {
+    super();
+    this.sun = sun;
+    this.visibility = visibility;
+  }
+
+  indirect(context, stack, builder) {
+    super.indirect(context, stack, builder);
+    const sun = this.sun;
+    const lightDirection = transformDirection(sun.direction, cameraViewMatrix);
+    const dotNL = transformedNormalView.dot(lightDirection).clamp();
+    const lightColor = sun.color.mul(sun.intensity).mul(this.visibility).mul(sun.specular);
+    const lobe = BRDF_GGX({
+      lightDirection,
+      f0: specularColor,
+      f90: float(1),
+      roughness: roughnessNode.max(SUN_LOBE_MIN_ROUGHNESS)
+    });
+    context.reflectedLight.directSpecular.addAssign(dotNL.mul(lightColor).mul(lobe));
+  }
+}
 
 /**
  * MeshStandardNodeMaterial with two hooks:
@@ -103,10 +269,38 @@ export class Cs3dMaterial extends THREE.MeshStandardNodeMaterial {
   copy(source) {
     super.copy(source);
     if (source.cs3d) this.cs3d = source.cs3d;
+    // The slots, so the shared nodes read the right textures for a clone too.
+    // NOT the structural key: a clone is a copy that is about to be changed
+    // (a door leaf gets a hole cut through its opacityNode), and the key only
+    // describes what the library built.
+    if (source.cs3dTex) this.cs3dTex = source.cs3dTex;
+    if (source.cs3dU) this.cs3dU = source.cs3dU;
     return this;
   }
 
+  /**
+   * Materials the library built the same way compile to the same program
+   * (see SlotTextureNode and threePatches.js patchSharedBatchShaders); anything
+   * else keeps three's own key, which is unique per node.
+   */
+  customProgramCacheKey() {
+    return this.cs3dKey || super.customProgramCacheKey();
+  }
+
+  /**
+   * The sun's highlight, when this build gave the surface a sun term (see
+   * SunLobeLightingModel). setupLightMap runs first and leaves the visibility
+   * it used here.
+   */
+  setupLightingModel(builder) {
+    const lobe = this._sunLobe;
+    this._sunLobe = null;
+    if (lobe?.sun?.specular) return new SunLobeLightingModel(lobe.sun, lobe.visibility);
+    return super.setupLightingModel(builder);
+  }
+
   setupLightMap(builder) {
+    this._sunLobe = null;
     const lm = this.cs3d.lightmap;
     /**
      * The 3D skybox: distant scenery drawn at ×16 around the sky camera.
@@ -152,6 +346,7 @@ export class Cs3dMaterial extends THREE.MeshStandardNodeMaterial {
         let vis = attribute('_sun', 'float');
         if (psun.shade) vis = vis.mul(psun.shade);
         irr = irr.add(psun.color.mul(psun.intensity).mul(nDotL).mul(vis));
+        this._sunLobe = { sun: psun, visibility: vis };
       }
       return new IrradianceNode(irr);
     }
@@ -160,6 +355,12 @@ export class Cs3dMaterial extends THREE.MeshStandardNodeMaterial {
     // RGBM: rgb × a × range, then the per-map intensity. This atlas is the
     // INDIRECT term only.
     let irr = t.rgb.mul(t.a).mul(float(lm.range)).mul(lm.intensity).mul(float(LM_TO_IRRADIANCE));
+    // ...re-lit per texel by the normal map, from the direction the bake says
+    // that light arrives from (see directionalLightmapShading).
+    if (this.cs3d.directional && this.cs3d.normalTS) {
+      const n = normalize(this.cs3d.normalTS.xyz.mul(2).sub(1));
+      irr = directionalLightmapShading(irr, texture(this.cs3d.directional, uv(1)), n);
+    }
     // The sun, analytically, exactly as the game does it: colour × N·L ×
     // baked visibility. CS2 keeps the sun out of the atlas and stores only its
     // shadow in direct_light_shadows, so a lightmapped surface with no sun
@@ -180,6 +381,7 @@ export class Cs3dMaterial extends THREE.MeshStandardNodeMaterial {
       // What moves between the surface and the sun: the players (bodyShadows.js).
       if (sun.shade) vis = vis.mul(sun.shade);
       irr = irr.add(sun.color.mul(sun.intensity).mul(nDotL).mul(vis));
+      this._sunLobe = { sun, visibility: vis };
     }
     return new IrradianceNode(irr);
   }
@@ -255,6 +457,8 @@ export class MaterialLibrary {
     this.base = base;
     this.renderer = renderer;
     this.versionQuery = versionQuery;
+    /** Part of every structural key: shaders never share across libraries (their lightmaps differ). */
+    this.libId = ++librarySeq;
     // WebGPURenderer has no `.capabilities`; WebGPU guarantees 16.
     this.anisotropy = renderer?.capabilities?.getMaxAnisotropy
       ? Math.min(16, renderer.capabilities.getMaxAnisotropy())
@@ -276,6 +480,8 @@ export class MaterialLibrary {
     this.onMaterialReady = null; // (id, material) → void
     this.aborted = false;
     this.lightmap = null; // { texture, range, intensity(uniform) } once loaded
+    /** The directional atlas (see directionalLightmapShading), once loaded. */
+    this.directional = null;
     this.lightmapIntensity = makeLightmapUniform(opts.lightmapIntensity ?? 1);
     /** The pack baked CS2's light probes into the vertices of chartless geometry. */
     this.probeAmbient = !!opts.probeAmbient;
@@ -297,7 +503,9 @@ export class MaterialLibrary {
        * reads the baked mask: the live shadow of whatever moves (bodyShadows.js).
        * Fixed at construction, because the materials compile it in.
        */
-      shade: opts.sunShade || null
+      shade: opts.sunShade || null,
+      /** Scale on the sun's highlight (SunLobeLightingModel); the look's `spec` knob. */
+      specular: uniform(1)
     };
     /** The 3D skybox's own ambient; see setSkyAmbient. */
     this.skyAmbient = uniform(new THREE.Color(0, 0, 0));
@@ -489,6 +697,69 @@ export class MaterialLibrary {
     return mat;
   }
 
+  /**
+   * One of `mat`'s own textures inside a custom node (see SlotTextureNode).
+   * A slot holds one texture per material; asking for a second one under the
+   * same name means the structural key can no longer describe the material,
+   * so it is dropped and the material compiles on its own as before.
+   */
+  _slot(mat, slot, tex, uvNode) {
+    const slots = (mat.cs3dTex ??= {});
+    const name = freeName(slots, slot, tex, (a, b) => a === b);
+    if (name !== slot) mat.cs3dNoShare = true;
+    slots[name] = tex;
+    return nodeObject(new SlotTextureNode(name, tex, uvNode));
+  }
+
+  /**
+   * One of `mat`'s own numbers inside a custom node, as a uniform read from the
+   * material being drawn (`material.cs3dU[name]`) instead of a constant in the
+   * code. Same reason as the texture slots: Inferno's colour corrections,
+   * tints and blend softness differ per vmat, and as literals they made a
+   * hundred-odd programs out of what is a few dozen shapes.
+   * @param {number|THREE.Vector2|THREE.Vector3|THREE.Color} value
+   * @param {'float'|'vec2'|'vec3'|'color'} type
+   */
+  _param(mat, name, value, type) {
+    const params = (mat.cs3dU ??= {});
+    const key = freeName(params, name, value, (a, b) => a === b || !!a?.equals?.(b));
+    if (key !== name) mat.cs3dNoShare = true;
+    params[key] = value;
+    return materialReference(`cs3dU.${key}`, type);
+  }
+
+  /**
+   * The shape of the shader `_buildFinal` makes for `m`: every manifest field
+   * that can change the generated code, with texture indices reduced to
+   * "present", plus the library state the lighting compiles in. Two materials
+   * with equal keys build identical programs and differ only in textures (read
+   * through slots) and in values three already reads through uniforms.
+   *
+   * Conservative on purpose: anything not known to be irrelevant stays in,
+   * so a new manifest field can only cost sharing, never correctness.
+   */
+  _structureKey(m, lighting) {
+    const has = (i) => (i === undefined || i === null ? 0 : this.textures[i] ? 1 : -1);
+    const shape = {};
+    for (const [k, v] of Object.entries(m)) {
+      if (KEY_DROP.has(k)) continue;
+      shape[k] = KEY_TEX.has(k) ? has(v) : v;
+    }
+    // Values the wiring reads through _param or materialReference: only
+    // whether each one is there shapes the program.
+    for (const k of KEY_UNIFORM) if (k in shape) shape[k] = shape[k] !== undefined && shape[k] !== null && shape[k] !== false;
+    if (m.envTint) shape.envTint = { l1: !!m.envTint.l1?.on, l2: !!m.envTint.l2?.on };
+    if (m.blend) {
+      const b = {};
+      for (const [k, v] of Object.entries(m.blend)) {
+        if (k === 'scale2' || k === 'softness') continue;
+        b[k] = KEY_BLEND_TEX.has(k) ? has(v) : v;
+      }
+      shape.blend = b;
+    }
+    return `cs3d:${this.libId}:${JSON.stringify(lighting)}:${JSON.stringify(shape)}`;
+  }
+
   /** Material id from a pack mesh's material name ("m12"). */
   static idOf(mesh) {
     const name = mesh.material?.name || mesh.name || '';
@@ -527,6 +798,11 @@ export class MaterialLibrary {
     this._loadShadowMask().catch((e) => {
       console.warn('cs3d: shadow mask failed', e);
       this._maskGaveUp = true;
+      this._releaseHeld();
+    });
+    this._loadDirectional().catch((e) => {
+      console.warn('cs3d: directional lightmap failed, normal maps stay flat in shade', e);
+      this._directionalGaveUp = true;
       this._releaseHeld();
     });
     // A bundle that fails outright (404, dropped connection) never reaches the
@@ -582,6 +858,7 @@ export class MaterialLibrary {
       anisotropy: 1,
       mips: false
     });
+    this._upload(this.sun.mask);
     this._rebuildLightmapped();
     this._releaseHeld();
   }
@@ -599,7 +876,34 @@ export class MaterialLibrary {
   _lightingSettled() {
     const atlasDue = !!this.manifest.lightmap?.file && !this.lightmap && !this._lightmapGaveUp;
     const maskDue = !!this.manifest.shadowMask?.file && !this.sun.mask && !this._maskGaveUp;
-    return !atlasDue && !maskDue;
+    const directionalDue = !!this.manifest.directional?.file && !this.directional && !this._directionalGaveUp;
+    return !atlasDue && !maskDue && !directionalDue;
+  }
+
+  /**
+   * Where the baked indirect light comes from, per lightmap texel (see
+   * directionalLightmapShading). Compiled into every lightmapped material with
+   * a normal map, so it settles before they build, like the atlas and the mask.
+   */
+  async _loadDirectional() {
+    const d = this.manifest.directional;
+    if (!d?.file || !this.manifest.lightmap?.file) return;
+    const res = await packFetchOk(`${this.base}/${d.file}${this.versionQuery}`, 'directional');
+    const bitmap = await createImageBitmap(await res.blob(), {
+      premultiplyAlpha: 'none',
+      colorSpaceConversion: 'none'
+    });
+    if (this.aborted) return;
+    // Charts, like the atlas: no mips, no wrap.
+    this.directional = makeTexture(bitmap, {
+      srgb: false,
+      wrap: THREE.ClampToEdgeWrapping,
+      anisotropy: 1,
+      mips: false
+    });
+    this._upload(this.directional);
+    this._rebuildLightmapped();
+    this._releaseHeld();
   }
 
   /** Every texture decoded and every lighting input in (or given up on). */
@@ -634,7 +938,10 @@ export class MaterialLibrary {
     for (const k of ['base', 'normal', 'orm', 'emissiveMask']) if (m[k] !== undefined) out.push(m[k]);
     if (m.tintMask !== undefined) out.push(m.tintMask);
     if (m.effect?.maskTex !== undefined) out.push(m.effect.maskTex);
-    if (m.blend) for (const k of ['base', 'normal', 'heights', 'mod']) if (m.blend[k] !== undefined) out.push(m.blend[k]);
+    // Layer 2's tint mask too: _buildFinal reads it, and a material built
+    // before it decoded fell back to the constant mask for good — which
+    // differed from one load to the next on Inferno.
+    if (m.blend) for (const k of ['base', 'normal', 'heights', 'mod', 'tintMask']) if (m.blend[k] !== undefined) out.push(m.blend[k]);
     return out;
   }
 
@@ -647,6 +954,7 @@ export class MaterialLibrary {
     if (this.aborted) return;
     // No mips: the atlas is charts; a mip would bleed neighbours together.
     const tex = makeTexture(bitmap, { srgb: false, wrap: THREE.ClampToEdgeWrapping, anisotropy: 1, mips: false });
+    this._upload(tex);
     this.lightmap = { texture: tex, range: lm.range || 16, intensity: this.lightmapIntensity, mean: lm.mean };
     this._rebuildLightmapped();
     this._releaseHeld();
@@ -684,7 +992,7 @@ export class MaterialLibrary {
     // createImageBitmap decodes off the main thread; each finished one only
     // needs a turn of it. Enough in flight that a busy main thread (the
     // shader warm-up) still drains a batch of them per turn.
-    const MAX_DECODE = 16;
+    const MAX_DECODE = 64;
     let finish;
     const allDone = new Promise((r) => (finish = r));
     let streamDone = false;
@@ -743,6 +1051,25 @@ export class MaterialLibrary {
     return out;
   }
 
+  /**
+   * Send a texture to the GPU now rather than at the first draw that binds it.
+   *
+   * The upload is what a map load waits on at the end: half a gigabyte of
+   * pixels on Nuke, which the browser's GPU process moves at its own pace.
+   * Left to the first draw, it all queued up behind the shader warm-up and
+   * was still draining a second or two after the CPU had finished; started at
+   * decode, it overlaps the geometry streaming instead. Same call the
+   * bindings make (it is a no-op for them afterwards).
+   */
+  _upload(tex) {
+    try {
+      this.renderer?._textures?.updateTexture(tex);
+    } catch (e) {
+      // The draw that binds it will try again.
+      console.warn('cs3d: early texture upload failed', e);
+    }
+  }
+
   async _decodeEntry(i, chunks, e) {
     const bytes = this._slice(chunks, e.off, e.len);
     const blob = new Blob([bytes], { type: 'image/webp' });
@@ -751,6 +1078,7 @@ export class MaterialLibrary {
     const bitmap = await createImageBitmap(blob, { premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
     if (this.aborted) return;
     this.textures[i] = makeTexture(bitmap, { srgb: e.kind === 'base', anisotropy: this.anisotropy });
+    this._upload(this.textures[i]);
     const waiting = this.pendingMats.get(i);
     if (waiting) {
       this.pendingMats.delete(i);
@@ -838,7 +1166,8 @@ export class MaterialLibrary {
         // _rebuildLightmapped() replaces it.
         probeAmbient: !m.lightmapped && this.probeAmbient && !m.sky,
         sky: !!m.sky,
-        skyAmbient: m.sky ? this.skyAmbient : null
+        skyAmbient: m.sky ? this.skyAmbient : null,
+        directional: lightmapped ? this.directional : null
       });
       // `factor` is only the tints the pack invents (water fog, glass, unlit
       // black). A vmat's own g_vColorTint is NOT here: it already rides on each
@@ -888,6 +1217,25 @@ export class MaterialLibrary {
       // A dedicated tint mask (csgo_complex and friends). csgo_environment
       // handled its own tint above and must not take it a second time here.
       if (!m.envTint && m.tintMask !== undefined) this._wireTintMask(mat, this.textures[m.tintMask], base, m.tintMaskBright ?? 1);
+      // What the lighting compiled into it (Cs3dMaterial's constructor,
+      // setupLightMap and setupEnvironment read exactly these).
+      // The tangent-space normal the directional lightmap re-lights against:
+      // the blend's mixed texel, or the material's own normal map. Water has
+      // its normal pinned flat and nothing to re-light.
+      if (mat.cs3d.directional && !m.water) {
+        mat.cs3d.normalTS = mat._cs3dBlend?.normalTS || (normal ? this._slot(mat, 'normal', normal, uv(0)) : null);
+      }
+      if (!mat.cs3dNoShare) {
+        mat.cs3dKey = this._structureKey(m, {
+          lm: lightmapped ? this.lightmap.range || 0 : 0,
+          mask: !!(lightmapped && this.sun.mask),
+          dir: !!mat.cs3d.normalTS,
+          sun: !!(lightmapped || (this.probeAmbient && this.sunVis) || m.sky),
+          shade: !!this.sun.shade,
+          probe: !m.lightmapped && this.probeAmbient && !m.sky,
+          sky: !!m.sky
+        });
+      }
     }
     mat.name = `m${m.id}`;
     mat.userData = { id: m.id, decal: !!m.decal, alphaMode: m.alphaMode, lightmapped: !!m.lightmapped };
@@ -951,9 +1299,11 @@ export class MaterialLibrary {
     const mask = m.emissiveMask !== undefined ? this.textures[m.emissiveMask] : null;
     const albedoFactor = Number.isFinite(m.emissiveAlbedo) ? m.emissiveAlbedo : 1;
     // Without an albedo map there is nothing to modulate, so the tint is it.
-    const albedo = base ? mix(vec3(1), texture(base, uv(0)).rgb, float(albedoFactor)) : vec3(1);
-    let node = vec3(tint.r, tint.g, tint.b).mul(albedo).mul(float(intensity));
-    if (mask) node = node.mul(texture(mask, uv(0)).r);
+    const albedo = base
+      ? mix(vec3(1), this._slot(mat, 'base', base, uv(0)).rgb, this._param(mat, 'emAlbedo', albedoFactor, 'float'))
+      : vec3(1);
+    let node = this._param(mat, 'emTint', tint, 'color').mul(albedo).mul(this._param(mat, 'emIntensity', intensity, 'float'));
+    if (mask) node = node.mul(this._slot(mat, 'emissiveMask', mask, uv(0)).r);
     else if (!base) node = node.mul(0.5); // no mask and no albedo: a whole glowing surface, so tread lightly
     mat.emissiveNode = node;
   }
@@ -1013,15 +1363,15 @@ export class MaterialLibrary {
   _wireTintMask(mat, maskTex, base, maskBright = 1) {
     if (!maskTex) return;
     const had = !!mat.colorNode;
-    const src = had ? mat.colorNode : base ? texture(base, uv(0)) : vec4(1, 1, 1, 1);
+    const src = had ? mat.colorNode : base ? this._slot(mat, 'base', base, uv(0)) : vec4(1, 1, 1, 1);
     // The game's tint for this family: `1 - mask * (1 - tint)`, a straight
     // multiply where the mask says so. csgo_environment is NOT this — see
     // _envTintLayer — and never reaches here.
-    const m = clamp(texture(maskTex, uv(0)).r.mul(float(maskBright)), 0, 1);
+    const m = clamp(this._slot(mat, 'tintMask', maskTex, uv(0)).r.mul(this._param(mat, 'tmBright', maskBright, 'float')), 0, 1);
     const k = mix(vec3(1), vertexColor().gba, m);
     let rgb = src.rgb.mul(k);
     // A colourNode from the blend wiring already carries the material factor.
-    if (!had) rgb = rgb.mul(vec3(mat.color.r, mat.color.g, mat.color.b));
+    if (!had) rgb = rgb.mul(materialReference('color', 'color'));
     mat.colorNode = vec4(rgb, src.a);
   }
 
@@ -1051,18 +1401,20 @@ export class MaterialLibrary {
    * the first thing to suspect — contrast about 0.5 is not the same operation
    * either side of the transfer curve.
    */
-  _correct(rgb, cc, avg) {
+  _correct(mat, layer, rgb, cc, avg) {
     if (!cc) return rgb;
-    let c = rgb;
     // The game's MatrixColorCorrect2, in order: contrast about the TEXTURE'S
     // AVERAGE colour (not mid grey), then brightness, then saturation about
     // the luminance axis. `avg` is the pack's per-texture mean, sRGB bytes.
-    if (cc.con !== 1) {
-      const p = avg ? vec3(...avg.map((v) => Math.pow(v / 255, 2.2))) : vec3(0.18);
-      c = c.sub(p).mul(float(cc.con)).add(p);
-    }
-    if (cc.bri !== 1) c = c.mul(float(cc.bri));
-    if (cc.sat !== 1) c = mix(vec3(luminance(c)), c, float(cc.sat));
+    //
+    // All three always run, with the material's numbers as uniforms (see
+    // _param): an identity step costs a multiply-add, and skipping the ones a
+    // vmat leaves at 1 is what split one shape into a program per combination.
+    const pivot = avg ? new THREE.Vector3(...avg.map((v) => Math.pow(v / 255, 2.2))) : new THREE.Vector3(0.18, 0.18, 0.18);
+    const p = this._param(mat, `${layer}Pivot`, pivot, 'vec3');
+    let c = rgb.sub(p).mul(this._param(mat, `${layer}Con`, cc.con ?? 1, 'float')).add(p);
+    c = c.mul(this._param(mat, `${layer}Bri`, cc.bri ?? 1, 'float'));
+    c = mix(vec3(luminance(c)), c, this._param(mat, `${layer}Sat`, cc.sat ?? 1, 'float'));
     return clamp(c, 0, 1);
   }
 
@@ -1083,16 +1435,17 @@ export class MaterialLibrary {
    * near-black. The barrels also set g_bModelTint1 = 0 (tint off), and 37
    * Inferno vmats run amount 0; both were being tinted anyway.
    */
-  _envTintLayer(albedo, tint, layer, maskNode, amount) {
+  _envTintLayer(mat, name, albedo, tint, layer, maskNode, amount) {
     if (!layer || !layer.on) return albedo;
-    const raw = maskNode ?? float(layer.const ?? 0.5);
-    const mask = clamp(raw.sub(0.5).mul(float(layer.contrast)).add(0.5).mul(float(layer.bright)), 0, 1);
+    const P = (k, v) => this._param(mat, `${name}${k}`, v, 'float');
+    const raw = maskNode ?? P('Const', layer.const ?? 0.5);
+    const mask = clamp(raw.sub(0.5).mul(P('Contrast', layer.contrast ?? 1)).add(0.5).mul(P('Bright', layer.bright ?? 1)), 0, 1);
     const tn = normalize(max(tint, vec3(0.001)));
     const L = luminance(albedo);
     const hi = max(tint.x, max(tint.y, tint.z));
     const lo = min(tint.x, min(tint.y, tint.z));
     const tinted = tn.mul(min(L.div(luminance(tn)), L.mul(3).mul(hi)));
-    const k = float(amount).mul(float(1).sub(lo)).mul(mask);
+    const k = this._param(mat, 'etAmount', amount ?? 0, 'float').mul(float(1).sub(lo)).mul(mask);
     return clamp(mix(albedo, tinted, k), 0, 1);
   }
 
@@ -1104,59 +1457,62 @@ export class MaterialLibrary {
    */
   _wireEnvSingle(mat, base, m, mask1) {
     if (!base) return;
-    const src = texture(base, uv(0));
-    let rgb = this._correct(src.rgb, m.cc1, m.avg);
+    const src = this._slot(mat, 'base', base, uv(0));
+    let rgb = this._correct(mat, 'cc1', src.rgb, m.cc1, m.avg);
     const et = m.envTint;
     if (et) {
-      const maskNode = mask1 ? texture(mask1, uv(0)).r : null;
-      rgb = this._envTintLayer(rgb, vertexColor().gba, et.l1, maskNode, et.amount);
+      const maskNode = mask1 ? this._slot(mat, 'tintMask', mask1, uv(0)).r : null;
+      rgb = this._envTintLayer(mat, 'et1', rgb, vertexColor().gba, et.l1, maskNode, et.amount);
     }
-    mat.colorNode = vec4(rgb.mul(vec3(mat.color.r, mat.color.g, mat.color.b)), src.a);
+    mat.colorNode = vec4(rgb.mul(materialReference('color', 'color')), src.a);
   }
 
   _wireBlend(mat, base1, normal1, blend) {
     const uv0 = uv(0);
-    const uv2 = uv0.mul(vec2(blend.scale2[0], blend.scale2[1]));
+    const uv2 = uv0.mul(this._param(mat, 'blendScale2', new THREE.Vector2(blend.scale2[0], blend.scale2[1]), 'vec2'));
     const paint = vertexColor().r;
-    const soft = Math.max(0.02, Math.min(0.95, blend.softness));
+    const soft = this._param(mat, 'blendSoft', Math.max(0.02, Math.min(0.95, blend.softness)), 'float');
     let w = paint;
     if (blend.mod) {
-      const m = texture(blend.mod, uv0);
+      const m = this._slot(mat, 'blendMod', blend.mod, uv0);
       // G widens the transition where the artist wanted it soft; at its default
       // (1) this is just the vmat's own softness.
-      const s = max(float(0.02), float(soft).mul(m.g.mul(2)));
+      const s = max(float(0.02), soft.mul(m.g.mul(2)));
       w = smoothstep(clamp(m.r.sub(s), 0, 1), clamp(m.r.add(s), 0, 1), paint);
     } else if (blend.heights) {
-      const h = texture(blend.heights, uv0);
+      const h = this._slot(mat, 'blendHeights', blend.heights, uv0);
       // mask > 0.5 where layer 1 stands proud → needs more paint there.
       const mask = float(0.5).add(h.r.sub(h.g).mul(0.5));
-      const s = float(soft);
+      const s = soft;
       w = smoothstep(clamp(mask.sub(s), 0, 1), clamp(mask.add(s), 0, 1), paint);
     }
-    const c1 = texture(base1, uv0);
-    const c2 = texture(blend.base, uv2);
+    const c1 = this._slot(mat, 'base', base1, uv0);
+    const c2 = this._slot(mat, 'blendBase', blend.base, uv2);
     // Each layer is corrected and tinted on its own, then the two are mixed:
     // that is the game's order, and it is what lets Inferno's "dirty" pass
     // (layer 2, tint-mask brightness 0.4) stay lightly tinted over plaster
     // that is fully tinted, exactly where the paint reveals it.
-    let l1 = this._correct(c1.rgb, blend.cc1, blend.avg1);
-    let l2 = this._correct(c2.rgb, blend.cc2, blend.avg2);
+    let l1 = this._correct(mat, 'cc1', c1.rgb, blend.cc1, blend.avg1);
+    let l2 = this._correct(mat, 'cc2', c2.rgb, blend.cc2, blend.avg2);
     const et = blend.envTint;
     if (et) {
       const tint = vertexColor().gba;
-      l1 = this._envTintLayer(l1, tint, et.l1, blend.mask1 ? texture(blend.mask1, uv0).r : null, et.amount);
-      l2 = this._envTintLayer(l2, tint, et.l2, blend.mask2 ? texture(blend.mask2, uv2).r : null, et.amount);
+      l1 = this._envTintLayer(mat, 'et1', l1, tint, et.l1, blend.mask1 ? this._slot(mat, 'tintMask', blend.mask1, uv0).r : null, et.amount);
+      l2 = this._envTintLayer(mat, 'et2', l2, tint, et.l2, blend.mask2 ? this._slot(mat, 'blendTintMask', blend.mask2, uv2).r : null, et.amount);
     }
     const rgb = mix(l1, l2, w);
     // Keep the material's own colour factor and layer 1's alpha for cut-outs.
-    mat.colorNode = vec4(rgb.mul(vec3(mat.color.r, mat.color.g, mat.color.b)), c1.a);
+    mat.colorNode = vec4(rgb.mul(materialReference('color', 'color')), c1.a);
     // For a non-environment blend with a dedicated tint mask, _wireTintMask
     // still runs after this and needs the same weight and layer-2 UV.
     mat._cs3dBlend = { w, uv2 };
     if (normal1 || blend.normal) {
-      const n1 = normal1 ? texture(normal1, uv0) : vec4(0.5, 0.5, 1, 1);
-      const n2 = blend.normal ? texture(blend.normal, uv2) : n1;
-      mat.normalNode = normalMap(mix(n1, n2, w));
+      const n1 = normal1 ? this._slot(mat, 'normal', normal1, uv0) : vec4(0.5, 0.5, 1, 1);
+      const n2 = blend.normal ? this._slot(mat, 'blendNormal', blend.normal, uv2) : n1;
+      const mixed = mix(n1, n2, w);
+      mat.normalNode = normalMap(mixed);
+      // The raw texel too, for the directional lightmap (setupLightMap).
+      mat._cs3dBlend.normalTS = mixed;
     }
   }
 
@@ -1165,6 +1521,7 @@ export class MaterialLibrary {
     for (const t of this.textures) t?.dispose();
     this.lightmap?.texture.dispose();
     this.sun.mask?.dispose();
+    this.directional?.dispose();
     for (const m of this.interim.values()) m.dispose();
     if (this.simple) {
       for (const [id, m] of this.simple) {

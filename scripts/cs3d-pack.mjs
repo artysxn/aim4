@@ -64,6 +64,7 @@ import { parseEnts } from './lib/ents.mjs';
 import { CS3D_MAPS, cs3dMap } from '../shared/cs3d/maps.js';
 import { encodeRgbe, RGBE_BYTES } from '../shared/cs3d/rgbe.js';
 import { VRF_TO_SCENE_MAT4 } from '../shared/sim3d/units.js';
+import { DIRECTIONAL_FILE, DIRECTIONAL_PNG, packDirectional } from './lib/directionalLightmap.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const RAW_DIR = path.join(ROOT, 'server', 'data', 'cs3d', 'raw', 'maps');
@@ -2635,6 +2636,7 @@ async function packMap(entry) {
   const worldKv3 = path.join(raw, 'world.kv3');
   const lightmapPng = path.join(raw, 'lightmaps', 'irradiance.png');
   const shadowPng = path.join(raw, 'lightmaps', 'direct_light_shadows.png');
+  const directionalPng = path.join(raw, 'lightmaps', DIRECTIONAL_PNG);
   const skyJson = path.join(raw, 'sky', 'sky.json');
   const probeDir = path.join(raw, 'probes');
   // The baked light probes CS2 lights its props with. Sampled per vertex during
@@ -2811,6 +2813,7 @@ async function packMap(entry) {
 
   let lightmap = null;
   let shadowMask = null;
+  let directional = null;
   if (haveLightmap) {
     try {
       const lm = await packLightmap(lightmapPng, path.join(out, 'lightmap.webp'), TEX_LIGHTMAP);
@@ -2853,6 +2856,17 @@ async function packMap(entry) {
       }
     } else {
       console.warn('  ! shadows: no direct_light_shadows.png; re-run cs3d-import (world will have no sun)');
+    }
+    if (fs.existsSync(directionalPng)) {
+      try {
+        const dl = await packDirectional(directionalPng, path.join(out, DIRECTIONAL_FILE), TEX_LIGHTMAP);
+        directional = { file: DIRECTIONAL_FILE, ...dl };
+        console.log(`  directional: ${dl.size}² lossless webp, ${(dl.bytes / 1e6).toFixed(1)} MB, mean ${dl.mean}`);
+      } catch (e) {
+        console.warn(`  ! directional: ${e.message}`);
+      }
+    } else {
+      console.warn('  ! directional: no directional_irradiance.png; re-run cs3d-import (normal maps stay flat in shade)');
     }
   }
 
@@ -2904,6 +2918,7 @@ async function packMap(entry) {
     tex: { file: 'tex.bin', bytes: tex.bytes, dir: tex.dir },
     lightmap,
     shadowMask,
+    directional,
     materials: world.materials,
     groups: geo.rows,
     sky3d,

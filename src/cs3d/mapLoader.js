@@ -30,7 +30,8 @@ import { decodeRgbeAdd, RGBE_BYTES } from '../../shared/cs3d/rgbe.js';
 import { packFetch, packFetchOk, packFetchStats } from './packFetch.js';
 
 export const PACK_VERSION = 2;
-const GEO_CONCURRENCY = 4;
+/** Tiles in flight: a browser opens six connections per host, and these share them. */
+const GEO_CONCURRENCY = 6;
 /**
  * Tiles this close to the camera are drawn even when outside the view
  * frustum. The WebGPU backend renders the shadow pass with the visibility
@@ -616,6 +617,8 @@ export class MapPack {
      */
     this.forceReceiveShadow = false;
     this.placeholder = null;
+    /** A world tile has landed: the grey stand-in is no longer wanted. */
+    this._worldTileIn = false;
     this.collider = null; // { geometry, bvh }
     /** The map's baked ambient on a lattice, for things that move. See ProbeGrid. */
     this.probeGrid = null;
@@ -691,27 +694,34 @@ export class MapPack {
 
     if (manifest.sky3d) this._setupSky3d(manifest.sky3d);
 
-    await this._loadPhys();
-    this._progress('phys');
-    // Small, and everything that moves waits on it: fetched before the tiles.
-    if (manifest.probeGrid) {
-      try {
-        const res = await packFetch(`${this.base}/${manifest.probeGrid.file}${this.v}`);
-        if (res.ok) this.probeGrid = new ProbeGrid(manifest.probeGrid, await res.arrayBuffer());
-      } catch (e) {
-        console.warn('cs3d: probe grid unavailable, dynamic bodies fall back to the sky probe', e);
-      }
-    }
-    // Textures start right away: the bundle is one connection and the
-    // geometry fetches are a few more; both stream side by side.
+    // Everything at once. The packs are read off this machine, so the network
+    // is never what a load waits on; the main thread is. The collision BVH is
+    // the longest single block of it (Inferno: ~1 s) and used to stand in
+    // front of every texture and every tile, with the decoders idle behind
+    // it. Started together, the textures decode off the main thread while it
+    // builds, and the tiles fill the gaps.
     this.materials.streamAll();
+    const phys = this._loadPhys().then(() => this._progress(this.groupsLoaded ? 'geometry' : 'phys'));
+    // Small, and everything that moves waits on it.
+    const probe = manifest.probeGrid ? this._loadProbeGrid(manifest.probeGrid) : null;
     const jobs = [
       ...manifest.groups.map((g) => ({ g, root: this.world })),
       ...skyGroups.map((g) => ({ g, root: this.sky3d, sky: true }))
     ];
-    await this._loadGroups(jobs);
+    const tiles = this._loadGroups(jobs);
+    const failed = (await Promise.allSettled([phys, probe, tiles])).find((r) => r.status === 'rejected');
+    if (failed) throw failed.reason;
     this._progress('geometry');
     return this;
+  }
+
+  async _loadProbeGrid(meta) {
+    try {
+      const res = await packFetch(`${this.base}/${meta.file}${this.v}`);
+      if (res.ok) this.probeGrid = new ProbeGrid(meta, await res.arrayBuffer());
+    } catch (e) {
+      console.warn('cs3d: probe grid unavailable, dynamic bodies fall back to the sky probe', e);
+    }
   }
 
   _setupSky3d(s) {
@@ -910,9 +920,11 @@ export class MapPack {
       }
     };
     // Stand-in world: flat grey collision geometry until real surfaces arrive.
+    // The tiles stream alongside this now, so they may have beaten it here.
     const ph = new THREE.Mesh(merged, new THREE.MeshLambertMaterial({ color: 0x6b6b6b, flatShading: true }));
     ph.name = 'phys-placeholder';
     ph.frustumCulled = true;
+    ph.visible = !this._worldTileIn;
     this.placeholder = ph;
     this.world.add(ph);
     this.onPhys(this.collider, ph);
@@ -934,7 +946,6 @@ export class MapPack {
    */
   async _loadGroups(jobs) {
     let next = 0;
-    let firstDone = false;
     /** Jobs whose fetch or parse threw, for the second pass. */
     const failed = [];
     const worker = async () => {
@@ -948,10 +959,11 @@ export class MapPack {
         }
         this.groupsLoaded++;
         this.bytesLoaded += job.g.bytes || 0;
-        // The first group is the map's big surfaces; the grey stand-in has done its job.
-        if (!firstDone && this.placeholder && !job.sky) {
-          firstDone = true;
-          this.placeholder.visible = false;
+        // The first group is the map's big surfaces; the grey stand-in has
+        // done its job (or, if collision is still building, never shows).
+        if (!this._worldTileIn && !job.sky) {
+          this._worldTileIn = true;
+          if (this.placeholder) this.placeholder.visible = false;
         }
         this._progress('geometry');
       }

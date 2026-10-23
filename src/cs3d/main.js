@@ -15,7 +15,7 @@ import { MapPack, assetBase } from './mapLoader.js';
 import { MapLighting } from './sky.js';
 import { installGrade } from './grade.js';
 import { createLook, createMapRenderer, loadPostLut, LIGHT_KEYS, LOOK_DEFAULTS, MAP_LOOK, setupBloom } from './look.js';
-import { patchWebGPUPartialAttributeUpload, patchNodeMaterialTypeLookup } from './threePatches.js';
+import { patchWebGPUPartialAttributeUpload, patchNodeMaterialTypeLookup, patchSharedBatchShaders } from './threePatches.js';
 import { Player } from './player.js';
 import { Controls } from './controls.js';
 import { Hud } from './hud.js';
@@ -1450,6 +1450,9 @@ async function boot() {
     // an empty NodeMaterial and drew as an untextured box. See threePatches.js.
     const repaired = patchNodeMaterialTypeLookup(renderer, THREE);
     if (repaired) console.log(`cs3d: node material lookup repaired for ${repaired} material types (minified build)`);
+    // ...and one shader build per material shape rather than one per batch,
+    // which was most of the time it took to open a map. See threePatches.js.
+    if (!patchSharedBatchShaders(renderer, THREE)) console.warn('cs3d: shared batch shaders unavailable, every batch compiles on its own');
     hud.setBackend(renderer.backend?.isWebGPUBackend ? 'webgpu' : 'webgl');
     // Manifest first: the sun, exposure and spawns come from it, and the
     // lighting has to exist before the first tile arrives.
@@ -1743,6 +1746,7 @@ function setupGradePanel(knobs, slug) {
   // business (`createLook`); this panel only moves them.
   const defs = [
     { key: 'sun', label: 'sun ×', min: 0, max: 5, step: 0.05, def: LOOK_DEFAULTS.sun },
+    { key: 'spec', label: 'sun highlight ×', min: 0, max: 3, step: 0.05, def: LOOK_DEFAULTS.spec },
     { key: 'bake', label: 'bounce ×', min: 0, max: 3, step: 0.05, def: LOOK_DEFAULTS.bake },
     { key: 'sky', label: 'sky probe ×', min: 0, max: 3, step: 0.05, def: LOOK_DEFAULTS.sky },
     { key: 'brightness', label: 'brightness', min: 0.2, max: 3, step: 0.01, def: LOOK_DEFAULTS.brightness },

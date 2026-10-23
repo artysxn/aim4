@@ -16,6 +16,10 @@
 //                               8-bit linear PNG via tools/cs3d-tex mask2d
 //   lightmaps/irradiance.png    baked indirect light, 16-bit linear PNG via
 //                               tools/cs3d-tex (the CLI would tonemap it)
+//   lightmaps/directional_irradiance.png
+//                               where that light comes from, per texel
+//                               (tangent space), 8-bit via mask2d
+//                               (scripts/lib/directionalLightmap.mjs)
 //   sky/world/world.glb + ...   the 3D skybox: the separate prefab map the
 //   sky/ents/...                skybox_reference entity points at, from
 //                               game/csgo/maps/prefabs/<map>/<name>.vpk
@@ -44,6 +48,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 import { CS3D_MAPS, cs3dMap } from '../shared/cs3d/maps.js';
+import { DIRECTIONAL_PNG } from './lib/directionalLightmap.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DROP_DIR = path.join(ROOT, 'cs3d', 'maps');
@@ -402,6 +407,7 @@ async function importMap(vrf, gameDir, entry, dropVpk) {
   const worldKv3 = path.join(out, 'world.kv3');
   const lightmapPng = path.join(out, 'lightmaps', 'irradiance.png');
   const shadowPng = path.join(out, 'lightmaps', 'direct_light_shadows.png');
+  const directionalPng = path.join(out, 'lightmaps', DIRECTIONAL_PNG);
   const skyJson = path.join(out, 'sky', 'sky.json');
   const postJson = path.join(out, 'post', 'post.json');
   const probesJson = path.join(out, 'probes', 'volumes.json');
@@ -489,6 +495,21 @@ async function importMap(vrf, gameDir, entry, dropVpk) {
         console.log(`  ${entry.slug} shadows: ${res}`);
       } catch (e) {
         console.warn(`  ! ${entry.slug} shadows: ${e.message.split('\n')[0]}`);
+      }
+    }
+  }
+
+  // Where the indirect light comes from, per lightmap texel (BC1 4096², tangent
+  // space): what lets a normal map show in shade. Linear like the shadows, so
+  // the same straight 8-bit export. See scripts/lib/directionalLightmap.mjs.
+  if (force || !fs.existsSync(directionalPng)) {
+    if (await ensureTexTool()) {
+      await fsp.mkdir(path.dirname(directionalPng), { recursive: true });
+      try {
+        const res = await run(TEX_TOOL, ['mask2d', gameVpk, `${prefix}lightmaps/directional_irradiance.vtex_c`, path.dirname(directionalPng), path.basename(directionalPng, '.png'), String(LIGHTMAP_SIZE)]);
+        console.log(`  ${entry.slug} directional: ${res}`);
+      } catch (e) {
+        console.warn(`  ! ${entry.slug} directional: ${e.message.split('\n')[0]}`);
       }
     }
   }

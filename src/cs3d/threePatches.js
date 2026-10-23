@@ -150,3 +150,196 @@ export function patchNodeMaterialTypeLookup(renderer, THREE) {
   }
   return fixed;
 }
+
+/**
+ * Let BatchedMeshes share their compiled shaders.
+ *
+ * three builds a shader once per (material structure, object kind) and shares
+ * it between every object that comes out the same — except BatchedMesh, whose
+ * cache key carries the batch's own `_matricesTexture.uuid`, because r169's
+ * BatchNode binds that batch's matrix, indirect and colour textures straight
+ * into the shader. So the map, one BatchedMesh per material, built every
+ * shader from scratch: measured on Nuke, 377 world builds that came out as 40
+ * distinct programs, and 288 shadow-pass builds that came out as ONE. That was
+ * ~6.5 s of the 10.5 s it took to open the map, all of it NodeBuilder on the
+ * main thread.
+ *
+ * Two changes make the sharing safe:
+ *
+ *   1. BatchNode reads the batch textures through nodes that take their value
+ *      from the object being drawn (NodeUpdateType.OBJECT), the same way
+ *      `materialReference` reads a material's maps. A shader built for one
+ *      batch then binds each batch's own textures at its own draw.
+ *   2. The cache key drops the batch's texture uuids — keeping only whether it
+ *      has per-instance colours, which changes the shader — so batches whose
+ *      materials agree get the same build.
+ *
+ * The materials have to agree for real for (2) to do anything: three keys a
+ * node material by its node ids, so materials.js gives `Cs3dMaterial` a
+ * structural key and reads its own textures through slots (SlotTextureNode)
+ * for the same reason as (1).
+ *
+ * WebGPU only, and only on r169's BatchNode (checked against its source).
+ *
+ * @param {THREE.WebGPURenderer} renderer  already `init()`ed
+ * @param {object} THREE                   the `three/webgpu` namespace
+ * @returns {boolean} whether the patch was applied
+ */
+export function patchSharedBatchShaders(renderer, THREE) {
+  if (!renderer?.backend?.isWebGPUBackend || !THREE) return false;
+  const nodes = renderer._nodes;
+  const BatchNode = THREE.BatchNode;
+  if (!nodes || typeof nodes.getForRenderCacheKey !== 'function' || !BatchNode?.prototype?.setup) return false;
+  if (nodes._cs3dSharedBatches) return true;
+  const setupSrc = String(BatchNode.prototype.setup);
+  if (!BatchNode.prototype._cs3dShared) {
+    // Only the implementation this replaces: it reads the three textures off
+    // `this.batchMesh` and nothing else about the batch.
+    if (!/_matricesTexture/.test(setupSrc) || !/_indirectTexture/.test(setupSrc) || !/_colorsTexture/.test(setupSrc)) {
+      return false;
+    }
+    BatchNode.prototype.setup = makeSharedBatchSetup(THREE);
+    BatchNode.prototype._cs3dShared = true;
+  }
+
+  // Stand-ins with fixed uuids: RenderObject.getMaterialCacheKey reads only
+  // `.uuid` off the batch's textures, so swapping these in for the duration of
+  // the call yields the key with the per-batch part taken out, and everything
+  // else (material, geometry layout, shadows, lights) exactly as three has it.
+  const MATRICES = { uuid: 'cs3d-batch-matrices' };
+  const COLORS = { uuid: 'cs3d-batch-colors' };
+  const original = nodes.getForRenderCacheKey;
+  nodes.getForRenderCacheKey = function (renderObject) {
+    // Cached on the render object, so `delete()` finds the entry that
+    // `getForRender()` made even if the material changed in between.
+    if (renderObject._cs3dSharedKey !== undefined) return renderObject._cs3dSharedKey;
+    const o = renderObject.object;
+    let key;
+    if (o?.isBatchedMesh === true && o._matricesTexture) {
+      const mt = o._matricesTexture;
+      const ct = o._colorsTexture;
+      o._matricesTexture = MATRICES;
+      o._colorsTexture = ct ? COLORS : null;
+      try {
+        key = `batch:${renderObject.getMaterialCacheKey()}:${renderObject.getDynamicCacheKey()}`;
+      } finally {
+        o._matricesTexture = mt;
+        o._colorsTexture = ct;
+      }
+    } else {
+      key = original.call(this, renderObject);
+    }
+    renderObject._cs3dSharedKey = key;
+    return key;
+  };
+  nodes._cs3dSharedBatches = true;
+  return true;
+}
+
+/**
+ * r169's BatchNode.setup, line for line, with every read of the batch's
+ * textures going through a node that follows the object being drawn.
+ */
+function makeSharedBatchSetup(THREE) {
+  const {
+    Fn,
+    int,
+    ivec2,
+    float,
+    vec3,
+    mat3,
+    mat4,
+    textureSize,
+    instanceIndex,
+    drawIndex,
+    varyingProperty,
+    positionLocal,
+    normalLocal,
+    tangentLocal,
+    nodeObject,
+    TextureNode,
+    NodeUpdateType
+  } = THREE;
+
+  /** `textureLoad(batch[prop], uv)`, with the texture taken from the drawn object. */
+  class BatchTextureNode extends TextureNode {
+    static get type() {
+      return 'Cs3dBatchTextureNode';
+    }
+
+    constructor(prop = '', batch = null, uvNode = null) {
+      super(batch ? batch[prop] : null, uvNode);
+      this.prop = prop;
+      this.sampler = false;
+      this.updateMatrix = false;
+      this.updateType = NodeUpdateType.OBJECT;
+    }
+
+    getUniformHash() {
+      return `cs3d-batch:${this.prop}`;
+    }
+
+    update(frame) {
+      const t = frame.object?.[this.prop];
+      if (t && t.isTexture) this.value = t;
+    }
+  }
+
+  const load = (batch, prop, uvNode = null) => nodeObject(new BatchTextureNode(prop, batch, uvNode));
+
+  return function setup(builder) {
+    if (this.batchingIdNode === null) {
+      this.batchingIdNode = builder.getDrawIndex() === null ? instanceIndex : drawIndex;
+    }
+    const mesh = this.batchMesh;
+
+    const getIndirectIndex = Fn(([id]) => {
+      const size = textureSize(load(mesh, '_indirectTexture'), 0);
+      const x = int(id).modInt(int(size));
+      const y = int(id).div(int(size));
+      return load(mesh, '_indirectTexture', ivec2(x, y)).x;
+    }).setLayout({
+      name: 'getIndirectIndex',
+      type: 'uint',
+      inputs: [{ name: 'id', type: 'int' }]
+    });
+
+    const indirectId = getIndirectIndex(int(this.batchingIdNode));
+
+    const size = textureSize(load(mesh, '_matricesTexture'), 0);
+    const j = float(indirectId).mul(4).toInt().toVar();
+    const x = j.modInt(size);
+    const y = j.div(int(size));
+    const batchingMatrix = mat4(
+      load(mesh, '_matricesTexture', ivec2(x, y)),
+      load(mesh, '_matricesTexture', ivec2(x.add(1), y)),
+      load(mesh, '_matricesTexture', ivec2(x.add(2), y)),
+      load(mesh, '_matricesTexture', ivec2(x.add(3), y))
+    );
+
+    if (mesh._colorsTexture !== null) {
+      const getBatchingColor = Fn(([id]) => {
+        const csize = textureSize(load(mesh, '_colorsTexture'), 0).x;
+        const cj = id;
+        const cx = cj.modInt(csize);
+        const cy = cj.div(csize);
+        return load(mesh, '_colorsTexture', ivec2(cx, cy)).rgb;
+      }).setLayout({
+        name: 'getBatchingColor',
+        type: 'vec3',
+        inputs: [{ name: 'id', type: 'int' }]
+      });
+      const color = getBatchingColor(indirectId);
+      varyingProperty('vec3', 'vBatchColor').assign(color);
+    }
+
+    const bm = mat3(batchingMatrix);
+    positionLocal.assign(batchingMatrix.mul(positionLocal));
+    const transformedNormal = normalLocal.div(vec3(bm[0].dot(bm[0]), bm[1].dot(bm[1]), bm[2].dot(bm[2])));
+    const batchingNormal = bm.mul(transformedNormal).xyz;
+    normalLocal.assign(batchingNormal);
+    if (builder.hasGeometryAttribute('tangent')) {
+      tangentLocal.mulAssign(bm);
+    }
+  };
+}
