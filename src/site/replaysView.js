@@ -238,6 +238,9 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     players: new Set(),
     /** @type {''|'selected'|'opponent'} */
     wonByMode: '',
+    /** Which side won the round, read from the round itself (not its name). */
+    /** @type {''|'T'|'CT'} */
+    winnerSide: '',
     /** @type {number|null} */
     econA: null,
     /** @type {number|null} */
@@ -2383,6 +2386,18 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     );
   }
 
+  function winnerSideSelectHtml() {
+    const v = filters.winnerSide;
+    return mbWrap(
+      'star',
+      `<select id="rp-winner-side" class="site-input rp-econ-select" aria-label="Winner side">
+        <option value=""${v === '' ? ' selected' : ''}>Winner side...</option>
+        <option value="T"${v === 'T' ? ' selected' : ''}>T won</option>
+        <option value="CT"${v === 'CT' ? ' selected' : ''}>CT won</option>
+      </select>`
+    );
+  }
+
   function renderFilters() {
     if (!filtersEl) return;
 
@@ -2432,13 +2447,10 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
         </div>
       </div>
       ${sideSegHtml(sideEnabled)}
-      ${
-        teamClusters.length
-          ? `<div class="rp-filter-group">
-              ${wonBySelectHtml()}
-            </div>`
-          : ''
-      }
+      <div class="rp-filter-group">
+        ${teamClusters.length ? wonBySelectHtml() : ''}
+        ${winnerSideSelectHtml()}
+      </div>
       ${roundTypeFilterHtml()}
       <div class="rp-filter-group">
         ${rankFilterHtml({
@@ -2500,6 +2512,12 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       });
     });
 
+    filtersEl.querySelector('#rp-winner-side')?.addEventListener('change', (e) => {
+      const v = e.target.value;
+      filters.winnerSide = v === 'T' || v === 'CT' ? v : '';
+      runQuery();
+    });
+
     filtersEl.querySelector('#rp-won-by')?.addEventListener('change', (e) => {
       const v = e.target.value;
       filters.wonByMode = v === 'selected' || v === 'opponent' ? v : '';
@@ -2523,6 +2541,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       filters.teams.clear();
       filters.players.clear();
       filters.wonByMode = '';
+      filters.winnerSide = '';
       filters.econA = null;
       filters.econB = null;
       filters.hasAwpA = false;
@@ -2828,6 +2847,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
   function needsMetaFilters() {
     return Boolean(
       filters.side ||
+        filters.winnerSide ||
         filters.situations.size ||
         filters.afterplant ||
         filters.decidedPhases.size ||
@@ -2848,6 +2868,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
         filters.teams.size ||
         filters.players.size ||
         filters.wonByMode ||
+        filters.winnerSide ||
         Number.isFinite(filters.econA) ||
         Number.isFinite(filters.econB) ||
         filters.hasAwpA ||
@@ -2975,6 +2996,9 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       if (!sit || !filters.situations.has(sit)) return false;
     }
     if (filters.afterplant && !isAfterplantMeta(meta)) return false;
+    // The round's own winner side (round_end + team sides), not the half rule
+    // the name implies: that misreads about one second-half round in twenty.
+    if (filters.winnerSide && winningSide(meta) !== filters.winnerSide) return false;
     if (filters.decidedPhases.size) {
       const d = findRoundDecided(meta);
       if (!d || !filters.decidedPhases.has(d.phase)) return false;
