@@ -42,6 +42,7 @@ import {
 } from './recordingFormat.js';
 import backIcon from '../../icons/icon_back.svg?raw';
 import { mbWrap } from '../../icons/menubuttons.js';
+import { publicOrigin } from '../../site/publicOrigin.js';
 
 /** Maps that have a radar image to draw on. */
 const CREATOR_MAPS = Object.entries(MAPS).map(([code, m]) => ({ code, name: m.name }));
@@ -632,7 +633,7 @@ export function createCreatorPanel({
   }
 
   const shareUrl = () =>
-    entry?.shareId ? `${window.location.origin}/s2/${entry.shareId}` : '';
+    entry?.shareId ? `${publicOrigin()}/s2/${entry.shareId}` : '';
 
   function renderHead() {
     const mapName = MAPS[round.map]?.name || 'No map';

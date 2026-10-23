@@ -78,6 +78,7 @@ import {
 } from '../analytics/antistratSummary.js';
 import { opinionsFrom } from '../training/opinions.js';
 import { pointsFromSummaryHtml } from '../training/trainingSources.js';
+import { publicOrigin } from '../../site/publicOrigin.js';
 import { QueryError, runRoundQuery, zoneNames } from './roundQuery.js';
 import { buildRewrite, editDocument, editKey, outlineOfHtml, reviewOutline, sectionName, sectionsOfOutline } from './docReview.js';
 import { findWeaknesses } from './weaknesses.js';
@@ -2509,7 +2510,7 @@ async function runToolInner(name, args = {}, ctx = {}) {
         });
         ctx.onProgress?.('Saving strategy…');
         // The stratbook is shared: its 2D link opens on aim4.io, not the desktop app's localhost.
-        const origin = typeof location !== 'undefined' ? location.origin : '';
+        const origin = typeof location !== 'undefined' ? publicOrigin() : '';
         await saveTeamStrategy(d.team.id, {
           map: d.mapCode,
           side: d.side,

@@ -37,6 +37,7 @@ import logoGoogle from '../../icons/logo_google.svg?raw';
 import logoSteam from '../../icons/logo_steam.svg?raw';
 import logoDiscord from '../../icons/logo_discord.svg?raw';
 import logoX from '../../icons/logo_x.svg?raw';
+import { publicOrigin } from '../publicOrigin.js';
 
 const PENCIL_SVG =
   '<svg viewBox="0 -960 960 960" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M200-200h57l391-391-57-57-391 391v57Zm-80 80v-170l528-527q12-11 26.5-17t30.5-6q16 0 31 6t26 18l55 56q12 11 17.5 26t5.5 30q0 16-5.5 30.5T817-647L290-120H120Zm640-584-56-56 56 56Zm-141 85-28-29 57 57-29-28Z"/></svg>';
@@ -1300,10 +1301,7 @@ function money(amount, currency = 'EUR') {
 
 /** The share link for a code, against whatever origin the page is served from. */
 function referralLink(code) {
-  const origin =
-    typeof window !== 'undefined' && window.location?.origin
-      ? window.location.origin
-      : 'https://aim4.io';
+  const origin = typeof window !== 'undefined' && window.location?.origin ? publicOrigin() : 'https://aim4.io';
   return `${origin}/?ref=${encodeURIComponent(code)}`;
 }
 

@@ -10,12 +10,18 @@
 //     opens the recorder window (the same .exe in its other mode)
 //   * a notice when the app has found a newer build of itself, with the
 //     button that installs it and restarts
+//   * copying: links leave with aim4.io, not the app's localhost address
 // ---------------------------------------------------------------------------
 
+import { desktopApp } from './desktopApp.js';
+import { installPublicClipboard } from './publicOrigin.js';
+
 export function mountDesktopExtras() {
-  const app = typeof window !== 'undefined' ? window.aim4Desktop : null;
+  const app = desktopApp();
   if (!app) return;
   document.documentElement.classList.add('is-desktop-app');
+  // Copied links point at aim4.io, not the app's own localhost server.
+  installPublicClipboard();
 
   const comms = document.querySelector('.side-link[data-nav="team-comms"]');
   if (comms && !document.querySelector('[data-desktop-recorder]')) {
