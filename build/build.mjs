@@ -405,6 +405,7 @@ async function buildWorkers(workers) {
     entryPoints: [...new Set(workers.map((w) => w.ref))],
     outdir: path.join(ASSETS, 'workers'),
     entryNames: '[name]-[hash]',
+    publicPath: '/assets/workers',
     bundle: true,
     format: 'esm',
     target: 'es2022',
@@ -550,6 +551,11 @@ async function run() {
     outdir: ASSETS,
     entryNames: '[name]-[hash]',
     assetNames: '[name]-[hash]',
+    // An image or icon a script imports is a URL the page uses (an <img src>),
+    // and without this esbuild writes it relative to the script ("./logo-AB.png"),
+    // which the page resolves against its own address: every imported image
+    // came back 404 and drew as an empty square, the sidebar logo included.
+    publicPath: '/assets',
     bundle: true,
     format: 'esm',
     target: 'es2022',
