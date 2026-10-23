@@ -76,6 +76,20 @@ assert.match(transcript, /ASSISTANT: They lose their A fights/);
 assert.ok(!transcript.includes('Attached by the user'), 'the question as the user typed it, not as the model read it');
 assert.ok(transcript.length < 700, 'tool results are cut');
 
+// A long answer's folded steps go to the summary as their lines, not call by call.
+{
+  const long = [
+    { role: 'user', content: 'Notes on every playlist', ui: { text: 'Notes on every playlist' }, progress: '- round_briefs(playlist "A") -> 4 rounds\n- write_round_notes(4 notes) -> Wrote 4 of 4 round notes.' },
+    { role: 'assistant', content: '', stepFolded: true, tool_calls: [{ id: 'f', type: 'function', function: { name: 'round_briefs', arguments: '{"playlist":"A"}' } }] },
+    { role: 'tool', tool_call_id: 'f', stepFolded: true, content: 'z'.repeat(3000) },
+    { role: 'assistant', content: 'Done: 4 notes.' }
+  ];
+  const t = transcriptOf(long);
+  assert.match(t, /^USER: Notes on every playlist\nDONE \(a line per call\):\n- round_briefs\(playlist "A"\) -> 4 rounds\n/);
+  assert.ok(!t.includes('zzz'), 'the folded results are not repeated');
+  assert.match(t, /ASSISTANT: Done: 4 notes\.$/);
+}
+
 const after = compactedMessages('  HAVU lose A fights on Nuke T side.  ');
 assert.equal(after.length, 2);
 assert.equal(after[0].role, 'user');
@@ -89,6 +103,7 @@ assert.equal(s.questions, 1, 'a picture message is not a question');
 assert.equal(s.toolCalls, 1);
 assert.equal(s.shortened, 1);
 assert.equal(s.messages, 5);
-assert.ok(s.percent >= 8 && s.percent <= 12);
+// The picture counts as the tokens it costs the model (eyeContext.js IMAGE_TOKENS), not its data URL's length.
+assert.ok(s.percent >= 13 && s.percent <= 17, `${s.percent}%`);
 
 console.log('eyeCommands.test.js ok');

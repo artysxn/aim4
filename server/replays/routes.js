@@ -35,6 +35,7 @@
 // and must never be buffered in memory or pass through the JSON body reader.
 // ---------------------------------------------------------------------------
 
+import { createHash } from 'node:crypto';
 import { open, readdir, readFile, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import zlib from 'node:zlib';
@@ -3013,18 +3014,25 @@ export async function handleReplayRequest(req, res, url) {
       json(res, 404, { error: 'Round not found.' });
       return true;
     }
-    // Immutable for the same reason the tick buffer is: the round file name
-    // encodes which round of which demo this is, and a written round is never
-    // rewritten. Reopening a demo was refetching every round's meta from the
-    // server; now the browser answers from its own cache.
+    // NOT immutable: the round's notes live in this meta and POST .../note
+    // rewrites them. A year-long immutable cache served the meta from before a
+    // note was written, so notes the eye (or the user) saved never showed in
+    // the viewer. Everything else in the meta is fixed, so the notes alone are
+    // the validator: a reopen still costs no body, only a 304.
     // Compressed: round meta is repetitive JSON — kill lists, damage events and
     // grenade paths — and the viewer pulls one per round when a demo opens,
-    // which measured ~950 KB uncompressed for a 22-round match. It is immutable
-    // and cached hard, so this is a first-open cost, but it is the first open
-    // that people notice.
-    await jsonBig(res, 200, { round: meta }, req, {
-      'Cache-Control': 'private, max-age=31536000, immutable'
-    });
+    // which measured ~950 KB uncompressed for a 22-round match.
+    const etag = `"n${createHash('sha1')
+      .update(JSON.stringify(meta.notes ?? meta.note ?? ''))
+      .digest('base64url')
+      .slice(0, 16)}"`;
+    const cacheHeaders = { 'Cache-Control': 'private, no-cache', ETag: etag };
+    if (String(req.headers['if-none-match'] || '') === etag) {
+      res.writeHead(304, { ...CORS, ...cacheHeaders });
+      res.end();
+      return true;
+    }
+    await jsonBig(res, 200, { round: meta }, req, cacheHeaders);
     return true;
   }
 

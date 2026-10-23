@@ -33,6 +33,13 @@
 //   { "pace": "rush"|"pop"|"contact"|"full-exec"|"default"|"slow-default"|"other" }  (T rounds)
 //   { "not": condition }
 //
+// players_in, utility and kill can take their window around the moment the
+// team got onto a site instead of the round clock: "around": "entry" with
+// "before" and "after" in seconds ({"players_in":{"zone":"A","around":"entry",
+// "before":15,"after":15}} is "someone in A within 15 s of the entry"). The
+// entry is the first second 2+ of the team stood on a site; a round with no
+// entry never matches. "entry_site": "A"|"B" asks for an entry on that site.
+//
 // A zone is any name the map's zone network has: a position ("Silo"), a zone
 // that groups positions, or an area. Unknown names are reported back so the
 // model can look the map's names up and try again, rather than silently
@@ -156,10 +163,32 @@ function compile(raw, zones, unknown) {
     if (['opponent', 'opponents', 'enemy', 'enemies', 'them', 'other'].includes(v)) return 'opponent';
     throw new QueryError(`"who" is "team" or "opponent", not "${w}".`);
   };
+  /** The condition's window for a round, as [from, to] seconds since the round went live, or null (no entry). */
   const windowOf = (a) => {
+    const around = String(a?.around || '').toLowerCase();
+    if (around && around !== 'entry') throw new QueryError('"around" is "entry" (the moment the team got onto a site).');
+    if (around === 'entry') {
+      const secs = (v, name) => {
+        if (v === undefined || v === null || v === '') return 10;
+        const n = Number(v);
+        if (!Number.isFinite(n) || n < 0) throw new QueryError(`"${name}" is a number of seconds, for example 15.`);
+        return Math.min(n, ROUND_SECONDS);
+      };
+      const before = secs(a.before, 'before');
+      const after = secs(a.after, 'after');
+      const site = a.entry_site ? String(a.entry_site).toLowerCase() : '';
+      if (site && site !== 'a' && site !== 'b') throw new QueryError('"entry_site" is "A" or "B".');
+      return (r) => {
+        const e = typeof r.siteEntry === 'function' ? r.siteEntry(2) : null;
+        if (!e || (site && e.site !== site)) return null;
+        const at = ROUND_SECONDS - e.clock;
+        return [at - before, at + after];
+      };
+    }
     const from = elapsedOfClock(a?.from, 0);
     const to = elapsedOfClock(a?.to, ROUND_SECONDS);
-    return from <= to ? [from, to] : [to, from];
+    const fixed = from <= to ? [from, to] : [to, from];
+    return () => fixed;
   };
   switch (kind) {
     case 'not': {
@@ -172,8 +201,11 @@ function compile(raw, zones, unknown) {
       const who = whoOf(arg.who);
       const min = Number.isFinite(arg.min) ? arg.min : 1;
       const max = Number.isFinite(arg.max) ? arg.max : 5;
-      const [from, to] = windowOf(arg);
+      const win = windowOf(arg);
       return (r) => {
+        const w = win(r);
+        if (!w) return false;
+        const [from, to] = w;
         for (const s of r.series || []) {
           if (s.elapsed < from) continue;
           if (s.elapsed > to) break;
@@ -191,8 +223,11 @@ function compile(raw, zones, unknown) {
       if (arg?.type && arg.type !== 'any' && !type) throw new QueryError(`Unknown utility "${arg.type}". Use smoke, molotov, flash, he or any.`);
       const set = zoneSet(arg?.zone);
       const min = Number.isFinite(arg?.min) ? arg.min : 1;
-      const [from, to] = windowOf(arg);
+      const win = windowOf(arg);
       return (r) => {
+        const w = win(r);
+        if (!w) return false;
+        const [from, to] = w;
         const list = who === 'team' ? r.nades : r.enemyNades || [];
         let n = 0;
         for (const g of list) {
@@ -209,14 +244,18 @@ function compile(raw, zones, unknown) {
       const by = whoOf(arg?.by);
       const set = zoneSet(arg?.zone);
       const min = Number.isFinite(arg?.min) ? arg.min : 1;
-      const [from, to] = windowOf(arg);
-      return (r) =>
-        r.kills.filter((k) => {
+      const win = windowOf(arg);
+      return (r) => {
+        const w = win(r);
+        if (!w) return false;
+        const [from, to] = w;
+        return r.kills.filter((k) => {
           const t = ROUND_SECONDS - k.clock;
           if (t < from || t > to) return false;
           if ((by === 'team') !== k.attackerOurs) return false;
           return !set || set.has(k.victimZone) || set.has(k.attackerZone);
         }).length >= min;
+      };
     }
     case 'first_kill': {
       const by = whoOf(arg?.by);

@@ -88,7 +88,8 @@ r = JSON.parse((await runTool('list_matches', { random: true, limit: 1 })).conte
 assert.equal(r.shown, 1);
 assert.equal(r.picked, 'at random');
 assert.ok(['m1', 'm2', 'm3'].includes(r.matches[0].match));
-assert.match((await runTool('list_matches', { opponent: 'fnatic' })).content, /^Error: opponent needs team/);
+// "matches against fnatic" with no team: every match fnatic played (it used to be an error the model could not get past).
+assert.ok(JSON.parse((await runTool('list_matches', { opponent: 'fnatic' })).content).matches.every((m) => [m.team1, m.team2].includes('fnatic')));
 
 // ---- match_summary ----
 r = JSON.parse((await runTool('match_summary', { match: 'm1' })).content);

@@ -23,10 +23,52 @@
 // writes (foldPoint, modelMessages): they stay in the chat for the screen, the
 // export and the saved chat, and the model reads the memory in their place,
 // with recall_earlier to read one of them in full again.
+//
+// One long answer has the same floor inside it: a job over 15 playlists makes
+// dozens of calls, and every shortened result still costs its 1,200 characters.
+// So when shortening is not enough, whole old steps are folded (stepFolded):
+// the model reads one line per call in their place, on the question ("done so
+// far"), and calls a tool again if it still needs what it said.
 // ---------------------------------------------------------------------------
 
-/** Characters of conversation (not counting the system prompt and tools) kept before older results are shortened. */
-export const HISTORY_BUDGET = 44000;
+// ---- what fits: the model's context, in tokens ------------------------------------
+
+/** The model's context in tokens: llama-server runs with -c 32768 (recorder/app/src/eye/runtime.rs CONTEXT). */
+export const MODEL_CONTEXT = 32768;
+/**
+ * Characters per token, measured with the model's own tokenizer (Qwen3.8 27B, 21 Oct): the system
+ * prompt and the tool list 4.1, chat text 2.8, tool results only 2.2 to 2.4. The budgets here were
+ * set as if everything were 4 characters a token: the 44,000-character history was about 19,000
+ * tokens, and with the 14,500 the prompt and the tool list take, the 32k context was full before the
+ * model wrote anything (21 Oct, notes for 15 playlists: the reply was cut off mid-call at token 32,767).
+ */
+export const CHARS_PER_TOKEN = { prompt: 4.1, history: 2.2 };
+/** A picture costs about this many tokens (a 768 px radar shot). Its base64 text is not what the model reads. */
+export const IMAGE_TOKENS = 1200;
+const IMAGE_CHARS = Math.round(IMAGE_TOKENS * CHARS_PER_TOKEN.history);
+/** The chat template's own tokens around the system prompt and the tool list. */
+export const TEMPLATE_TOKENS = 400;
+/** Room kept for the reply: its answer or tool call, and at least this much reasoning (more when there is room). */
+export const OUTPUT_TOKENS = 2500;
+export const THINK_MIN_TOKENS = 3000;
+
+/**
+ * Characters of conversation that fit beside a system prompt and tool list of `fixedChars`, with
+ * room left for the reply. `calibration` is the server's own count of the history's tokens over
+ * this estimate (from the last reply), so the budget follows what the model really reads.
+ */
+export function historyBudget(fixedChars, calibration = 1) {
+  const fixed = fixedChars / CHARS_PER_TOKEN.prompt + TEMPLATE_TOKENS;
+  const room = MODEL_CONTEXT - fixed - OUTPUT_TOKENS - THINK_MIN_TOKENS;
+  return Math.max(4000, Math.floor((room * CHARS_PER_TOKEN.history) / calibration));
+}
+
+/**
+ * Characters of conversation (not counting the system prompt and tools) kept before older results
+ * are shortened: what historyBudget gives for the prompt and tool list of 21 Oct (59,000 characters).
+ * The agent works the budget out again each step; this is the default and what /context shows.
+ */
+export const HISTORY_BUDGET = 27000;
 /** Roughly what a shortened result may take. */
 const KEEP_CHARS = 1200;
 /** Rows kept from each list in a shortened result. */
@@ -37,17 +79,45 @@ const KEEP_STRING = 160;
 const NOTE = '[shortened to save space: the rows and text above are the start of the result. Call the tool again, once, if you need the rest.]';
 
 /** Earlier questions (characters) past which the oldest are folded into the memory. */
-export const FOLD_AT = 32000;
+export const FOLD_AT = 12000;
 /** Earlier questions kept word for word after a fold (the newest is always kept). */
-export const KEEP_RECENT = 12000;
+export const KEEP_RECENT = 6000;
 /** The memory never grows past this. */
 export const MEMORY_CHARS = 4000;
 /** Tool-call arguments longer than this are shortened like a result. */
 const KEEP_ARGS = 600;
+/** Steps this small (a list of playlists, a confirmation) are folded last: they say much in little room. */
+const SMALL_STEP = 1800;
 
-/** Characters a message costs the model. A folded one costs only the memory it carries, if any. */
+const contentChars = (c) =>
+  typeof c === 'string' ? c.length : Array.isArray(c) ? c.reduce((n, p) => n + (p?.type === 'image_url' ? IMAGE_CHARS : String(p?.text || '').length), 0) : JSON.stringify(c || '').length;
+
+/** What the model is asked before the memory, and what opens it (modelMessages). */
+const MEMORY_ASK = 'What have we covered so far?';
+export const MEMORY_HEADING = 'Summary of the earlier part of our conversation (older questions were folded to make room: recall_earlier lists them and returns one in full):';
+
+/**
+ * Characters a message costs the model, a picture at what it costs in tokens. A folded question
+ * costs only the memory it carries, if any, with the lines around it; a folded step nothing (its
+ * lines are on the question, with their heading).
+ */
 export const sizeOf = (m) =>
-  m.folded ? m.memory?.length || 0 : (typeof m.content === 'string' ? m.content.length : JSON.stringify(m.content || '').length) + JSON.stringify(m.tool_calls || '').length;
+  m.folded
+    ? m.memory
+      ? m.memory.length + MEMORY_ASK.length + MEMORY_HEADING.length + 2
+      : 0
+    : m.stepFolded
+      ? 0
+      : contentChars(m.content) + JSON.stringify(m.tool_calls || '').length + (m.progress ? m.progress.length + PROGRESS_HEADING.length + 3 : 0);
+
+const textOf = (c) => (typeof c === 'string' ? c : Array.isArray(c) ? c.filter((p) => p.type === 'text').map((p) => p.text).join(' ') : '');
+/**
+ * A picture a tool returned: it rides on a user message after the results (eyeAgent.js), and stays
+ * one once limitImages has turned it into plain text.
+ */
+const isPicture = (m) => m.role === 'user' && !m.ui && /^The picture from /.test(textOf(m.content));
+/** A question the user asked. */
+const isQuestion = (m) => m.role === 'user' && !isPicture(m) && Boolean(m.ui || typeof m.content === 'string');
 
 /** A document text: its short lines (headings, names) kept, long points dropped. */
 function shortenText(text) {
@@ -91,17 +161,22 @@ export function shortenResult(content) {
 }
 
 /**
- * Shorten the oldest tool results until the conversation fits the budget.
- * Results from before `turnStart` (earlier questions) go first. The current
- * question's results are only shortened when that is not enough, and the
- * latest tool step's results never are: the model is about to read them.
+ * Shorten the oldest tool results until the conversation fits the budget; when
+ * that is not enough, fold whole old steps into a line per call (foldSteps).
+ * Earlier questions (before `turnStart`) go first. The current question's
+ * results are only shortened, then folded, when that is not enough, and the
+ * latest tool step is only shortened when nothing else is left: the model is
+ * about to read it.
  *
  * @param {Array<object>} messages  OpenAI-style, edited in place
  * @param {number} [budget]
  * @param {number} [turnStart]  index of the current question; results before it go first
- * @returns {number} how many results were shortened
+ * @param {{ latest?: number }} [opts]  latest: the budget the latest step is shortened to, when it is
+ *   more than `budget` (the agent makes room below its budget, for a few steps at once, but never cuts
+ *   the results the model is about to read for that)
+ * @returns {number} how many results were shortened or steps folded
  */
-export function compactHistory(messages, budget = HISTORY_BUDGET, turnStart = 0) {
+export function compactHistory(messages, budget = HISTORY_BUDGET, turnStart = 0, { latest = budget } = {}) {
   let total = messages.reduce((n, m) => n + sizeOf(m), 0);
   if (total <= budget) return 0;
   // The latest step's results: the tool messages after the last assistant message with tool calls.
@@ -118,7 +193,7 @@ export function compactHistory(messages, budget = HISTORY_BUDGET, turnStart = 0)
   const keepFrom = lastCalls >= turnStart ? lastCalls + 1 : messages.length;
   let cut = 0;
   const shorten = (m) => {
-    if (m.folded) return;
+    if (m.folded || m.stepFolded) return;
     if (m.role === 'assistant') return void (shortenCalls(m) && cut++);
     if (m.role !== 'tool' || typeof m.content !== 'string' || m.compacted) return;
     const short = shortenResult(m.content);
@@ -153,34 +228,160 @@ export function compactHistory(messages, budget = HISTORY_BUDGET, turnStart = 0)
     total -= before - sizeOf(m);
     return true;
   };
-  const pass = (end) => {
-    for (let i = 0; i < Math.min(end, keepFrom) && total > budget; i++) shorten(messages[i]);
+  /** Shorten what is in [from, end) oldest first until it fits, only what is bigger than `least`. */
+  const pass = (from, end, least = 0) => {
+    for (let i = from; i < Math.min(end, keepFrom) && total > budget; i++) if (sizeOf(messages[i]) > least) shorten(messages[i]);
   };
-  pass(turnStart);
-  pass(messages.length);
+  /**
+   * Fold the steps in [from, end) oldest first until it fits: first the big ones and those already
+   * shortened (what is left of them is a remnant), then the small whole ones.
+   */
+  const fold = (from, end) => {
+    const steps = stepsIn(messages, from, Math.min(end, keepFrom));
+    for (const small of [false, true]) {
+      for (const s of steps) {
+        if (total <= budget) return;
+        if (messages[s.start].stepFolded) continue;
+        let size = 0;
+        let shortened = false;
+        for (let i = s.start; i < s.end; i++) {
+          size += sizeOf(messages[i]);
+          shortened ||= Boolean(messages[i].compacted);
+        }
+        if (!small && size <= SMALL_STEP && !shortened) continue;
+        for (let i = s.start; i < s.end; i++) messages[i].stepFolded = true;
+        const q = questionAt(messages, s.start);
+        const before = q >= 0 ? sizeOf(messages[q]) : 0;
+        if (q >= 0) messages[q].progress = progressOf(messages, q);
+        total += (q >= 0 ? sizeOf(messages[q]) - before : 0) - size;
+        cut++;
+      }
+    }
+  };
+  // Earlier questions first, then this one. In each: big results shortened, then old steps folded, and
+  // small results shortened only after that: a list the job works through stays whole the longest. On
+  // 21 Oct the 15-playlist list was cut to its first 3 rows, and the model guessed the next playlist's id.
+  for (const [from, end] of [
+    [0, turnStart],
+    [turnStart, messages.length]
+  ]) {
+    pass(from, end, SMALL_STEP);
+    fold(from, end);
+    pass(from, end);
+  }
   // Still over: the latest step itself is too big (eleven antistrat sheets in one step overflowed
   // the model's 32k context). Shorten its largest results first; shortened beats not answering.
-  if (total > budget) {
-    const latest = messages
+  const roomForLatest = Math.max(budget, latest);
+  if (total > roomForLatest) {
+    const newest = messages
       .map((m, i) => ({ m, i }))
       .filter(({ m, i }) => i >= keepFrom && m.role === 'tool' && typeof m.content === 'string' && !m.compacted)
       .sort((a, b) => b.m.content.length - a.m.content.length);
-    for (const { m } of latest) {
-      if (total <= budget) break;
+    for (const { m } of newest) {
+      if (total <= roomForLatest) break;
       shorten(m);
     }
   }
   return cut;
 }
 
+// ---- folding old steps of an answer into a line per call ---------------------------
+
+/** What opens the folded steps on a question, in the model's view. */
+export const PROGRESS_HEADING =
+  'Done so far on this question (older steps were folded to make room: their results are no longer shown, so call a tool again if you still need one):';
+/** The lines of folded steps on one question never grow past this; the oldest become a count. */
+const PROGRESS_CHARS = 3000;
+
+/** The tool steps in messages[from, end): an assistant message with calls, its results and the pictures they returned. */
+function stepsIn(messages, from, end) {
+  const steps = [];
+  for (let i = from; i < end; i++) {
+    const m = messages[i];
+    if (m.role === 'assistant' && m.tool_calls?.length) steps.push({ start: i, end: i + 1 });
+    else if (steps.at(-1)?.end === i && (m.role === 'tool' || isPicture(m))) steps.at(-1).end = i + 1;
+  }
+  return steps;
+}
+
+/** The question a message belongs to, or -1. */
+function questionAt(messages, i) {
+  for (let k = i; k >= 0; k--) if (isQuestion(messages[k])) return k;
+  return -1;
+}
+
+const clip = (s, n) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
+
+/** Short plain fields as "key value", lists as "N key", nested objects left out. */
+function plainFields(obj, longest) {
+  return Object.entries(obj)
+    .map(([k, v]) => {
+      if (Array.isArray(v)) {
+        // A list of named things (playlists, rounds) keeps its names: a long job goes through them.
+        const names = v.map((x) => (x && typeof x === 'object' ? x.name || x.label || x.title : null)).filter((x) => typeof x === 'string');
+        return names.length ? `${v.length} ${k}: ${clip(names.map((n, i) => `${n}${typeof v[i]?.id === 'string' && v[i].id.length <= 16 ? ` (${v[i].id})` : ''}`).join('; '), 400)}` : `${v.length} ${k}`;
+      }
+      if (v && typeof v === 'object') return null;
+      return String(v).length <= longest ? `${k} ${typeof v === 'string' ? `"${v}"` : v}` : null;
+    })
+    .filter(Boolean)
+    .join(', ');
+}
+
+/** "round_briefs(playlist "Anubis T Pistols", side "T", part 2)". */
+function callLine(tc) {
+  let args = {};
+  try {
+    args = JSON.parse(String(tc.function?.arguments || '{}')) || {};
+  } catch {
+    /* cut off: the name is enough */
+  }
+  return clip(`${tc.function?.name || 'tool'}(${typeof args === 'object' ? plainFields(args, 60) : ''})`, 200);
+}
+
+/** What a result said, in a line: an error or a confirmation as written, JSON as its short fields and list sizes. */
+function outcomeOf(content) {
+  const text = String(content ?? '');
+  let json;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    /* plain text */
+  }
+  const line = json && typeof json === 'object' ? plainFields(Array.isArray(json) ? { items: json } : json, 80) : text.replace(/\s+/g, ' ').trim();
+  return clip(line || '(nothing)', 600);
+}
+
+/**
+ * The folded steps of the question at `q`, a line per call, oldest first. Past PROGRESS_CHARS
+ * the oldest lines (all but the first, which is often the list the job works through) become a count.
+ */
+export function progressOf(messages, q) {
+  const results = new Map();
+  const calls = [];
+  for (let i = q + 1; i < messages.length && !isQuestion(messages[i]); i++) {
+    const m = messages[i];
+    if (!m.stepFolded) continue;
+    if (m.role === 'tool') results.set(m.tool_call_id, m.full ?? m.content);
+    else if (m.role === 'assistant') calls.push(...(m.fullCalls || m.tool_calls || []));
+  }
+  const lines = calls.map((tc) => ({ name: tc.function?.name || 'tool', text: `- ${callLine(tc)} -> ${outcomeOf(results.get(tc.id))}` }));
+  let size = lines.reduce((n, l) => n + l.text.length + 1, 0);
+  const dropped = [];
+  while (size > PROGRESS_CHARS && lines.length > 2) {
+    const [gone] = lines.splice(1, 1);
+    dropped.push(gone.name);
+    size -= gone.text.length + 1;
+  }
+  if (dropped.length) {
+    const counts = [...dropped.reduce((m, n) => m.set(n, (m.get(n) || 0) + 1), new Map())].map(([n, c]) => `${n} x${c}`).join(', ');
+    lines.splice(1, 0, { text: `- (${dropped.length} more calls here: ${counts})` });
+  }
+  return lines.map((l) => l.text).join('\n');
+}
+
 // ---- folding earlier questions into a memory ------------------------------------
 
-/** What opens the memory pair in the model's view. */
-export const MEMORY_HEADING = 'Summary of the earlier part of our conversation (older questions were folded to make room: recall_earlier lists them and returns one in full):';
-
-/** A question the user asked (pictures a tool returned ride on user messages too, as a list). */
-const isQuestion = (m) => m.role === 'user' && (m.ui || typeof m.content === 'string');
-const textOf = (c) => (typeof c === 'string' ? c : Array.isArray(c) ? c.filter((p) => p.type === 'text').map((p) => p.text).join(' ') : '');
 
 /**
  * The questions of a chat as index ranges, each with its question and final answer.
@@ -205,23 +406,49 @@ export function memoryOf(messages) {
   return '';
 }
 
+/** Roughly what one call's line costs in a question's folded steps. */
+const LINE_CHARS = 200;
+
+/**
+ * What messages[from, to) cost once every step in them is folded: the questions,
+ * the answers and a line per call. Shortening and folding steps cannot go below it;
+ * only folding the questions into the memory can.
+ */
+export function leastSize(messages, from, to) {
+  let n = 0;
+  let lines = 0;
+  const close = () => {
+    n += Math.min(PROGRESS_CHARS, lines * LINE_CHARS);
+    lines = 0;
+  };
+  for (let i = from; i < to; i++) {
+    const m = messages[i];
+    if (m.folded) continue;
+    if (isQuestion(m)) {
+      close();
+      n += contentChars(m.content);
+    } else if (m.role === 'assistant' && m.tool_calls?.length) lines += m.tool_calls.length;
+    else if (m.role === 'assistant') n += contentChars(m.content);
+  }
+  close();
+  return n;
+}
+
 /**
  * Where to fold: the index of the first earlier question to keep, or -1 when
  * nothing needs folding. Earlier questions (before `turnStart`) past FOLD_AT are
  * folded oldest first until KEEP_RECENT characters of them are left; the newest
- * earlier question is always kept. `force` folds every earlier question (the
- * request overflowed anyway).
+ * earlier question is always kept. Both count what the questions cost with their
+ * steps folded (leastSize): their results can be made small without the model,
+ * only the questions and answers need it. `force` folds every earlier question
+ * (the request overflowed anyway).
  *
  * @param {object[]} messages
  * @param {number} turnStart  index of the current question
  * @param {{ force?: boolean }} [opts]
  */
 export function foldPoint(messages, turnStart, { force = false } = {}) {
-  const size = (a, b) => {
-    let n = 0;
-    for (let i = a; i < b; i++) if (!messages[i].folded) n += sizeOf(messages[i]);
-    return n;
-  };
+  const size = (a, b) => leastSize(messages, a, b);
   const hasUnfolded = (cut) => messages.slice(0, cut).some((m) => !m.folded);
   if (force) return hasUnfolded(turnStart) ? turnStart : -1;
   if (size(0, turnStart) <= FOLD_AT) return -1;
@@ -259,19 +486,25 @@ export function digestOf(previous, messages) {
 
 /**
  * The conversation as the model reads it: folded messages replaced by the memory,
- * the panel's own fields left out, and narration before a tool call blanked (the
- * model would read its planning again and plan more).
+ * folded steps by their lines on the question, the panel's own fields left out, and
+ * narration before a tool call blanked (the model would read its planning again and
+ * plan more).
  */
 export function modelMessages(messages) {
   const memory = memoryOf(messages);
   const out = memory
     ? [
-        { role: 'user', content: 'What have we covered so far?' },
+        { role: 'user', content: MEMORY_ASK },
         { role: 'assistant', content: `${MEMORY_HEADING}\n\n${memory}` }
       ]
     : [];
-  for (const { compacted, callsCompacted, ui, full, fullCalls, folded, memory: _memory, ...m } of messages) {
-    if (folded) continue;
+  for (const { compacted, callsCompacted, ui, full, fullCalls, folded, memory: _memory, stepFolded, progress, ...m } of messages) {
+    if (folded || stepFolded) continue;
+    if (progress) {
+      const done = `${PROGRESS_HEADING}\n${progress}`;
+      out.push({ ...m, content: Array.isArray(m.content) ? [...m.content, { type: 'text', text: done }] : `${m.content}\n\n${done}` });
+      continue;
+    }
     out.push(m.role === 'assistant' && m.tool_calls?.length && m.content ? { ...m, content: '' } : m);
   }
   return out;

@@ -1045,6 +1045,42 @@
   color: var(--text);
 }
 
+/* Questions queued with Ctrl+Enter while an answer runs, sent in order as each one ends */
+.eye-queue {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0 2px;
+}
+.eye-queued {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 3px 4px 3px 10px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 13px;
+}
+.eye-queued-tag {
+  flex: none;
+  color: var(--muted);
+}
+.eye-queued-text {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: text;
+}
+
 /* Past chats: a list above the bar, on the right */
 .eye-history {
   position: absolute;

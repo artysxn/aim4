@@ -17,7 +17,7 @@ const network = {
 };
 
 /** A round: side, buys, where ours/theirs stood (elapsed -> positions), and what happened. */
-function round(file, { side = 'T', own = 4, opp = 4, ours = {}, theirs = {}, site = null, won = false, plant = false, nades = [], kills = [] }) {
+function round(file, { side = 'T', own = 4, opp = 4, ours = {}, theirs = {}, site = null, won = false, plant = false, nades = [], kills = [], entry = null }) {
   const series = [];
   for (let e = 0; e <= 60; e++) {
     series.push({
@@ -37,7 +37,8 @@ function round(file, { side = 'T', own = 4, opp = 4, ours = {}, theirs = {}, sit
     plantTick: plant ? 1 : null,
     plantSite: site ? site.toLowerCase() : null,
     hitSite: site ? site.toLowerCase() : null,
-    siteEntry: () => null,
+    // entry: [elapsed, site] -> the shape antistratScan's siteEntry returns (clock = seconds left).
+    siteEntry: () => (entry ? { tick: 0, clock: 115 - entry[0], site: entry[1] } : null),
     nades,
     enemyNades: [],
     kills,
@@ -111,5 +112,18 @@ assert.equal(bought.considered, 5);
 assert.equal(runRoundQuery(rounds, network, { side: 'T', buy: 'full' }).considered, 4);
 assert.match(bought.counted, /T side, their buy bought, opponent buy any/);
 assert.deepEqual(runRoundQuery(rounds, network, { side: 'T', buy: 'bought', group_by: 'buy' }).groups.map((g) => g.key), ['full', 'force']);
+
+// "A lurk within 15 s of the B entry": the window follows each round's own entry.
+const lurks = [
+  round('e1', { site: 'B', entry: [40, 'b'], ours: { 30: ['Silo'] } }), // 10 s before the entry: in
+  round('e2', { site: 'B', entry: [40, 'b'], ours: { 20: ['Silo'] } }), // 20 s before: out
+  round('e3', { site: 'B', entry: [40, 'b'], ours: { 52: ['Silo'] } }), // 12 s after: in
+  round('e4', { site: 'B', ours: { 30: ['Silo'] } }), // never got onto a site: out
+  round('e5', { site: 'A', entry: [40, 'a'], ours: { 38: ['Silo'] } }) // an A entry: out with entry_site B
+];
+const lurk = { players_in: { zone: 'Silo', who: 'team', min: 1, around: 'entry', before: 15, after: 15 } };
+assert.deepEqual(runRoundQuery(lurks, network, { side: 'T', where: [lurk] }).files, ['e1', 'e3', 'e5']);
+assert.deepEqual(runRoundQuery(lurks, network, { side: 'T', where: [{ players_in: { ...lurk.players_in, entry_site: 'B' } }] }).files, ['e1', 'e3']);
+assert.throws(() => runRoundQuery(lurks, network, { where: [{ players_in: { zone: 'Silo', around: 'plant' } }] }), QueryError);
 
 console.log('roundQuery.test.js ok');

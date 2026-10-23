@@ -23,13 +23,17 @@
 //   site_map                   every page of the site, with links to cite
 //   find_weaknesses            where a team loses on a map and side, measured and ranked
 //   review_antistrat_document  check a document against the data and itself
-//   rewrite_antistrat_document save a reorganised version (asks the user first)
+//   rewrite_antistrat_document save an edited or reorganised version (asks the user first)
 //   queue_antistrat_documents  several teams and maps, one document each, in a row
 //                              (asks the user once)
 //   round_value                what each kill and plant of a round was worth: round win
 //                              chance before and after, the gunfight's xK, who gained
 //   moment_value               one clock time of a round: win chance, what makes it up,
 //                              the open gunfights and each fighter's xK at that tick
+//   refresh_library            read the library again (demos uploaded since the chat began)
+//   list_playlists             the user's round playlists, or one playlist's rounds
+//   save_playlist              create or edit a playlist (asks the user first)
+//   delete_playlist            delete a playlist (asks the user first)
 //   screenshot_round           (vision only) one moment of a round, as a picture
 // ---------------------------------------------------------------------------
 
@@ -46,8 +50,14 @@ import {
   saveUtilityArchive,
   fetchVrsRanks,
   findRounds,
-  saveTeamDocument
+  saveTeamDocument,
+  fetchPlaylists,
+  savePlaylist,
+  deletePlaylist,
+  NOTE_MAX,
+  saveRoundNotes
 } from '../api.js';
+import { aliveGaps, gapFits, gapWords, sideOfTeam, winnerSide } from './roundSample.js';
 import { screenshotRound } from './eyeVision.js';
 import { momentValueTool, roundValueTool } from './eyeValue.js';
 import { noteRounds, roundIdsIn } from './roundRefs.js';
@@ -69,7 +79,7 @@ import {
 import { opinionsFrom } from '../training/opinions.js';
 import { pointsFromSummaryHtml } from '../training/trainingSources.js';
 import { QueryError, runRoundQuery, zoneNames } from './roundQuery.js';
-import { buildRewrite, outlineOfHtml, reviewOutline } from './docReview.js';
+import { buildRewrite, editDocument, editKey, outlineOfHtml, reviewOutline, sectionName, sectionsOfOutline } from './docReview.js';
 import { findWeaknesses } from './weaknesses.js';
 import { findExecute, roundStory } from './roundStory.js';
 import { ROUND_KINDS, classifyRound } from './roundTypes.js';
@@ -96,9 +106,26 @@ const escapeHtml = (s) =>
 // ---- the library -------------------------------------------------------------
 
 let catalogue = null;
-/** The roster catalogue as teams and their demos, fetched once a session. */
+let catalogueAt = 0;
+/**
+ * How long the library list is trusted before it is fetched again. It used to be fetched once a
+ * session: demos uploaded after the page opened were not there ("BC.Game has no Dust2 demos"
+ * while the site's own sheet had two), and "refresh the library" could not change that.
+ */
+export const LIBRARY_TTL_MS = 60_000;
+
+/** Forget the library and everything read from it, so the next tool reads the demos as they are now. */
+export function forgetLibrary() {
+  catalogue = null;
+  catalogueAt = 0;
+  matchRounds.clear();
+}
+
+/** The roster catalogue as teams and their demos, fetched again once it is LIBRARY_TTL_MS old. */
 async function library() {
+  if (catalogue && Date.now() - catalogueAt > LIBRARY_TTL_MS) forgetLibrary();
   if (!catalogue) {
+    catalogueAt = Date.now();
     catalogue = (async () => {
       const roster = await fetchRoster();
       const players = roster?.players || [];
@@ -389,12 +416,15 @@ const scans = new Map();
 async function teamScan(teamName, map, onProgress) {
   const team = await teamOf(teamName);
   const mapCode = mapCodeOf(map);
-  const key = `${team.key}|${mapCode}`;
+  const ids = await demosOf(team, mapCode);
+  // The demo set is part of the key: a demo uploaded since the last scan makes a new one.
+  const key = `${team.key}|${mapCode}|${[...ids].sort().join(',')}`;
   if (!scans.has(key)) {
+    for (const k of scans.keys()) if (k.startsWith(`${team.key}|${mapCode}|`)) scans.delete(k);
     scans.set(
       key,
       (async () => {
-        const demoIds = await demosOf(team, mapCode);
+        const demoIds = ids;
         if (!demoIds.length) throw new ToolError(`${team.name} has no demos on ${MAPS[mapCode]?.name || mapCode}.`);
         const { names } = await library();
         onProgress?.(`Loading ${team.name} on ${MAPS[mapCode]?.name || mapCode}…`);
@@ -436,7 +466,9 @@ const CONDITION_HELP =
   '{"players_in":{"zone":"Silo","who":"team"|"opponent","min":1,"max":5,"from":"1:55","to":"1:20"}}, ' +
   '{"utility":{"who":"team"|"opponent","type":"smoke"|"molotov"|"flash"|"he"|"any","zone":"Heaven","from":"1:55","to":"0:00","min":1}}, ' +
   '{"kill":{"by":"team"|"opponent","zone":"...","from":"...","to":"...","min":1}}, {"first_kill":{"by":"team"|"opponent","zone":"..."}}, ' +
-  '{"site":"A"|"B"|"none"}, {"plant":true|false}, {"won":true|false}, {"pace":"rush"|"pop"|"contact"|"full-exec"|"default"|"slow-default"|"other"}, {"not":<condition>}.';
+  '{"site":"A"|"B"|"none"}, {"plant":true|false}, {"won":true|false}, {"pace":"rush"|"pop"|"contact"|"full-exec"|"default"|"slow-default"|"other"}, {"not":<condition>}. ' +
+  'players_in, utility and kill can time their window from the moment the team got onto a site instead of the clock: "around":"entry","before":15,"after":15 (seconds; "entry_site":"A"|"B" for one site). ' +
+  'Example, an A lurk while they hit B: [{"site":"B"},{"players_in":{"zone":"A","who":"team","min":1,"around":"entry","before":15,"after":15}}].';
 
 /** OpenAI-style tool definitions, as the model sees them. */
 export const TOOLS = [
@@ -740,7 +772,14 @@ TOOLS.push(
       name: 'team_documents',
       description:
         "The user's team documents (antistrat sheets, notes). Without \"title\" or \"id\" lists them, newest first, each with its id and date; with one of them reads that document as text. Documents can share a title: the newest is used unless you pass an id.",
-      parameters: { type: 'object', properties: { title: { type: 'string' }, id: { type: 'string', description: 'A document id from the list.' } } }
+      parameters: {
+        type: 'object',
+        properties: {
+          title: { type: 'string' },
+          id: { type: 'string', description: 'A document id from the list.' },
+          part: { type: 'number', description: 'A long document comes in parts: 1 (default), then the next part the answer names.' }
+        }
+      }
     }
   },
   {
@@ -792,7 +831,7 @@ TOOLS.push(
     function: {
       name: 'player_patterns',
       description:
-        "How each player of a team plays one map, read from the rounds: where he starts, whether he looks for early fights and where, whether he plays alone, his opening duels, whether his deaths get traded and whether he trades, the utility he throws and when, CT rotations and T lurks, each with 'in X of N rounds', and what to do against him. Use it to write player notes in a coach's words instead of a most-played position.",
+        "How each player of a team plays one map (or map \"all\": every map the team has demos on), read from the rounds: where he starts, whether he looks for early fights and where, whether he plays alone, his opening duels, whether his deaths get traded and whether he trades, the utility he throws and when, CT rotations and T lurks, each with 'in X of N rounds', and what to do against him. Use it to write player notes in a coach's words instead of a most-played position.",
       parameters: {
         type: 'object',
         properties: {
@@ -800,7 +839,8 @@ TOOLS.push(
           map: { type: 'string' },
           side: { type: 'string', enum: ['T', 'CT', 'both'] },
           player: { type: 'string', description: 'Only this player (part of the name).' },
-          all_buys: { type: 'boolean', description: 'Count every buy; by default only full-buy rounds.' }
+          all_buys: { type: 'boolean', description: 'Count every buy; by default only full-buy rounds.' },
+          brief: { type: 'boolean', description: 'Only where each player starts. Use it with map "all" for "where do their players play" over every map: one call, small answer.' }
         },
         required: ['team', 'map']
       }
@@ -831,7 +871,8 @@ TOOLS.push(
           title: { type: 'string', description: 'The document title, or part of it (team_documents lists them). Several with one title: the newest is used.' },
           id: { type: 'string', description: 'A document id from team_documents, instead of the title.' },
           team: { type: 'string', description: 'Only when the title does not say which team it is about.' },
-          maps: { type: 'array', items: { type: 'string' }, description: 'Only when the title does not say the maps.' }
+          maps: { type: 'array', items: { type: 'string' }, description: 'Only when the title does not say the maps.' },
+          part: { type: 'number', description: 'A long review comes in parts (issues, then the outline): 1 (default), then the next part the answer names. Later parts reuse the review, nothing is counted again.' }
         },
         required: []
       }
@@ -842,15 +883,35 @@ TOOLS.push(
     function: {
       name: 'rewrite_antistrat_document',
       description:
-        'Save a reorganised and rewritten version of a document you reviewed. Give every section with its points, in the order they should read. Numbers must be copied from the review (the document or its "current data" lines) or from a query you ran this turn; any other number is refused, and the refusal names the point. Points keep their round links. ' +
-        'A long document goes in parts of about 3 to 5 sections per call. Every call for the same reviewed document adds to one "Reviewed:" copy (a section sent again with the same heading replaces the old one), so parts never make separate documents. final false keeps the sections without saving until a later call.',
+        'Save a changed version of a document you reviewed. To change part of it (fill a section, fix, drop or add points), send edits, which name points by the review\'s numbers and sections by its "## " headings; everything else is kept as it is, links and layout included. To reorganise the whole document, send every section instead, with its points, in the order they should read. ' +
+        'Numbers must be copied from the review (the document or its "current data" lines) or from a query you ran this turn; any other number is refused, and the refusal names the point. New points get the round links of the point they read like. ' +
+        'Every call for the same reviewed document adds to one "Reviewed:" copy: edits add to the earlier edits, and a section sent again with the same heading replaces the old one. A long document\'s sections go in parts of about 3 to 5 per call. final false keeps what is sent without saving until a later call.',
       parameters: {
         type: 'object',
         properties: {
           title: { type: 'string', description: 'The reviewed document.' },
           id: { type: 'string', description: 'The reviewed document id, instead of the title.' },
-          final: { type: 'boolean', description: 'false: keep these sections and wait for more. true or omitted: join everything sent so far and save.' },
+          final: { type: 'boolean', description: 'false: keep what is sent and wait for more. true or omitted: join everything sent so far and save.' },
           mode: { type: 'string', enum: ['copy', 'replace'], description: 'copy (default) saves a new document next to it; replace overwrites it.' },
+          edits: {
+            type: 'array',
+            description:
+              'Changes, by the review\'s outline. set_section {section, points}: the section holds these points (fills an empty one, replaces all of a full one). replace_point {point, text}. delete_point {point}. add_points {after, points} after a point, or {section, points} at the end of a section. rename_section {section, heading}. add_section {side, heading, points}: a new section at the end of that side, or after the section "after" names.',
+            items: {
+              type: 'object',
+              properties: {
+                op: { type: 'string', enum: ['set_section', 'replace_point', 'delete_point', 'add_points', 'rename_section', 'add_section'] },
+                section: { type: 'string', description: 'A heading as the review writes it after "## ", for example "Nuke T side / Notes".' },
+                point: { type: 'number', description: 'A point number from the review.' },
+                side: { type: 'string', description: 'A side heading, for example "Nuke T side".' },
+                after: { type: ['number', 'string'], description: 'add_points: the point number to add after. add_section: the section to add after.' },
+                text: { type: 'string' },
+                points: { type: 'array', items: { type: 'string' } },
+                heading: { type: 'string', description: 'The new heading.' }
+              },
+              required: ['op']
+            }
+          },
           sections: {
             type: 'array',
             items: {
@@ -860,7 +921,7 @@ TOOLS.push(
             }
           }
         },
-        required: ['sections']
+        required: []
       }
     }
   },
@@ -883,6 +944,132 @@ TOOLS.push(
           }
         },
         required: ['jobs']
+      }
+    }
+  }
+);
+
+TOOLS.push(
+  {
+    type: 'function',
+    function: {
+      name: 'refresh_library',
+      description:
+        'Read the demo library again, now: demos uploaded since the chat started appear, and every team read is redone on its next use. Use it when the user says they uploaded demos, asks to refresh or reload the library, or says a team has demos the tools did not find. Returns the totals and the newest matches.',
+      parameters: { type: 'object', properties: { team: { type: 'string', description: 'Optional: also list this team (part of a name) and its maps.' } } }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'list_playlists',
+      description:
+        "The user's round playlists (their own, and their team's shared ones): id, name, how many rounds, private or team. With id or name, that playlist's rounds by match and number.",
+      parameters: {
+        type: 'object',
+        properties: { id: { type: 'string' }, name: { type: 'string', description: 'A playlist name, or part of it.' } }
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'save_playlist',
+      description:
+        'Create a round playlist (no id or name of an existing one) or edit one (id, or its exact name): rename it, share it with the team or make it private, add rounds, remove rounds, or replace them all. ' +
+        'Rounds are given by match and number ({"match":"<id>","number":7}) or as round files from find_rounds. add_from "last_result" adds every round the last tool you ran matched (a query_rounds, classify_rounds, find_rounds or player_patterns answer), so "make a playlist of those rounds" is one call after the query.',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'The playlist to edit (list_playlists). Leave out to create one.' },
+          name: { type: 'string', description: 'The name for a new playlist, or the new name when editing.' },
+          scope: { type: 'string', enum: ['private', 'team'], description: 'team shares it with everyone on the team.' },
+          add: { type: 'array', items: { type: 'object', properties: { match: { type: 'string' }, number: { type: 'number' }, round: { type: 'string' } } }, description: 'Rounds to add.' },
+          add_from: { type: 'string', enum: ['last_result'], description: 'Also add every round the last tool answer matched.' },
+          remove: { type: 'array', items: { type: 'object', properties: { match: { type: 'string' }, number: { type: 'number' }, round: { type: 'string' } } }, description: 'Rounds to take out.' },
+          replace: { type: 'boolean', description: 'The playlist becomes exactly the added rounds (the old ones go).' }
+        }
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'delete_playlist',
+      description: "Delete one of the user's round playlists, by id (list_playlists) or exact name. The rounds themselves stay in the library.",
+      parameters: { type: 'object', properties: { id: { type: 'string' }, name: { type: 'string' } } }
+    }
+  }
+);
+
+TOOLS.push(
+  {
+    type: 'function',
+    function: {
+      name: 'sample_rounds',
+      description:
+        'Pick rounds at random from the whole library (or one team) on a map, by both teams\' buys, the side that won, and how the round went in players alive. ' +
+        'gap counts players alive, from gap.side\'s view, after every kill. never_below 0: gap.side never has fewer players alive than the other side (never 4v5). -1: never two fewer (never 3v5). reaches 2: two more at some point (5v3). A count held grace seconds or less (default 2: a trade) does not count. ' +
+        'Example, "8 random pistol rounds on Ancient the Ts win clean": {"map":"Ancient","buy":"pistol","vs_buy":"pistol","winner":"T","gap":{"side":"T","never_below":-1,"reaches":2},"count":8,"prefer":true}. ' +
+        'prefer true fills up with rounds that pass everything but the gap when too few pass it all, and marks which ones are clean. Without team, buy is the T side\'s and vs_buy the CT side\'s. ' +
+        'The picked rounds are the "last_result" for save_playlist.',
+      parameters: {
+        type: 'object',
+        properties: {
+          map: { type: 'string' },
+          team: { type: 'string', description: 'Only this team\'s rounds; buy is then its buy and vs_buy the other team\'s.' },
+          buy: { type: 'string', enum: BUYS },
+          vs_buy: { type: 'string', enum: BUYS },
+          winner: { type: 'string', enum: ['T', 'CT', 'team', 'opponent', 'any'], description: 'Who won the round: a side, or (with team) the team or its opponent.' },
+          gap: {
+            type: 'object',
+            properties: { side: { type: 'string', enum: ['T', 'CT'] }, never_below: { type: 'number' }, reaches: { type: 'number' }, grace: { type: 'number', description: 'Seconds a count must hold to count, default 2.' } },
+            description: 'The man advantage condition, from gap.side\'s view.'
+          },
+          count: { type: 'number', description: 'How many rounds, default 8, at most 30.' },
+          prefer: { type: 'boolean', description: 'The gap is a preference: fill up with other rounds when too few fit it.' }
+        },
+        required: ['map']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'round_briefs',
+      description:
+        'What one side did in each of several rounds, short: the kind of hit (T), where its players stood every 10 seconds, every grenade it threw with the clock and where it landed, the kills and the plant. ' +
+        'Give a playlist (id or name) or rounds by match and number. Use it to write a note per round (write_round_notes); for one round in depth use round_timeline. Many rounds come in parts.',
+      parameters: {
+        type: 'object',
+        properties: {
+          playlist: { type: 'string', description: 'A playlist id or name (list_playlists).' },
+          rounds: { type: 'array', items: { type: 'object', properties: { match: { type: 'string' }, number: { type: 'number' }, round: { type: 'string' } } } },
+          side: { type: 'string', enum: ['T', 'CT'], description: 'Whose play to describe (default T).' },
+          part: { type: 'number', description: 'Rounds come 4 at a time: 1 (default), then the next part the answer names.' }
+        }
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'write_round_notes',
+      description:
+        "Write a note on rounds, at a clock time (default 1:55, the start of the round), where the round viewer shows it. One note per round, written by you in a coach's plain words, for example \"1 fakes A at 1:30 with 2 smokes, rest walk up B for contact\". " +
+        'A note this tool wrote earlier on the same round is replaced, so writing again corrects it. delete: true (no text) removes this tool\'s note from that round. The user\'s own notes are never changed or removed. Several rounds in one call.',
+      parameters: {
+        type: 'object',
+        properties: {
+          notes: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: { match: { type: 'string' }, number: { type: 'number' }, round: { type: 'string' }, text: { type: 'string' }, at: { type: 'string', description: 'Round clock, default 1:55.' }, delete: { type: 'boolean', description: 'Remove the note this tool wrote on the round instead of writing one.' } }
+            }
+          }
+        },
+        required: ['notes']
       }
     }
   }
@@ -961,14 +1148,56 @@ async function myTeam() {
   return dest;
 }
 
-/** The sheet for a team on a map as the review compares points: fresh, with rounds. */
-function freshPoints(scan) {
-  const html = buildSummaryDocHtml(
-    { teamName: scan.team.name, mapCode: scan.mapCode, categories: SUMMARY_CATEGORIES.map((c) => c.key), report: scan.report(), links: true },
-    escapeHtml
-  );
-  return pointsFromSummaryHtml(html).map((p) => ({ ...p, side: `${mapName(scan.mapCode)} ${p.side}`.trim() }));
+/**
+ * The sheet for a team on a map as the review compares points: fresh, with rounds, written in the
+ * given styles. A sixpack or outline words its points its own way ("B flash and B Doors smoke →
+ * most likely B (14 of 17)"); checked only against the full sheet's wording, a sixpack made a
+ * minute earlier came back with 18 "unbacked" points.
+ */
+function freshPoints(scan, styles = ['full']) {
+  const seen = new Set();
+  const out = [];
+  for (const style of styles) {
+    const spec = { teamName: scan.team.name, mapCode: scan.mapCode, categories: SUMMARY_CATEGORIES.map((c) => c.key), report: scan.report(), links: true };
+    const html = style === 'sixpack' ? buildSixpackDocHtml([spec], escapeHtml) : style === 'outline' ? buildOutlineDocHtml(spec, escapeHtml) : buildSummaryDocHtml(spec, escapeHtml);
+    for (const p of pointsFromSummaryHtml(html)) {
+      const key = `${p.side}|${p.section}|${p.text}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ ...p, side: `${mapName(scan.mapCode)} ${p.side}`.trim() });
+    }
+  }
+  return out;
 }
+
+/** The style a generated document was written in, from its title ("Sixpack: ...", "Reviewed: Outline: ..."). */
+export function styleOfTitle(title) {
+  const t = String(title || '').replace(/^\s*reviewed:\s*/i, '');
+  return /^\s*sixpack:/i.test(t) ? 'sixpack' : /^\s*outline:/i.test(t) ? 'outline' : 'full';
+}
+
+/** Characters of one part of a long answer (a document, a review): the rest comes with part 2, 3 ... */
+export const PART_CHARS = 9000;
+
+/** Lines cut into parts of about PART_CHARS on line ends; the asked part (1-based) and how many there are. */
+export function partOf(lines, part = 1, size = PART_CHARS) {
+  const parts = [[]];
+  let used = 0;
+  for (const line of lines) {
+    const len = String(line).length + 1;
+    if (used + len > size && parts.at(-1).length) {
+      parts.push([]);
+      used = 0;
+    }
+    parts.at(-1).push(line);
+    used += len;
+  }
+  const n = Math.max(1, Math.min(parts.length, Math.round(Number(part)) || 1));
+  return { lines: parts[n - 1], part: n, parts: parts.length };
+}
+
+/** "part 1 of 3" and how to get the next one, for a result that comes in parts. */
+const partNote = (p) => (p.parts > 1 ? { part: `${p.part} of ${p.parts}`, ...(p.part < p.parts ? { next: `Call again with part ${p.part + 1} for the rest.` } : {}) } : {});
 
 /** Build one antistrat document and save it. */
 /** "T", "CT" or "both" from what the model passed. */
@@ -1028,6 +1257,9 @@ export function shortDate(ms, withTime = true) {
   return withTime ? `${date} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}` : date;
 }
 
+/** Words a user puts around a document's name that are not in its title. */
+const TITLE_FILLER = new Set(['on', 'the', 'doc', 'document', 'sheet', 'antistrat', 'and', 'for', 'of', 'review', 'this']);
+
 /** A title compared without case or the generator's date: "Outline: X on Nuke (17 Oct)" -> "outline: x on nuke". */
 const undatedTitle = (t) =>
   String(t || '')
@@ -1055,6 +1287,15 @@ async function documentOf(title, id) {
     // title without it finds the newest copy, not an older undated one that matches exactly.
     const exact = docs.filter((d) => undatedTitle(d.title) === want);
     near = exact.length ? exact : docs.filter((d) => undatedTitle(d.title).includes(want));
+    // "BC.Game: Cache" for "Outline: BC.Game on Cache, Mirage (19 Oct)": every word of the ask in the title.
+    if (!near.length) {
+      const tokens = (t) => String(t || '').toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 1 && !TITLE_FILLER.has(w));
+      const asked = tokens(want);
+      if (asked.length) near = docs.filter((d) => {
+        const have = new Set(tokens(d.title));
+        return asked.every((w) => have.has(w));
+      });
+    }
     if (!near.length) throw new ToolError(`No document called "${title}". Call team_documents to list them.`);
     const titles = new Set(near.map((d) => undatedTitle(d.title)));
     if (titles.size > 1) {
@@ -1091,7 +1332,12 @@ const reviews = new Map();
 const turnNumbers = new Set();
 /** Sections sent with final false, per document, until the final call joins and saves them. */
 const pendingRewrites = new Map();
-/** Reviewed document id -> the "Reviewed:" copy a rewrite saved, and its sections, so later calls add to that copy. */
+/** Edits kept without saving (final false, or the rest of a call that had an edit refused), per document. */
+const pendingEdits = new Map();
+/**
+ * Reviewed document id -> the "Reviewed:" copy a rewrite saved, so later calls add to that copy:
+ * { copyId, sections } when it was built from sections, { copyId, edits, html, outline } when edited.
+ */
 const rewriteCopies = new Map();
 const DATA_TOOLS = new Set(['query_rounds', 'find_weaknesses', 'antistrat_summary', 'database_query', 'review_antistrat_document']);
 
@@ -1099,7 +1345,82 @@ const DATA_TOOLS = new Set(['query_rounds', 'find_weaknesses', 'antistrat_summar
 export function resetTurnFacts() {
   turnNumbers.clear();
   pendingRewrites.clear();
+  pendingEdits.clear();
+  lastMatched = null;
 }
+
+const PLAYLIST_TOOLS = new Set(['list_playlists', 'save_playlist', 'delete_playlist']);
+/** The rounds the last tool answer matched this turn: { tool, files }. */
+let lastMatched = null;
+
+/** Round files from {match, number} or {round} items. */
+async function roundFilesOf(items) {
+  const out = [];
+  for (const x of Array.isArray(items) ? items : []) {
+    if (typeof x === 'string' && x.trim()) out.push(x.trim());
+    else if (x?.round) out.push(String(x.round).trim());
+    else if (x?.match && x?.number != null) out.push(await fileOfMatchRound(x.match, x.number));
+    else throw new ToolError('Give each round as {"match": "<id>", "number": 7} or {"round": "<file from find_rounds>"}.');
+  }
+  return out;
+}
+
+/** One playlist by id or by name (exact, else the only one containing it). */
+function playlistIn(list, { id, name } = {}) {
+  if (id) {
+    const hit = list.find((p) => String(p.id) === String(id).trim());
+    if (!hit) throw new ToolError(`No playlist with id "${id}". Call list_playlists to see them.`);
+    return hit;
+  }
+  const q = String(name || '').trim().toLowerCase();
+  if (!q) return null;
+  const exact = list.filter((p) => String(p.name || '').toLowerCase() === q);
+  if (exact.length === 1) return exact[0];
+  const near = exact.length ? exact : list.filter((p) => String(p.name || '').toLowerCase().includes(q));
+  if (near.length === 1) return near[0];
+  if (!near.length) return null;
+  throw new ToolError(`"${name}" could be ${near.slice(0, 8).map((p) => `"${p.name}" (id ${p.id})`).join(', ')}. Pass the id.`);
+}
+
+/** Marks the notes the eye wrote on a round, so writing again replaces them and leaves the user's own. */
+const EYE_NOTE_RULE = 'eye';
+
+/** A round file as the model names it: label, match and number (empty fields for a round of an old upload). */
+async function roundRefOf(file) {
+  try {
+    const d = await matchById(matchOfFile(file));
+    const row = (await roundsOfMatch(d)).find((r) => r.file === file);
+    return { label: `${matchLabel(d)}${row ? `, round ${row.round}` : ''}`, match: d.id, ...(row ? { number: row.round } : {}) };
+  } catch {
+    return { label: 'a round from an older upload' };
+  }
+}
+
+/**
+ * One side's read of a round (antistratScan's record, with positions), and the team that played it.
+ * The match's two teams are tried in turn: the read of each is from that team's view.
+ */
+async function sideReadOf(file, side, onProgress) {
+  const d = await matchById(matchOfFile(file));
+  const row = (await roundsOfMatch(d)).find((x) => x.file === file);
+  if (!row) throw new ToolError(`That round is not in ${matchLabel(d)}.`);
+  for (const name of [d.name1 || d.t1, d.name2 || d.t2]) {
+    let scan;
+    try {
+      scan = await teamScan(name, d.map, onProgress);
+    } catch {
+      continue;
+    }
+    const r = (scan.results.extract.rounds || []).find((x) => String(x.demoId) === String(d.id) && x.round === row.round);
+    if (r && r.side === side) {
+      const theirs = teamNameKey(d.name1, d.t1) === scan.team.key ? d.name2 || d.t2 : d.name1 || d.t1;
+      return { d, row, r, scan, ours: scan.team.name, theirs };
+    }
+  }
+  throw new ToolError(`${matchLabel(d)}, round ${row.round}: no ${side} read of it (its positions could not be read).`);
+}
+
+const playlistRow = (p) => ({ id: p.id, name: p.name, rounds: (p.rounds || []).length, scope: p.scope === 'team' ? 'team' : 'private', ...(p.mine === false ? { owner: p.ownerName || 'a teammate', yours: false } : {}), updated: shortDate(p.updatedAt) });
 
 
 const roundsLink = (files) => (files?.length ? `/demos?rounds=${files.slice(0, 150).map(encodeURIComponent).join(',')}` : '');
@@ -1119,6 +1440,9 @@ const roundsLink = (files) => (files?.length ? `/demos?rounds=${files.slice(0, 1
  */
 export async function runTool(name, args = {}, ctx = {}) {
   const result = await runToolInner(name, args, ctx);
+  // The rounds an answer matched, for save_playlist's add_from "last_result".
+  const linked = /^\/demos\?rounds=([^&#]+)/.exec(String(result?.link || ''));
+  if (linked && !PLAYLIST_TOOLS.has(name)) lastMatched = { tool: name, files: linked[1].split(',').map(decodeURIComponent).filter(Boolean) };
   noteRounds(roundIdsIn(result?.content));
   if (DATA_TOOLS.has(name) && typeof result?.content === 'string' && !result.content.startsWith('Error:')) {
     for (const n of result.content.match(/\d+(?:\.\d+)?/g) || []) turnNumbers.add(n);
@@ -1390,6 +1714,35 @@ async function runToolInner(name, args = {}, ctx = {}) {
         };
       }
       case 'player_patterns': {
+        // Where each player starts, on one map or every map at once: the 19 Oct Nexus question read
+        // six whole antistrat sheets and six full pattern lists for this and never fit them all.
+        if (String(args.map || '').trim().toLowerCase() === 'all' || args.brief) {
+          const team = await teamOf(args.team);
+          const maps = String(args.map || '').trim().toLowerCase() === 'all' ? await mapsOf(team, ['all'], 1) : [mapCodeOf(args.map)];
+          const side = args.side === 'T' || args.side === 'CT' ? args.side : 'both';
+          const out = [];
+          const files = [];
+          for (const [i, m] of maps.entries()) {
+            try {
+              const scan = await teamScan(team.name, m, (label) => ctx.onProgress?.(`Map ${i + 1} of ${maps.length}: ${label}`));
+              const { rounds, network, nameOf } = scan.results.extract;
+              const found = playerPatterns(rounds, network, { nameOf, side, player: args.player, fullBuyOnly: !args.all_buys });
+              files.push(...found.flatMap((x) => x.files));
+              out.push({
+                map: mapName(m),
+                demos: scan.demoIds.length,
+                players: found.map((x) => ({ player: x.player, side: x.side, rounds: x.rounds, starts: (x.how_he_plays || []).find((l) => /^Starts\b/.test(l)) || 'no usual start' }))
+              });
+            } catch (err) {
+              out.push({ map: mapName(m), error: err.message });
+            }
+          }
+          return {
+            content: fit({ team: team.name, buys: args.all_buys ? 'all' : 'full buys', maps: out, how: 'Where each player starts, per map and side, with the rounds it is counted over. Ask player_patterns for one map for how they play.' }),
+            display: `Read where ${team.name}'s players start on ${maps.length} map${maps.length === 1 ? '' : 's'}`,
+            link: roundsLink([...new Set(files)])
+          };
+        }
         const scan = await teamScan(args.team, args.map, ctx.onProgress);
         const { rounds, network, nameOf } = scan.results.extract;
         const side = args.side === 'T' || args.side === 'CT' ? args.side : 'both';
@@ -1429,7 +1782,20 @@ async function runToolInner(name, args = {}, ctx = {}) {
       }
       case 'review_antistrat_document': {
         const { doc, note: docNote } = await documentOf(args.title, args.id);
+        // Part 2, 3 ... of a review already made this session: read from it, nothing is counted again.
+        const earlier = reviews.get(doc.id);
+        if (Number(args.part) > 1 && earlier?.lines) {
+          const page = partOf(earlier.lines, args.part);
+          return {
+            content: fit({ title: doc.title, id: doc.id, ...partNote(page), lines: page.lines }),
+            display: `Review of "${doc.title}", part ${page.part} of ${page.parts}`,
+            link: '/team/documents'
+          };
+        }
         const outline = outlineOfHtml(doc.html || '');
+        const style = styleOfTitle(doc.title);
+        /** The points a document in this style would carry: what "missing" is judged against. */
+        const sameStyle = [];
         const subject = args.team ? { team: args.team, maps: args.maps || [] } : subjectOfTitle(doc.title);
         let fresh = [];
         const findings = [];
@@ -1440,7 +1806,8 @@ async function runToolInner(name, args = {}, ctx = {}) {
             const maps = await mapsOf(team, subject.maps?.length ? subject.maps : ['all']);
             for (const m of maps) {
               const scan = await teamScan(team.name, m, ctx.onProgress);
-              fresh.push(...freshPoints(scan));
+              fresh.push(...freshPoints(scan, ['full', 'outline', 'sixpack']));
+              sameStyle.push(...freshPoints(scan, [style]));
               // What "Notes and preparation" may draw on: measured weaknesses and the rule-bot's exploits.
               const { rounds, network } = scan.results.extract;
               for (const side of ['T', 'CT']) {
@@ -1456,15 +1823,30 @@ async function runToolInner(name, args = {}, ctx = {}) {
         } else {
           note = 'Not compared with the data: the title does not name a team and maps. Call again with team and maps.';
         }
-        const review = reviewOutline(outline, fresh);
-        reviews.set(doc.id, { outline, fresh, findings, issues: review.issues.map((x) => x.text) });
+        const review = reviewOutline(outline, fresh, { missingFrom: sameStyle });
         // A new review starts a new rewrite: the next one is a fresh "Reviewed:" copy.
         rewriteCopies.delete(doc.id);
         pendingRewrites.delete(doc.id);
+        pendingEdits.delete(doc.id);
         let n = 0;
-        const numbered = outline.map((p) => (p.heading ? `## ${p.side}${p.section ? ` / ${p.section}` : ''}` : `${n++}. ${p.text}`));
+        // Edits name points by these numbers and sections by these headings (editDocument reads them the same way).
+        const numbered = outline.map((p) => (p.heading ? `## ${sectionName(p)}` : `${n++}. ${p.text}`));
+        // A long document's review comes in parts (the 417-point Drama sheet was cut after the first
+        // stretch and the model fetched it again and again): issues first, then what the notes may
+        // draw on, then the outline.
+        const lines = [
+          'ISSUES:',
+          ...review.issues.map((x) => `[${x.kind}] ${x.text}`),
+          'FOR NOTES (their weaknesses and exploits):',
+          ...findings.map((f) => `${f.side} ${f.section}: ${f.text}`),
+          'OUTLINE (numbered points):',
+          ...numbered
+        ];
+        // The html as reviewed: edits are made in it, by the review's numbers.
+        reviews.set(doc.id, { outline, fresh, findings, issues: review.issues.map((x) => x.text), lines, html: String(doc.html || '') });
+        const page = partOf(lines, 1);
         return {
-          content: fit({ title: doc.title, id: doc.id, note: [docNote, note].filter(Boolean).join(' '), points: review.points, issue_counts: review.counts, issues: review.issues.map((x) => `[${x.kind}] ${x.text}`), outline: numbered, for_notes: findings.map((f) => `${f.side} ${f.section}: ${f.text}`) }),
+          content: fit({ title: doc.title, id: doc.id, note: [docNote, note].filter(Boolean).join(' '), points: review.points, issue_counts: review.counts, ...partNote(page), lines: page.lines }),
           display: `Reviewed "${doc.title}": ${review.issues.length} issue${review.issues.length === 1 ? '' : 's'}`,
           link: '/team/documents'
         };
@@ -1476,13 +1858,88 @@ async function runToolInner(name, args = {}, ctx = {}) {
         const replace = args.mode === 'replace';
         const title = replace ? doc.title : `Reviewed: ${String(doc.title).replace(/^reviewed:\s*/i, '')}`;
         const sent = Array.isArray(args.sections) ? args.sections : [];
-        // Parts: a long document is sent a few sections at a time and saved by the final call.
-        // A section sent again (same side and heading) replaces the earlier one in its place.
-        // Sections already saved by an earlier call for this review come first, so a rewrite
-        // sent in several calls (with or without final false) grows one document.
+        const edits = Array.isArray(args.edits) ? args.edits : [];
+        if (sent.length && edits.length) throw new ToolError('Send edits or sections, not both: edits change parts of the document, sections rebuild all of it.');
         const copy = rewriteCopies.get(doc.id);
+        const target = replace ? doc.id : copy?.copyId || '';
+        // Numbers new text may use: the review's points, the fresh sheet and findings, this turn's data
+        // tools, the review's own issues (its corrected numbers), and what an earlier call for this review
+        // saved (checked then, perhaps against an earlier question's queries).
+        const savedTexts = copy?.outline ? copy.outline.filter((p) => !p.heading).map((p) => p.text) : (copy?.sections || []).flatMap((s) => s?.points || []);
+        const numbers = { text: [...turnNumbers, ...(seen.issues || []), ...savedTexts].join(' '), files: [] };
+        const known = [...seen.outline.filter((p) => !p.heading), ...seen.fresh, ...seen.findings, numbers];
+
+        // Edits: made in the document as reviewed, by the review's numbers; the rest of it stays as it was.
+        // Every call replays the edits saved before it, so later calls grow the same copy.
+        if (edits.length || (!sent.length && pendingEdits.has(doc.id))) {
+          if (copy?.sections) {
+            throw new ToolError(`"${title}" was rebuilt from whole sections, so the review's point numbers no longer fit it. Send the sections to change again: a section sent with the same heading replaces it.`);
+          }
+          if (pendingRewrites.has(doc.id)) throw new ToolError('Sections sent for this document are waiting to be saved: call again with final true and no edits to save them first.');
+          const now = String(doc.html || '');
+          if (now !== seen.html && now !== copy?.html) throw new ToolError('The document changed after the review: review it again, then edit by its new numbers.');
+          const before = copy?.edits || [];
+          const kept = pendingEdits.get(doc.id) || [];
+          // An edit sent again (after a refusal, or already saved) is made once.
+          const keys = new Set([...before, ...kept].map(editKey));
+          const fresh = [];
+          for (const e of edits) {
+            const key = editKey(e);
+            if (!keys.has(key)) fresh.push(e);
+            keys.add(key);
+          }
+          const all = [...before, ...kept, ...fresh];
+          const out = editDocument(seen.html, all, known, escapeHtml, { checkFrom: before.length });
+          const refused = new Set(out.refused.map((r) => r.index));
+          const good = all.filter((_, i) => i >= before.length && !refused.has(i));
+          const edit = (n) => `${n} edit${n === 1 ? '' : 's'}`;
+          if (out.refused.length) {
+            if (good.length) pendingEdits.set(doc.id, good);
+            else pendingEdits.delete(doc.id);
+            throw new ToolError(
+              `Not made: ${out.refused.map((r) => r.why).join(' ')} ${
+                good.length
+                  ? `The other ${edit(good.length)} ${good.length === 1 ? 'is' : 'are'} kept and nothing is saved yet: send only the fixed edits (not the kept ones again), or call again with no edits to save the kept ones without them.`
+                  : 'Nothing is saved.'
+              }`
+            );
+          }
+          if (args.final === false) {
+            pendingEdits.set(doc.id, good);
+            return {
+              content: `Kept ${edit(fresh.length)} (${good.length} so far). Send the rest, then call again with final true. Nothing is saved yet.`,
+              display: `Kept ${edit(good.length)} to the document`
+            };
+          }
+          pendingEdits.delete(doc.id);
+          if (!good.length) return { content: `Nothing new: ${edits.length === 1 ? 'that edit is' : 'those edits are'} already in "${title}".`, display: 'No new edits' };
+          const what = out.done.join('; ');
+          const q = replace
+            ? `Overwrite "${doc.title}" with these changes: ${what}? The old text is not kept.`
+            : `${target ? 'Update the edited copy' : 'Save an edited copy'} "${title}" in your team's Documents (${dest.name})? Changes: ${what}.`;
+          const ok = (await ctx.confirm?.(q)) ?? true;
+          if (!ok) return { content: 'The user declined. Nothing was saved.', display: 'Edits not saved (declined)' };
+          const saved = await saveTeamDocument(dest.id, target ? { id: target, title, html: out.html } : { title, html: out.html });
+          const copyId = target || saved?.document?.id || '';
+          rewriteCopies.set(doc.id, { copyId, edits: [...before, ...good], html: out.html, outline: out.outline });
+          const verb = target && !replace ? 'Updated' : 'Saved';
+          const points = out.outline.filter((p) => !p.heading).length;
+          return {
+            content: `${verb} "${title}"${copyId ? ` (id ${copyId})` : ''}: ${what}. ${points} point${points === 1 ? '' : 's'} in all, the rest as it was. Later edits for this document are added to it.`,
+            display: `${verb} "${title}"`,
+            link: '/team/documents'
+          };
+        }
+
+        // Sections: parts of a long document are sent a few sections at a time and saved by the final call.
+        // A section sent again (same side and heading) replaces the earlier one in its place.
+        // Sections already saved by an earlier call for this review come first (an edited copy's, read
+        // from its outline), so a rewrite sent in several calls (with or without final false) grows one document.
+        if (pendingEdits.has(doc.id)) throw new ToolError('Edits sent for this document are waiting to be saved: call again with no sections to save them first.');
+        if (copy?.outline && !sent.length && !pendingRewrites.has(doc.id)) throw new ToolError(`Nothing to save: "${title}" already has the earlier edits. Send edits or sections to change it.`);
         const merged = new Map();
-        for (const s of [...(copy?.sections || []), ...(pendingRewrites.get(doc.id) || []), ...sent]) merged.set(`${s?.side || ''}|${s?.heading || ''}`, s);
+        const base = copy?.outline ? sectionsOfOutline(copy.outline) : copy?.sections || [];
+        for (const s of [...base, ...(pendingRewrites.get(doc.id) || []), ...sent]) merged.set(`${s?.side || ''}|${s?.heading || ''}`, s);
         const sections = [...merged.values()];
         if (args.final === false) {
           if (!sent.length) throw new ToolError('Send at least one section, or call with final true to save what was sent.');
@@ -1494,16 +1951,13 @@ async function runToolInner(name, args = {}, ctx = {}) {
         }
         let built;
         try {
-          // Also allowed: this turn's data tools, and the review's own issues (its corrected numbers).
-          const numbers = { text: [...turnNumbers, ...(seen.issues || [])].join(' '), files: [] };
-          built = buildRewrite({ title, sections }, [...seen.outline.filter((p) => !p.heading), ...seen.fresh, ...seen.findings, numbers], escapeHtml);
+          built = buildRewrite({ title, sections }, known, escapeHtml);
         } catch (err) {
           // Kept, so the model corrects the one point and sends the final call again, not the whole document.
           if (sections.length) pendingRewrites.set(doc.id, sections);
           throw new ToolError(`${err.message}${sent.length ? ' The sections you sent are kept: fix that point in a section sent again with the same heading, or leave it out.' : ''}`);
         }
         pendingRewrites.delete(doc.id);
-        const target = replace ? doc.id : copy?.copyId || '';
         const q = replace
           ? `Overwrite "${doc.title}" with the rewritten version (${built.points} points)? The old text is not kept.`
           : `${target ? 'Update' : 'Save'} the rewritten version (${built.points} points) as "${title}" in your team's Documents (${dest.name})?`;
@@ -1583,7 +2037,9 @@ async function runToolInner(name, args = {}, ctx = {}) {
             list = list.filter((d) => (side(d) === 1 ? teamNameKey(d.name2, d.t2) : teamNameKey(d.name1, d.t1)) === opp.key);
           }
         } else if (args.opponent) {
-          throw new ToolError('opponent needs team: name both teams.');
+          // "matches against X" without a team: every match X played.
+          const opp = await teamOf(args.opponent);
+          list = list.filter((d) => teamNameKey(d.name1, d.t1) === opp.key || teamNameKey(d.name2, d.t2) === opp.key);
         }
         const total = list.length;
         if (!total) return { content: fit({ total: 0, matches: [], note: 'No match in the library fits. list_teams shows the teams and their maps.' }), display: 'No matches found' };
@@ -1663,6 +2119,8 @@ async function runToolInner(name, args = {}, ctx = {}) {
         return { content: fit(out), display: `${label}: ${out.score}`, link: roundsLink(rounds.map((r) => r.file)) };
       }
       case 'find_rounds': {
+        // "rounds against X" without a team is every round X played.
+        if (args.opponent && !args.team) args = { ...args, team: args.opponent, opponent: undefined };
         const { payload } = await library();
         const idsOf = (team) => idsOfTeam(payload, team);
         const query = {};
@@ -1833,7 +2291,12 @@ async function runToolInner(name, args = {}, ctx = {}) {
           .replace(/&gt;/g, '>')
           .replace(/\n{3,}/g, '\n\n')
           .trim();
-        return { content: fit({ title: full.title, id: full.id, ...(docNote ? { note: docNote } : {}), text }), display: `Read "${full.title}"`, link: '/team/documents' };
+        const page = partOf(text.split('\n'), args.part);
+        return {
+          content: fit({ title: full.title, id: full.id, ...(docNote ? { note: docNote } : {}), ...partNote(page), text: page.lines.join('\n') }),
+          display: `Read "${full.title}"${page.parts > 1 ? ` (part ${page.part} of ${page.parts})` : ''}`,
+          link: '/team/documents'
+        };
       }
       case 'team_rankings': {
         const table = await fetchVrsRanks();
@@ -2045,6 +2508,7 @@ async function runToolInner(name, args = {}, ctx = {}) {
           return out.text;
         });
         ctx.onProgress?.('Saving strategy…');
+        // The stratbook is shared: its 2D link opens on aim4.io, not the desktop app's localhost.
         const origin = typeof location !== 'undefined' ? location.origin : '';
         await saveTeamStrategy(d.team.id, {
           map: d.mapCode,
@@ -2063,6 +2527,290 @@ async function runToolInner(name, args = {}, ctx = {}) {
           content: `Saved the ${d.side} strategy "${name}" (${category}, ${economy}) to your team's stratbook (${d.team.name}), ${mapName(d.mapCode)}. ${linked} grenade link${linked === 1 ? '' : 's'} in the notes${folded.dropped ? `; ${folded.dropped} grenade${folded.dropped === 1 ? '' : 's'} left out because the utility archive for this map is full` : ''}.${empty.length ? ` Empty columns: ${empty.join(', ')}.` : ''}`,
           display: `Saved strategy "${name}"`,
           link: '/team/stratbook'
+        };
+      }
+      case 'refresh_library': {
+        ctx.onProgress?.('Reading the library again…');
+        forgetLibrary();
+        scans.clear();
+        const { payload, teams } = await library();
+        const newest = [...payload.demos].sort((a, b) => (b.uploadedAt || 0) - (a.uploadedAt || 0)).slice(0, 8).map((d) => ({ match: d.id, label: matchLabel(d) }));
+        let team;
+        if (args.team) {
+          try {
+            const t = await teamOf(args.team);
+            const counts = new Map();
+            for (const d of payload.demos) if (teamNameKey(d.name1, d.t1) === t.key || teamNameKey(d.name2, d.t2) === t.key) counts.set(d.map, (counts.get(d.map) || 0) + 1);
+            team = { team: t.name, maps: [...counts].sort((a, b) => b[1] - a[1]).map(([m, n]) => ({ map: mapName(m), demos: n })) };
+          } catch (err) {
+            team = { error: err.message };
+          }
+        }
+        return {
+          content: fit({ matches: payload.demos.length, teams: teams.length, newest, ...(team ? { team } : {}), note: 'Read just now. A demo still being processed after upload is not in the library until it finishes.' }),
+          display: `Library read again: ${payload.demos.length} matches`
+        };
+      }
+      case 'list_playlists': {
+        const list = await fetchPlaylists();
+        const one = args.id || args.name ? playlistIn(list, args) : null;
+        if (args.name && !one) throw new ToolError(`No playlist called "${args.name}". Call list_playlists to see them.`);
+        if (!one) {
+          return {
+            content: fit({ total: list.length, playlists: list.slice(0, 40).map(playlistRow), ...(list.length > 40 ? { note: `Newest 40 of ${list.length}.` } : {}) }),
+            display: `${list.length} playlist${list.length === 1 ? '' : 's'}`,
+            link: '/demos'
+          };
+        }
+        const files = one.rounds || [];
+        const rounds = [];
+        for (const f of files.slice(0, 40)) rounds.push(await roundRefOf(f));
+        return {
+          content: fit({ ...playlistRow(one), shown: rounds.length, rounds, ...(files.length > 40 ? { note: `First 40 of ${files.length} rounds.` } : {}) }),
+          display: `Read playlist "${one.name}"`,
+          link: roundsLink(files)
+        };
+      }
+      case 'save_playlist': {
+        const list = await fetchPlaylists();
+        // An id edits; a name that is already a playlist edits it too; anything else creates.
+        let target = args.id ? playlistIn(list, { id: args.id }) : null;
+        if (!target && args.name) target = list.find((p) => String(p.name || '').toLowerCase() === String(args.name).trim().toLowerCase()) || null;
+        if (target && target.mine === false) throw new ToolError(`"${target.name}" belongs to ${target.ownerName || 'a teammate'}; only they can change it. Create a new playlist instead.`);
+        const add = await roundFilesOf(args.add);
+        if (args.add_from === 'last_result') {
+          if (!lastMatched?.files?.length) throw new ToolError('No earlier tool answer this turn matched any rounds. Run the query first, or give the rounds in add.');
+          add.push(...lastMatched.files);
+        }
+        const drop = new Set(await roundFilesOf(args.remove));
+        const before = target?.rounds || [];
+        const rounds = [...new Set([...(args.replace ? [] : before), ...add])].filter((f) => !drop.has(f));
+        const newName = String(args.name || '').trim();
+        if (!target && !newName) throw new ToolError('Give the new playlist a name.');
+        if (!target && !rounds.length) throw new ToolError('A new playlist needs rounds: give them in add, or add_from "last_result" after a query.');
+        const scope = args.scope === 'team' || args.scope === 'private' ? args.scope : undefined;
+        const added = rounds.filter((f) => !before.includes(f)).length;
+        const removed = before.filter((f) => !rounds.includes(f)).length;
+        const what = target
+          ? `Change the playlist "${target.name}"${newName && newName !== target.name ? ` (rename to "${newName}")` : ''}: ${added} round${added === 1 ? '' : 's'} added, ${removed} removed${scope ? `, ${scope}` : ''}?`
+          : `Create the playlist "${newName}" with ${rounds.length} round${rounds.length === 1 ? '' : 's'}${scope === 'team' ? ', shared with your team' : ''}?`;
+        const ok = (await ctx.confirm?.(what)) ?? true;
+        if (!ok) return { content: 'The user declined. Nothing was saved.', display: 'Playlist not saved (declined)' };
+        const saved = await savePlaylist({ ...(target ? { id: target.id } : {}), ...(newName ? { name: newName } : {}), rounds, ...(scope ? { scope } : {}) });
+        // The server answers with the whole list; a new playlist is the one that was not there before.
+        const now = target ? saved.find((p) => p.id === target.id) : saved.find((p) => !list.some((o) => o.id === p.id));
+        const kept = now?.rounds?.length ?? rounds.length;
+        const label = now?.name || newName || target?.name;
+        return {
+          content: `${target ? 'Updated' : 'Created'} the playlist "${label}"${now?.id ? ` (id ${now.id})` : ''}: ${kept} round${kept === 1 ? '' : 's'}${target ? ` (${added} added, ${removed} removed)` : ''}, ${now?.scope === 'team' ? 'shared with the team' : 'private'}.${kept < rounds.length ? ` ${rounds.length - kept} rounds were not kept (a playlist holds at most 400).` : ''}`,
+          display: `${target ? 'Updated' : 'Created'} playlist "${label}"`,
+          link: roundsLink(now?.rounds || rounds)
+        };
+      }
+      case 'delete_playlist': {
+        if (!args.id && !args.name) throw new ToolError('Name the playlist to delete (id or name).');
+        const list = await fetchPlaylists();
+        const target = playlistIn(list, args);
+        if (!target) throw new ToolError(`No playlist called "${args.name}". Call list_playlists to see them.`);
+        if (target.mine === false) throw new ToolError(`"${target.name}" belongs to ${target.ownerName || 'a teammate'}; only they can delete it.`);
+        const ok = (await ctx.confirm?.(`Delete the playlist "${target.name}" (${(target.rounds || []).length} rounds)? The rounds stay in the library.`)) ?? true;
+        if (!ok) return { content: 'The user declined. Nothing was deleted.', display: 'Playlist not deleted (declined)' };
+        await deletePlaylist(target.id);
+        return { content: `Deleted the playlist "${target.name}". Its rounds are still in the library.`, display: `Deleted playlist "${target.name}"`, link: '/demos' };
+      }
+      case 'sample_rounds': {
+        const { payload } = await library();
+        const mapCode = mapCodeOf(args.map);
+        const count = Math.max(1, Math.min(30, Math.round(args.count) || 8));
+        const codeOf = (b) => (b && b !== 'any' ? BUY_CODE[b] : undefined);
+        const buyA = codeOf(args.buy);
+        const buyB = codeOf(args.vs_buy);
+        const query = { maps: [mapCode] };
+        let mine = null;
+        if (args.team) {
+          mine = idsOfTeam(payload, await teamOf(args.team));
+          query.teams = [...mine];
+        }
+        // The pair of buys narrows the search on the server; which side had which is checked below.
+        if (buyA !== undefined) query.econA = buyA;
+        if (buyB !== undefined) query.econB = buyB;
+        ctx.onProgress?.('Searching the rounds…');
+        let list = (await findRounds(query, 2000)).rounds || [];
+        if (mine) {
+          list = list.filter((r) => {
+            const own = buyBucket(mine.has(r.team1) ? r.econ1 : r.econ2);
+            const opp = buyBucket(mine.has(r.team1) ? r.econ2 : r.econ1);
+            return (buyA === undefined || own === buyA) && (buyB === undefined || opp === buyB);
+          });
+        }
+        for (let i = list.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [list[i], list[j]] = [list[j], list[i]];
+        }
+        const gap = args.gap && (Number.isFinite(args.gap.never_below) || Number.isFinite(args.gap.reaches)) ? args.gap : null;
+        // A gap with only a side checked nothing, and its rounds came back as fitting it (19 Oct: "never down a man" got 4v5 rounds).
+        if (args.gap && !gap) throw new ToolError('gap needs never_below or reaches. never_below 0: never fewer players alive than the other side (never 4v5); -1: never two fewer (never 3v5); reaches 2: two more at some point (5v3).');
+        const gapSide = String(args.gap?.side || '').toUpperCase() === 'CT' ? 'CT' : 'T';
+        // Down a man for a moment (traded at once) is not being down a man: 2 seconds unless the user names another time.
+        const grace = args.gap?.grace != null && Number.isFinite(Number(args.gap.grace)) ? Math.max(0, Number(args.gap.grace)) : 2;
+        const winner = String(args.winner || 'any');
+        if ((winner === 'team' || winner === 'opponent') && !mine) throw new ToolError('winner "team" or "opponent" needs team; without one use "T" or "CT".');
+        const fits = [];
+        const others = [];
+        let checked = 0;
+        /** Rounds read at most: each is one request. */
+        const MAX_CHECK = 160;
+        for (let i = 0; i < list.length && fits.length < count && checked < MAX_CHECK; i += 8) {
+          const batch = list.slice(i, i + 8);
+          ctx.onProgress?.(`Reading rounds: ${checked} checked, ${fits.length} of ${count} found…`);
+          const metas = await Promise.all(batch.map((r) => fetchRoundMeta(r.file).catch(() => null)));
+          for (const [j, meta] of metas.entries()) {
+            if (!meta) continue;
+            checked++;
+            const r = batch[j];
+            if (!mine) {
+              // No team: buy is the T side's, vs_buy the CT side's.
+              const tTeam = sideOfTeam(meta, 1) === 'T' ? 1 : 2;
+              const econT = buyBucket(tTeam === 1 ? meta.econ1 : meta.econ2);
+              const econCT = buyBucket(tTeam === 1 ? meta.econ2 : meta.econ1);
+              if ((buyA !== undefined && econT !== buyA) || (buyB !== undefined && econCT !== buyB)) continue;
+            }
+            const won = winnerSide(meta);
+            if ((winner === 'T' || winner === 'CT') && won !== winner) continue;
+            if (winner === 'team' || winner === 'opponent') {
+              const winnerId = r.winner === 1 ? r.team1 : r.team2;
+              if ((winner === 'team') !== mine.has(winnerId)) continue;
+            }
+            const gaps = aliveGaps(meta, gapSide, grace);
+            (gap && !gapFits(gaps, gap) ? others : fits).push({ file: r.file, won, gaps });
+            if (fits.length >= count) break;
+          }
+        }
+        const picked = fits.slice(0, count).map((x) => ({ ...x, fit: true }));
+        if (args.prefer && picked.length < count) picked.push(...others.slice(0, count - picked.length).map((x) => ({ ...x, fit: false })));
+        const rounds = [];
+        for (const x of picked) rounds.push({ ...(await roundRefOf(x.file)), won_by: x.won, ...(gap ? { fits_gap: x.fit } : {}), [`${gapSide}_alive`]: gapWords(x.gaps) });
+        const all = checked >= list.length;
+        return {
+          content: fit({
+            map: mapName(mapCode),
+            rounds_with_these_buys: list.length,
+            checked,
+            fit_everything: fits.length,
+            picked: rounds.length,
+            ...(gap ? { gap: `${gapSide} side: ${Number.isFinite(gap.never_below) ? `never below ${gap.never_below}` : ''}${Number.isFinite(gap.never_below) && Number.isFinite(gap.reaches) ? ', ' : ''}${Number.isFinite(gap.reaches) ? `up ${gap.reaches} at some point` : ''}${grace ? `; a count held ${grace}s or less (a trade) left out` : ''}` } : {}),
+            rounds,
+            note: `${fits.length < count ? `Only ${fits.length} fit everything${all ? ' in the whole pool' : ` in the ${checked} rounds read (the search stops at ${MAX_CHECK})`}${args.prefer && rounds.length > fits.length ? `; the other ${rounds.length - fits.length} pass everything but the gap` : ''}. ` : ''}Picked at random. These rounds are the last result for save_playlist.`
+          }),
+          display: `Picked ${rounds.length} round${rounds.length === 1 ? '' : 's'} on ${mapName(mapCode)} (${fits.length} fit everything)`,
+          link: roundsLink(picked.map((x) => x.file))
+        };
+      }
+      case 'round_briefs': {
+        const side = String(args.side || 'T').toUpperCase() === 'CT' ? 'CT' : 'T';
+        let files;
+        let from = '';
+        if (args.playlist) {
+          const list = await fetchPlaylists();
+          const pl = list.find((p) => String(p.id) === String(args.playlist).trim()) || playlistIn(list, { name: args.playlist });
+          if (!pl) throw new ToolError(`No playlist "${args.playlist}". Call list_playlists to see them.`);
+          files = pl.rounds || [];
+          from = `playlist "${pl.name}"`;
+        } else files = await roundFilesOf(args.rounds);
+        if (!files.length) throw new ToolError('Give a playlist or rounds by match and number.');
+        const PER_PART = 4;
+        const parts = Math.ceil(files.length / PER_PART);
+        const part = Math.max(1, Math.min(parts, Math.round(Number(args.part)) || 1));
+        const { names } = await library();
+        const nadeLine = /\b(smoke|molotov|flash|HE) → /;
+        const out = [];
+        for (const [i, file] of files.slice((part - 1) * PER_PART, part * PER_PART).entries()) {
+          const ref = await roundRefOf(file);
+          ctx.onProgress?.(`Round ${(part - 1) * PER_PART + i + 1} of ${files.length}: ${ref.label}`);
+          try {
+            const { d, r, scan, ours, theirs } = await sideReadOf(file, side, ctx.onProgress);
+            const { network, nameOf } = scan.results.extract;
+            const story = roundStory(r, { names, network, ours, theirs, pool: scan.results.extract.rounds || [] });
+            const mark = `${ours} (${side}):`;
+            const kind = side === 'T' ? classifyRound(r, network, { nameOf, mapCode: d.map }) : null;
+            out.push({
+              ...ref,
+              team: ours,
+              buys: story.buys,
+              result: story.result,
+              ...(kind ? { hit: kind.kind === 'no-hit' ? 'no hit on a site' : `${kind.label}${kind.lanes?.length ? `, from ${kind.lanes.map((l) => `${l.from} (${l.players.length})`).join(' + ')}` : ''}` } : {}),
+              ...(story.pace?.this_round ? { pace: story.pace.this_round } : {}),
+              // Only this side's shape: "1:45 Nexus: T Mid 3, B Main 2 (fNk, HOLY)".
+              shape: story.formations.map((l) => l.split(' | ')[0]).slice(0, 10),
+              utility: story.events.filter((l) => l.includes(mark) && nadeLine.test(l)).map((l) => l.replace(`${mark} `, '')).slice(0, 25),
+              kills_and_bomb: story.events.filter((l) => /^\d+:\d\d (KILL|BOMB)/.test(l)).slice(0, 12)
+            });
+          } catch (err) {
+            out.push({ ...ref, error: err.message });
+          }
+        }
+        return {
+          content: fit({ side, ...(from ? { from } : {}), rounds_total: files.length, ...(parts > 1 ? { part: `${part} of ${parts}`, ...(part < parts ? { next: `Call again with part ${part + 1} for the next rounds.` } : {}) } : {}), rounds: out }),
+          display: `Read ${out.length} round${out.length === 1 ? '' : 's'}${from ? ` of ${from}` : ''}${parts > 1 ? ` (part ${part} of ${parts})` : ''}`,
+          link: roundsLink(files)
+        };
+      }
+      case 'write_round_notes': {
+        const items = (Array.isArray(args.notes) ? args.notes : []).slice(0, 40);
+        if (!items.length) throw new ToolError('Give at least one note: a round (match and number) and its text.');
+        const jobs = [];
+        for (const n of items) {
+          const remove = n?.delete === true;
+          const text = String(n?.text || '').trim().slice(0, NOTE_MAX);
+          if (!text && !remove) throw new ToolError('Every note needs its text (or delete: true to remove one).');
+          const [file] = await roundFilesOf([n]);
+          jobs.push({ file, text, at: n.at, remove });
+        }
+        const writes = jobs.filter((j) => !j.remove).length;
+        const removes = jobs.length - writes;
+        const asked = [writes ? `write ${writes} round note${writes === 1 ? '' : 's'}` : '', removes ? `remove ${removes} of the eye's round note${removes === 1 ? '' : 's'}` : ''].filter(Boolean).join(' and ');
+        const ok = (await ctx.confirm?.(`${asked[0].toUpperCase()}${asked.slice(1)} (shown in the round viewer)?\n${jobs.map((j) => `- ${j.remove ? '(remove)' : j.text.slice(0, 90)}`).join('\n')}`)) ?? true;
+        if (!ok) return { content: 'The user declined. No notes were changed.', display: 'Round notes not changed (declined)' };
+        const done = [];
+        const removed = [];
+        const absent = [];
+        const failed = [];
+        for (const [i, j] of jobs.entries()) {
+          ctx.onProgress?.(`${j.remove ? 'Removing' : 'Writing'} note ${i + 1} of ${jobs.length}…`);
+          try {
+            const meta = await fetchRoundMeta(j.file);
+            if (!meta) throw new ToolError('round not found');
+            const timing = timingFor(meta);
+            const existing = Array.isArray(meta.notes) ? meta.notes : meta.note ? [{ id: 'legacy', tick: timing.freezeEndTick, text: String(meta.note), kind: 'user' }] : [];
+            // The eye's own earlier note on this round is replaced (or removed); the user's notes stay.
+            const keep = existing.filter((x) => x.rule !== EYE_NOTE_RULE);
+            if (j.remove) {
+              if (keep.length === existing.length) {
+                absent.push(j.file);
+                continue;
+              }
+              await saveRoundNotes(j.file, keep);
+              removed.push(j.file);
+              continue;
+            }
+            const tick = Math.round(timing.freezeEndTick + clockArg(j.at, 0) * timing.tickRate);
+            await saveRoundNotes(j.file, [...keep, { id: `n${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`, tick, text: j.text, kind: 'user', rule: EYE_NOTE_RULE, updatedAt: Date.now() }]);
+            done.push(j.file);
+          } catch (err) {
+            failed.push(`${(await roundRefOf(j.file)).label}: ${err.message}`);
+          }
+        }
+        const absentLabels = await Promise.all(absent.map(async (f) => (await roundRefOf(f)).label));
+        const said = [
+          writes ? `Wrote ${done.length} of ${writes} round note${writes === 1 ? '' : 's'}` : '',
+          removes ? `removed ${removed.length} of ${removes}` : '',
+          absent.length ? `no eye note to remove on ${absentLabels.join(', ')} (the user's own notes are never removed)` : '',
+          failed.length ? `failed: ${failed.join('; ')}` : ''
+        ].filter(Boolean).join('; ');
+        return {
+          content: `${said[0].toUpperCase()}${said.slice(1)}.${done.length ? ' They show in the round viewer at their clock time.' : ''}`,
+          display: [done.length ? `Wrote ${done.length} round note${done.length === 1 ? '' : 's'}` : '', removed.length ? `Removed ${removed.length}` : ''].filter(Boolean).join(', ') || 'No round notes changed',
+          link: roundsLink([...done, ...removed])
         };
       }
       default:

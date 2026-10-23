@@ -976,7 +976,11 @@ export async function fetchRoundMeta(file) {
   try {
     const body = await asJson(
       await safeFetch(`${API_BASE}/api/replays/rounds/${encodeURIComponent(file)}`, {
-        headers: await headers()
+        headers: await headers(),
+        // Always revalidate: the notes in this meta change, and browsers still
+        // hold copies the server once sent as immutable for a year. The server
+        // answers 304 by a notes ETag, so an unchanged round costs no body.
+        cache: 'no-cache'
       })
     );
     return body.round;

@@ -24,6 +24,21 @@ pub type Error = Box<dyn std::error::Error + Send + Sync>;
 /// results in it (16k overflowed after three database answers), small enough
 /// to fit beside the model on modest machines.
 const CONTEXT: &str = "32768";
+/// One request at a time. By default llama-server runs 4 slots on one shared
+/// cache of CONTEXT tokens, so two chats asking at once (two tabs, or a chat
+/// and its retry) each brought a 20,000-token prompt and both failed with
+/// "Context size has been exceeded" (21 Oct). With one slot the second waits
+/// its turn and every request has the whole context.
+const SLOTS: &str = "1";
+/// Tokens of reasoning a reply may spend before llama-server ends it and the
+/// model acts, in the same request. Measured on the 27B (22 Oct): without it,
+/// 4 of 6 replies thought for 2,500 tokens and made no call; with it, 3 of 3
+/// acted within 22 s. The page used to stop such replies and ask again, which
+/// threw the reasoning away: 20 of 55 busy minutes in the 21 Oct notes job.
+/// The page is told the budget (`hello`) and then leaves the stopping to it.
+pub const REASONING_BUDGET: u32 = 1500;
+/// Ends the reasoning when the budget runs out, in the model's own voice.
+const REASONING_BUDGET_MESSAGE: &str = "I have planned enough. Act now: make the next tool call, or answer from what the tools have shown.";
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(180);
 
 pub fn eye_dir() -> PathBuf {
@@ -264,14 +279,16 @@ fn free_port() -> Result<u16, Error> {
 
 /// Start the server on a model and wait until it answers. With `gpu`, it is
 /// left to fit as much of the model on the GPU as memory allows; without, it
-/// runs on the CPU only.
-pub fn start_server(exe: &Path, model: &Path, mmproj: Option<&Path>, gpu: bool) -> Result<Server, Error> {
+/// runs on the CPU only. With `mtp`, it drafts with the model's own draft layer
+/// (ModelSpec::mtp).
+pub fn start_server(exe: &Path, model: &Path, mmproj: Option<&Path>, gpu: bool, mtp: bool) -> Result<Server, Error> {
     let port = free_port()?;
     let log = std::fs::File::create(eye_dir().join("llama-server.log"))?;
     let mut cmd = Command::new(exe);
     cmd.arg("-m")
         .arg(model)
-        .args(["--host", "127.0.0.1", "--port", &port.to_string(), "--jinja", "-c", CONTEXT, "--no-webui"])
+        .args(["--host", "127.0.0.1", "--port", &port.to_string(), "--jinja", "-c", CONTEXT, "-np", SLOTS, "--no-webui"])
+        .args(["--reasoning-budget", &REASONING_BUDGET.to_string(), "--reasoning-budget-message", REASONING_BUDGET_MESSAGE])
         .stdin(Stdio::null())
         .stdout(log.try_clone()?)
         .stderr(log);
@@ -282,6 +299,9 @@ pub fn start_server(exe: &Path, model: &Path, mmproj: Option<&Path>, gpu: bool) 
         cmd.args(["--fit", "on"]);
     } else {
         cmd.args(["-ngl", "0"]);
+    }
+    if mtp {
+        cmd.args(["--spec-type", "draft-mtp"]);
     }
     #[cfg(windows)]
     {
@@ -340,9 +360,14 @@ pub fn bring_up(spec: &ModelSpec, on: &mut dyn FnMut(&str, Option<f32>)) -> Resu
                 None => vec![None],
             };
             for proj in attempts {
-                match start_server(&exe, &model, proj, gpu) {
-                    Ok(server) => return Ok(server),
-                    Err(err) => last_err = Some(err),
+                // Drafting is a speed-up, never a requirement: a server that will not
+                // start with it is started again without, before anything else changes.
+                // Only measured on the GPU, so the CPU fallback runs without it.
+                for mtp in if spec.mtp && gpu { vec![true, false] } else { vec![false] } {
+                    match start_server(&exe, &model, proj, gpu, mtp) {
+                        Ok(server) => return Ok(server),
+                        Err(err) => last_err = Some(err),
+                    }
                 }
             }
         }

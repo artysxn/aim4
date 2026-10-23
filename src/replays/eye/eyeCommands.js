@@ -5,6 +5,8 @@
 // (eyePanel.js) does the clicking, downloading and calling.
 // ---------------------------------------------------------------------------
 
+import { sizeOf } from './eyeContext.js';
+
 /** @typedef {{ name: string, aliases?: string[], args?: string, about: string }} Command */
 
 /** @type {Command[]} */
@@ -106,14 +108,19 @@ export function exportName(title, ext, now = new Date()) {
 
 /**
  * The chat as plain text for the model to summarise: questions and answers whole,
- * each tool call on a line with its result cut short.
+ * each tool call on a line with its result cut short. Steps folded during a long
+ * answer are given as the line per call they were folded into: sixty calls in
+ * full did not fit one summary request, and its start was cut.
  */
 export function transcriptOf(messages, { resultChars = 500 } = {}) {
   const results = new Map(messages.filter((m) => m.role === 'tool').map((m) => [m.tool_call_id, textOf(m.content)]));
   const lines = [];
   for (const m of messages) {
-    if (m.role === 'user') lines.push(`USER: ${m.ui?.text ?? textOf(m.content)}`);
-    else if (m.role === 'assistant') {
+    if (m.stepFolded) continue;
+    if (m.role === 'user') {
+      lines.push(`USER: ${m.ui?.text ?? textOf(m.content)}`);
+      if (m.progress) lines.push(`DONE (a line per call):\n${m.progress}`);
+    } else if (m.role === 'assistant') {
       if (String(m.content || '').trim()) lines.push(`${m.tool_calls?.length ? 'NOTE' : 'ASSISTANT'}: ${String(m.content).trim()}`);
       for (const tc of m.tool_calls || []) {
         const raw = results.get(tc.id) ?? '';
@@ -145,15 +152,14 @@ export function compactedMessages(summary) {
 
 /** How big the conversation is, the way the agent counts it. */
 export function contextStats(messages, budget) {
-  // A folded question costs only the memory that stands in for it.
-  const size = (m) =>
-    m.folded ? m.memory?.length || 0 : (typeof m.content === 'string' ? m.content.length : JSON.stringify(m.content || '').length) + JSON.stringify(m.tool_calls || '').length;
-  const chars = messages.reduce((n, m) => n + size(m), 0);
+  // A folded question costs only the memory that stands in for it, a folded step only its line.
+  const chars = messages.reduce((n, m) => n + sizeOf(m), 0);
   return {
     messages: messages.length,
     questions: messages.filter((m) => m.role === 'user' && m.ui).length,
     toolCalls: messages.filter((m) => m.role === 'tool').length,
     shortened: messages.filter((m) => m.compacted).length,
+    stepsFolded: messages.filter((m) => m.stepFolded && m.role === 'assistant').length,
     folded: messages.filter((m) => m.folded && m.role === 'user' && m.ui).length,
     chars,
     budget,

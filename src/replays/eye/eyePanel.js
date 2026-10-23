@@ -11,6 +11,7 @@
 // ---------------------------------------------------------------------------
 
 import { accessToken } from '../api.js';
+import { desktopApp } from '../../site/desktopApp.js';
 import { SYSTEM_PROMPT, runAgentTurn, summarizeChat } from './eyeAgent.js';
 import { HISTORY_BUDGET } from './eyeContext.js';
 import {
@@ -40,9 +41,12 @@ const canRate = () => (rateable ||= adminApi.labelStats().then(() => true, () =>
 /** A tool result kept in a rated trace is cut to this; the whole record must stay under 240 KB. */
 const TRACE_TOOL_CHARS = 6000;
 
-/** One finished turn as training data: images left out, long tool results cut. */
+/**
+ * One finished turn as training data (and a chat as it is saved): images left out, long tool
+ * results cut, and what the agent folds to fit the model left out too: it folds it again as needed.
+ */
 export function traceOf(turn) {
-  return turn.map(({ compacted, callsCompacted, ui, full, fullCalls, ...m }) => {
+  return turn.map(({ compacted, callsCompacted, ui, full, fullCalls, stepFolded, progress, ...m }) => {
     // A result shortened to fit the model's context is kept whole here.
     if (full !== undefined) m = { ...m, content: full };
     if (fullCalls) m = { ...m, tool_calls: fullCalls };
@@ -56,6 +60,8 @@ export function traceOf(turn) {
   });
 }
 const STATUS_POLL_MS = 3000;
+/** The key that queues a question while an answer runs. */
+const QUEUE_KEY = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || '') ? 'Cmd+Enter' : 'Ctrl+Enter';
 
 /** The models the desktop app offers. Ids are the app's; sizes are the download. */
 export const EYE_MODELS = [
@@ -82,8 +88,8 @@ async function call(method, path, body) {
   return data;
 }
 
-/** The desktop app's bridge, when this page runs inside it. */
-const desktop = () => (typeof window !== 'undefined' ? window.aim4Desktop || null : null);
+/** The desktop app's bridge, when this page runs inside it (in a tab too). */
+const desktop = desktopApp;
 
 /**
  * A model's reply as safe HTML: escaped first, then **bold**, `code`, line
@@ -173,6 +179,7 @@ export function createEyePanel({ escapeHtml }) {
       <div class="eye-log" id="eye-log" aria-live="polite"></div>
       <form class="eye-composer" id="eye-form">
         <div class="eye-pop eye-cmd-pop" id="eye-cmd-pop" role="listbox" aria-label="Commands" hidden></div>
+        <div class="eye-queue" id="eye-queue" aria-label="Queued" hidden></div>
         <div class="eye-chips" id="eye-chips" hidden></div>
         <div class="eye-composer-main">
           <div class="eye-menu-host">
@@ -206,6 +213,7 @@ export function createEyePanel({ escapeHtml }) {
   const sendBtn = el.querySelector('#eye-send');
   const stopBtn = el.querySelector('#eye-stop');
   const chipsEl = el.querySelector('#eye-chips');
+  const queueEl = el.querySelector('#eye-queue');
   const plusBtn = el.querySelector('#eye-plus');
   const attachPop = el.querySelector('#eye-attach-pop');
   const cmdPop = el.querySelector('#eye-cmd-pop');
@@ -224,6 +232,7 @@ export function createEyePanel({ escapeHtml }) {
   let running = null;
   let shown = false;
   let linking = false;
+  let linkError = '';
   /** The saved-chat id of this conversation, made with its first question. */
   let chatId = '';
   /** A title for the chat when its first message is not a question (a compacted chat). */
@@ -232,6 +241,10 @@ export function createEyePanel({ escapeHtml }) {
   let cmdIndex = 0;
   /** What the user attached to the message being written: { kind, label, value, url? }. */
   let attachments = [];
+  /** Questions queued with Ctrl+Enter while an answer runs: { text, atts }, sent in order as each answer ends. */
+  let queued = [];
+  /** The "Ctrl+Enter queues it" hint was shown during this answer. */
+  let hinted = false;
   let choices = null;
 
   // ---- status: is the app running, which model ----------------------------------
@@ -246,6 +259,8 @@ export function createEyePanel({ escapeHtml }) {
     }
     renderStatus();
     syncSend();
+    // Questions queued while the model was not ready go once it is.
+    if (!running && queued.length) sendNextQueued();
   }
 
   function schedulePoll() {
@@ -308,7 +323,8 @@ export function createEyePanel({ escapeHtml }) {
           ? '<span class="an-muted">Waiting for the app to connect</span>'
           : `<button type="button" class="eye-btn is-primary" data-eye-link ${linking ? 'disabled' : ''}>${linking ? 'Linking…' : 'Link this computer'}</button>`
         : '<a class="eye-btn is-primary" href="/api/recorder/download">Download the aim4 desktop app</a>';
-      statusEl.innerHTML = `<div class="eye-status-row"><span class="eye-dot"></span><strong>aim4 eye is not running</strong><span class="eye-spacer"></span>${action}</div>`;
+      const failed = linkError ? `<span class="an-muted">${escapeHtml(linkError)}</span>` : '';
+      statusEl.innerHTML = `<div class="eye-status-row"><span class="eye-dot"></span><strong>aim4 eye is not running</strong>${failed}<span class="eye-spacer"></span>${action}</div>`;
       return;
     }
     const model = EYE_MODELS.find((m) => m.id === dev.model);
@@ -368,8 +384,10 @@ export function createEyePanel({ escapeHtml }) {
     try {
       const { token } = await call('POST', '/api/eye/link', { name: app.info?.deviceName || 'aim4 desktop' });
       app.send({ type: 'eye-link', token });
+      linkError = '';
     } catch (err) {
-      statusError = `Could not link: ${err.message}`;
+      // Kept apart from statusError: the status refresh below would clear it before anyone saw it.
+      linkError = `Could not link: ${err.message}`;
     }
     linking = false;
     await refreshStatus();
@@ -427,6 +445,66 @@ export function createEyePanel({ escapeHtml }) {
         </span>`
       )
       .join('');
+  }
+
+  // ---- the queue: questions written while an answer runs ------------------------------
+
+  function renderQueue() {
+    queueEl.hidden = !queued.length;
+    queueEl.innerHTML = queued
+      .map(
+        (x, i) => `<div class="eye-queued">
+          <span class="eye-queued-tag">Queued</span>
+          <button type="button" class="eye-queued-text" data-eye-requeue="${i}" title="Edit">${escapeHtml(x.text)}</button>
+          ${x.atts.length ? `<span class="eye-queued-tag">+${x.atts.length}</span>` : ''}
+          <button type="button" class="eye-chip-x" data-eye-unqueue="${i}" aria-label="Remove">×</button>
+        </div>`
+      )
+      .join('');
+  }
+
+  /** The text being written goes to the queue, with what is attached to it. */
+  function enqueue() {
+    const text = textEl.value.trim();
+    if (!text) return;
+    queued.push({ text, atts: attachments });
+    attachments = [];
+    renderChips();
+    textEl.value = '';
+    textEl.style.height = '';
+    renderCommands();
+    renderQueue();
+  }
+
+  /** Queued questions back in the composer, after what is being written, with what was attached to them. */
+  function toComposer(items) {
+    if (!items.length) return;
+    textEl.value = [textEl.value.trim(), ...items.map((x) => x.text)].filter(Boolean).join('\n\n');
+    for (const a of items.flatMap((x) => x.atts)) if (!attachments.some((b) => b.kind === a.kind && b.value === a.value)) attachments.push(a);
+    renderChips();
+    textEl.dispatchEvent(new Event('input'));
+  }
+
+  /**
+   * The next queued question, now that nothing runs. A command (/compact) runs as if typed: one that
+   * is over at once lets the next go straight after it, one that runs sends the next when it ends.
+   */
+  function sendNextQueued() {
+    if (running || !queued.length || !ready()) return;
+    const next = queued.shift();
+    renderQueue();
+    const parsed = parseCommand(next.text);
+    if (!parsed) return void ask(next.text, null, next);
+    runCommand(parsed);
+    if (!running) sendNextQueued();
+  }
+
+  /** After an answer: a finished one sends the next queued question; a stopped or failed one puts the queue back to edit. */
+  function afterAnswer(failed) {
+    if (!failed) return sendNextQueued();
+    toComposer(queued);
+    queued = [];
+    renderQueue();
   }
 
   function attach(item) {
@@ -690,6 +768,7 @@ export function createEyePanel({ escapeHtml }) {
     sendBtn.title = ready() ? '' : 'aim4 eye is not ready';
     sendBtn.hidden = Boolean(running);
     stopBtn.hidden = !running;
+    textEl.placeholder = running ? `${QUEUE_KEY} queues a follow-up` : 'Ask about a team';
     renderModelButton();
   }
 
@@ -870,6 +949,7 @@ export function createEyePanel({ escapeHtml }) {
     running = ctrl;
     syncSend();
     const row = bubble('eye-pending', '<span class="eye-dots" aria-hidden="true"><i></i><i></i><i></i></span><span class="eye-pending-text">Summarising the chat</span>');
+    let failed = false;
     try {
       const summary = await summarizeChat(transcriptOf(messages), SUMMARY_PROMPT, { signal: ctrl.signal });
       if (!summary) throw new Error('The model returned no summary.');
@@ -883,11 +963,13 @@ export function createEyePanel({ escapeHtml }) {
     } catch (err) {
       row.remove();
       info(err.name === 'AbortError' ? 'Stopped. The chat is unchanged.' : `Could not summarise: ${escapeHtml(err.message)}. The chat is unchanged.`);
+      failed = true;
     } finally {
       row.remove();
       running = null;
       syncSend();
     }
+    afterAnswer(failed);
   }
 
   /** Ask the last question again, with what was attached to it; the answer to it is dropped. */
@@ -914,8 +996,9 @@ export function createEyePanel({ escapeHtml }) {
     info(
       `${s.messages} messages, ${s.questions} question${s.questions === 1 ? '' : 's'}, ${s.toolCalls} tool result${s.toolCalls === 1 ? '' : 's'}. ` +
         `About ${s.chars.toLocaleString()} of ${s.budget.toLocaleString()} characters (${s.percent}%) before old results are shortened${s.shortened ? `; ${s.shortened} already shortened` : ''}. ` +
+        (s.stepsFolded ? `${s.stepsFolded} older step${s.stepsFolded === 1 ? ' is' : 's are'} folded into a line per call. ` : '') +
         (s.folded ? `${s.folded} earlier question${s.folded === 1 ? ' is' : 's are'} folded into a summary. ` : '') +
-        'Older questions are summarised on their own when the chat gets long.'
+        'Older steps and questions make room on their own as the chat grows.'
     );
   }
 
@@ -986,13 +1069,15 @@ export function createEyePanel({ escapeHtml }) {
   /**
    * @param {string} text
    * @param {object} [again]  a user message to send as it was (the /retry command), attachments and all
+   * @param {{ atts: object[] }} [fromQueue]  a question queued with Ctrl+Enter: it carries its own
+   *   attachments, and the composer (where the next one may be being written) is left alone
    */
-  async function ask(text, again) {
+  async function ask(text, again, fromQueue) {
     const q = String(text || '').trim();
     if (!q || running || !ready()) return;
     logEl.querySelector('.eye-intro')?.remove();
-    const atts = again ? [] : attachments;
-    if (!again) {
+    const atts = again ? [] : fromQueue ? fromQueue.atts : attachments;
+    if (!again && !fromQueue) {
       attachments = [];
       renderChips();
     }
@@ -1000,10 +1085,13 @@ export function createEyePanel({ escapeHtml }) {
     const turnStart = messages.length;
     let failed = false;
     messages.push(again || messageWith(q, atts));
-    textEl.value = '';
-    textEl.style.height = '';
+    if (!fromQueue) {
+      textEl.value = '';
+      textEl.style.height = '';
+    }
     const ctrl = new AbortController();
     running = ctrl;
+    hinted = false;
     syncSend();
     toBottom();
 
@@ -1061,6 +1149,17 @@ export function createEyePanel({ escapeHtml }) {
         closeReasoning();
         endReply();
         showPending(e.step === 0 ? 'Thinking' : `Reading results, step ${e.step + 1}`);
+      } else if (e.type === 'retry') {
+        closeReasoning();
+        showPending(
+          e.reason === 'room'
+            ? 'Out of room, folding older steps and asking again'
+            : e.why === 'hedging'
+              ? 'Going back and forth, acting on the first plan'
+              : e.reason === 'overthought'
+                ? 'Thought too long, acting on the plan'
+                : 'No reply, asking again'
+        );
       } else if (e.type === 'folding') {
         showPending(`Summarising ${e.questions} earlier question${e.questions === 1 ? '' : 's'} to make room`);
       } else if (e.type === 'folded') {
@@ -1122,8 +1221,9 @@ export function createEyePanel({ escapeHtml }) {
       }
     };
     try {
-      const vision = Boolean((status?.devices || []).find((d) => d.state === 'ready')?.vision);
-      await runAgentTurn(messages, { onEvent, signal: ctrl.signal, vision });
+      const live = (status?.devices || []).find((d) => d.state === 'ready');
+      // An app whose model server ends reasoning itself says so; the agent then does not stop replies.
+      await runAgentTurn(messages, { onEvent, signal: ctrl.signal, vision: Boolean(live?.vision), serverBudget: live?.reasoningBudget || 0 });
     } catch (err) {
       failed = true;
       hidePending();
@@ -1143,6 +1243,7 @@ export function createEyePanel({ escapeHtml }) {
     syncSend();
     saveChat();
     void refreshStatus();
+    afterAnswer(failed);
   }
 
   // ---- events -----------------------------------------------------------------------
@@ -1152,6 +1253,14 @@ export function createEyePanel({ escapeHtml }) {
     submit(textEl.value);
   });
   textEl.addEventListener('keydown', (e) => {
+    // Ctrl+Enter (Cmd+Enter on a Mac): while an answer runs, the question is queued to go after it; otherwise it goes now.
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      cmdPop.hidden = true;
+      if (running) enqueue();
+      else submit(textEl.value);
+      return;
+    }
     // The command list: arrows pick, Tab (or Enter on a partial word) completes, Escape closes.
     if (!cmdPop.hidden) {
       const list = matchCommands(textEl.value);
@@ -1176,6 +1285,12 @@ export function createEyePanel({ escapeHtml }) {
     }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
+      // A question cannot go while an answer runs: say once how to queue it. A command still runs now.
+      if (running && textEl.value.trim() && !parseCommand(textEl.value)) {
+        if (!hinted) info(`${QUEUE_KEY} queues it to go after this answer.`);
+        hinted = true;
+        return;
+      }
       submit(textEl.value);
     }
   });
@@ -1253,6 +1368,20 @@ export function createEyePanel({ escapeHtml }) {
       renderChips();
       return;
     }
+    const unqueue = e.target.closest('[data-eye-unqueue]');
+    if (unqueue) {
+      queued.splice(Number(unqueue.dataset.eyeUnqueue), 1);
+      renderQueue();
+      return;
+    }
+    // A queued question clicked goes back in the composer to edit; Ctrl+Enter queues it again.
+    const requeue = e.target.closest('[data-eye-requeue]');
+    if (requeue) {
+      toComposer(queued.splice(Number(requeue.dataset.eyeRequeue), 1));
+      renderQueue();
+      textEl.focus();
+      return;
+    }
     const open = e.target.closest('[data-eye-open]');
     if (open) {
       void openChat(open.dataset.eyeOpen);
@@ -1295,8 +1424,9 @@ export function createEyePanel({ escapeHtml }) {
       void refreshStatus();
     }
   });
-  // The desktop app tells the page when its link or state changes.
-  window.addEventListener('aim4-desktop', () => {
+  // The desktop app tells the page when its link or state changes. Through the bridge, not the
+  // window event: in a tab that event fires on the top window only.
+  desktop()?.on(() => {
     if (shown) renderStatus();
   });
 
@@ -1311,7 +1441,9 @@ export function createEyePanel({ escapeHtml }) {
       void refreshStatus().then(() => {
         // Inside the desktop app and signed in, but never linked: do it now.
         const app = desktop();
-        if (app && !app.info?.eyeLinked && !statusError && !status?.online) void linkThisComputer();
+        // Only once the app has answered (info): before that "not linked" is unknown, and linking then
+        // made new links the app never got, evicting the one it had (20 Oct: 8 links in 11 s).
+        if (app?.info && !app.info.eyeLinked && !statusError && !status?.online) void linkThisComputer();
       });
       schedulePoll();
     },

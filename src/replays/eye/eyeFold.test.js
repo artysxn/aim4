@@ -8,7 +8,24 @@
 import assert from 'node:assert/strict';
 import { foldEarlier, runAgentTurn } from './eyeAgent.js';
 import { exportJson } from './eyeCommands.js';
-import { FOLD_AT, HISTORY_BUDGET, KEEP_RECENT, compactHistory, digestOf, foldPoint, memoryOf, modelMessages, recallEarlier, sizeOf } from './eyeContext.js';
+import {
+  CHARS_PER_TOKEN,
+  FOLD_AT,
+  HISTORY_BUDGET,
+  KEEP_RECENT,
+  MODEL_CONTEXT,
+  OUTPUT_TOKENS,
+  TEMPLATE_TOKENS,
+  THINK_MIN_TOKENS,
+  compactHistory,
+  digestOf,
+  foldPoint,
+  leastSize,
+  memoryOf,
+  modelMessages,
+  recallEarlier,
+  sizeOf
+} from './eyeContext.js';
 
 const big = (n, tag) => JSON.stringify({ rows: Array.from({ length: n }, (_, i) => ({ round: i + 1, note: `${tag} row ${i} `.repeat(6) })), total: n });
 const rewriteArgs = JSON.stringify({ title: 'HAVU Nuke', sections: Array.from({ length: 12 }, (_, i) => ({ heading: `S${i}`, points: ['a long point about outside smokes and ramp control '.repeat(4)] })) });
@@ -34,12 +51,12 @@ function pushTurn(messages, k) {
   for (let k = 1; k <= 12; k++) pushTurn(m, k);
   m.push({ role: 'user', content: 'now', ui: { text: 'now' } });
   const turnStart = m.length - 1;
-  const earlier = m.slice(0, turnStart).reduce((n, x) => n + sizeOf(x), 0);
-  assert.ok(earlier > FOLD_AT, 'the fixture is past the fold line');
+  // Measured the way foldPoint measures: what the questions cost with their steps folded.
+  assert.ok(leastSize(m, 0, turnStart) > FOLD_AT, 'the fixture is past the fold line');
   const cut = foldPoint(m, turnStart);
   assert.ok(cut > 0 && m[cut].role === 'user', 'the cut is at a question');
   assert.ok(cut <= turnStart - 4, 'the newest earlier question is kept');
-  const kept = m.slice(cut, turnStart).reduce((n, x) => n + sizeOf(x), 0);
+  const kept = leastSize(m, cut, turnStart);
   assert.ok(kept <= KEEP_RECENT || cut === turnStart - 4, 'kept turns fit KEEP_RECENT');
 
   // ---- foldEarlier with a model summary ----
@@ -132,23 +149,28 @@ function pushTurn(messages, k) {
 }
 
 // ---- 30 questions against a model with a fixed context ----
-// The fake model refuses (400) any request over CONTEXT characters. Each question
+// The fake model counts tokens the way the model's tokenizer was measured (CHARS_PER_TOKEN)
+// and refuses (400) any request that leaves the reply less than its room. Each question
 // calls a tool once (recall_earlier, answered here) and answers; between questions
 // the history grows by the size real questions do (a rewrite call, a big result).
 {
   const sse = (chunks) => chunks.map((c) => `data: ${JSON.stringify(c)}\n\n`).join('') + 'data: [DONE]\n\n';
-  const CONTEXT = 110000;
+  const tokensOf = (body) => {
+    const [system, ...rest] = body.messages;
+    return (String(system.content).length + JSON.stringify(body.tools || []).length) / CHARS_PER_TOKEN.prompt + TEMPLATE_TOKENS + rest.reduce((n, m) => n + sizeOf(m), 0) / CHARS_PER_TOKEN.history;
+  };
+  const LIMIT = MODEL_CONTEXT - OUTPUT_TOKENS - THINK_MIN_TOKENS;
   let biggest = 0;
   let overflows = 0;
   let summaries = 0;
   globalThis.fetch = async (_url, init) => {
     const body = JSON.parse(init.body);
-    const chars = JSON.stringify(body.messages).length + JSON.stringify(body.tools || []).length;
-    if (chars > CONTEXT) {
+    const tokens = tokensOf(body);
+    if (tokens > LIMIT) {
       overflows++;
-      return new Response(JSON.stringify({ error: 'request (40000 tokens) exceeds the available context size' }), { status: 400 });
+      return new Response(JSON.stringify({ error: `request (${Math.round(tokens)} tokens) exceeds the available context size` }), { status: 400 });
     }
-    biggest = Math.max(biggest, chars);
+    biggest = Math.max(biggest, tokens);
     if (!body.tools) {
       summaries++;
       assert.equal(body.chat_template_kwargs.enable_thinking, false, 'a summary does not reason');
@@ -171,7 +193,7 @@ function pushTurn(messages, k) {
   }
   assert.equal(overflows, 0, 'no request overflowed');
   assert.ok(summaries >= 3, 'the chat was folded more than once');
-  assert.ok(biggest < CONTEXT * 0.8, `the biggest request (${biggest}) stays well inside the context`);
+  assert.ok(biggest <= LIMIT, `the biggest request (${Math.round(biggest)} tokens) leaves the reply its room`);
   assert.equal(messages.filter((m) => m.ui).length, 60, 'every question is still in the chat');
   const view = modelMessages(messages).reduce((n, m) => n + JSON.stringify(m).length, 0);
   assert.ok(view < FOLD_AT + HISTORY_BUDGET, 'the model view stays bounded');

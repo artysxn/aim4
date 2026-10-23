@@ -9,6 +9,16 @@
 // open-external {url}, check-update, apply-update.
 (() => {
   if (window.aim4Desktop) return;
+  // The site's tabs are same-origin frames, and only the top window reaches the app
+  // (a frame's ipc goes nowhere, and pushes go to the top), so a frame shares its bridge.
+  try {
+    if (window.top !== window && window.top.aim4Desktop) {
+      Object.defineProperty(window, 'aim4Desktop', { value: window.top.aim4Desktop });
+      return;
+    }
+  } catch {
+    /* a cross-origin frame */
+  }
   const listeners = new Set();
   const api = {
     version: '__VERSION__',

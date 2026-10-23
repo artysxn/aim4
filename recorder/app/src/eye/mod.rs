@@ -213,6 +213,8 @@ impl Service {
             "type": "hello",
             "version": env!("CARGO_PKG_VERSION"),
             "platform": std::env::consts::OS,
+            // llama-server ends reasoning at this many tokens itself, so the page need not stop replies.
+            "reasoningBudget": runtime::REASONING_BUDGET,
             "hardware": {
                 "ramGb": hw.ram_gb,
                 "cpus": hw.cpus,
@@ -292,6 +294,17 @@ impl Service {
                         return Ok(());
                     }
                     let line = line?;
+                    // A failure after the reply started (it ran into the end of the context mid-call:
+                    // "Failed to parse tool call arguments as JSON") comes as an "error:" line, not
+                    // "data:". Passed on, or the page sees a reply that just stops.
+                    if let Some(err) = line.strip_prefix("error:") {
+                        let err = err.trim();
+                        let message = serde_json::from_str::<Value>(err)
+                            .ok()
+                            .and_then(|v| v["error"]["message"].as_str().or(v["message"].as_str()).map(str::to_string))
+                            .unwrap_or_else(|| err.to_string());
+                        return Err(message.into());
+                    }
                     let Some(data) = line.strip_prefix("data:") else { continue };
                     let data = data.trim();
                     if data == "[DONE]" {

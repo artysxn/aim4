@@ -30,7 +30,8 @@ import crypto from 'node:crypto';
 import { deviceForToken, touchDevice } from './eyeStore.js';
 
 /** A chat request's own fields; anything else in the body is dropped. */
-const CHAT_FIELDS = ['messages', 'tools', 'tool_choice', 'temperature', 'top_p', 'top_k', 'max_tokens', 'stop', 'chat_template_kwargs'];
+// stream_options asks llama-server for its token count of the prompt (usage), which the page sizes the chat by.
+const CHAT_FIELDS = ['messages', 'tools', 'tool_choice', 'temperature', 'top_p', 'top_k', 'min_p', 'presence_penalty', 'max_tokens', 'stop', 'chat_template_kwargs', 'stream_options'];
 /** A chat carries the whole conversation each step, and round screenshots ride along as images. */
 export const MAX_CHAT_BYTES = 8 * 1024 * 1024;
 const MAX_MESSAGE_BYTES = 1024 * 1024;
@@ -134,7 +135,9 @@ export class EyeRelay {
         agent.hello = {
           version: String(msg.version || '').slice(0, 32),
           platform: String(msg.platform || '').slice(0, 32),
-          hardware: msg.hardware && typeof msg.hardware === 'object' ? JSON.parse(JSON.stringify(msg.hardware)) : null
+          hardware: msg.hardware && typeof msg.hardware === 'object' ? JSON.parse(JSON.stringify(msg.hardware)) : null,
+          // The reasoning tokens llama-server stops a reply at by itself (0: it does not, the page must).
+          reasoningBudget: Number.isFinite(msg.reasoningBudget) && msg.reasoningBudget > 0 ? Math.round(msg.reasoningBudget) : 0
         };
         return;
       case 'status':
@@ -172,6 +175,7 @@ export class EyeRelay {
       version: a.hello?.version || '',
       platform: a.hello?.platform || '',
       hardware: a.hello?.hardware || null,
+      reasoningBudget: a.hello?.reasoningBudget || 0,
       ...a.state
     }));
     return { online: devices.length > 0, ready: devices.some((d) => d.state === 'ready'), devices };

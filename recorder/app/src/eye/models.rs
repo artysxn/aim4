@@ -22,6 +22,12 @@ pub struct ModelSpec {
     pub mmproj_sha256: &'static str,
     /// System memory below which this model is not the recommended one.
     pub min_ram_gb: u64,
+    /// The model carries its own draft layer (multi-token prediction, the GGUF's
+    /// `nextn` layer): llama-server drafts the next tokens with it and the model
+    /// checks them, so replies are the same, only faster. For the 27B on an RTX
+    /// 4090 (22 Oct) writing went from 34-39 to 70-85 tokens a second, with 75 to
+    /// 86% of drafted tokens accepted. Only set for a model it was measured on.
+    pub mtp: bool,
 }
 
 impl ModelSpec {
@@ -47,6 +53,7 @@ pub const MODELS: &[ModelSpec] = &[
         mmproj_size: 668_227_264,
         mmproj_sha256: "7035e9cb8d7c6a9681d07eef9a364783e86ea4cd73faab2eabb4f43a101830c7",
         min_ram_gb: 0,
+        mtp: false,
     },
     ModelSpec {
         id: "qwen3.5-4b",
@@ -60,6 +67,7 @@ pub const MODELS: &[ModelSpec] = &[
         mmproj_size: 672_423_616,
         mmproj_sha256: "cd88edcf8d031894960bb0c9c5b9b7e1fea6ebee02b9f7ce925a00d12891f864",
         min_ram_gb: 8,
+        mtp: false,
     },
     ModelSpec {
         id: "qwen3.5-9b",
@@ -73,6 +81,7 @@ pub const MODELS: &[ModelSpec] = &[
         mmproj_size: 918_166_080,
         mmproj_sha256: "f70dc3509053962b0d0d3ee8a7eacebf5d60aa560cad78254ae8698516ae029f",
         min_ram_gb: 16,
+        mtp: false,
     },
     ModelSpec {
         // Dense, so every weight works on every token: slower than the 35B-A3B it
@@ -88,6 +97,7 @@ pub const MODELS: &[ModelSpec] = &[
         mmproj_size: 927_607_488,
         mmproj_sha256: "cbb841a9ee0636b2ec172f5bb8df2ea8dfeb01e90fe7c6126581d662a0b4e43e",
         min_ram_gb: 32,
+        mtp: true,
     },
 ];
 

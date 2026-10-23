@@ -29,7 +29,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { SYSTEM_PROMPT } from '../../src/replays/eye/eyeAgent.js';
+import { SAMPLING, SYSTEM_PROMPT } from '../../src/replays/eye/eyeAgent.js';
 import { clockLabel, parseClock } from '../../src/replays/eye/eyeImages.js';
 import { MAX_RESULT_CHARS, TOOLS } from '../../src/replays/eye/eyeTools.js';
 import { repairedNote, resolveRound } from '../../src/replays/eye/roundRefs.js';
@@ -122,7 +122,7 @@ async function callModel(messages, offered) {
       ...(modelName ? { model: modelName } : {}),
       messages,
       tools: offered,
-      temperature: 0.3,
+      ...(has('--thinking') ? SAMPLING.thinking : SAMPLING.plain),
       stream: false,
       chat_template_kwargs: { enable_thinking: has('--thinking') }
     })

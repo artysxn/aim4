@@ -60,7 +60,7 @@ assert.equal(refused, 401);
 
 const app = new WebSocket(`${base.replace('http', 'ws')}/eye/agent`, { headers: { Authorization: `Bearer ${linked.token}` } });
 await new Promise((r) => app.on('open', r));
-app.send(JSON.stringify({ type: 'hello', version: '0.2.0', platform: 'test', hardware: { ramGb: 32 } }));
+app.send(JSON.stringify({ type: 'hello', version: '0.2.0', platform: 'test', reasoningBudget: 1500, hardware: { ramGb: 32 } }));
 app.send(JSON.stringify({ type: 'status', state: 'ready', model: 'qwen3.5-4b' }));
 // The fake app answers every chat with two deltas and done; a cancel is noted.
 const seen = { chats: [], cancels: [], commands: [] };
@@ -82,6 +82,7 @@ assert.equal(status.online, true);
 assert.equal(status.ready, true);
 assert.equal(status.devices[0].model, 'qwen3.5-4b');
 assert.equal(status.devices[0].hardware.ramGb, 32);
+assert.equal(status.devices[0].reasoningBudget, 1500, 'the page learns that the server ends reasoning itself');
 
 // ---- a chat, streamed ------------------------------------------------------------
 
