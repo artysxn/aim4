@@ -2722,6 +2722,36 @@ export async function handleReplayRequest(req, res, url) {
     return out;
   }
 
+  /**
+   * The Similar Rounds projection (the desktop app's scan, server/similar).
+   *
+   * It rebuilds each round's win chance, so it keeps what the round model
+   * reads on top of the matching fields: `stats` (loadouts and equipment
+   * value), `weapons` (the tick buffer's weapon dictionary) and `events.items`
+   * (kits, pickups). Grenade flight paths go: the scan reads where a grenade
+   * landed, and the path is most of a grenade's weight.
+   */
+  const SIMILAR_META_DROP = new Set(['parser', 'events']);
+  const SIMILAR_EVENTS_KEEP = ['kills', 'grenades', 'bomb', 'items'];
+  function similarProjection(meta) {
+    if (!meta || typeof meta !== 'object') return meta;
+    const out = {};
+    for (const [k, v] of Object.entries(meta)) if (!SIMILAR_META_DROP.has(k)) out[k] = v;
+    const ev = meta.events;
+    if (ev && typeof ev === 'object') {
+      out.events = {};
+      for (const k of SIMILAR_EVENTS_KEEP) if (ev[k] !== undefined) out.events[k] = ev[k];
+      if (Array.isArray(out.events.grenades)) {
+        out.events.grenades = out.events.grenades.map((g) => {
+          if (!g || typeof g !== 'object' || !('path' in g)) return g;
+          const { path: _path, ...rest } = g;
+          return rest;
+        });
+      }
+    }
+    return out;
+  }
+
   if (req.method === 'POST' && p === '/api/replays/rounds/packs') {
     let body;
     try {
@@ -2748,7 +2778,8 @@ export async function handleReplayRequest(req, res, url) {
     // — every bullet of the round — which no search predicate looks at. Across
     // a 150-round batch that is megabytes of transfer whose only visible
     // effect was a ten-second gap between the client's progress bursts.
-    const slimMeta = body.meta === 'match';
+    const projection =
+      body.meta === 'match' ? matchProjection : body.meta === 'similar' ? similarProjection : null;
     const stride = Math.max(1, Math.min(1000, Number(body.stride) || 100));
     // Warm both lookups once; every canOpenRound below is then map reads.
     await roundLookup();
@@ -2763,7 +2794,7 @@ export async function handleReplayRequest(req, res, url) {
         try {
           if (!(await canOpenRound(file))) continue;
           entry.meta = await readRoundMetaMaybeSample(user, file);
-          if (entry.meta && slimMeta) entry.meta = matchProjection(entry.meta);
+          if (entry.meta && projection) entry.meta = projection(entry.meta);
           if (entry.meta && wantTicks) {
             entry.ticks = await readRoundTicksMaybeSample(user, file, stride);
           }

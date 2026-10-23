@@ -14,4 +14,6 @@ process.env.AIM4_UPSTREAM_SITE ||= '1';
 process.env.AIM4_SERVE_STATIC = '1';
 process.env.AIM4_HOST ||= '127.0.0.1';
 process.env.AIM4_DIST_DIR ||= 'dist-account';
+// The desktop app's own server: Similar Rounds scans run here (server/similar).
+process.env.AIM4_DESKTOP ||= '1';
 await import('./index.js');

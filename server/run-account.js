@@ -9,4 +9,6 @@ import { loadAccountEnv } from './accountEnv.js';
 loadAccountEnv();
 process.env.AIM4_SERVE_STATIC = '1';
 process.env.AIM4_HOST ||= '127.0.0.1';
+// The desktop app's own server: Similar Rounds scans run here (server/similar).
+process.env.AIM4_DESKTOP ||= '1';
 await import('./index.js');

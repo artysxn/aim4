@@ -1961,9 +1961,13 @@ body.rv-open:has(.side-collapsed) .rv-side-show {
 }
 
 /* The eight overlay tools carry the panel's bottom row, so they get more room
-   than the tools that still sit in a cluster. */
+   than the tools that still sit in a cluster. They give some of it back when
+   every tool is showing (the desktop app adds Similar rounds), rather than
+   pushing the last one out of the panel. */
 .rv-side > .rv-tools > .rv-tool {
+  flex: 0 1 36px;
   width: 36px;
+  min-width: 28px;
   height: 36px;
 }
 
@@ -2128,7 +2132,8 @@ body.rv-open:has(.side-collapsed) .rv-side-show {
 }
 
 .rv-strat-form .site-input,
-.rv-strat-form .site-select {
+.rv-strat-form .site-select,
+.rv-similar .site-select {
   box-sizing: border-box;
   height: 32px;
   min-height: 32px;
@@ -2156,13 +2161,15 @@ body.rv-open:has(.side-collapsed) .rv-side-show {
 }
 
 .rv-strat-form .site-input:focus,
-.rv-strat-form .site-select:focus {
+.rv-strat-form .site-select:focus,
+.rv-similar .site-select:focus {
   outline: none;
   box-shadow: none;
   border: 0;
 }
 
-.rv-strat-form .site-select {
+.rv-strat-form .site-select,
+.rv-similar .site-select {
   width: 100%;
   appearance: none;
   -webkit-appearance: none;
@@ -5541,6 +5548,194 @@ body.rv-open:has(.side-collapsed) .rv-side-show {
 
 .rv-charts[hidden] {
   display: none;
+}
+
+/* ---- Similar rounds (desktop app) ------------------------------------------ */
+
+.rv-similar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rv-similar[hidden],
+.rv-similar [hidden] {
+  display: none;
+}
+
+.rv-similar-at {
+  color: var(--muted);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.rv-similar-row {
+  display: flex;
+  gap: 6px;
+}
+
+.rv-similar-row > * {
+  flex: 1;
+  min-width: 0;
+}
+
+.rv-similar-row > .rv-similar-both {
+  flex: 0 0 auto;
+  width: auto;
+}
+
+.rv-similar-both .rv-az-seg-btn {
+  padding: 8px 12px;
+  white-space: nowrap;
+}
+
+.rv-similar .rv-az-seg-btn {
+  height: 32px;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.rv-similar-go {
+  width: 100%;
+  height: 32px;
+}
+
+.rv-similar-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.rv-similar-bar {
+  flex: 1;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.rv-similar-bar span {
+  display: block;
+  width: 0;
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.2s ease;
+}
+
+.rv-similar-count,
+.rv-similar-summary,
+.rv-similar-msg,
+.rv-similar-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.rv-similar-count {
+  white-space: nowrap;
+}
+
+.rv-similar-results {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rv-similar-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.rv-similar-item {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr) 22px 42px;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 4px;
+  border-radius: var(--radius-xs);
+  color: var(--text);
+  font-size: 12px;
+  text-decoration: none;
+}
+
+a.rv-similar-item:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.rv-similar-headrow {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.rv-similar-sort {
+  padding: 0;
+  white-space: nowrap;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.rv-similar-sort:hover {
+  color: var(--text);
+}
+
+/* The bar behind the number is the number. */
+.rv-similar-pct {
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--accent-dim) var(--sim), transparent var(--sim));
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.rv-similar-match {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.rv-similar-match .t,
+.rv-similar-match .ct {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rv-similar-match .t {
+  color: var(--rv-t);
+}
+
+.rv-similar-match .ct {
+  color: var(--rv-ct);
+}
+
+.rv-similar-vs,
+.rv-similar-rn {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.rv-similar-res {
+  text-align: center;
+  font-weight: 700;
+}
+
+.rv-similar-res.lost {
+  color: var(--muted);
+}
+
+.rv-similar-dom,
+.rv-similar-headrow > :last-child {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
 .rv-mapgraph,

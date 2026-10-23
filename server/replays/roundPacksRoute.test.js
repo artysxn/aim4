@@ -104,7 +104,9 @@ for (const round of [5, 6]) {
         shots: Array.from({ length: 40 }, (_, i) => ({ tick: 9300 + i, player: 'p1' })),
         damage: [{ tick: 9500, attacker: 'p1', victim: 'p2', hp: 27 }],
         items: [{ tick: 9200, player: 'p1', item: 'ak47' }],
-        grenades: [{ tick: 9400, player: 'p1', type: 'smoke' }],
+        grenades: [
+          { tick: 9400, player: 'p1', type: 'smoke', at: { x: 1, y: 2, z: 3 }, path: [{ tick: 9400, x: 0, y: 0, z: 0 }] }
+        ],
         bomb: []
       },
       ticks: ticks.buffer.slice(ticks.byteOffset, ticks.byteOffset + ticks.byteLength)
@@ -186,6 +188,31 @@ const base = `http://127.0.0.1:${server.address().port}`;
     const want = Buffer.from(sliceStride(ticksByStem.get(stem), 100));
     assert(Buffer.compare(Buffer.from(packs[i].ticks), want) === 0,
       'ticks are untouched by the meta projection');
+  }
+}
+
+// The Similar Rounds projection (the desktop app's scan): what the round model
+// reads to rebuild a win chance on top of the matching fields, so stats and
+// items stay; shots, damage and grenade flight paths go.
+{
+  const res = await fetch(`${base}/api/replays/rounds/packs`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ files: stems, stride: 100, meta: 'similar' })
+  });
+  assert(res.ok, `similar packs respond 200 (${res.status})`);
+  const packs = decodeRoundPacks(await res.arrayBuffer());
+  for (const [i, stem] of stems.entries()) {
+    const m = packs[i].meta;
+    assert(m, 'projected meta present');
+    assert(m.events?.kills?.length === 1, 'kills survive');
+    assert(m.events?.items?.length === 1, 'items survive: kits and pickups feed the win chance');
+    assert(m.stats && Object.keys(m.stats).length === 1, 'stats survive: loadouts and equipment');
+    assert(m.events.grenades?.length === 1 && m.events.grenades[0].at?.x === 1, 'grenade landing survives');
+    assert(m.events.grenades[0].path === undefined, 'grenade flight path is dropped');
+    assert(m.events.shots === undefined && m.events.damage === undefined, 'shots and damage are dropped');
+    const want = Buffer.from(sliceStride(ticksByStem.get(stem), 100));
+    assert(Buffer.compare(Buffer.from(packs[i].ticks), want) === 0, 'ticks are untouched');
   }
 }
 
