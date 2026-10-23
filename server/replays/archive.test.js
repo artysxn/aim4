@@ -327,7 +327,10 @@ function makeRar(files) {
   const parts = [Buffer.from([0x52, 0x61, 0x72, 0x21, 0x1a, 0x07, 0x00])];
   parts.push(block(0x73, 0x0000, Buffer.alloc(6)));
   for (const { name, data } of files) {
-    const nb = Buffer.from(name, 'ascii');
+    // RAR 1.5-4 stores paths with backslashes whatever the host, which is
+    // what WinRAR writes. unar reads a forward slash as part of the name and
+    // stores "sub/x.dem" as "sub_x.dem".
+    const nb = Buffer.from(name.replace(/\//g, '\\'), 'ascii');
     const body = Buffer.alloc(21 + nb.length);
     body.writeUInt32LE(data.length, 0); // UNP_SIZE
     body.writeUInt8(3, 4); // HOST_OS

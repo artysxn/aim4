@@ -41,7 +41,10 @@ function fixture(metric = 'total') {
 test('a square names its day and then what was done on it', () => {
   const { cell } = fixture('train');
   const [when, ...lines] = cellTipText(cell, 'train').split('\n');
-  assert.match(when, /Thu/, `the weekday leads: ${when}`);
+  // Formatted in the machine's locale, so compare against that rather than
+  // against English: "Thu" on one machine is "Do." or "чт" on another.
+  const weekday = cell.date.toLocaleDateString(undefined, { weekday: 'short' });
+  assert.ok(when.includes(weekday), `the weekday leads: ${when}`);
   assert.match(when, /5/);
   assert.deepEqual(lines, ['4 runs · 10 min']);
 });
