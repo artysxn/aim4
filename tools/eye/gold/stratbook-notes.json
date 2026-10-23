@@ -1,0 +1,894 @@
+{
+ "about": "Stratbook rows written by a coach, pasted by the user on 22 Oct 2026 as the style bar for strategy notes (aim4 eye's eyeStrategyNotes.js prompt). One row is one strategy, one string per player column; a string repeated in all five is a team-wide note (spawn-based pistol calls). Map and side were read from the callouts (inferred: true), not given. Typos are kept as written.",
+ "sections": [
+  {
+   "map": "DD2",
+   "side": "T",
+   "inferred": true,
+   "strategies": [
+    [
+     "kyousuke. K. Go close long. Run left side and check shogu. Then instantly peek and push long.",
+     "TeSeS. SFF. On 1:30, smoke CT cross and do a rightclick flash long. Use last flash for right side or for over site.",
+     "NiKo. K. Go top mid. Jiggle out mid angles. When we are fully out long, full rush short.",
+     "m0NESY. K. Go top mid. Jiggle out mid angles. When we are fully out long, full rush short.",
+     "Karrigan. SFF. Bomb. Jumpspot mid. Throw xbox around 1.42 (ID 110). Do 2 retake flashes long 1.30, follow up long."
+    ],
+    [
+     "1st + 2nd: K, Full rush long, wide right side and fight wide early.\n3rd: K, Take bomb, run antiflash close left wall insta.\n4th: K, take flash, flash long 1.48, come long with us.\n5th: SFF, drop flash. Smoke cross + flash left side over site.",
+     "1st + 2nd: K, Full rush long, wide right side and fight wide early.\n3rd: K, Take bomb, run antiflash close left wall insta.\n4th: K, take flash, flash long 1.48, come long with us.\n5th: SFF, drop flash. Smoke cross + flash left side over site.",
+     "1st + 2nd: K, Full rush long, wide right side and fight wide early.\n3rd: K, Take bomb, run antiflash close left wall insta.\n4th: K, take flash, flash long 1.48, come long with us.\n5th: SFF, drop flash. Smoke cross + flash left side over site.",
+     "1st + 2nd: K, Full rush long, wide right side and fight wide early.\n3rd: K, Take bomb, run antiflash close left wall insta.\n4th: K, take flash, flash long 1.48, come long with us.\n5th: SFF, drop flash. Smoke cross + flash left side over site.",
+     "1st + 2nd: K, Full rush long, wide right side and fight wide early.\n3rd: K, Take bomb, run antiflash close left wall insta.\n4th: K, take flash, flash long 1.48, come long with us.\n5th: SFF, drop flash. Smoke cross + flash left side over site."
+    ],
+    [
+     "Kylar: K. Jump strafe for info on entryflash 1.37. Fight and swing wide out on 2nd flash from AWPer (around 1.33).",
+     "nicoodoz: K. Control B lower push until 1.36, then come and fight B.",
+     "cej0t: K. Stay close B antiflash and ready to peek + trade. Control far angles as we push, care our flash 1.33.",
+     "TMB: SFF. Line up door smoke 1.37. Flash left (NOT HIGH) + call it 1.33, then hammer flash + run out.",
+     "KEI: MFF. Line up entryflash bounce to blind anyone holding tunnel 1.37. Then molotov backplat or backsite based on info, followup flash left side and go out."
+    ],
+    [
+     "K. Go lower, search. Entry out mid on 2 flashes and commit mid to B.",
+     "K. Search lower. When we are clear, stay behind B tunnels and go out B on timing.",
+     "SFF. Jumpspot mid push then smoke door 1.45. Care pushes, come down with us 1.35. Pick up smoke and do mid to B at 1.14. After it lands, flash mid + high mid, lurk short solo.",
+     "Take p250. Go lower, search. Control angles as we search close mid to B.",
+     "SF+P250, drop p250 to AWP. Go lower. Come through lower to short and drop smoke for mid to B on catwalk. Wait close short until we are ready to go mid."
+    ],
+    [
+     "Nexius: K. Go lower, search. Entry out mid on 2 flashes and try to fake mid to B.",
+     "s0und: K. Search lower to up short slowly.",
+     "fNk: SFF. Jumpspot mid push then smoke door 1.45. Care pushes, come down with us 1.35. Pick up smoke and do mid to B at 1.14. After it lands, flash mid + high mid, come short.",
+     "shield: Take p250. Go lower, search. Control angles as we search close up short.",
+     "HOLY: SF+P250, drop p250 to AWP. Go lower. Come through lower to short and drop smoke for mid to B on catwalk, keep going short. As we come up short, use your flash for ramp."
+    ],
+    [
+     "K. Go lower, search together slowly. Wait for regroup mid and contact out.",
+     "K. Take flash. Go lower, search together slowly. Wait for regroup mid and contact out. After we are out mid and go mid to B, stay behind, flash over doors.",
+     "K. Good spawn = peek long. If not, jumpspot mid. When we are close lower, come down mid and contact out. Control long flank / short push while we go out mid.",
+     "SFF. Drop 1 flash. Go long, flash 1x long 1.48, come down mid. Line up B split.",
+     "K. Good spawn = peek long. If not, go top mid. When we are close lower, come down mid and contact out."
+    ],
+    [
+     "Get fast lower and do flash. Get up mid after and do deeper short molotov.",
+     "Come lower and do first stairs molotov. Come up with us and hold mid smoke.",
+     "Spot lower info. Molotov short after. Come up short and you will do flashes for CTs on long.",
+     "Go top mid. Come up short. Do 2nd smoke pop.",
+     "Smoke door 1.42. Have flash top mid then go with us while you hold long. Come with us."
+    ],
+    [
+     "Start in A default, then come down late B. Do full exec.",
+     "Start in A default, then come down late B. Do full exec.",
+     "Start in A default, then come down late B. Do full exec.",
+     "Start in A default, then come down late B. Do full exec.",
+     "Start in A default, then come down late B. Do full exec."
+    ],
+    [
+     "Spot mid info.",
+     "Play solo B. Do B split smoke if we decide to go B, otherwise lurk.",
+     "Do parivision molo and flash once. Go close long and listen to what they do.",
+     "Smoke long corner, do one flash. Go close long.",
+     "Do one flash on long, go close long."
+    ],
+    [
+     "Drop smoke, drop flash right, followup refrag on long.",
+     "Play mid on timing and get up short.",
+     "Hold 2 flashes on the right, then a third flash deep short, then a smoke CT (ID 108). Come long after.",
+     "Do 2 left flashes on call, then do 2 smokes and go out long. ID 106, 107",
+     "Hold smoke for molotovs. Call timing to pop out, and rush left side."
+    ],
+    [
+     "flouzer: Can do parivision molotov. Flash long twice, come top mid and search short. do 2nd smoke quick lineup.",
+     "m1quse: Go B solo. Go out B very late.",
+     "senka: Do mid smoke from suicide and molotov short insta. Pick up nades, flash suicide, and come join us short. Flash jumper and join us.",
+     "z1k4: drop smoke suicide, come mid. scope the break mid until we crossed it, then come up short. do 2 high flashes and molotov goose.",
+     "ayuki: can do long smoke. come top mid, search short. gun out while we exec, then when 1st guy swings, molotov ramp."
+    ],
+    [
+     "Go lower. Jumpspot short. Come up short after. Call flash if needed.",
+     "Go lower. Refrag. Do B split and molotov mid, then come search short.",
+     "Molotov short 1.43. Flash apEX / short after. Take bomb, go long.",
+     "Go down top mid after molo is thrown. Search down short. After, molotov stairs and go back to long. If we need flash short, you throw it.",
+     "Smoke mid 1.43. Control long. Be ready to play after their smoke."
+    ],
+    [
+     "Either come B, do lurk and very heavy pressure on B, or come with us mid and go down.",
+     "Stay solo outside B. Be ready on the B split smoke if we need it (1.43). If we call accelerate, you throw it.",
+     "Go down mid. Do smoke ID 109. Call the tempo if we walk, call the smoke on B if we need it or if we want to walk out.",
+     "Hold mid on boost (optional) for a bit, come down with us through suicide.",
+     "Can do some long pressure, come join us mid fast after."
+    ],
+    [
+     "flameZ: Go lower to take short. Use molotov stairs. First wave control short. Second wave do quick 2nd smoke and take quick pathing to kill ramp.",
+     "ropz: Control B until we have fully taken short. Then come mid. First wave do smoke left mid. Line up flash above CT and throw when called. Can go mid or late short after.",
+     "apEX: Help take short antiflash holding mid (can drop molo for 2nd molo short). First wave throw smoke B split and get out mid into the smoke, call flash above CT (show pathing).",
+     "ZywOo. Bomb. After optional boost, do smoke doors + molotov short 1.42. Keep zooming mid. Zoom behind us long while we do first wave. For 2nd wave, do high flash and flash down.",
+     "mezii: Pressure long with any nades you want, but save molo. Later, come up mid. Use 2nd molotov goose or site."
+    ],
+    [
+     "Get on the box or on another offangle.",
+     "Get left side B if possible, or stay upper entrance.",
+     "Control mid push. You or awper smoke mid 1.42.",
+     "Take bomb. Spot info lower, then transition to holding short peek or hiding suicide. Go down / peek on flash.",
+     "Drop smoke + flashes, stay antiflash top mid if not pressuring."
+    ],
+    [
+     "Default",
+     "Default",
+     "1: Go out long, do own flash and get behind blue. Can do own lurk smoke or save it for extinguish.\n2: Smoke corner + flashes.\n3: Do parivision molotov + flashes.",
+     "1: Go out long, do own flash and get behind blue. Can do own lurk smoke or save it for extinguish.\n2: Smoke corner + flashes.\n3: Do parivision molotov + flashes.",
+     "1: Go out long, do own flash and get behind blue. Can do own lurk smoke or save it for extinguish.\n2: Smoke corner + flashes.\n3: Do parivision molotov + flashes."
+    ],
+    [
+     "Free role.",
+     "Free role.",
+     "Jumpspot suicide to make sure we arent lower.",
+     "Go lower fast and jump on top of box to peek short.",
+     "Free role."
+    ],
+    [
+     "Apex flashes",
+     "2nd Entryflash and go out",
+     "Entryflash and go out",
+     "Smoke door + 2 flashes",
+     "Free role, go kill maybe idk"
+    ],
+    [
+     "Molotov site, ramp or goose and drop down on smoke on flashes.",
+     "Buy flashes, go short slow and safe. entryflashes as we pop. Search site.",
+     "Buy flashes, go short slow and safe. entryflashes as we pop. Search site.",
+     "Buy flashes, go short slow and safe. entryflashes as we pop. Search site.",
+     "2 smokes, ID 137 + ID 138 when we are up short. 2 flashes above left side after and lurk mid."
+    ]
+   ]
+  },
+  {
+   "map": "DD2",
+   "side": "CT",
+   "inferred": true,
+   "strategies": [
+    [
+     "1 + 2 + 3: K. Push mid\n4: DFF. Drop D, go backsite B and hold flash for B.\n5: K. Take D, go close B and block rush.",
+     "1 + 2 + 3: K. Push mid\n4: DFF. Drop D, go backsite B and hold flash for B.\n5: K. Take D, go close B and block rush.",
+     "1 + 2 + 3: K. Push mid\n4: DFF. Drop D, go backsite B and hold flash for B.\n5: K. Take D, go close B and block rush.",
+     "1 + 2 + 3: K. Push mid\n4: DFF. Drop D, go backsite B and hold flash for B.\n5: K. Take D, go close B and block rush.",
+     "1 + 2 + 3: K. Push mid\n4: DFF. Drop D, go backsite B and hold flash for B.\n5: K. Take D, go close B and block rush."
+    ],
+    [
+     "1 long: K. go long, cross pit on shift if you can.\n1+2+3: B go B. one of B players D2F. with flash go behind xbox and 2 others push on shift close B.",
+     "1 long: K. go long, cross pit on shift if you can.\n1+2+3: B go B. one of B players D2F. with flash go behind xbox and 2 others push on shift close B.",
+     "1 long: K. go long, cross pit on shift if you can.\n1+2+3: B go B. one of B players D2F. with flash go behind xbox and 2 others push on shift close B.",
+     "1 long: K. go long, cross pit on shift if you can.\n1+2+3: B go B. one of B players D2F. with flash go behind xbox and 2 others push on shift close B.",
+     "1 long: K. go long, cross pit on shift if you can.\n1+2+3: B go B. one of B players D2F. with flash go behind xbox and 2 others push on shift close B."
+    ],
+    [
+     "K. Go lower in 2D under.",
+     "K. Go long.",
+     "K. Go lower in 2D under.",
+     "K. Go short, play near xbox ledge.",
+     "S+HE+F, go B, jumpspot with HE and smoke site if B. Play for time."
+    ],
+    [
+     "K. Take D. Try to kill mid or lower.",
+     "K. Go 2 long.",
+     "K. Take D. Try to kill mid or lower. Hold B from outside door after.",
+     "Drop 2D, buy flash, go mid and try to kill suicide.",
+     "K. Go 2 long."
+    ],
+    [
+     "B spawn: K, take D+Smoke, go B solo.\n1: Peek long, try to cross pit if no one there.\n2: Be ready to fight long antiflash from close.\n3: Be ready to fight long antiflash from further back.\nLast guy: Drop S+Smoke, buy flash, hold flash over long.",
+     "B spawn: K, take D+Smoke, go B solo.\n1: Peek long, try to cross pit if no one there.\n2: Be ready to fight long antiflash from close.\n3: Be ready to fight long antiflash from further back.\nLast guy: Drop S+Smoke, buy flash, hold flash over long.",
+     "B spawn: K, take D+Smoke, go B solo.\n1: Peek long, try to cross pit if no one there.\n2: Be ready to fight long antiflash from close.\n3: Be ready to fight long antiflash from further back.\nLast guy: Drop S+Smoke, buy flash, hold flash over long.",
+     "B spawn: K, take D+Smoke, go B solo.\n1: Peek long, try to cross pit if no one there.\n2: Be ready to fight long antiflash from close.\n3: Be ready to fight long antiflash from further back.\nLast guy: Drop S+Smoke, buy flash, hold flash over long.",
+     "B spawn: K, take D+Smoke, go B solo.\n1: Peek long, try to cross pit if no one there.\n2: Be ready to fight long antiflash from close.\n3: Be ready to fight long antiflash from further back.\nLast guy: Drop S+Smoke, buy flash, hold flash over long."
+    ],
+    [
+     "HE+DF. Drop DF. Start short, jumpspot lower, nade lower on contact.",
+     "K. start long, play from car. If door is smoked and we see them, search long with AWPer.",
+     "K. Start B and peek tunnels from behind xbox. Play from behind xbox or backplat. If door is smoked, search 2B.",
+     "K. Take flash. Start mid, keep spotting mid. If door smoked + we see them lower, go long and help search long.",
+     "K. Take D. Go close B tunnels near fridge. If door is smoked, search 2B."
+    ],
+    [
+     "Flash long, be ready with molo/he blue. Play from ramp/site/goose.",
+     "Be ready to spam corner. If you have good spawn, molo box.",
+     "Have nade ready vs B rush. Play around car / door.",
+     "Smoke long and flash long. Play from car/corner.",
+     "Molotov and flash B tunnels, then smoke and play long range after."
+    ],
+    [
+     "Smoke long, flash long, go short. After we kill 2 we go back.",
+     "Free role long, dont full commit.",
+     "Fight mid on long range. After we kill 2 you go back B and reblock.",
+     "Fight mid on long range. After we kill 2 we go back.",
+     "Molotov then smoke on B and control smoke from long range"
+    ],
+    [
+     "Start short, take fights lower / mid.",
+     "Good spawn = molo long, nade long, smoke long. Bad spawn = flash over, molo + smoke if clear. Don't cross pit.",
+     "Start close door trying to kill any jumpspot. Can stay behind mid xbox holding lower. After, play close door.",
+     "Start mid early, then go back to shrooms and help hold top mid.",
+     "Block B with smoke (or molo + smoke). Hold B from outside door."
+    ],
+    [
+     "Go close short, call flashes",
+     "Go close short",
+     "Go short and line up 2 flashes above mid",
+     "Go mid, line up flash under xbox",
+     "Go close mid"
+    ],
+    [
+     "Go long, 1+2 molo blue, drop one flash, go close long. 3 flash into box then outside of box twice.",
+     "Take scout, fight mid.",
+     "mp9, smoke long, go close mid door",
+     "Go long, 1+2 molo blue, drop one flash, go close long. 3 flash into box then outside of box twice.",
+     "Go long, 1+2 molo blue, drop one flash, go close long. 3 flash into box then outside of box twice."
+    ],
+    [
+     "Start long, do HE long box as molotov fades. Smoke behind it.",
+     "Do long molotov take, then instantly go close and peek behind long box molo on HE. We smoke behind you, stay long box.",
+     "Start A, do flashes for us.",
+     "Start mid/B",
+     "Default"
+    ],
+    [
+     "Default",
+     "Default. Drop HE.",
+     "Start mid. If AWP mid, save HE for break. If AWP not mid, use HE top mid on timings.",
+     "Default",
+     "Use HE for cross, start solo B (use molotov + smoke early). Get into a good multikill position from left side (backplat, close hammer, close left tunnels, etc)."
+    ]
+   ]
+  },
+  {
+   "map": "MIR",
+   "side": "T",
+   "inferred": true,
+   "strategies": [
+    [
+     "K. Take decoy + molo. Go B. Molotov balc, decoy B, fake B after we are out mid.",
+     "K. Go palace. Go out after we are through con.",
+     "K. Go close mid. Go in con smoke after we go out.",
+     "SM. Drop molo. Hold from TV, line up window smoke (id 136).",
+     "SF+P250. Control mid, smoke con. Come up short and take duels."
+    ],
+    [
+     "Go mid to short.",
+     "Go mid to short.",
+     "Go down mid, smoke ladder and go into con lurking.",
+     "Do window, go B. Line up kitchen + flashes. Can molotov backsite.",
+     "Drop smoke B. Molotov car when we execute."
+    ],
+    [
+     "Go down mid. Gun out the entire time and control.",
+     "Go palace. Save molotov for under balc if smoked + break. If not, search.",
+     "Go down mid. Nade con, control con and flash con. Molotov ladder as we go up.",
+     "Go down behind top mid boxes. Keep controlling short. Molotov deep short as we come up con.",
+     "Go down mid. Molotov short from behind boxes and go down into con."
+    ],
+    [
+     "Smoke window, go ramp and be ready to entry. Break on 1st flash and go out if smoked ramp. Path under balc.",
+     "Go palace. If smoked, molotov under balc and break. If not, search.",
+     "Smoke stairs 1.41, flash 2 lamp flashes.",
+     "Flash over A, flash over palace.",
+     "Smoke jungle 1.41, flash over tetris and go refrag out A."
+    ],
+    [
+     "Smoke 2 mid somkes, go B, flash B, molo bench.",
+     "Smoke window/top mid, Molo under, go mid and refrag on our smokes flying. Hold window/con.",
+     "Smoke window/top mid. Go mid. On smokes, flash mid, go through top mid smoke go short. Aim short.",
+     "Hold under, line up 3 flashes. Entryflash short then 2 followups above left side.",
+     "Control B. Drop smoke for 2 smokes, Molotov car as we go, go out balc to site."
+    ],
+    [
+     "Default early. Drop smoke. Go mid, molo under, go safe. On resmokes, check mid on own flash and go back B.",
+     "Do only window. Default palace early, stay palace and search out as we fake A.",
+     "Default early. Very late about 1.20, make smoke in spawn after and do window + bottom con, then go A and smoke jungle + molo stairs, 2 flashes over.",
+     "Default early. Drop smoke in spawn. Control top mid from TV, go B late.",
+     "Default early. Some rounds, do VERY heavy pressure on B, smoking molo, molotoving car, flashing insta to get them to use nades (others dont make any sound). Wait B. Then re-search B as we molo stairs (about 0.40)."
+    ],
+    [
+     "Go under.",
+     "Go A",
+     "Go mid.",
+     "Go mid, hold flashes mid",
+     "Go under"
+    ],
+    [
+     "Go B. If they dont fight mid for 15 sec, go under. Otherwise, be ready on B nades.",
+     "Go B. Stay B aps, be ready to search.",
+     "Go mid.",
+     "Go B. Stay B aps, be ready to search.",
+     "Go B. If they dont fight mid for 15 sec, go under."
+    ],
+    [
+     "Go mid.",
+     "Go A.",
+     "Go mid.",
+     "Go A.",
+     "Go A."
+    ],
+    [
+     "Smoke jungle + molotov stairs.",
+     "Search A.",
+     "Go mid.",
+     "Search A.",
+     "Search A."
+    ]
+   ]
+  },
+  {
+   "map": "MIR",
+   "side": "CT",
+   "inferred": true,
+   "strategies": [
+    [
+     "Free role",
+     "Default, hold flash for us to leave mid",
+     "Swing mid, call flash from A",
+     "Start window, call break window + TM",
+     "Drop and hold break top mid"
+    ],
+    [
+     "Free role",
+     "Flash twice from A on breaks",
+     "Free role",
+     "Break and call 2nd break",
+     "Break 2nd time"
+    ],
+    [
+     "Free role",
+     "Flash from A",
+     "Free role",
+     "Go con and call break",
+     "Start window, molo, break top mid"
+    ],
+    [
+     "Flash from B site over mid",
+     "Free role A",
+     "Come window, get boosted, break and peek",
+     "Short with AWP",
+     "Go under left boost in window and ready to fight right side on break"
+    ],
+    [
+     "Molo B, jump up and search.",
+     "",
+     "Smoke deep B",
+     "",
+     ""
+    ],
+    [
+     "Molo B, jump up and search. Call HE.",
+     "",
+     "Hold HE for B push",
+     "",
+     ""
+    ],
+    [
+     "Free role",
+     "Free role, maybe boost window",
+     "Free role",
+     "Free role, maybe boost window",
+     "Go window, call for boost"
+    ],
+    [
+     "Free role",
+     "Hold A from stairs",
+     "Free role",
+     "Go con right side with AWP and hold under",
+     "Jiggle from left con"
+    ],
+    [
+     "Run short and peek mid, transition to aggro mid setups",
+     "Go con from A",
+     "Run short and peek mid, throw biceps flash, transition to aggro mid setups",
+     "Molo B, go B with AWP",
+     "Go window, spam, molo, break"
+    ]
+   ]
+  },
+  {
+   "map": "INF",
+   "side": "T",
+   "inferred": true,
+   "strategies": [
+    [
+     "K, rush aps to boiler to A.",
+     "K, rush aps and late lurk balcony.",
+     "K, rush aps to boiler to A.",
+     "SFF. Smoke mid lurk, pick up smoke. Smoke moto, flash over boiler 1.37 then over A 1.32. (97, 98, 99)",
+     "SM. Take bomb. Drop smoke for mid lurk, go 2nd mid to boiler. Molo pit."
+    ],
+    [
+     "Insani: K, Take smoke. Search banana. Smoke CT on nades, cross pool, try to kill one.",
+     "venomzera: K. Go 2nd mid, boost up boiler. Go mid and wait JW for mid push.",
+     "tomaszin: SF+HE. Drop everything. Go 2nd mid, get boosted up. Hold aps push, go SLOW boiler on B fake.",
+     "nqz: K. Take HE + flash. Refrag banana. Get boosted up and do nade CT + entryflash. Hold ruins.",
+     "LNZ: SF+HE. Hold flash banana. Nade + flash CT. Spam. Go back to A if blocked. Smoke for moto if we go A."
+    ],
+    [
+     "K. Rush long to A.",
+     "K. Rush long to A.",
+     "K. Rush long to A.",
+     "SF+P250. Drop flash. Smoke mid lurk, stay ramp and bait (waiting for B flank).",
+     "K. Take flash. Rush long to A. Bounce flash into short as we run through the mid smoke."
+    ],
+    [
+     "nicoodoz: K. Pick up 2 flashes. Go slow into aps. Line up 2 chimney flashes 1.16.",
+     "KEi. Search slow into aps. When dropping around 1.16, go through balc / minipit, dont jump over short",
+     "TMB: SFF. Hold mid cross early. Line up smoke moto + 2 flashes (ID 141+142). Smoke 1.21, flash 1.16.",
+     "cej0t. Search slow aps. On exec, go out and refrag at 1.16 ish. When dropping, go through balc / minipit, dont jump over short.",
+     "Kylar. M+FF. Drop FF. Molo pit + jump out balc to minipit 1.17."
+    ],
+    [
+     "gehji. Hold car peek until 1.15, then come close mid. Hold short until first flash. Rush long to CT.",
+     "kaiori. SFF. Hold flash until 1.20. Smoke moto at 1.00, flash close short + deep short. (ID 143, 144 + 145). Search B.",
+     "newt. Open 2nd mid door and stay holding exit until 1.20. Then go get boosted into bedroom. Search and pop out boiler on first flash, peek deep short. If you show yourself + peek, go back B (important to live).",
+     "Ne1XXX. Spot mid from ramp until 1.15. Walk up mid. Hold short until first flash, then rush long to CT to B.",
+     "porya. Take bomb. Hold bedroom from bridge until 1.30. Cross right side, go out door and boost up aps, go mid. Go out on first flash, rush long to CT to B."
+    ],
+    [
+     "MFF. Come up B. When all ready, Molo ruins, flash 2x behind pillar.",
+     "SM. Drop molo, take flash. For exec, smoke CT first, then wait until ready and do smoke ruins + entryflash.",
+     "K. Search up banana.",
+     "K. Decoy off mid wall, jump mexi and control mexi for a bit. Then come up banana.",
+     "S+HE+F. Drop flash, take molo. Before exec, drop smoke for combo. When all ready, molo triple, and break their block smoke if there is one."
+    ],
+    [
+     "Molo car, peek long, go first short and search",
+     "Molo boiler, come mid, check boiler from mid",
+     "Go 2nd mid, search short",
+     "HE / flash / or molo but say then dont molo boiler, go mid. Peek short and search long",
+     "HE car, flash banana, molo fallen, come A, go short"
+    ],
+    [
+     "Flash mid, molo car, pick up nades. Molo fallen/sandbags, go mid, flash short + flash aps",
+     "Molo boiler, flash 2nd mid, go aps. 1st guy drops instantly.",
+     "Go 2nd mid to aps. 1st going out drops instantly. last can try to molo pit",
+     "Smoke karrigan, drop molo + flashes B, go 2nd mid with bomb to aps",
+     "Go 2nd mid to aps. 1st going out drops instantly. last can try to molo pit"
+    ],
+    [
+     "Control banana peek, then walk up. Molo sandbags, peek halfwall then CT. Search B gun out slow.",
+     "Molo boiler, flash 2nd mid, nade long and go into boiler. Play slow from bedroom.",
+     "Spam bridge, come close mid and smoke long, molo short. Care mid swings. Later take bomb and come B.",
+     "Check mid early, come B, flash insani and resmoke CT.",
+     "Flash banana early. Molo fallen after. Smoke CT early while molos are up, then later smoke ruins + molo oranges."
+    ],
+    [
+     "1st: Molotov car, get up banana, drop he, stay antiflash close left.\n2nd: Molotov fallen. Up halfwall. 2x HE CT. Smoke ruins + 2 flash.\n3rd: Molotov sandbags. Boost up and drop HE. Smoke CT + flash.",
+     "1st: Molotov car, get up banana, drop he, stay antiflash close left.\n2nd: Molotov fallen. Up halfwall. 2x HE CT. Smoke ruins + 2 flash.\n3rd: Molotov sandbags. Boost up and drop HE. Smoke CT + flash.",
+     "1st: Molotov car, get up banana, drop he, stay antiflash close left.\n2nd: Molotov fallen. Up halfwall. 2x HE CT. Smoke ruins + 2 flash.\n3rd: Molotov sandbags. Boost up and drop HE. Smoke CT + flash.",
+     "Flash mid, jump mexi. Fight from mexi. Save molo for molo oranges and HE for breaking their smoke.",
+     "Stay bottom ramp ready to fight banana or peek mid. If they block car, flash left side. Come up banana. Save molo for molo triple."
+    ],
+    [
+     "Drop molotov, line up break for B. Flash car after break and can flash site.",
+     "Molotov 2nd mid, come banana and line up flash for break + smoke ct.",
+     "Go close B, after break run all the way.",
+     "Molotov car, Stay close ramp ready for break. Hold on break as we run, then nade sandbags as we run all the way.",
+     "Drop smoke, go close B, after break run all the way."
+    ],
+    [
+     "Go right on frozen. Can molotov sandbags",
+     "Free role",
+     "Free role, sometimes go with us 4th B",
+     "Molo car, go left on frozen.",
+     "Smoke frozen, hold flash. After flash, come close."
+    ],
+    [
+     "1st: Run up right side, peek on flash\n2nd: Molo fallen, nade sandbags\n3rd: Smoke molo, flash car",
+     "Default",
+     "1st: Run up right side, peek on flash\n2nd: Molo fallen, nade sandbags\n3rd: Smoke molo, flash car",
+     "1st: Run up right side, peek on flash\n2nd: Molo fallen, nade sandbags\n3rd: Smoke molo, flash car",
+     "Flash mid, play close B with us"
+    ],
+    [
+     "Default B",
+     "Molo boiler, Default",
+     "Come ramp, have HE ready for right side",
+     "Flash mid, have HE ready for right side",
+     "Throw mid lurk, come mid and have HE ready for right side, call HE for right side of it"
+    ],
+    [
+     "Someone do mid lurk, 2x spam mid.",
+     "Someone do mid lurk, 2x spam mid.",
+     "Run up mid",
+     "Someone do mid lurk, 2x spam mid.",
+     "Someone do mid lurk, 2x spam mid."
+    ],
+    [
+     "insani: Smoke library + Flash 1-2 sec later (ID 127 + 128), come up short.",
+     "tomaszin: Play aps. Can flash off of site if smoked.",
+     "venomzera: Go mid on flash from insani. After flash from short, peek haybale and check site. Keep fighting A aggressive.",
+     "nqz: Smoke arch (ID 129). Flash off short wall (130), flash pit and molotov pit from short (131 + 132).",
+     "LNZ: Drop smoke if needed. Take mid on flash, then go up long on own timings. Can play in arch smoke and buy time."
+    ],
+    [
+     "s1zzi: Stay ramp and mid, then search and lurk on own timings.",
+     "kensizor: Go aps. Entry out on first flash (0.38). Drop out down right isde.",
+     "alex666: Smoke combo ID 124 & 125, then 2 flashes instantly. Go T Aps after.",
+     "npl: Smoke long (ID 121). On exec, do pit molo (ID 122) after 2 smokes thrown, flash from aps (ID 123), go out aps.",
+     "esenthial: Drop smoke near bridge, go T aps. Drop down on flash from aps."
+    ]
+   ]
+  },
+  {
+   "map": "INF",
+   "side": "CT",
+   "inferred": true,
+   "strategies": [
+    [
+     "1st: Strafe wide 2nd mid, Flash off the wall.\n2nd: Underhand flash mid as you run, Strafe close 2nd mid, HE wall\n3rd: Drop flash long, push boiler, smoke molo boiler & fight\n4th: Smoke G2, do 3 flashes 2nd mid\n5th: Block B",
+     "1st: Strafe wide 2nd mid, Flash off the wall.\n2nd: Underhand flash mid as you run, Strafe close 2nd mid, HE wall\n3rd: Drop flash long, push boiler, smoke molo boiler & fight\n4th: Smoke G2, do 3 flashes 2nd mid\n5th: Block B",
+     "1st: Strafe wide 2nd mid, Flash off the wall.\n2nd: Underhand flash mid as you run, Strafe close 2nd mid, HE wall\n3rd: Drop flash long, push boiler, smoke molo boiler & fight\n4th: Smoke G2, do 3 flashes 2nd mid\n5th: Block B",
+     "1st: Strafe wide 2nd mid, Flash off the wall.\n2nd: Underhand flash mid as you run, Strafe close 2nd mid, HE wall\n3rd: Drop flash long, push boiler, smoke molo boiler & fight\n4th: Smoke G2, do 3 flashes 2nd mid\n5th: Block B",
+     "1st: Strafe wide 2nd mid, Flash off the wall.\n2nd: Underhand flash mid as you run, Strafe close 2nd mid, HE wall\n3rd: Drop flash long, push boiler, smoke molo boiler & fight\n4th: Smoke G2, do 3 flashes 2nd mid\n5th: Block B"
+    ],
+    [
+     "1st: Smoke extinguish, molotov right, boost up\n2nd: Molotov close, flash logs, peek deep\n3rd: Flash fallen 2x",
+     "Free role A",
+     "1st: Smoke extinguish, molotov right, boost up\n2nd: Molotov close, flash logs, peek deep\n3rd: Flash fallen 2x",
+     "Smoke deep banana",
+     "1st: Smoke extinguish, molotov right, boost up\n2nd: Molotov close, flash logs, peek deep\n3rd: Flash fallen 2x"
+    ],
+    [
+     "1st: Drop flash banana, smoke extinguish, HE left, push down\n2nd: Molotov right, HE left, peek from car\n3rd: Flash 2x FalleN 1.46 + hold one more",
+     "Free role A",
+     "1st: Drop flash banana, smoke extinguish, HE left, push down\n2nd: Molotov right, HE left, peek from car\n3rd: Flash 2x FalleN 1.46 + hold one more",
+     "Smoke deep banana",
+     "1st: Drop flash banana, smoke extinguish, HE left, push down\n2nd: Molotov right, HE left, peek from car\n3rd: Flash 2x FalleN 1.46 + hold one more"
+    ],
+    [
+     "1st A: Molotov ramp, push down mid. Hold 2nd for a bit, push down after molo.\n1st B: Smoke molo (c9), molo deep, push down banana.\n2nd B: Molo logs, peek from car. When clear, flash deep ramp.\n3rd B: Flash FalleN",
+     "1st A: Molotov ramp, push down mid. Hold 2nd for a bit, push down after molo.\n1st B: Smoke molo (c9), molo deep, push down banana.\n2nd B: Molo logs, peek from car. When clear, flash deep ramp.\n3rd B: Flash FalleN",
+     "1st A: Molotov ramp, push down mid. Hold 2nd for a bit, push down after molo.\n1st B: Smoke molo (c9), molo deep, push down banana.\n2nd B: Molo logs, peek from car. When clear, flash deep ramp.\n3rd B: Flash FalleN",
+     "Hold mid. Flash ramp, come down and hold 2nd mid.",
+     "1st A: Molotov ramp, push down mid. Hold 2nd for a bit, push down after molo.\n1st B: Smoke molo (c9), molo deep, push down banana.\n2nd B: Molo logs, peek from car. When clear, flash deep ramp.\n3rd B: Flash FalleN"
+    ],
+    [
+     "A: Someone take mp9 and push into G2 smoke. Go through it on random timing. Other A players spam deep ramp.",
+     "B: Nade, molotov, flash deep.",
+     "A: Someone take mp9 and push into G2 smoke. Go through it on random timing. Other A players spam deep ramp.",
+     "A: Someone take mp9 and push into G2 smoke. Go through it on random timing. Other A players spam deep ramp.",
+     "B: Nade, molotov, flash deep."
+    ],
+    [
+     "Stay antiflash close, then go sandbags. Use molotov / flash / HE for second retake.",
+     "Molotov boiler and use smoke mid if you feel pressured. Play safe after, we will rotate 3A.",
+     "Use smoke, molotov, flash and HE early, then go A.",
+     "Nade deep banana, molotov logs or behind our smoke. go back, hold flash for 3-5 sec. Go A after.",
+     "Start ruins insta holding flash. Do deep retake smoke + molo + flash after, and use more molotovs+HEs to fight banana"
+    ],
+    [
+     "Play from CT with HE.",
+     "Free role A",
+     "Drop smoke, molotov, HE on B. Go A.",
+     "Free role A",
+     "Do retake util combo when called."
+    ],
+    [
+     "Stay close sandbags.",
+     "Stay CT with HE ready halfwall. Potentially molotov same lineup if called that there is no karrigan.",
+     "Drop smoke, molotov, HE in spawn. Go A",
+     "Free role A",
+     "Free role A"
+    ],
+    [
+     "Stay close car.",
+     "Stay close oranges with flash behind ready.",
+     "Drop molotov + HE in spawn, smoke niko. Go A",
+     "Free role A",
+     "Free role A"
+    ],
+    [
+     "HE + Molo banana, play safe",
+     "Molo off 2nd mid wall 1.45, stay close long ready to fight.",
+     "Smoke deep banana, hold flash mid.",
+     "Jumpspot mid, be ready with break if there is smoke to fight mid. Organize break, around 1.35-1.36.",
+     "Play balcony, wait for player going out."
+    ]
+   ]
+  },
+  {
+   "map": "ANU",
+   "side": "T",
+   "inferred": true,
+   "strategies": [
+    [
+     "SFF. Drop flash to A player. Go mid. After 10 sec, walk 5 mid to temple to A.",
+     "K. Take flash, flash A main, come mid with us. After 10 sec, walk 5 mid to temple to A",
+     "Go mid. After 10 sec, walk 5 mid to temple to A",
+     "Go mid. After 10 sec, walk 5 mid to temple to A",
+     "Go mid. After 10 sec, walk 5 mid to temple to A"
+    ],
+    [
+     "Walk up B main. Swing on flash. Take molotov. Molotov temple after we have killed B.",
+     "Buy smoke and molotov. Drop molotov + smoke. Stay from B pillar and control B main. When smokes fly, walk up B main.",
+     "Walk up B main. Swing on flash.",
+     "Buy p250, smoke, flash. Get smoke dropped. Do exec combo ID 117 118 119",
+     "Walk up B main. Swing on flash."
+    ],
+    [
+     "Molotov + HE window combo. Take mid after.",
+     "Flash water, default towards A.",
+     "Smoke top con or drop so we do it for you.",
+     "Full utility saved for laterounds.",
+     "B lurk 50/50. Control B."
+    ],
+    [
+     "Default mid combo, walk through mid right side.",
+     "Play solo A.",
+     "Smoke top con, come mid to walk through right side.",
+     "Get boosted mid as we walk.",
+     "Do B lurk, boost up AWP mid."
+    ],
+    [
+     "Do top con smoke. Come close B. Molotov dark and break smoke when we ready.",
+     "Flash water. Hold con while we walk. Care behind mid drop as we search.",
+     "Go down water on right side. Care above window on the right. Get into con. From con, molotov close outside con smoke (ID 104)",
+     "Molotov mid, hold mid until 1.42. Throw 2 smokes 1.34 (ID 101+102). Flash about 1.27 (ID 103, when we are actually going out)",
+     "Go antiflash under B. Drop smoke to AWP. Line up molo yekindar (ID 100)."
+    ],
+    [
+     "Molotov + HE window combo. Go first mid and peek on flashes. Run after all the way.",
+     "Focus on A main.",
+     "Flash water. Smoke A hell 1.36 and flashes for split when we go, about 1.28. (ID 105).",
+     "Molotov B main. Smoke temple, flash right mid and flash window. Care down water.",
+     "Molotov left mid (blue?) as we throw flash and come refrag mid."
+    ],
+    [
+     "Default utility. Come to A exec after 40 sec. You will do smoke camera + molotov hell.",
+     "Control the map for 40 sec. Start doing nades to take A main 1.15.",
+     "Smoke con. Control the map for 40 sec. Come to A exec.",
+     "Control the map for 40 sec. Come to A exec. You will do heaven smoke, site molo, 2x flashes.",
+     "Control the map for 40 sec. Come to A exec. You will do molotov pillar."
+    ],
+    [
+     "Come B with us. Molotov backsite before we go. Call breaks.",
+     "Go water solo.",
+     "Smoke top con. Come B with us. Molotov yekindar.",
+     "Smoke left side B. Hold smoke temple + flashes.",
+     "Nade B main. Molotov left side (jail)."
+    ],
+    [
+     "Default utility, play slow and just default the map.",
+     "Default utility, play slow and just default the map.",
+     "Default utility, play slow and just default the map.",
+     "Default utility, play slow and just default the map.",
+     "Default utility, play slow and just default the map."
+    ]
+   ]
+  },
+  {
+   "map": "ANU",
+   "side": "CT",
+   "inferred": true,
+   "strategies": [
+    [
+     "Go B",
+     "Go B",
+     "Go A",
+     "Go A",
+     "Go A"
+    ],
+    [
+     "Go B. Take smoke and block B on timing.",
+     "Go B",
+     "Go mid, 1st go left on shift. 2rd go right on shift. Peek on flash.",
+     "Dualies, smoke, flash. Drop dualies + smoke. Hold flash right mid.",
+     "Go mid, 1st go left on shift. 2rd go right on shift. Peek on flash."
+    ],
+    [
+     "Free role",
+     "Free role",
+     "Molotov mid, come up close right wall and peek left, then swing right on flash",
+     "Hold mid. When mid player ready, flash right for him",
+     "Free role A. Sometimes can smoke A and start 3rd B"
+    ],
+    [
+     "Hold HE for con and fight deep.",
+     "Focus on B",
+     "Drop HE A. Block mid with smoke. When ready, line up molotov ZywOo.",
+     "Smoke stairs early, drop molo B and come scope con. We molotov left, flash deep and break con for you.",
+     "Molotov A early. Nade stairs/carpets 2x, come mid and line up flash ZywOo."
+    ],
+    [
+     "Hold HE for con",
+     "Hold flash for con",
+     "Free role",
+     "Free role",
+     "Free role"
+    ],
+    [
+     "Flash through con smoke and kill left corner around 1.38.",
+     "sirah: Smoke stairs 1.40. Control B main from backsite.",
+     "Block mid with smoke. Molotov under window 1.39.",
+     "device: Start A, drop molotov. Do 2 flashes over A 1.38.",
+     "Molotov close A early. Take 2nd molotov and do deep molotov krimz. Push out on molotov and try to kill stairs."
+    ],
+    [
+     "Flash con, focus on B",
+     "Focus on B",
+     "Block mid with molotov and smoke their molo door to hold water.",
+     "Smoke stairs (or drop). Go mid.",
+     "Block A hard and play long range from heaven."
+    ],
+    [
+     "Peek con on good spawn",
+     "Molotov B. Peek con on good spawn",
+     "Use molotov mid, play long distance from camera/headshot.",
+     "Smoke A main, stay temple 5-10 sec, listen info, rotate",
+     "Nade stairs/carpets, play from fountain. Save molo. Resmoke."
+    ]
+   ]
+  },
+  {
+   "map": "CCH",
+   "side": "T",
+   "inferred": true,
+   "strategies": [
+    [
+     "K. Boost 3x guys up. Go mid. Get into con.",
+     "SF+p250. Drop p250. Get boosted, smoke highway, then flash when we ready. Control A push.",
+     "K. Get boosted up. Wait, then drop on right side. Get up close highway.",
+     "K. Get boosted up. Wait, then drop on right side. Take bomb. Search con + highway.",
+     "K. Lurk B"
+    ],
+    [
+     "noway: K. Go A main. Go 2nd out A main.",
+     "chelo: K. Boost up. Go A main on left wall. Swing on flash.",
+     "Decenty: K. Get boosted up. After we exec, search mid. Drop and search highway.",
+     "saadzin: FF+p250. Take bomb. Control A main. When we molo, flash A main. Then flash backsite for our peek. (71+72)",
+     "VINI: SM, go door. 1:24 open door, smoke, molotov fork. (ID 69+70)"
+    ],
+    [
+     "K. Go 4B. One of you take p250 + flash and hold long, + flash out B main. Rest go.",
+     "SF+p250. Drop p250 + flash, check door push on sound, then line up smoke B CT from outside A. Lurk mid. (ID 87)",
+     "K. Go 4B. One of you take p250 + flash and hold long, + flash out B main. Rest go.",
+     "K. Go 4B. One of you take p250 + flash and hold long, + flash out B main. Rest go.",
+     "K. Go 4B. One of you take p250 + flash and hold long, + flash out B main. Rest go."
+    ],
+    [
+     "Take bomb. Slow default. Do mid utility retake at some point (smoke con + highway, molotov highway). Go in core A.",
+     "Slow default. Drop smoke to lyoli, listen door, then go control A main. When we start coming A, go door.",
+     "Slow default. Do mid utility retake at some point. (smoke con + highway, molotov highway). Clear mid, Go in core A.",
+     "Slow default. Molotov vents on mid retake. Later, do 2 smokes + 2 flashes on A and go door late.",
+     "Slow default. We come to you after."
+    ],
+    [
+     "Slow default. Do mid utility retake at some point (smoke con + highway, molotov highway). Go in core B.",
+     "Slow default. Listen door, then control A main. Stay A main and go slow out on B exec.",
+     "Slow default. Do mid utility retake at some point (smoke con + highway, molotov highway). Clear mid, Go in core B.",
+     "Take bomb. Slow default. Molotov vents on mid retake. Later come B and do B exec.",
+     "Slow default. Control B. Try to go out B as we execute A."
+    ],
+    [
+     "Rush A, spam some flashes",
+     "Rush A, spam some flashes",
+     "Smoke garage (ID 63), Rush A, spam some flashes",
+     "Smoke A rush #1 (ID 58), rush A, spam flashes",
+     "Smoke A rush #2 (ID 59), stay behind & spam flashes over A (ID 60)"
+    ],
+    [
+     "1st: Best spawn smoke B (ID 88) and flash off of peek, rush checkers.\n2nd: Molo droplet, rush through smoke to site.\n3rd: Smoke CT, rush smoke to site.\n4th: Rush through smoke to site.\n5th: Flash through smoke from back of B lobby.",
+     "1st: Best spawn smoke B (ID 88) and flash off of peek, rush checkers.\n2nd: Molo droplet, rush through smoke to site.\n3rd: Smoke CT, rush smoke to site.\n4th: Rush through smoke to site.\n5th: Flash through smoke from back of B lobby.",
+     "1st: Best spawn smoke B (ID 88) and flash off of peek, rush checkers.\n2nd: Molo droplet, rush through smoke to site.\n3rd: Smoke CT, rush smoke to site.\n4th: Rush through smoke to site.\n5th: Flash through smoke from back of B lobby.",
+     "1st: Best spawn smoke B (ID 88) and flash off of peek, rush checkers.\n2nd: Molo droplet, rush through smoke to site.\n3rd: Smoke CT, rush smoke to site.\n4th: Rush through smoke to site.\n5th: Flash through smoke from back of B lobby.",
+     "1st: Best spawn smoke B (ID 88) and flash off of peek, rush checkers.\n2nd: Molo droplet, rush through smoke to site.\n3rd: Smoke CT, rush smoke to site.\n4th: Rush through smoke to site.\n5th: Flash through smoke from back of B lobby."
+    ],
+    [
+     "Smoke con. Pick up smoke. Come B. Do heaven smoke, molo site, and 2x right flashes.",
+     "Pressure mid, free role",
+     "Drop smoke. Come B. If they did smoke, molotov back checkers, reveal the smoke.",
+     "Come B. Do CT smoke, molo HS, 2x followup box flashes.",
+     "Drop smoke spawn. Come B. If they did smoke, molotov front checkers, control the reveal and play checkers on it after."
+    ],
+    [
+     "mizu: Smoke con. Go antiflash A instantly. After we flash, molotov quad. Call flashes over A and go out.",
+     "n0rb3r7: drop smoke for A execute, go door. Open door around 1.27 (on flash). Find a timing to molotov fork while fighting.",
+     "dwushka: Flash mid and jumpspot early. Smoke ID 114 1.32, run A main instantly after and go entry/refrag.",
+     "frontales: Go A. Do flash off of A around 1.30 and scope quad. When its clear, scope backsite.",
+     "kade0: Smoke B lurk instantly. Molotov sandbags. Do full exec at 1:30: ID 111, 112. 2 flashes ID 113 WHEN WE CALL."
+    ],
+    [
+     "Smoke ticket. (ID 96), line up A flashes. Then smoke CT and molotov vents.",
+     "Go door insta. Open door, do smoke + molotov + flashes (ID 95)",
+     "Smoke con / mid lurk and spam mid. Go B.",
+     "Molotov highway, drop smoke outside A, go B.",
+     "Do B lurk + molotov checkers, try to get up front of the smoke."
+    ],
+    [
+     "donk: Smoke con, Pick up smoke. Control A until 1.12. Get boosted and drop. Go A from mid, peek ticket on flash.",
+     "tN1R: Control A. At 1:05, molotov vents and smoke ticket. Go A door.",
+     "magixx: Spam mid. 1:15 do smoke con and molotov sandbags (134 + 135). Go mid and path right side. Refrag.",
+     "sh1ro: Stay near A. After, get boosted up and molotov whitebox (check lineup). Cover con. When we ready to peek, flash whitebox.",
+     "zont1x: Smoke B lurk and control B from sunroom. 1.08 start going back. Go out mid, flash highway and smoke CT (ID 133)."
+    ],
+    [
+     "Smoke con, go mid. Call break+flash.",
+     "Smoke extinguish, molotov sandbags, lurk A",
+     "Go mid. Flash+HE when you + 2nd guy are ready.",
+     "Molotov highway, hold flashes over con synced with break.",
+     "Hold break HE on mid synced with flash, then free role B."
+    ],
+    [
+     "1st: smoke mid cross + go out mid, flash rightclick\n2nd: smoke garage wallbang left side",
+     "Molo highway, flash over mid",
+     "1st: smoke mid cross + go out mid, flash rightclick\n2nd: smoke garage wallbang left side",
+     "Flash 2x over garage",
+     "Smoke lurk (ID 62)"
+    ],
+    [
+     "1st: Smoke con. Peek mid instantly. Stand in molo if there is one.\n2nd: Flash over mid.\n3rd: Molotov highway and hold flashes if we kill.",
+     "Smoke extinguish, free role",
+     "1st: Smoke con. Peek mid instantly. Stand in molo if there is one.\n2nd: Flash over mid.\n3rd: Molotov highway and hold flashes if we kill.",
+     "1st: Smoke con. Peek mid instantly. Stand in molo if there is one.\n2nd: Flash over mid.\n3rd: Molotov highway and hold flashes if we kill.",
+     "Free role"
+    ],
+    [
+     "1st: Line up to boost.\n2nd: Jump up and strafe right.\n3rd: Jump up and fight.\n4th: Flash under boost, flash above boost (to not blind us)",
+     "1st: Line up to boost.\n2nd: Jump up and strafe right.\n3rd: Jump up and fight.\n4th: Flash under boost, flash above boost (to not blind us)",
+     "1st: Line up to boost.\n2nd: Jump up and strafe right.\n3rd: Jump up and fight.\n4th: Flash under boost, flash above boost (to not blind us)",
+     "1st: Line up to boost.\n2nd: Jump up and strafe right.\n3rd: Jump up and fight.\n4th: Flash under boost, flash above boost (to not blind us)",
+     "Smoke con. Be ready to play mid."
+    ]
+   ]
+  },
+  {
+   "map": "CCH",
+   "side": "CT",
+   "inferred": true,
+   "strategies": [
+    [
+     "1st + 2nd spawn: Rush door\n3rd: Go quad, hold highway, bait A\n4th: Go con, hold mid,\n5th: Go B, play for multikill from door",
+     "1st + 2nd spawn: Rush door\n3rd: Go quad, hold highway, bait A\n4th: Go con, hold mid,\n5th: Go B, play for multikill from door",
+     "1st + 2nd spawn: Rush door\n3rd: Go quad, hold highway, bait A\n4th: Go con, hold mid,\n5th: Go B, play for multikill from door",
+     "1st + 2nd spawn: Rush door\n3rd: Go quad, hold highway, bait A\n4th: Go con, hold mid,\n5th: Go B, play for multikill from door",
+     "1st + 2nd spawn: Rush door\n3rd: Go quad, hold highway, bait A\n4th: Go con, hold mid,\n5th: Go B, play for multikill from door"
+    ],
+    [
+     "FF+Dualies. Drop dualies, go mid.",
+     "K. Play USP in front of triple and going into default after.",
+     "K. Get up vents.",
+     "K. Take dualies, go behind triple, play joker.",
+     "K. Go B, boost vents."
+    ],
+    [
+     "1st smoke, cross sandbags, line up boost\n2nd molo boost, get up boost\n3rd HE garage, cross highway, control with gun",
+     "Free role",
+     "1st smoke, cross sandbags, line up boost\n2nd molo boost, get up boost\n3rd HE garage, cross highway, control with gun",
+     "1st smoke, cross sandbags, line up boost\n2nd molo boost, get up boost\n3rd HE garage, cross highway, control with gun",
+     "Free role"
+    ],
+    [
+     "Free role",
+     "Free role",
+     "Hold flash for B main",
+     "Needs best spawn, go peek B",
+     "Go into checkers and help door"
+    ],
+    [
+     "1st molo boost + HE mid, go A\n2nd HE mid + spam, go A",
+     "1st molo boost + HE mid, go A\n2nd HE mid + spam, go A",
+     "Free role",
+     "Free role",
+     "Smoke mid, Free role"
+    ],
+    [
+     "Pressure mid, come heaven, do fake flash into A main then drop down and rush in.",
+     "Maybe help mid, but come close A and be ready to push on 2nd flash",
+     "Free role",
+     "Pressure mid, come CT line up flash for A main.",
+     "Free role"
+    ],
+    [
+     "Come close A, peek 2nd to fight deep on flash.",
+     "Come close A, peek 1st to wide and kill behind box.",
+     "",
+     "Smoke outside of A, do flash into A main",
+     ""
+    ]
+   ]
+  }
+ ]
+}

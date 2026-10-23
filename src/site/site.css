@@ -2167,6 +2167,26 @@ body.is-impersonating {
   max-width: min(360px, calc(100vw - 32px));
 }
 
+/* aim4 eye's background queue (replays/eye/eyeJobs.js). */
+.eye-jobs-pill {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 9999;
+  max-width: min(420px, calc(100vw - 32px));
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  font-family: var(--font-body);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .site-toast {
   display: flex;
   align-items: flex-start;

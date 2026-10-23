@@ -10,7 +10,10 @@
 //   1. fold every grenade the side threw into the team's archive for this map,
 //      and save it — that mints the throw ids
 //   2. seat the five bodies into the map's stratbook columns
-//   3. write one note per column from the round's events, linking the ids
+//   3. write one note per column from the round's events, linking the ids.
+//      With a writer (aim4 eye, eye/eyeStrategyNotes.js) the rules' notes and the
+//      facts behind them go to it, and whatever it cannot write well stays as
+//      the rules wrote it
 //   4. save the strategy
 //
 // A failure at step 1 stops the whole thing: half-written archives are worse
@@ -26,7 +29,7 @@ import {
 import { loadCoachSmokes } from '../coach/coachSmokes.js';
 import { createNamer } from './regionNames.js';
 import { foldRoundUtility } from './utilityImport.js';
-import { buildRoundNotes } from './roundNarrative.js';
+import { readRoundNotes } from './roundNarrative.js';
 import {
   mergeRolesAcrossDemos,
   rolesCoverSide,
@@ -133,10 +136,15 @@ export async function resolveSeats({
  * @param {object} args.track
  * @param {object|null} args.network
  * @param {string[]} args.seats     player id per stratbook column
+ * @param {string[]} [args.columns] the column names, for a writer to know whose job is whose
  * @param {number} [args.windowFrom]  seconds after freeze; only events in this window
  * @param {number} [args.windowTo]
  * @param {(text: string) => void} [args.onStatus]
- * @returns {Promise<{ strategy: object, utilityAdded: number }>}
+ * @param {boolean} [args.setposInNotes]  write each grenade as its setpos/setang instead of a link
+ * @param {null | ((input: object) => Promise<{ notes: Map<string, string>, description?: string, fromEye: number, fellBack: Array }>)} [args.writer]
+ *   words the notes itself (writeNotesWithEye); gets the rules' notes and their facts
+ * @returns {Promise<{ strategy: object, utilityAdded: number, utilityDropped: number, written: null | object }>}
+ *   `written` is the writer's report, or `{ error }` when it failed and the rules' notes were saved
  */
 export async function saveStrategyFromRound({
   teamId,
@@ -151,9 +159,12 @@ export async function saveStrategyFromRound({
   track,
   network,
   seats,
+  columns = [],
   windowFrom = 0,
   windowTo = ROUND_SECONDS,
-  onStatus = () => {}
+  onStatus = () => {},
+  writer = null,
+  setposInNotes = false
 }) {
   const timing = timingFor(meta);
   const rate = timing.tickRate || 64;
@@ -203,16 +214,20 @@ export async function saveStrategyFromRound({
   });
 
   let links = folded.links;
+  let archived = folded.archive;
   if (folded.changed) {
     onStatus('Saving utility…');
     const saved = await saveUtilityArchive(teamId, mapCode, folded.archive);
     // The server owns the id namespace and may re-mint a collision. Re-read the
     // ids off what it stored so a note never links a throw that was renamed.
-    if (saved?.grenades) links = relinkAgainst(saved, folded, links);
+    if (saved?.grenades) {
+      links = relinkAgainst(saved, folded, links);
+      archived = saved;
+    }
   }
 
   onStatus('Reading the round…');
-  const notes = buildRoundNotes({
+  const { notes, facts } = readRoundNotes({
     meta,
     track,
     network,
@@ -225,6 +240,27 @@ export async function saveStrategyFromRound({
     windowTo
   });
 
+  let roleNotes = seats.map((id) => (id ? notes.get(id) || '' : ''));
+  let description = '';
+  let written = null;
+  if (writer && facts) {
+    try {
+      written = await writer({ facts, notes, seats, columns, meta, mapCode, side, name, category, economy, onStatus });
+      roleNotes = seats.map((id, i) => (id ? written.notes.get(id) || roleNotes[i] : ''));
+      description = written.description || '';
+    } catch (err) {
+      // The rules' notes are a strategy too. A model that is off, slow or
+      // confused costs the wording, never the save.
+      written = { error: err?.message || 'aim4 eye failed.' };
+    }
+  }
+
+  if (setposInNotes) {
+    const throwsById = new Map();
+    for (const g of archived?.grenades || []) for (const t of g.throws || []) throwsById.set(t.id, t);
+    roleNotes = roleNotes.map((n) => notesWithSetpos(n, throwsById));
+  }
+
   onStatus('Saving strategy…');
   const body = await saveTeamStrategy(teamId, {
     map: mapCode,
@@ -232,12 +268,12 @@ export async function saveStrategyFromRound({
     name,
     category,
     economy,
-    description: '',
+    description,
     // The row's 2D button opens the round this was read from. That IS the 2D
     // view of this strategy, and it is the first thing anyone reading the row
     // will want.
     link2d: roundUrl,
-    roleNotes: seats.map((id) => (id ? notes.get(id) || '' : '')),
+    roleNotes,
     visibleAll: true
   });
 
@@ -246,8 +282,26 @@ export async function saveStrategyFromRound({
     utilityAdded: links.length,
     // The archive is capped per map. Anything it had no room for is said out
     // loud rather than quietly missing from the notes.
-    utilityDropped: folded.dropped || 0
+    utilityDropped: folded.dropped || 0,
+    written
   };
+}
+
+/**
+ * A note's grenade links written out as the console lines that stand on the
+ * lineup: "<Window smoke><!ab12>" becomes "Window smoke (setpos 1 2 3; setang 4 5 0)".
+ * For a book read outside aim4 (a sheet, a doc), where a link goes nowhere.
+ * A link whose throw has no setpos keeps just its label.
+ *
+ * @param {string} text
+ * @param {Map<string, { setpos?: string, setang?: string }>} throwsById
+ */
+export function notesWithSetpos(text, throwsById) {
+  return String(text || '').replace(/<([^<>!][^<>]*)><!([A-Za-z0-9]{4})>/g, (_, label, id) => {
+    const t = throwsById.get(id);
+    const lines = [t?.setpos, t?.setang].filter(Boolean);
+    return lines.length ? `${label} (${lines.join('; ')})` : label;
+  });
 }
 
 /**

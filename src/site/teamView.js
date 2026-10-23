@@ -51,6 +51,8 @@ import { createRoundListPanel } from '../replays/analytics/roundListPanel.js';
 import { analyzeDemoCoach } from '../replays/coach/analyzeDemo.js';
 import { COACH_CATEGORY_LABELS } from '../replays/coach/coachMessages.js';
 import { POSITION_MAPS, positionsFor } from '../replays/roles/teamPositions.js';
+import { playerStratsTsv, stratbookTsv } from './stratbookCopy.js';
+import { publicOrigin } from './publicOrigin.js';
 import {
   mapWinrateCompareKind,
   mapWinrateFillWidth,
@@ -1180,14 +1182,14 @@ export function initTeamView({ auth, escapeHtml }) {
   }
 
   function inviteUrl() {
-    return `${window.location.origin}/i/${team?.invite || ''}`;
+    return `${publicOrigin()}/i/${team?.invite || ''}`;
   }
 
   // ---- documents ----------------------------------------------------------
 
   function documentShareUrl(shareId) {
     if (!shareId) return '';
-    return `${window.location.origin}/d/${shareId}`;
+    return `${publicOrigin()}/d/${shareId}`;
   }
 
   function sharedDocHtml(doc) {
@@ -2420,7 +2422,9 @@ export function initTeamView({ auth, escapeHtml }) {
     const maps = POSITION_MAPS.map(
       (m) => `
       <section class="tm-card sb-map" data-sb-map="${escapeHtml(m.code)}">
-        <h3 class="sb-map-title">${escapeHtml(m.name.toUpperCase())}</h3>
+        <h3 class="sb-map-title">${escapeHtml(m.name.toUpperCase())}
+          <button type="button" class="btn btn-sm sb-copy" data-sb-copy="${escapeHtml(m.code)}" title="Copy this map's strategies as spreadsheet rows">Copy</button>
+        </h3>
         ${stratSection(m.code, 'T')}
         ${stratSection(m.code, 'CT')}
       </section>`
@@ -2428,7 +2432,10 @@ export function initTeamView({ auth, escapeHtml }) {
 
     const colorVars = stratColorVarsStyle();
     return `
-      ${headerHtml('', stratSettingsPanelHtml({ showZoom: true, showView: true }))}
+      ${headerHtml(
+        '',
+        `<button type="button" class="btn btn-sm" data-sb-copy="all" title="Copy every strategy as spreadsheet rows">Copy all</button>${stratSettingsPanelHtml({ showZoom: true, showView: true })}`
+      )}
       ${
         team?.isAdmin
           ? ''
@@ -2828,7 +2835,10 @@ export function initTeamView({ auth, escapeHtml }) {
     const mapsHtml = POSITION_MAPS.map((m) => myStratMapHtml(m, strategiesPlayerId)).join('');
 
     return `
-      ${headerHtml('', stratSettingsPanelHtml({ showZoom: true, showRow: true }))}
+      ${headerHtml(
+        '',
+        `<button type="button" class="btn btn-sm" data-ms-copy title="Copy this player's strategies as spreadsheet rows">Copy all</button>${stratSettingsPanelHtml({ showZoom: true, showRow: true })}`
+      )}
       <div class="ms-maps" data-sb-color-root data-sb-zoom-root style="--sb-zoom: ${
         stratbookZoom / 100
       };--ms-row-pad: ${stratRowPad(stratbookRowHeight)}px;${stratColorVarsStyle()}">
@@ -3210,6 +3220,42 @@ export function initTeamView({ auth, escapeHtml }) {
         } catch {
           setStatus('Copy the link from the field.', true);
         }
+      }
+      return;
+    }
+    const sbCopy = t.closest('[data-sb-copy], [data-ms-copy]');
+    if (sbCopy) {
+      // Rows a spreadsheet pastes back as the stratbook: one per strategy, a cell per column.
+      const code = sbCopy.dataset.sbCopy;
+      const maps = code && code !== 'all' ? POSITION_MAPS.filter((m) => m.code === code) : POSITION_MAPS;
+      const text = sbCopy.hasAttribute('data-ms-copy')
+        ? playerStratsTsv({
+            strategies: team?.stratbook || [],
+            maps: POSITION_MAPS,
+            noteOf: (s) => playerRoleNote(s, strategiesPlayerId),
+            visible: (s) => stratVisibleToPlayer(s, strategiesPlayerId),
+            compare: compareStrats
+          })
+        : stratbookTsv({
+            strategies: team?.stratbook || [],
+            maps,
+            columns: (side, mapCode) => positionsFor(side, mapCode),
+            columnTitle: roleColumnTitle,
+            compare: compareStrats
+          });
+      if (!text) {
+        setStatus('No strategies to copy.', true);
+        return;
+      }
+      const codes = new Set(maps.map((m) => m.code));
+      const count = (team?.stratbook || []).filter((s) =>
+        sbCopy.hasAttribute('data-ms-copy') ? stratVisibleToPlayer(s, strategiesPlayerId) : codes.has(s.map)
+      ).length;
+      try {
+        await navigator.clipboard.writeText(text);
+        setStatus(`Copied ${count} strateg${count === 1 ? 'y' : 'ies'}. Paste into a spreadsheet.`);
+      } catch {
+        setStatus('Could not copy to clipboard.', true);
       }
       return;
     }

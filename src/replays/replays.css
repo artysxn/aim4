@@ -2201,6 +2201,21 @@ body.rv-open:has(.side-collapsed) .rv-side-show {
   width: 100%;
 }
 
+.rv-strat-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-dim, #b8b8b8);
+  cursor: pointer;
+  user-select: none;
+}
+
+.rv-strat-check input {
+  margin: 0;
+  accent-color: var(--accent, #e8b04b);
+}
+
 .rv-strat-range .rs {
   height: 18px;
 }
@@ -10546,6 +10561,15 @@ table.rp-mine-table td.rp-mine-match {
   letter-spacing: 0;
   text-align: left;
   color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.sb-map-title .sb-copy {
+  font-family: var(--font-body, inherit);
+  font-weight: 500;
 }
 
 .sb-section {

@@ -17,13 +17,13 @@ const POLL_MS = 90 * 1000;
 /** More than this many cards is a wall, not news. */
 const MAX_VISIBLE = 3;
 
-function stack() {
-  let host = document.getElementById('site-toast-stack');
+function stack(doc = document) {
+  let host = doc.getElementById('site-toast-stack');
   if (!host) {
-    host = document.createElement('div');
+    host = doc.createElement('div');
     host.id = 'site-toast-stack';
     host.className = 'site-toast-stack';
-    document.body.appendChild(host);
+    doc.body.appendChild(host);
   }
   return host;
 }
@@ -32,28 +32,31 @@ function stack() {
  * Show one toast. Returns its element; calling with the same `id` while it is
  * on screen is a no-op, so pollers can re-assert without stuttering.
  *
+ * `doc` puts the toast in another same-origin document: the desktop app's
+ * top window, so a job finishing in a background tab is still seen.
+ *
  * @param {{ id: string, title: string, body?: string, href?: string,
- *           onDismiss?: () => void, onOpen?: () => void }} opts
+ *           onDismiss?: () => void, onOpen?: () => void, doc?: Document }} opts
  */
-export function showToast({ id, title, body = '', href = '', onDismiss, onOpen }) {
+export function showToast({ id, title, body = '', href = '', onDismiss, onOpen, doc = document }) {
   const domId = `toast-${id}`;
-  const existing = document.getElementById(domId);
+  const existing = doc.getElementById(domId);
   if (existing) return existing;
 
-  const toast = document.createElement('div');
+  const toast = doc.createElement('div');
   toast.id = domId;
   toast.className = 'site-toast';
   toast.setAttribute('role', 'status');
 
-  const main = document.createElement(href ? 'a' : 'div');
+  const main = doc.createElement(href ? 'a' : 'div');
   main.className = 'site-toast-main';
   if (href) main.href = href;
-  const titleEl = document.createElement('div');
+  const titleEl = doc.createElement('div');
   titleEl.className = 'site-toast-title';
   titleEl.textContent = title;
   main.appendChild(titleEl);
   if (body) {
-    const bodyEl = document.createElement('div');
+    const bodyEl = doc.createElement('div');
     bodyEl.className = 'site-toast-body';
     bodyEl.textContent = body;
     main.appendChild(bodyEl);
@@ -65,7 +68,7 @@ export function showToast({ id, title, body = '', href = '', onDismiss, onOpen }
     });
   }
 
-  const close = document.createElement('button');
+  const close = doc.createElement('button');
   close.type = 'button';
   close.className = 'site-toast-close';
   close.setAttribute('aria-label', 'Dismiss');
@@ -76,7 +79,7 @@ export function showToast({ id, title, body = '', href = '', onDismiss, onOpen }
   });
 
   toast.append(main, close);
-  stack().appendChild(toast);
+  stack(doc).appendChild(toast);
   return toast;
 }
 

@@ -1,0 +1,34 @@
+{
+ "about": "Rounds aim4 eye wrote a strategy for, with the coach's correction and his grade. Unlike stratbook-notes.json these have a round behind them (the file is the round id in the replay library on aim4.io), so they can grade a model and become fine-tuning pairs.",
+ "pairs": [
+  {
+   "round": "205-iJD-100-ANU-01_kob-XTr-dzy-Q7C-WFJ_gnA-gyS-MeS-L0w-KRy~53680550395b54ff",
+   "label": "Nemiga vs Lavked, Anubis, round 1",
+   "map": "ANU",
+   "side": "T",
+   "economy": "Pistol",
+   "graded": "2026-10-22",
+   "score": 8,
+   "eye": [
+    "robo: Hold water watching B Water. Push mid to B, be first on site.",
+    "Xant3r: Go A Water. Hold krimz watching A Main, then shift to Water.",
+    "KaiR0N-: Hold stairs watching m0NESY. Push mid to CT Con, go B.",
+    "khaN: Hold B Water watching Bridge. Push mid to CT Con.",
+    "SYPH0: Hold B Lobby watching B Main. Push B Main, be ready to support."
+   ],
+   "coach": [
+    "robo: SF+P250. Drop p250. Go stairs and slowly shift right side water towards con. When out B, use smoke temple.",
+    "Xant3r: K. Go krimz instantly, hold A main. Go B con very late.",
+    "KaiR0N-: K. Go stairs and slowly shift right side water towards con.",
+    "khaN: K. Take p250. Stay m0NESY and hold con/mid peek first 5-10 sec. Then shift right side water towards con.",
+    "SYPHO: K. Lurk outside of B Main. Around 1.26, Push B Main & be ready to support."
+   ],
+   "feedback": [
+    "Pistol rounds require timings.",
+    "Anubis is bugged in terms of interpreting con as mid.",
+    "If someone is holding something early, include the time for what to do next (when to stop doing something).",
+    "Overall 8/10."
+   ]
+  }
+ ]
+}

@@ -15,6 +15,20 @@ Most of what "knowing how to scout" means is in code the model calls, not in its
 
 The ordering and fixing rules (which issue matters most, the section order of a rewrite) live in `SYSTEM_PROMPT` in `src/replays/eye/eyeAgent.js`. Change behaviour there first: it costs nothing, and it works on every model size.
 
+## Writing strategy notes: the coach's stratbook is the bar
+
+"Add strategy" in the round viewer has aim4 eye write each column's note from the facts the rules measured (`src/replays/eye/eyeStrategyNotes.js`, rules in `src/replays/strategy/roundNarrative.js`). How a note should read comes from a coach's real stratbook, not from a description of one:
+
+```bash
+node tools/eye/stratbook-style.mjs     # measures tools/eye/gold/stratbook-notes.json
+```
+
+On the 457 per-player notes there (22 Oct 2026): a median of 57 characters and two sentences, 90% under 111; a time in only 11% of them; pistol and eco rows open with the buy in stratbook letters (K, SFF, SM, SF+P250); the words are the job (go, hold, search, lurk, entry, refrag, line up, take bomb, on flash). `STRATEGY_NOTES_PROMPT` says this and quotes twelve of the notes, times rewritten 1:45 (the coach writes 1.45) and lineup numbers removed (here the grenade links do that). The checks in the same file keep the model honest whatever it copies: grenade tags must be the player's own, every time must be in his facts, the opening buy is replaced by his real loadout's.
+
+Measured on the user's Qwen3.8 27B (8 library rounds, same rounds before and after): median note 118 → 63 characters, notes with a time 90% → 38%, every grenade linked, 0 of 40 columns falling back to the rules. With thinking off the model is 5× faster but made up a buy on every column of two full-buy rounds and timed 73% of its notes, so thinking stays on (about 25 s a strategy).
+
+More rows in `stratbook-notes.json` (one string per column, a string repeated in all five is a team-wide call) make the measurements and the choice of examples better. They are style, not grounded pairs: there is no round behind them, so they are not fine-tuning data on their own.
+
 ## Judging a round: the models are the teacher
 
 eye can say whether a move was good or bad because it can price it, not because it was told a rule. `round_value` and `moment_value` (`src/replays/eye/roundValue.js`) read the two models that were fitted on the library's own rounds:

@@ -9,7 +9,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { buildRoundNotes, buyString, lookTarget, utilityHandovers } from './roundNarrative.js';
+import { buildRoundNotes, buyString, lookTarget, pistolDrops, readRoundNotes, utilityHandovers } from './roundNarrative.js';
 import { foldRoundUtility, TYPE_WORDS } from './utilityImport.js';
 import { seatPlayers } from './roundRoles.js';
 import { sidePlayers } from './addStrategy.js';
@@ -351,11 +351,17 @@ test('a teammate too far away did not hand anything over', () => {
 // ---------------------------------------------------------------------------
 
 test('buy letters follow the stratbook shorthand', () => {
-  assert.equal(buyString(['P250', 'Smoke Grenade', 'Flashbang'], { armor: 100 }), 'KPSF');
-  assert.equal(buyString(['Dual Berettas'], { armor: 0 }), 'D');
-  assert.equal(buyString(['Tec-9', 'High Explosive Grenade'], { armor: 0 }), 'TN');
+  // The coach's own rows (tools/eye/gold/stratbook-notes.json): a letter per
+  // grenade, a second flash is a second F, pistols and HE joined with a plus.
+  assert.equal(buyString(['Glock-18', 'Smoke Grenade', 'Flashbang', 'Flashbang'], { armor: 0 }), 'SFF');
+  assert.equal(buyString(['Glock-18', 'Smoke Grenade', 'Molotov'], { armor: 0 }), 'SM');
+  assert.equal(buyString(['P250', 'Smoke Grenade', 'Flashbang'], { armor: 0 }), 'SF+P250');
+  assert.equal(buyString(['P250', 'Smoke Grenade', 'Flashbang'], { armor: 100 }), 'KSF+P250');
+  assert.equal(buyString(['Dual Berettas', 'Flashbang', 'Flashbang'], { armor: 0 }), 'DFF');
+  assert.equal(buyString(['Tec-9', 'High Explosive Grenade'], { armor: 0 }), 'HE+Tec9');
   assert.equal(buyString(['Molotov'], { armor: 100 }), 'KM');
   assert.equal(buyString(['Incendiary Grenade'], { armor: 0 }), 'M');
+  assert.equal(buyString(['Glock-18'], { armor: 100 }), 'K');
   // A Glock has no letter in the shorthand, so a naked pistol round is blank.
   assert.equal(buyString(['Glock-18'], { armor: 0 }), '');
 });
@@ -488,7 +494,7 @@ test('a note opens with the buy on a pistol round and not on a full buy', () => 
     playerIds: ['aaa'],
     economy: 'Pistol'
   }).get('aaa');
-  assert.match(body(pistol), /^PF\./, `expected a buy prefix in "${pistol}"`);
+  assert.match(body(pistol), /^F\+P250\./, `expected a buy prefix in "${pistol}"`);
 
   const full = buildRoundNotes({
     meta,
@@ -499,7 +505,7 @@ test('a note opens with the buy on a pistol round and not on a full buy', () => 
     playerIds: ['aaa'],
     economy: 'Full buy'
   }).get('aaa');
-  assert.ok(!body(full).startsWith('PF.'), `buy leaked into a full buy: "${full}"`);
+  assert.ok(!body(full).startsWith('F+P250.'), `buy leaked into a full buy: "${full}"`);
 });
 
 test('a throw is written at its clock and carries its link tags', () => {
@@ -1049,7 +1055,7 @@ test('the man who carries the bomb out of spawn is told so first', () => {
     economy: 'Pistol'
   });
   // Buy first, then the bomb, then whatever he does.
-  assert.equal(notes.get('ccc'), 'three: KP. Take bomb.');
+  assert.equal(notes.get('ccc'), 'three: K+P250. Take bomb.');
   assert.ok(!notes.get('aaa').includes('Take bomb'), 'the bomb went to two people');
 });
 
@@ -1146,27 +1152,50 @@ test('the line stops when the bomb goes down', () => {
   assert.ok(!note.includes('Catwalk'), `wrote past the plant: "${note}"`);
 });
 
-test('the line stops when a side is cut to three', () => {
-  const meta = roundMeta({ players: FIVE });
-  // Two of ours die: 5v5 to 4v5 to 3v5.
-  meta.events.kills = [
-    { tick: T0 + 12 * RATE, attacker: 'fff', victim: 'ddd', weapon: 'ak47' },
-    { tick: T0 + 20 * RATE, attacker: 'fff', victim: 'eee', weapon: 'ak47' }
-  ];
-  const note = body(
-    buildRoundNotes({
-      meta,
-      track: fakeTrack({
-        0: [{ at: 0, ...AT.spawn }, { at: 5, ...AT.mid }, { at: 30, ...AT.cat }]
-      }),
-      network: NETWORK,
-      mapCode: 'MIR',
-      side: 'T',
-      playerIds: ['aaa'],
-      economy: 'Full buy'
-    }).get('aaa')
-  );
-  assert.ok(!note.includes('Catwalk'), `wrote past three alive: "${note}"`);
+/** Five a side: FIVE's five Ts against fff plus four more CTs. */
+const TEN = [
+  ...FIVE,
+  { id: 'ggg', name: 'seven', team: 2, slot: 6 },
+  { id: 'hhh', name: 'eight', team: 2, slot: 7 },
+  { id: 'iii', name: 'nine', team: 2, slot: 8 },
+  { id: 'jjj', name: 'ten', team: 2, slot: 9 }
+];
+
+/** Does a smoke aaa throws 40 seconds in still make his line, after these kills? */
+function smokeAfterKills(kills) {
+  const late = {
+    type: 'smokegrenade',
+    player: 'aaa',
+    throwTick: T0 + 40 * RATE,
+    detonateTick: T0 + 41 * RATE,
+    at: { ...AT.cat, z: 0 }
+  };
+  const meta = roundMeta({ players: TEN, grenades: [late] });
+  meta.events.kills = kills.map(([sec, attacker, victim]) => ({ tick: T0 + sec * RATE, attacker, victim, weapon: 'ak47' }));
+  const note = buildRoundNotes({
+    meta,
+    track: fakeTrack({ 0: [{ at: 0, ...AT.spawn }, { at: 5, ...AT.mid }] }),
+    network: NETWORK,
+    mapCode: 'MIR',
+    side: 'T',
+    playerIds: ['aaa'],
+    links: [{ grenade: late, type: 'smokegrenade', word: 'Smoke', spot: 'Catwalk', throwId: 'zzzz' }],
+    economy: 'Full buy'
+  }).get('aaa');
+  return note.includes('zzzz');
+}
+
+test('an opening pick and its trade do not end the call', () => {
+  // 5v5 to 4v5 to 4v4 inside the first fifteen seconds: the old 4v4 rule ended
+  // every line there, and left the columns of a whole execute blank.
+  assert.equal(smokeAfterKills([[12, 'fff', 'ddd'], [13, 'aaa', 'fff']]), true);
+  // Two of ours down is still the call, played on three.
+  assert.equal(smokeAfterKills([[12, 'fff', 'ddd'], [20, 'fff', 'eee']]), true);
+});
+
+test('the line stops when a side is down to two', () => {
+  assert.equal(smokeAfterKills([[12, 'fff', 'ddd'], [20, 'fff', 'eee'], [25, 'fff', 'ccc']]), false);
+  assert.equal(smokeAfterKills([[12, 'aaa', 'fff'], [20, 'aaa', 'ggg'], [25, 'aaa', 'hhh']]), false);
 });
 
 test('the first man of a group entry is marked on the line that took him in', () => {
@@ -1293,9 +1322,11 @@ test('the call covers the two seconds after the second man is in', () => {
     at: { ...AT.cat, z: 0 },
     _id: id
   });
-  // Second body is in at 22s, so the call runs to 24s.
+  // Second body is in at 22s, so the call runs to 24s; utility keeps
+  // counting for five seconds more, because it is the hit landing.
   const inGrace = nadeAt(23, 'keep');
-  const past = nadeAt(26, 'drop');
+  const entryUtil = nadeAt(26, 'util');
+  const past = nadeAt(31, 'drop');
   const track = fakeTrack({
     0: [{ at: 0, ...AT.spawn }, { at: 10, ...AT.mid }, { at: 20, ...AT.ramp }],
     1: [{ at: 0, ...AT.spawn }, { at: 22, ...AT.ramp }],
@@ -1305,7 +1336,7 @@ test('the call covers the two seconds after the second man is in', () => {
   });
   const note = body(
     buildRoundNotes({
-      meta: roundMeta({ players: FIVE, grenades: [inGrace, past] }),
+      meta: roundMeta({ players: FIVE, grenades: [inGrace, entryUtil, past] }),
       track,
       network: net,
       mapCode: 'MIR',
@@ -1313,12 +1344,14 @@ test('the call covers the two seconds after the second man is in', () => {
       playerIds: ['aaa'],
       links: [
         { grenade: inGrace, type: 'hegrenade', word: 'Nade', spot: 'Catwalk', throwId: 'keep' },
+        { grenade: entryUtil, type: 'hegrenade', word: 'Nade', spot: 'Catwalk', throwId: 'util' },
         { grenade: past, type: 'hegrenade', word: 'Nade', spot: 'Catwalk', throwId: 'drop' }
       ],
       economy: 'Full buy'
     }).get('aaa')
   );
   assert.ok(note.includes('keep'), `the grace window was not covered: "${note}"`);
+  assert.ok(note.includes('util'), `utility thrown as the entry lands was cut: "${note}"`);
   assert.ok(!note.includes('drop'), `wrote past the grace window: "${note}"`);
 });
 
@@ -1935,4 +1968,264 @@ test('lookTarget follows yaw onto the next painted position', () => {
   const namer = createNamer(NETWORK, 'MIR');
   const yaw = yawTowards(AT.cat, AT.ramp);
   assert.equal(lookTarget(namer, AT.cat.x, AT.cat.y, 0, yaw, 'Catwalk'), 'A Ramp');
+});
+
+// ---------------------------------------------------------------------------
+// What does not belong in a column.
+
+/** The same round with FIVE's team defending: aaa..eee are the CTs. */
+const asCT = (meta) => ({ ...meta, team1Side: 'CT', team2Side: 'T' });
+
+test('defending columns get no fake, exec or first-in mark', () => {
+  // The Fake case: two nades from a minority opposite a core of four.
+  const one = { type: 'smokegrenade', player: 'aaa', throwTick: T0 + 10 * RATE, detonateTick: T0 + 11 * RATE, at: { ...AT.ramp, z: 0 } };
+  const two = { type: 'flashbang', player: 'aaa', throwTick: T0 + 11 * RATE, detonateTick: T0 + 12 * RATE, at: { ...AT.ramp, z: 0 } };
+  const fake = buildRoundNotes({
+    meta: asCT(roundMeta({ players: FIVE, grenades: [one, two] })),
+    track: fakeTrack({
+      0: [{ at: 0, ...AT.spawn }, { at: 6, ...AT.cat }],
+      1: [{ at: 0, x: AT.spawn.x + 80, y: AT.spawn.y }],
+      2: [{ at: 0, x: AT.spawn.x, y: AT.spawn.y + 80 }],
+      3: [{ at: 0, x: AT.spawn.x + 80, y: AT.spawn.y + 80 }],
+      4: [{ at: 0, x: AT.spawn.x - 80, y: AT.spawn.y }]
+    }),
+    network: NETWORK,
+    mapCode: 'MIR',
+    side: 'CT',
+    playerIds: ['aaa'],
+    economy: 'Full buy'
+  }).get('aaa');
+  assert.ok(!fake.includes('Fake'), fake);
+
+  // The exec case: four flashes from two players after 1:35.
+  const nadeAt = (player, sec) => ({ type: 'flashbang', player, throwTick: T0 + sec * RATE, detonateTick: T0 + (sec + 1) * RATE, at: { ...AT.ramp, z: 0 } });
+  const exec = buildRoundNotes({
+    meta: asCT(roundMeta({ players: FIVE, grenades: [nadeAt('aaa', 24), nadeAt('bbb', 25), nadeAt('aaa', 26), nadeAt('bbb', 27)] })),
+    track: fakeTrack({ 0: [{ at: 0, ...AT.spawn }, { at: 30, ...AT.ramp }], 1: [{ at: 0, ...AT.spawn }] }),
+    network: NETWORK,
+    mapCode: 'MIR',
+    side: 'CT',
+    playerIds: ['aaa'],
+    economy: 'Full buy'
+  }).get('aaa');
+  assert.ok(!exec.includes('On exec'), exec);
+
+  // The first-in case: three men onto the site, aaa first.
+  const molo = { type: 'molotov', player: 'eee', throwTick: T0 + 17 * RATE, detonateTick: T0 + 19 * RATE, at: { ...AT.ramp, z: 0 } };
+  const first = buildRoundNotes({
+    meta: asCT(roundMeta({ players: FIVE, grenades: [molo] })),
+    track: fakeTrack({
+      0: [{ at: 0, ...AT.spawn }, { at: 12, ...AT.mid }, { at: 20, ...AT.ramp }],
+      1: [{ at: 0, ...AT.spawn }, { at: 24, ...AT.ramp }],
+      2: [{ at: 0, ...AT.spawn }, { at: 26, ...AT.ramp }],
+      3: [{ at: 0, ...AT.spawn }],
+      4: [{ at: 0, ...AT.spawn }]
+    }),
+    network: NETWORK,
+    mapCode: 'MIR',
+    side: 'CT',
+    playerIds: ['aaa'],
+    economy: 'Full buy'
+  }).get('aaa');
+  assert.ok(!first.includes('Go 1st'), first);
+});
+
+test('the anchor on the other site is not a lurker', () => {
+  const notes = buildRoundNotes({
+    meta: asCT(roundMeta({ players: FIVE })),
+    track: fakeTrack({
+      0: [{ at: 0, ...AT.spawn }, { at: 10, ...AT.cat }],
+      1: [{ at: 0, ...AT.spawn }, { at: 12, ...AT_B1 }],
+      2: [{ at: 0, ...AT.spawn }, { at: 12, ...AT_B1 }],
+      3: [{ at: 0, ...AT.spawn }, { at: 12, ...AT_B1 }],
+      4: [{ at: 0, ...AT.spawn }, { at: 12, ...AT_B1 }]
+    }),
+    network: KEY_NET,
+    mapCode: 'MIR',
+    side: 'CT',
+    playerIds: ['aaa'],
+    economy: 'Full buy'
+  });
+  assert.ok(!notes.get('aaa').includes('Lurk'), notes.get('aaa'));
+});
+
+test("standing in the other side's smoke is not written", () => {
+  const theirs = { type: 'smokegrenade', player: 'fff', throwTick: T0 + RATE, detonateTick: T0 + 2 * RATE, at: { x: AT.mid.x, y: AT.mid.y, z: 0 } };
+  const note = buildRoundNotes({
+    meta: roundMeta({ players: FIVE, grenades: [theirs] }),
+    track: fakeTrack({ 0: [{ at: 0, ...AT.spawn }, { at: 6, ...AT.mid }], 5: [{ at: 0, ...AT.spawn }] }),
+    network: NETWORK,
+    mapCode: 'MIR',
+    side: 'T',
+    playerIds: ['aaa'],
+    economy: 'Full buy'
+  }).get('aaa');
+  assert.ok(!note.includes('In smoke'), note);
+});
+
+test('shots out past our own smoke are not spam', () => {
+  const ours = { type: 'smokegrenade', player: 'bbb', throwTick: T0 + 4 * RATE, detonateTick: T0 + 5 * RATE, at: { ...AT.ramp, z: 0 } };
+  const meta = roundMeta({ players: FIVE, grenades: [ours] });
+  meta.events.shots = Array.from({ length: 12 }, (_, i) => ({
+    tick: T0 + (10 + i * 0.2) * RATE,
+    player: 'aaa',
+    weapon: 'ak47',
+    x: AT.mid.x,
+    y: AT.mid.y,
+    z: 0,
+    yaw: 90,
+    pitch: 0
+  }));
+  const note = buildRoundNotes({
+    meta,
+    track: fakeTrack({ 0: [{ at: 0, ...AT.spawn }, { at: 6, ...AT.mid }] }),
+    network: NETWORK,
+    mapCode: 'MIR',
+    side: 'T',
+    playerIds: ['aaa'],
+    economy: 'Full buy'
+  }).get('aaa');
+  assert.ok(!note.includes('Spam'), note);
+});
+
+test('only the first fight is written: where he took contact', () => {
+  const meta = roundMeta({ players: [...FIVE, { id: 'ggg', name: 'seven', team: 2, slot: 6 }] });
+  meta.events.damage = [
+    { tick: T0 + 20 * RATE, attacker: 'aaa', victim: 'fff', hp: 30 },
+    { tick: T0 + 35 * RATE, attacker: 'ggg', victim: 'aaa', hp: 30 }
+  ];
+  const note = body(
+    buildRoundNotes({
+      meta,
+      track: fakeTrack({
+        0: [{ at: 0, ...AT.spawn }, { at: 10, ...AT.mid }],
+        5: [{ at: 0, ...AT.ramp }],
+        6: [{ at: 0, ...AT.cat }]
+      }),
+      network: NETWORK,
+      mapCode: 'MIR',
+      side: 'T',
+      playerIds: ['aaa'],
+      economy: 'Full buy'
+    }).get('aaa')
+  );
+  assert.match(note, /Fight A Ramp from Top Mid/);
+  assert.equal((note.match(/Fight /g) || []).length, 1, note);
+});
+
+test('a handed-over smoke names both ends', () => {
+  const meta = roundMeta({
+    players: FIVE,
+    items: [{ tick: T0 + 3 * RATE, player: 'bbb', item: 'smokegrenade', op: 'pickup' }],
+    stats: { aaa: { loadout: ['Smoke Grenade'] }, bbb: { loadout: [] } }
+  });
+  const notes = buildRoundNotes({
+    meta,
+    track: fakeTrack({ 0: [{ at: 0, ...AT.spawn }], 1: [{ at: 0, x: AT.spawn.x + 40, y: AT.spawn.y }] }),
+    network: NETWORK,
+    mapCode: 'MIR',
+    side: 'T',
+    playerIds: ['aaa', 'bbb'],
+    economy: 'Full buy'
+  });
+  assert.match(body(notes.get('aaa')), /Drop smoke to two/);
+  assert.match(body(notes.get('bbb')), /Get smoke from one/);
+});
+
+test('a body nothing else places plays where he spent the call', () => {
+  // Walks onto A alone (no cover, so no Go) and sits there to the end (a stay
+  // with nothing after it is dropped): the old note was empty.
+  const note = body(
+    buildRoundNotes({
+      meta: roundMeta({ players: FIVE }),
+      track: fakeTrack({ 0: [{ at: 0, ...AT.spawn }, { at: 10, ...AT.ramp }] }),
+      network: NETWORK,
+      mapCode: 'MIR',
+      side: 'T',
+      playerIds: ['aaa'],
+      economy: 'Full buy'
+    }).get('aaa')
+  );
+  assert.equal(note, 'Play A Site');
+});
+
+// ---------------------------------------------------------------------------
+// The Nemiga Anubis pistol (22 Oct), graded by the coach.
+
+test('a pistol drop is read off the money: who bought it and who was given it', () => {
+  const stats = {
+    aaa: { money: 0, equipValue: 700, loadout: ['Glock-18', 'Smoke Grenade', 'Flashbang'] },
+    bbb: { money: 150, equipValue: 950, loadout: ['P250'] },
+    ccc: { money: 150, equipValue: 850, loadout: ['Glock-18'] }
+  };
+  assert.deepEqual(pistolDrops(['aaa', 'bbb', 'ccc'], stats), [{ from: 'aaa', to: 'bbb', item: 'p250' }]);
+  // Nobody short of what he holds: no drops, and no guessing.
+  assert.deepEqual(pistolDrops(['ccc'], stats), []);
+
+  const notes = buildRoundNotes({
+    meta: roundMeta({ players: FIVE, stats }),
+    track: fakeTrack({ 0: [{ at: 0, ...AT.spawn }], 1: [{ at: 0, ...AT.spawn, armor: 100 }] }),
+    network: NETWORK,
+    mapCode: 'MIR',
+    side: 'T',
+    playerIds: ['aaa', 'bbb'],
+    economy: 'Pistol'
+  });
+  assert.equal(notes.get('aaa'), 'one: SF+P250. Drop p250 to two.');
+  assert.equal(notes.get('bbb'), 'two: K. Take p250 from one.');
+});
+
+/** NETWORK with Catwalk painted into the spawn zone, the way Anubis paints "T Spawn + B Main". */
+const WIDE_SPAWN = {
+  ...NETWORK,
+  zones: [
+    { id: 'z_t', name: 'T Side', positionIds: ['p_spawn', 'p_cat'] },
+    { id: 'z_mid', name: 'Mid', positionIds: ['p_mid'] },
+    { id: 'z_a', name: 'A Site', positionIds: ['p_ramp'] }
+  ]
+};
+
+test('a lurker who never leaves a wide spawn zone still holds his spot', () => {
+  const note = body(
+    buildRoundNotes({
+      meta: roundMeta({ players: FIVE, grenades: [LATE_NADE] }),
+      track: fakeTrack({ 0: [{ at: 0, ...AT.spawn }, { at: 5, ...AT.cat }, { at: 40, ...AT.ramp }] }),
+      network: WIDE_SPAWN,
+      mapCode: 'MIR',
+      side: 'T',
+      playerIds: ['aaa'],
+      economy: 'Full buy'
+    }).get('aaa')
+  );
+  assert.match(note, /^Stay Catwalk until \d:\d\d/);
+});
+
+test('the route drops a clipped corner and marks a walk', () => {
+  // Mid from 10s, two seconds on A Ramp at 20s, back to Mid: one Mid step.
+  // From 24s he walks along Mid at 100 u/s.
+  const walk = Array.from({ length: 16 }, (_, i) => ({ at: 24 + i * 0.5, x: AT.mid.x - 100 + i * 50 * 0.25, y: AT.mid.y }));
+  const { facts } = readRoundNotes({
+    meta: roundMeta({ players: FIVE, grenades: [LATE_NADE] }),
+    track: fakeTrack({ 0: [{ at: 0, ...AT.spawn }, { at: 10, ...AT.mid }, { at: 20, ...AT.ramp }, { at: 22, ...AT.mid }, ...walk] }),
+    network: NETWORK,
+    mapCode: 'MIR',
+    side: 'T',
+    playerIds: ['aaa'],
+    economy: 'Full buy'
+  });
+  const route = facts.players.get('aaa').route;
+  assert.deepEqual(route.map((r) => r.zone), ['T Side', 'Mid']);
+  assert.equal(route[1].position, 'Top Mid');
+});
+
+test('setpos in notes: a grenade link becomes the lines that stand on its lineup', async () => {
+  const { notesWithSetpos } = await import('./addStrategy.js');
+  const throws = new Map([
+    ['ab12', { setpos: 'setpos 1.000000 2.000000 3.000000', setang: 'setang 4.000000 5.000000 0' }],
+    ['cd34', { setpos: '' }]
+  ]);
+  assert.equal(
+    notesWithSetpos('ropz: <Window smoke><!ab12> insta, <Con flash><!cd34> 1:24.', throws),
+    'ropz: Window smoke (setpos 1.000000 2.000000 3.000000; setang 4.000000 5.000000 0) insta, Con flash 1:24.'
+  );
 });

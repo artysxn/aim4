@@ -1,5 +1,10 @@
 {
  "about": "Manual antistrat sheets written by the aim4 coach: the quality bar for aim4 eye and the rule-based generators. Text extracted from the PDFs (layout flattened).",
+ "stratbook": {
+  "file": "stratbook-notes.json",
+  "about": "A coach's stratbook rows (one string per player column), the style bar for the strategy notes aim4 eye writes from a round. Measured by tools/eye/stratbook-style.mjs.",
+  "source": "pasted by the user, 22 Oct 2026"
+ },
  "docs": [
   {
    "file": "havu-mirage.en.txt",

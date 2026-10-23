@@ -34,13 +34,20 @@
 //                     is lining up a throw, which is the next line instead
 //   line up           standing somewhere with utility out and throwing it
 //                     later: where he sets up, and when it leaves his hand
-//   fights            shots traded with the other side, named by the ground
-//                     both men were on: "Fight Jungle from Top Con"
-//   spam              ten or more bullets into one cloud
-//   drops / pickups   utility handed between players
-//   smoke             standing inside one
+//   fights            the first shots he traded with the other side, named by
+//                     the ground both men were on: "Fight Jungle from Top Con".
+//                     That is where he took contact; the trades after it are
+//                     the round going on, not the call, and are left out
+//   spam              ten or more bullets into one of the other side's clouds
+//   drops / pickups   utility handed between players, and to or from whom:
+//                     "Drop smoke to ropz", "Get smoke from ropz"
+//   smoke             walking through one of his own side's clouds. A man
+//                     the other side smoked off is not doing anything
 //   lurk              solo on the far site while a core of three or more
 //                     walks into a key zone (T)
+//   play              a body nothing above placed still gets where he spent
+//                     the call: "Play B Apps". An empty column reads as a
+//                     player with no job
 //   search            T walking an a1–a4 / b1–b4 piece that the plant then
 //                     follows. Contact if nobody threw in the last five
 //                     seconds; Rush out if the next five cover 1000 PSDT
@@ -52,7 +59,7 @@
 //   runboost          the same hug, then 300+ u/s within a second of leaving
 //                     it: "Get runboosted Mid by ropz"
 //   fake              two or more nades from a 40% minority while a core
-//                     of three exists
+//                     of three exists (T)
 //   2x / synced       two pops of the same flash from one man, or a flash
 //                     and HE leaving two teammates together
 //
@@ -70,6 +77,11 @@
 // Where four or more grenades land from two or more players inside five
 // seconds after the 1:35 mark, that is an execute, and the actions inside it
 // are gathered under one "On exec, do ..." clause rather than listed loose.
+//
+// Attacking words are for attackers. A CT throwing his opening molotov from
+// spawn is not faking, the first CT to walk onto his own site is not entering
+// it, and the B anchor is not lurking: fake, lurk, first in and the execute
+// clause are written for T columns only.
 //
 // The FIRST zone a body stands in never produces any movement event. That is
 // where the round spawns, and "Stay T Spawn until 1:40" is not a strategy, it
@@ -148,8 +160,20 @@ const BOMB_MIN_HOLD_SECONDS = 2;
 const CUTOFF_ENTRIES = 2;
 /** Grace after the second body arrives, so the line covers the entry itself. */
 const CUTOFF_ENTRY_GRACE_SECONDS = 2;
-const CUTOFF_ALIVE = 3;
-const CUTOFF_EVEN = 4;
+/**
+ * Utility thrown this soon after the site entry ended the call is still the
+ * hit: the smoke a man puts up as he lands on the site (robo's temple smoke
+ * on the Nemiga Anubis pistol left his hand a fraction past the grace and was
+ * missing from his line).
+ */
+const ENTRY_UTILITY_SECONDS = 5;
+/**
+ * A side down to this many is improvising. One early trade is not: teams play
+ * the call on four or three a side. Stopping at 4v4 or at three alive (the old
+ * rule) ended the line 13 to 16 seconds in on an opening pick and trade, and
+ * left whole columns blank: 15 of 600 in 60 library rounds, 22 Oct.
+ */
+const CUTOFF_ALIVE = 2;
 /** Men entering the site inside this window are one group. */
 const ENTRY_GROUP_SECONDS = 8;
 /** A group this size has a first man worth naming. */
@@ -219,21 +243,27 @@ const FLIGHT_TAIL_SECONDS = 1.5;
 /** Stratbook roleNotes are capped by the server; leave the trim to us. */
 const NOTE_MAX = 800;
 
-/** Buy letters, in the order they are written. `K` first, then gun, then util. */
+/**
+ * The buy as the coach's stratbook writes it (tools/eye/gold/stratbook-notes.json):
+ * K for kevlar, then one letter per grenade, repeated for a second one (SFF is
+ * a smoke and two flashes, which the old one-letter-per-kind line wrote as SF),
+ * dualies as D among them, and the rest joined on with a plus: SF+P250, DF+HE.
+ */
 const BUY_LETTERS = [
-  ['kevlar', 'K'],
-  ['p250', 'P'],
-  ['elite', 'D'],
-  ['tec9', 'T'],
   ['smokegrenade', 'S'],
-  ['flashbang', 'F'],
   ['molotov', 'M'],
   ['incgrenade', 'M'],
-  ['hegrenade', 'N']
+  ['elite', 'D'],
+  ['flashbang', 'F']
+];
+const BUY_EXTRAS = [
+  ['hegrenade', 'HE'],
+  ['p250', 'P250'],
+  ['tec9', 'Tec9']
 ];
 
 /** Economies whose notes open with what the player bought. */
-const BUY_ECONOMIES = new Set(['Pistol', 'Force']);
+const BUY_ECONOMIES = new Set(['Pistol', 'Eco', 'Force']);
 
 /** "1:49" for a second offset into the live round. */
 export function clockAt(seconds) {
@@ -464,6 +494,38 @@ function runsFrom(samples, step, pick) {
   return runs;
 }
 
+/** Shortest time somewhere before it counts as where a player played. */
+const PLAY_MIN_SECONDS = 3;
+
+/**
+ * Where a player spent the call, for a column the event rules left with
+ * nothing that places him: the zone he was in longest. Never the spawn, by the
+ * same rule as everywhere else: a man who never left it gets no line.
+ *
+ * @param {Array<{ sec: number, zone: string }>} samples
+ * @param {number} step  seconds between samples
+ * @param {string} [spawnZone]
+ * @returns {{ name: string, sec: number } | null}
+ */
+export function presenceOf(samples, step, spawnZone = '') {
+  const time = new Map();
+  const first = new Map();
+  for (const s of samples) {
+    if (!s.zone || s.zone === spawnZone) continue;
+    time.set(s.zone, (time.get(s.zone) || 0) + step);
+    if (!first.has(s.zone)) first.set(s.zone, s.sec);
+  }
+  let best = '';
+  let most = 0;
+  for (const [name, t] of time) {
+    if (t > most) {
+      best = name;
+      most = t;
+    }
+  }
+  return most >= PLAY_MIN_SECONDS ? { name: best, sec: first.get(best) } : null;
+}
+
 /**
  * Grenades that changed hands, with the round trips already removed.
  *
@@ -614,21 +676,89 @@ export function utilityHandovers({
   return live;
 }
 
+/** What CS2 charges, to work out a pistol round's freezetime drops from what each man spent. */
+const PRICES = {
+  smokegrenade: 300,
+  flashbang: 200,
+  hegrenade: 300,
+  molotov: 400,
+  incgrenade: 500,
+  decoy: 50,
+  p250: 300,
+  elite: 300,
+  tec9: 500,
+  fiveseven: 500,
+  cz75a: 500,
+  deagle: 700,
+  revolver: 600
+};
+/** The pistol everyone spawns with, worth 200 in a demo's equipment value. */
+const DEFAULT_PISTOLS = new Set(['glock', 'usp_silencer', 'hkp2000']);
+const PISTOL_MONEY = 800;
+/** How a dropped item is named in a note. */
+const ITEM_WORDS = {
+  p250: 'p250',
+  elite: 'dualies',
+  tec9: 'tec9',
+  fiveseven: 'five-seven',
+  cz75a: 'cz',
+  deagle: 'deagle',
+  revolver: 'revolver',
+  smokegrenade: 'smoke',
+  flashbang: 'flash',
+  hegrenade: 'nade',
+  molotov: 'molo',
+  incgrenade: 'molo',
+  decoy: 'decoy'
+};
+
 /**
- * The buy line for a pistol or force round: what the player owned when
+ * Who dropped what to whom in a pistol round's freezetime.
+ *
+ * The demo has no event for it: the buy menu and the drop both happen before
+ * the round goes live. The money does say it. Everyone starts on 800, so a man
+ * who spent 800 and holds 500 of gear bought 300 he gave away, and a man who
+ * spent 650 and holds 950 was given 300 of it. A P250 in the second man's hands
+ * that nobody else lacks is the one the first bought ("SF+P250, drop p250").
+ * Only exact matches are written: a guess about who paid is worse than none.
+ *
+ * @param {string[]} ids   the side
+ * @param {object} stats   meta.stats: money left, equipValue and loadout at freeze end
+ * @returns {Array<{ from: string, to: string, item: string }>}
+ */
+export function pistolDrops(ids, stats) {
+  const left = new Map();
+  for (const id of ids) {
+    const st = stats?.[id];
+    if (!st || !Number.isFinite(st.money) || !Number.isFinite(st.equipValue)) continue;
+    const items = normalizeLoadout(st.loadout || []);
+    const bought = st.equipValue - (items.some((i) => DEFAULT_PISTOLS.has(i)) ? 200 : 0);
+    left.set(id, { spare: PISTOL_MONEY - st.money - bought, items });
+  }
+  const drops = [];
+  for (const [to, r] of left) {
+    if (r.spare >= 0) continue;
+    const item = r.items.find((i) => PRICES[i] === -r.spare);
+    const from = item && [...left].find(([id, d]) => id !== to && d.spare === -r.spare)?.[0];
+    if (!from) continue;
+    left.get(from).spare = 0;
+    r.spare = 0;
+    drops.push({ from, to, item });
+  }
+  return drops;
+}
+
+/**
+ * The buy line for a pistol, eco or force round: what the player owned when
  * freezetime ended.
  */
 export function buyString(loadout, state) {
-  const items = new Set(normalizeLoadout(loadout));
-  if ((state?.armor ?? 0) > 0) items.add('kevlar');
-  const seen = new Set();
-  let out = '';
-  for (const [item, letter] of BUY_LETTERS) {
-    if (!items.has(item) || seen.has(letter)) continue;
-    seen.add(letter);
-    out += letter;
-  }
-  return out;
+  const items = normalizeLoadout(loadout);
+  const count = (id) => items.filter((item) => item === id).length;
+  let letters = (state?.armor ?? 0) > 0 ? 'K' : '';
+  for (const [item, letter] of BUY_LETTERS) letters += letter.repeat(count(item));
+  const extras = BUY_EXTRAS.filter(([item]) => count(item)).map(([, word]) => word);
+  return [letters, ...extras].filter(Boolean).join('+');
 }
 
 /**
@@ -647,7 +777,108 @@ export function buyString(loadout, state) {
  * @param {number} [args.windowTo]    seconds after freeze, inclusive
  * @returns {Map<string, string>} playerId → note
  */
-export function buildRoundNotes({
+export function buildRoundNotes(args) {
+  return readRoundNotes(args).notes;
+}
+
+/** A hold in the facts: this long on one position, gun out for most of it. */
+const FACT_HOLD_SECONDS = 4;
+/** Route steps kept per player; a man pacing between two zones is not a route. */
+const FACT_ROUTE_STEPS = 14;
+/** A route step this short, between two steps in one zone, is a corner clipped. */
+const FACT_FLICKER_SECONDS = 3;
+/**
+ * Moving at this speed is walking (shift): CS2 runs at 215-250 u/s with a
+ * pistol or knife and walks at about half that. Measured on the Nemiga Anubis
+ * pistol: the slow shift along water to con read 100-120.
+ */
+const WALK_MIN = 80;
+const WALK_MAX = 160;
+const WALK_SECONDS = 3;
+
+/** The value of `key` the samples spent the most time on. */
+function mostSeen(samples, key) {
+  const n = new Map();
+  for (const s of samples) if (s[key]) n.set(s[key], (n.get(s[key]) || 0) + 1);
+  let best = '';
+  let most = 0;
+  for (const [v, c] of n) {
+    if (c > most) {
+      best = v;
+      most = c;
+    }
+  }
+  return best;
+}
+
+/** A pause this long ends the leg that took him into a route step. */
+const LEG_PAUSE_SECONDS = 1.5;
+
+/**
+ * When he started walking in this step: the first leg (movement between two
+ * pauses) with more time at walking speed than running and at least
+ * WALK_SECONDS of it, or null. Counted second by second per leg, not averaged
+ * over the step: a man who ran to krimz, held it and later edged along water
+ * averaged out at walking speed and was told to walk to krimz, while khaN's
+ * slow shift towards con came only after his hold on m0NESY.
+ *
+ * @returns {number|null} seconds into the round
+ */
+function walked(samples, step) {
+  let walking = 0;
+  let running = 0;
+  let still = 0;
+  let legFrom = null;
+  const done = () => (walking >= WALK_SECONDS && walking > running ? legFrom : null);
+  for (let i = 1; i < samples.length; i++) {
+    const dt = samples[i].sec - samples[i - 1].sec;
+    if (dt <= 0 || dt > step * 1.5) continue;
+    const speed = Math.hypot(samples[i].x - samples[i - 1].x, samples[i].y - samples[i - 1].y) / dt;
+    if (speed < WALK_MIN) {
+      still += dt;
+      if (still >= LEG_PAUSE_SECONDS && legFrom != null) {
+        const from = done();
+        if (from != null) return from;
+        walking = 0;
+        running = 0;
+        legFrom = null;
+      }
+      continue;
+    }
+    still = 0;
+    if (legFrom == null) legFrom = samples[i - 1].sec;
+    if (speed > WALK_MAX) running += dt;
+    else walking += dt;
+  }
+  return legFrom == null ? null : done();
+}
+
+/**
+ * The notes, and the facts they were read from.
+ *
+ * A writer that words the notes itself (aim4 eye, eye/eyeStrategyNotes.js) needs
+ * what the rules saw, not only what they printed: the whole walk, every hold
+ * and what it watched, each grenade with its archive id, where the call ended.
+ * Seconds are seconds after the round went live, like everything else here.
+ *
+ * @param {object} args  as buildRoundNotes
+ * @returns {{ notes: Map<string, string>, facts: null | {
+ *   side: 'T'|'CT',
+ *   window: { from: number, to: number },
+ *   cutoff: null | { sec: number, why: string },
+ *   exec: null | { from: number, to: number },
+ *   plant: null | { sec: number, site: string, player: string },
+ *   firstIn: null | { id: string, sec: number, zone: string },
+ *   players: Map<string, {
+ *     name: string, note: string, buy: string, handed: string[], died: number|null, bomb: boolean,
+ *     route: Array<{ zone: string, from: number, to: number, position: string, walkFrom: number|null }>,
+ *     holds: Array<{ position: string, from: number, to: number, aim: string }>,
+ *     nades: Array<{ grenade: object, sec: number, word: string, spot: string, from: string,
+ *                    throwId: string, insta: boolean, lineup: string, synced: string }>
+ *   }>
+ * } }}
+ */
+export function readRoundNotes({
   meta,
   track,
   network,
@@ -661,7 +892,7 @@ export function buildRoundNotes({
 }) {
   const notes = new Map();
   const ids = (playerIds || []).filter(Boolean);
-  if (!meta || !track || !ids.length) return notes;
+  if (!meta || !track || !ids.length) return { notes, facts: null };
 
   const timing = timingFor(meta);
   const rate = timing.tickRate || 64;
@@ -708,26 +939,33 @@ export function buildRoundNotes({
   const nameOf = new Map((meta.players || []).map((p) => [p.id, p.name || '']));
 
   // One execute for the whole side: it is the same hit under every column, so
-  // every player's note breaks at the same moment.
-  const exec = execWindow(
-    ourGrenades
-      .filter((g) => TYPE_WORDS[normalizeNadeType(g.type)])
-      .map((g) => ({ player: g.player, sec: secOf(Number(g.throwTick)) }))
-      .filter((t) => Number.isFinite(t.sec))
-      .sort((a, b) => a.sec - b.sec)
-  );
+  // every player's note breaks at the same moment. Attackers only: four CT
+  // grenades inside five seconds is a defence answering a hit, not a call.
+  const exec =
+    side !== 'T'
+      ? null
+      : execWindow(
+          ourGrenades
+            .filter((g) => TYPE_WORDS[normalizeNadeType(g.type)])
+            .map((g) => ({ player: g.player, sec: secOf(Number(g.throwTick)) }))
+            .filter((t) => Number.isFinite(t.sec))
+            .sort((a, b) => a.sec - b.sec)
+        );
 
   /**
    * Smokes that were up, for "standing in one" and for "spamming one".
    *
-   * Both sides' clouds, because the smoke a player empties a magazine into is
-   * almost always the other team's.
+   * Both sides' clouds, marked by whose they are. A player walks through his
+   * own side's cover on purpose; he is caught in the other side's. And the
+   * smoke a player empties a magazine into is the other team's: shots out past
+   * his own cloud are aimed at whoever is behind it, not at the smoke.
    */
   const smokes = allGrenades
     .filter((g) => normalizeNadeType(g.type) === 'smokegrenade')
     .map((g) => ({
       x: Number(g.at?.x),
       y: Number(g.at?.y),
+      ours: sideIds.has(g.player),
       spot: namer.positionName(Number(g.at?.x), Number(g.at?.y), Number(g.at?.z) || 0),
       from: Number(g.detonateTick ?? g.throwTick),
       to: Number(g.detonateTick ?? g.throwTick) + SMOKE_SECONDS * rate
@@ -752,7 +990,7 @@ export function buildRoundNotes({
     if (!Number.isFinite(ox) || !Number.isFinite(oy) || !Number.isFinite(yaw)) continue;
     for (let i = 0; i < smokes.length; i++) {
       const sm = smokes[i];
-      if (shot.tick < sm.from || shot.tick > sm.to) continue;
+      if (sm.ours || shot.tick < sm.from || shot.tick > sm.to) continue;
       const away = Math.hypot(sm.x - ox, sm.y - oy);
       if (away < SPAM_MIN_STANDOFF) continue;
       if (!shotIntoCloud(ox, oy, yaw, sm.x, sm.y, SMOKE_RADIUS_UNITS, SPAM_RANGE_UNITS)) continue;
@@ -990,11 +1228,13 @@ export function buildRoundNotes({
   const approachEntry = [];
   const seenApproach = new Set();
 
+  /** What ended the call: 'plant', 'site' or 'deaths', or '' when nothing did. */
+  let cutoffWhy = '';
   const cutoffSec = (() => {
     const marks = [];
 
     const plant = (meta.events?.bomb || []).find((b) => b.type === 'planted');
-    if (plant?.tick > t0) marks.push(secOf(plant.tick));
+    if (plant?.tick > t0) marks.push({ sec: secOf(plant.tick), why: 'plant' });
 
     // Deaths, in order, against the count each side started with.
     const teamOf = new Map((meta.players || []).map((p) => [p.id, p.team === 1 ? side1 : side2]));
@@ -1010,12 +1250,8 @@ export function buildRoundNotes({
       const s = teamOf.get(k.victim);
       if (s !== 'T' && s !== 'CT') continue;
       alive[s] -= 1;
-      if (
-        alive.T <= CUTOFF_ALIVE ||
-        alive.CT <= CUTOFF_ALIVE ||
-        (alive.T === CUTOFF_EVEN && alive.CT === CUTOFF_EVEN)
-      ) {
-        marks.push(secOf(k.tick || 0));
+      if (alive.T <= CUTOFF_ALIVE || alive.CT <= CUTOFF_ALIVE) {
+        marks.push({ sec: secOf(k.tick || 0), why: 'deaths' });
         break;
       }
     }
@@ -1067,10 +1303,13 @@ export function buildRoundNotes({
         if (!twoIn && inSite.size >= CUTOFF_ENTRIES) twoIn = tick;
       }
       // Plus a moment, so the line still covers the entry that ended it.
-      if (twoIn) marks.push(secOf(twoIn) + CUTOFF_ENTRY_GRACE_SECONDS);
+      if (twoIn) marks.push({ sec: secOf(twoIn) + CUTOFF_ENTRY_GRACE_SECONDS, why: 'site' });
     }
 
-    return marks.length ? Math.min(...marks) : Infinity;
+    if (!marks.length) return Infinity;
+    const first = marks.reduce((a, b) => (b.sec < a.sec ? b : a));
+    cutoffWhy = first.why;
+    return first.sec;
   })();
 
   /**
@@ -1081,7 +1320,12 @@ export function buildRoundNotes({
    * wandering into the site ahead of nobody is not leading an entry, he is
    * lurking.
    */
+  /** Where a grenade stops counting: a little later than the rest when the site entry ended the call. */
+  const nadeCutoff = cutoffWhy === 'site' ? cutoffSec + ENTRY_UTILITY_SECONDS : cutoffSec;
+
   const firstIn = (() => {
+    // Defenders walk onto their own site at the start: that is the setup, not an entry.
+    if (side !== 'T') return '';
     const entries = [...enteredSiteAt.entries()].sort((a, b) => a[1].tick - b[1].tick);
     if (entries.length < ENTRY_GROUP_MIN) return '';
     const [lead, leadInfo] = entries[0];
@@ -1164,7 +1408,8 @@ export function buildRoundNotes({
    * zone, everyone outside that core is lurking there.
    */
   const lurkAt = new Map();
-  {
+  // The B anchor while three CTs hold A is the setup, not a lurk.
+  if (side === 'T') {
     const keyHits = [
       ...approachEntry.map((e) => ({ id: e.id, tick: e.tick, site: e.site })),
       ...[...enteredSiteAt.entries()].map(([id, info]) => ({ id, tick: info.tick, site: info.site }))
@@ -1401,10 +1646,23 @@ export function buildRoundNotes({
   const scratch = {};
   const showBuy = BUY_ECONOMIES.has(String(economy || ''));
 
+  const freezeDrops = economy === 'Pistol' && !windowed ? pistolDrops([...sideIds], meta.stats) : [];
+  const planted = (meta.events?.bomb || []).find((b) => b.type === 'planted' && b.tick >= t0 && b.tick <= endTick);
+  const facts = {
+    side,
+    window: { from: winFrom, to: winTo },
+    cutoff: Number.isFinite(cutoffSec) ? { sec: cutoffSec, why: cutoffWhy } : null,
+    exec,
+    plant: planted ? { sec: secOf(planted.tick), site: String(planted.site || '').toUpperCase(), player: planted.player || '' } : null,
+    firstIn: firstIn ? { id: firstIn, sec: firstInSec, zone: firstInZone } : null,
+    players: new Map()
+  };
+
   for (const id of ids) {
     const slot = slotOf.get(id);
     if (slot == null || slot < 0) {
       notes.set(id, '');
+      facts.players.set(id, { name: nameOf.get(id) || '', note: '', buy: '', handed: [], died: null, bomb: false, route: [], holds: [], nades: [] });
       continue;
     }
     const died = deadAt.has(id) ? deadAt.get(id) : Infinity;
@@ -1440,6 +1698,11 @@ export function buildRoundNotes({
     // The first zone is the spawn. It never produces a movement event.
     // A mid-round window has no spawn: the first box is just where he was.
     const spawnEndsAt = windowed ? -1 : zoneRuns.length ? zoneRuns[0].to : 0;
+    // Holding is measured off the spawn SPOT, not the spawn zone. Anubis paints
+    // one zone over "T Spawn + B Main", and a lurker who sat outside B Main for
+    // twenty seconds read as never having left spawn: his column was empty.
+    const positionRuns = runsFrom(samples, step, (s) => s.position);
+    const spawnSpotEndsAt = windowed ? -1 : positionRuns.length ? positionRuns[0].to : 0;
 
     /** @type {Array<{ sec: number, text: string, exec?: boolean }>} */
     const events = [];
@@ -1455,8 +1718,8 @@ export function buildRoundNotes({
     // so a body peeking in and out of one does not read as two holds.
     const stays = [];
     let lastStay = null;
-    for (const run of runsFrom(samples, step, (s) => s.position)) {
-      if (run.from < spawnEndsAt) continue;
+    for (const run of positionRuns) {
+      if (run.from < spawnSpotEndsAt) continue;
       if (run.to - run.from < HOLD_SECONDS) continue;
       if (lastStay && lastStay.name === run.name) {
         lastStay.to = run.to;
@@ -1529,6 +1792,7 @@ export function buildRoundNotes({
         events.push({
           sec: first.sec,
           at: thrownAt,
+          grenade: g,
           nade: nadeFields(g, what, clockAt(thrownAt), {
             id: link?.throwId || '',
             from: stay.name,
@@ -1553,6 +1817,7 @@ export function buildRoundNotes({
       events.push({
         sec,
         at: sec,
+        grenade: g,
         nade: nadeFields(g, [word, link?.spot || ''].filter(Boolean).join(' '), insta ? 'insta' : clockAt(sec), {
           id: link?.throwId || '',
           from: spotOf(id, Number(g.throwTick)),
@@ -1695,12 +1960,17 @@ export function buildRoundNotes({
       e.text = `Go ${e.fromPos} to ${e.stayZone}. ${e.text}`;
     }
 
-    // ---- standing in smoke -----------------------------------------------
+    // ---- walking through our own smoke -----------------------------------
+    //
+    // Once per cloud: stepping out of the edge and back in is the same crossing.
     let smokeFrom = -1;
     let smokeAt = '';
+    let smokeCloud = -1;
+    const smokeTold = new Set();
     const closeSmoke = (endSec) => {
       if (smokeFrom < 0) return;
-      if (endSec - smokeFrom >= MIN_SMOKE_SECONDS && smokeFrom >= spawnEndsAt) {
+      if (endSec - smokeFrom >= MIN_SMOKE_SECONDS && smokeFrom >= spawnEndsAt && !smokeTold.has(smokeCloud)) {
+        smokeTold.add(smokeCloud);
         events.push({
           sec: smokeFrom,
           text: smokeAt ? `In smoke at ${smokeAt}` : 'In smoke'
@@ -1708,18 +1978,21 @@ export function buildRoundNotes({
       }
       smokeFrom = -1;
       smokeAt = '';
+      smokeCloud = -1;
     };
     for (const s of samples) {
-      const inside = smokes.some(
+      const cloud = smokes.findIndex(
         (sm) =>
+          sm.ours &&
           s.tick >= sm.from &&
           s.tick <= sm.to &&
           (sm.x - s.x) ** 2 + (sm.y - s.y) ** 2 <= SMOKE_RADIUS_UNITS * SMOKE_RADIUS_UNITS
       );
-      if (inside) {
+      if (cloud >= 0) {
         if (smokeFrom < 0) {
           smokeFrom = s.sec;
           smokeAt = s.position || s.zone;
+          smokeCloud = cloud;
         }
       } else {
         closeSmoke(s.sec);
@@ -1728,10 +2001,18 @@ export function buildRoundNotes({
     closeSmoke(samples[samples.length - 1]?.sec ?? 0);
 
     // ---- utility handed over ---------------------------------------------
+    //
+    // With the other end named: "Drop smoke" leaves the reader asking to whom,
+    // and that is the instruction.
     for (const h of handovers) {
       const word = lower(TYPE_WORDS[h.item] || h.item);
-      if (h.from === id) events.push({ sec: h.sec, text: `Drop ${word}` });
-      else if (h.to === id) events.push({ sec: h.sec, text: `Pick up ${word}` });
+      if (h.from === id) {
+        const to = nameOf.get(h.to) || '';
+        events.push({ sec: h.sec, hand: true, text: to ? `Drop ${word} to ${to}` : `Drop ${word}` });
+      } else if (h.to === id) {
+        const from = nameOf.get(h.from) || '';
+        events.push({ sec: h.sec, hand: true, text: from ? `Get ${word} from ${from}` : `Pick up ${word}` });
+      }
     }
 
     // ---- emptying a magazine into a cloud ---------------------------------
@@ -1741,7 +2022,11 @@ export function buildRoundNotes({
     }
 
     // ---- taking a fight ---------------------------------------------------
-    for (const f of fightsFor(id)) {
+    //
+    // The first one only. Where he took contact belongs to the call; the trades
+    // after it are the round going on, and a column that read "Fight Long from
+    // Long Corner" three times over said nothing a coach would write.
+    for (const f of fightsFor(id).slice(0, 1)) {
       events.push({
         sec: f.sec,
         fight: true,
@@ -1751,7 +2036,7 @@ export function buildRoundNotes({
       });
     }
 
-    for (const b of boostById.get(id) || []) events.push({ sec: b.sec, at: b.at, text: b.text });
+    for (const b of boostById.get(id) || []) events.push({ sec: b.sec, at: b.at, boost: true, text: b.text });
 
     // Ordered by the clock each line SHOWS, not by when its situation began.
     // "Stay Top mid until 1:38" is ordered by 1:38; putting it where the stay
@@ -1761,7 +2046,7 @@ export function buildRoundNotes({
     // Past the cutoff the round stopped being a call, so the line stops too.
     // Measured on the clock each line shows, which is the order they are in:
     // a hold running past the cutoff is a hold the call no longer covers.
-    const live = events.filter((e) => eventClock(e) <= cutoffSec);
+    const live = events.filter((e) => eventClock(e) <= (e.nade ? nadeCutoff : cutoffSec));
     events.length = 0;
     events.push(...live);
 
@@ -1792,9 +2077,9 @@ export function buildRoundNotes({
 
     // Trading with two men on the same angle, or re-peeking the same one, is
     // one line. The reader gains nothing from "Fight A from A Balc" three times
-    // over, and the fights themselves are the only events that repeat verbatim.
+    // over. Two flashes from the same teammate are one "Get flash from" too.
     for (let i = events.length - 1; i > 0; i--) {
-      if (events[i].fight && events[i].text === events[i - 1].text) events.splice(i, 1);
+      if ((events[i].fight || events[i].hand) && events[i].text === events[i - 1].text) events.splice(i, 1);
     }
 
     // A hold is only worth writing when the note goes on to say what happens
@@ -1826,13 +2111,33 @@ export function buildRoundNotes({
     if (!searched && lurkAt.has(id)) {
       events.push({
         sec: Number.isFinite(cutoffSec) ? cutoffSec : 1e9,
+        lurk: true,
         text: `Lurk ${lurkAt.get(id)}`
       });
     }
 
+    // Nothing above put him anywhere: he kept moving, or nobody's utility
+    // covered his walk, or the call ended early. Where he spent it still says
+    // what his job was.
+    const placed = events.some((e) => e.go || e.stay || e.keyMove || e.hold || e.lurk || e.boost || /^Go 1st/.test(e.text || ''));
+    if (!placed) {
+      const play = presenceOf(samples.filter((s) => s.sec <= cutoffSec), step, spawnZone);
+      // Grenades thrown from that zone already say where he stood ("… from Top Mid").
+      const threwFrom = new Set(
+        events
+          .filter((e) => e.nade)
+          .map((e) => samples.find((s) => s.sec >= eventClock(e) - step)?.zone)
+          .filter(Boolean)
+      );
+      if (play && !threwFrom.has(play.name)) {
+        events.push({ sec: play.sec, play: true, text: `Play ${play.name}` });
+        events.sort((a, b) => eventClock(a) - eventClock(b) || a.sec - b.sec);
+      }
+    }
+
     const collapsed = collapseNades(events);
     const nadeCount = events.filter((e) => e.nade).length;
-    if (nadeCount >= FAKE_NADES) {
+    if (side === 'T' && nadeCount >= FAKE_NADES) {
       const first = events.find((e) => e.nade);
       const tick = t0 + first.sec * rate;
       const alive = livingSide(tick);
@@ -1851,13 +2156,18 @@ export function buildRoundNotes({
     // Carrying the bomb is not something he does at a moment, it is the job he
     // leaves spawn with, so it opens the line rather than sitting in sequence.
     if (!windowed && id === bombCarrier) note = note ? `Take bomb. ${note}` : 'Take bomb.';
-    if (showBuy && !windowed) {
-      const buy = buyString(
-        meta.stats?.[id]?.loadout || [],
-        track.sample(slot, t0, scratch)
-      );
-      if (buy) note = note ? `${buy}. ${note}` : `${buy}.`;
-    }
+    // A pistol drop is part of the buy: he bought what he gave away, and what
+    // he was given is not his buy ("SF+P250. Drop p250 to khaN." / "K. Take p250 from robo.").
+    const gave = freezeDrops.filter((d) => d.from === id);
+    const got = freezeDrops.filter((d) => d.to === id);
+    const owned = normalizeLoadout(meta.stats?.[id]?.loadout || []);
+    for (const d of got) owned.splice(owned.indexOf(d.item), 1);
+    const buy = showBuy && !windowed ? buyString([...owned, ...gave.map((d) => d.item)], track.sample(slot, t0, scratch)) : '';
+    const handed = [
+      ...gave.map((d) => `Drop ${ITEM_WORDS[d.item] || d.item} to ${nameOf.get(d.to) || 'a teammate'}.`),
+      ...got.map((d) => `Take ${ITEM_WORDS[d.item] || d.item} from ${nameOf.get(d.from) || 'a teammate'}.`)
+    ];
+    if (buy || handed.length) note = [buy ? `${buy}.` : '', ...handed, note].filter(Boolean).join(' ');
 
     // Whose round this was read off. A coach opening the A Lurk column wants to
     // know he is watching ropz before he reads a word of what ropz did.
@@ -1865,7 +2175,81 @@ export function buildRoundNotes({
     const room = NOTE_MAX - (who ? who.length + 2 : 0);
     if (note.length > room) note = `${note.slice(0, room - 1).trimEnd()}…`;
     notes.set(id, who ? (note ? `${who}: ${note}` : who) : note);
+
+    // ---- the facts behind the line ---------------------------------------
+    //
+    // Everything up to where his part ended: the call's end, or his death.
+    const diedSec = Number.isFinite(died) && died >= t0 && died <= endTick ? secOf(died) : null;
+    const liveTo = Math.min(cutoffSec, diedSec ?? Infinity);
+    // Every zone he passed through, with the spot he spent it on and whether he
+    // walked it. A step shorter than FACT_FLICKER_SECONDS between two steps in
+    // one zone is a corner clipped, not a move: the walk from water to con on
+    // Anubis brushes "Bridge" (painted in T Mid) for two seconds, and the
+    // flicker came out as "push mid to con".
+    let route = zoneRuns
+      .filter((r) => r.from <= liveTo)
+      .map((r) => ({ zone: r.name, from: r.from, to: Math.min(r.to, liveTo), samples: r.samples.filter((s) => s.sec <= liveTo) }));
+    route = route.filter(
+      (r, i) => !(i > 0 && i < route.length - 1 && r.to - r.from < FACT_FLICKER_SECONDS && route[i - 1].zone === route[i + 1].zone)
+    );
+    // Pacing between two zones is not a route: the shortest steps go first.
+    while (route.length > FACT_ROUTE_STEPS) {
+      let shortest = 1;
+      for (let i = 1; i < route.length; i++) {
+        if (route[i].to - route[i].from < route[shortest].to - route[shortest].from) shortest = i;
+      }
+      route.splice(shortest, 1);
+    }
+    route = route
+      .reduce((out, r) => {
+        const last = out[out.length - 1];
+        if (last && last.zone === r.zone) {
+          last.to = r.to;
+          last.samples.push(...r.samples);
+        } else out.push({ ...r, samples: [...r.samples] });
+        return out;
+      }, [])
+      .map((r) => ({ zone: r.zone, from: r.from, to: r.to, position: mostSeen(r.samples, 'position'), walkFrom: walked(r.samples, step) }));
+    const holds = [];
+    for (const run of runsFrom(samples.filter((s) => s.sec <= liveTo), step, (s) => s.position)) {
+      if (run.from < spawnSpotEndsAt || run.to - run.from < FACT_HOLD_SECONDS) continue;
+      const guns = run.samples.filter((s) => s.gun);
+      if (guns.length < run.samples.length / 2) continue;
+      const looks = new Map();
+      for (const s of guns) if (s.aim) looks.set(s.aim, (looks.get(s.aim) || 0) + 1);
+      let aim = '';
+      let seen = 0;
+      for (const [spot, n] of looks) {
+        if (n > seen) {
+          aim = spot;
+          seen = n;
+        }
+      }
+      holds.push({ position: run.name, from: run.from, to: Math.min(run.to, liveTo), aim: seen >= guns.length / 2 ? aim : '' });
+    }
+    const nades = [];
+    for (const g of ourGrenades) {
+      if (g.player !== id) continue;
+      const sec = secOf(Number(g.throwTick));
+      const type = normalizeNadeType(g.type);
+      const link = linkOf.get(g);
+      const word = link?.word || TYPE_WORDS[type] || '';
+      if (!word || sec > nadeCutoff) continue;
+      const ev = events.find((e) => e.grenade === g);
+      nades.push({
+        grenade: g,
+        sec,
+        word,
+        spot: link?.spot || namer.positionName(Number(g.at?.x), Number(g.at?.y), Number(g.at?.z) || 0) || '',
+        from: spotOf(id, Number(g.throwTick)),
+        throwId: link?.throwId || '',
+        insta: type === 'smokegrenade' && INSTA_CLOCKS.has(clockAt(sec)),
+        lineup: ev?.nade?.lineup ? ev.nade.from || '' : '',
+        synced: syncedFor.get(g) || ''
+      });
+    }
+    facts.players.set(id, { name: who, note, buy, handed, died: diedSec, bomb: !windowed && id === bombCarrier, route, holds, nades });
   }
 
-  return notes;
+  return { notes, facts };
 }

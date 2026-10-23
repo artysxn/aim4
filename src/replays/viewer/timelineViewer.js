@@ -85,6 +85,9 @@ import { spinnerHtml } from '../../lib/spinner.js';
 import { createRangeSlider } from '../../lib/rangeSlider.js';
 import { getStatsPayload } from '../statsCache.js';
 import { resolveSeats, saveStrategyFromRound, sidePlayers } from '../strategy/addStrategy.js';
+import { eyeReady, writeNotesWithEye } from '../eye/eyeStrategyNotes.js';
+import { enqueueEyeJob } from '../eye/eyeJobs.js';
+import { publicOrigin } from '../../site/publicOrigin.js';
 import { nadeMarkColor } from '../strategy/utilityImport.js';
 import { ROLE_SCAN_ROUNDS } from '../strategy/roundRoles.js';
 import { cs3dMap } from '../../../shared/cs3d/maps.js';
@@ -111,6 +114,7 @@ const COACH_FOCUS_MS = 300;
 
 /** Same lists as the team stratbook. */
 const STRAT_ECONOMY = ['Pistol', 'Full buy', 'Full buy + AWP', 'Antiforce', 'Force', 'Eco'];
+const STRAT_SETPOS_KEY = 'aim4.strat.setposInNotes';
 const STRAT_CATEGORY_T = [
   'Pistol',
   'Set call',
@@ -329,6 +333,10 @@ export function createTimelineViewer({
               <div class="rv-strat-range" id="rv-strat-range"></div>
               <div class="rv-strat-range-read" id="rv-strat-range-read"></div>
             </div>
+            <label class="rv-strat-check" title="Write each grenade's setpos and setang into the notes instead of a link">
+              <input type="checkbox" id="rv-strat-setpos" />
+              <span>Setpos in notes</span>
+            </label>
             <button type="button" class="rv-playlist-strategy rv-strat-confirm" id="rv-strat-confirm">
               ${icon(addTacticIcon)}
               <span>CONFIRM</span>
@@ -563,6 +571,20 @@ export function createTimelineViewer({
   const playlistScopeMenu = el.querySelector('#rv-playlist-scope-menu');
   const playlistMsg = el.querySelector('#rv-playlist-msg');
   const stratFormEl = el.querySelector('#rv-strat-form');
+  /** Setpos in notes: remembered, because a team that keeps its book in a sheet always wants it. */
+  const stratSetposEl = el.querySelector('#rv-strat-setpos');
+  try {
+    if (stratSetposEl) stratSetposEl.checked = localStorage.getItem(STRAT_SETPOS_KEY) === '1';
+  } catch {
+    /* private window: unchecked */
+  }
+  stratSetposEl?.addEventListener('change', () => {
+    try {
+      localStorage.setItem(STRAT_SETPOS_KEY, stratSetposEl.checked ? '1' : '0');
+    } catch {
+      /* not remembered */
+    }
+  });
   const stratNameEl = el.querySelector('#rv-strat-name');
   const stratEconEl = el.querySelector('#rv-strat-econ');
   const stratCallEl = el.querySelector('#rv-strat-call');
@@ -2881,7 +2903,7 @@ export function createTimelineViewer({
   function momentHref() {
     const file = files[activeIndex];
     if (!file) return '';
-    const url = new URL('/demos', window.location.origin);
+    const url = new URL('/demos', publicOrigin());
     url.searchParams.set('round', file);
     url.searchParams.set('tick', String(playheadTick()));
     if (renderer.zoom > 1.001) {
@@ -3884,7 +3906,12 @@ export function createTimelineViewer({
         throw new Error(`The stratbook has no ${stratSide} columns for this map.`);
       }
 
-      const res = await saveStrategyFromRound({
+      // With the user's own model running (the desktop app), aim4 eye words the
+      // notes from what the rules measured; the rules' notes stay as the fallback.
+      const eye = await eyeReady();
+      // Everything the job needs is taken now: the job runs in the background,
+      // after this form has closed and while the viewer moves on (or closes).
+      const job = {
         teamId: team.id,
         mapCode,
         side: stratSide,
@@ -3894,25 +3921,41 @@ export function createTimelineViewer({
         roundFile: file,
         roundUrl: new URL(
           `/demos?round=${encodeURIComponent(file)}`,
-          window.location.origin
+          // Saved into the team's stratbook: teammates open it on aim4.io.
+          publicOrigin()
         ).toString(),
         meta,
         track,
         network,
         seats,
+        columns,
         windowFrom: stratRange?.get().from ?? 0,
         windowTo: stratRange?.get().to ?? ROUND_SECONDS,
-        onStatus: (text) => stratMsg(text)
+        writer: eye.usable ? (input) => writeNotesWithEye(input) : null,
+        setposInNotes: Boolean(stratSetposEl?.checked)
+      };
+      const teamName = team.name;
+      const queued = enqueueEyeJob({
+        label: `"${name}"`,
+        run: async (task) => {
+          const res = await saveStrategyFromRound({ ...job, onStatus: (text) => task.setStatus(text) });
+          const bits = [`Added to ${teamName}.`];
+          const w = res.written;
+          if (w?.error) bits.push(`Notes from the rules: ${w.error}`);
+          else if (w?.fromEye) {
+            const kept = w.fellBack?.length || 0;
+            bits.push(kept ? `Notes by aim4 eye, ${kept} from the rules.` : 'Notes by aim4 eye.');
+          }
+          if (res.utilityAdded) bits.push(`${res.utilityAdded} grenade${res.utilityAdded === 1 ? '' : 's'} archived.`);
+          if (res.utilityDropped) bits.push(`${res.utilityDropped} left out: the archive for this map is full.`);
+          return { title: `Strategy saved: ${name}`, body: bits.join(' ') };
+        }
       });
-      if (destroyed) return;
-      const bits = [`Added to ${team.name}.`];
-      if (res.utilityAdded) {
-        bits.push(`${res.utilityAdded} grenade${res.utilityAdded === 1 ? '' : 's'} archived.`);
-      }
-      if (res.utilityDropped) {
-        bits.push(`${res.utilityDropped} left out: the archive for this map is full.`);
-      }
-      stratMsg(bits.join(' '));
+      stratMsg(
+        queued.position
+          ? `Queued "${name}" behind ${queued.position} other${queued.position === 1 ? '' : 's'}. You get a notice when it is saved.`
+          : `Writing "${name}" in the background. You get a notice when it is saved.`
+      );
       setPlaylistStratMode(false);
     } catch (err) {
       if (!destroyed) stratMsg(err?.message || 'Could not build that strategy.', true);
