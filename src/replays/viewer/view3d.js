@@ -740,14 +740,6 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange, pixelR
   }
 
   /**
-   * How many shots this slot fired in the ticks the clock just crossed.
-   *
-   * Playing forward that is normally 0 or 1; at 4× or after a step it can be
-   * several, and each one kicks the viewmodel. A scrub backwards, a seek, or a
-   * pause returns 0 — a rewind must not fire the gun, and a held frame must not
-   * fire it again.
-   */
-  /**
    * The POV player's spray punch at `tick`: their current spray replayed from
    * its first shot through CS2's recoil model, so a scrub or a rewind shows
    * the same kick as playing through.
@@ -763,6 +755,14 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange, pixelR
     return demoSprayPunch(id != null ? sprayShots.get(id) : null, tick, rate, statsOf, _spray);
   }
 
+  /**
+   * How many shots this slot fired in the ticks the clock just crossed.
+   *
+   * Playing forward that is normally 0 or 1; at 4× or after a step it can be
+   * several, and each one kicks the viewmodel. A scrub backwards, a seek, or a
+   * pause returns 0 — a rewind must not fire the gun, and a held frame must not
+   * fire it again.
+   */
   function consumeShots(tick, rate) {
     const shots = frame?.events?.shots;
     const from = lastShotTick;
