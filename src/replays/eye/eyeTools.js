@@ -60,6 +60,8 @@ import {
 import { aliveGaps, gapFits, gapWords, sideOfTeam, winnerSide } from './roundSample.js';
 import { screenshotRound } from './eyeVision.js';
 import { momentValueTool, roundValueTool } from './eyeValue.js';
+import { playReviewTool, roundMovesTool, roundPlaysTool } from './eyePlays.js';
+import { KINDS as PLAY_KINDS } from '../plays/findPlays.js';
 import { noteRounds, roundIdsIn } from './roundRefs.js';
 import { getStatsPayload } from '../statsCache.js';
 import { buyBucket, MAPS } from '../shared/roundId.js';
@@ -770,6 +772,66 @@ TOOLS.push(
   {
     type: 'function',
     function: {
+      name: 'round_moves',
+      description:
+        "A round as it happened, with no labels: each player's path (the places he held, with the clock), both sides' shape every 10 seconds, every grenade and where it landed, every kill and where, the plant. Read it to make your own reading of each side's plays before round_plays checks it. Desktop app only.",
+      parameters: { type: 'object', properties: {} }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'round_plays',
+      description:
+        "What each side did in a round, as plays: which parts were the side's default and which were plays (an execute, split, rush or contact hit, a fake, a lurk, a rotation, a stack, a push, a retake, a save, the post-plant), when, by whom, how common each is on the map, and what each did to the side's round win chance, with a summary in plain words. Send your own reading from round_moves as guess: the result checks it (right, wrong, missed, and the definitions of what you missed). Each play has an id (T1, CT2) for play_review. Desktop app only.",
+      parameters: {
+        type: 'object',
+        properties: {
+          guess: {
+            type: 'array',
+            description: 'Your reading of the plays before you see them: one item per play.',
+            items: {
+              type: 'object',
+              properties: {
+                side: { type: 'string', enum: ['T', 'CT'] },
+                kind: { type: 'string', enum: PLAY_KINDS },
+                site: { type: 'string', enum: ['A', 'B'], description: 'For hits, stacks and retakes.' },
+                clock: { type: 'string', description: 'When it started, for example 1:05.' }
+              },
+              required: ['side', 'kind']
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'play_review',
+      description:
+        "Was one play good or bad, and how could it have gone better: the rounds most like this one when the play started (Similar Rounds: same map and buys, players where these stood, holding what these held, having thrown what these threw), what the same side chose from there and how each choice went (rounds won, win-chance change), how this play went against the rounds that chose the same, which grenades and timings went with winning (with counts), a verdict and improvements. Name the play by its id from round_plays. Send your own verdict first as guess: the result checks it. Desktop app only.",
+      parameters: {
+        type: 'object',
+        properties: {
+          play: { type: 'string', description: 'The play id from round_plays, for example T2.' },
+          guess: {
+            type: 'object',
+            description: 'Your verdict before you see the numbers.',
+            properties: {
+              verdict: { type: 'string', enum: ['good', 'bad', 'mixed'] },
+              why: { type: 'string', description: 'One line: what you expect the numbers to show.' }
+            },
+            required: ['verdict']
+          }
+        },
+        required: ['play']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
       name: 'team_documents',
       description:
         "The user's team documents (antistrat sheets, notes). Without \"title\" or \"id\" lists them, newest first, each with its id and date; with one of them reads that document as text. Documents can share a title: the newest is used unless you pass an id.",
@@ -1104,7 +1166,7 @@ export const VISION_TOOLS = [
  * the pattern of other files and got "Round not found"; a number cannot be
  * guessed wrong that way.
  */
-const ROUND_TOOLS = new Set(['round_details', 'round_timeline', 'round_value', 'moment_value', 'screenshot_round', 'show_round', 'strategy_draft']);
+const ROUND_TOOLS = new Set(['round_details', 'round_timeline', 'round_value', 'moment_value', 'round_moves', 'round_plays', 'play_review', 'screenshot_round', 'show_round', 'strategy_draft']);
 for (const t of [...TOOLS, ...VISION_TOOLS]) {
   if (!ROUND_TOOLS.has(t.function.name)) continue;
   const p = t.function.parameters;
@@ -2314,6 +2376,13 @@ async function runToolInner(name, args = {}, ctx = {}) {
       case 'round_value': {
         ctx.onProgress?.('Pricing the round…');
         const r = await roundValueTool({ round: args.round, moments: args.moments });
+        return { content: fit(r.out), display: r.display, link: `/demos?rounds=${encodeURIComponent(r.file)}` };
+      }
+      case 'round_moves':
+      case 'round_plays':
+      case 'play_review': {
+        const run = { round_moves: roundMovesTool, round_plays: roundPlaysTool, play_review: playReviewTool }[name];
+        const r = await run(args, { onProgress: ctx.onProgress, signal: ctx.signal });
         return { content: fit(r.out), display: r.display, link: `/demos?rounds=${encodeURIComponent(r.file)}` };
       }
       case 'moment_value': {

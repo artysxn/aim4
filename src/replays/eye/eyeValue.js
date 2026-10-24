@@ -116,3 +116,18 @@ export async function momentLines(file, tick) {
     return [];
   }
 }
+
+/**
+ * The autocoach's flags for a round, with their cost and the second of the
+ * round each came at: what play_review falls back on when there are too few
+ * similar rounds to measure a play. Empty when the round cannot be priced.
+ */
+export async function coachFlagsFor(file) {
+  try {
+    const value = await valueFor(file);
+    const { freezeEndTick, tickRate } = value.timing;
+    return value.flags.map((f) => ({ e: (f.tick - freezeEndTick) / tickRate, player: f.player, side: f.side, rule: f.rule, text: f.text, cost_pp: f.cost_pp }));
+  } catch {
+    return [];
+  }
+}

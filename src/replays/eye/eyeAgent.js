@@ -111,7 +111,9 @@ Rules:
   Use its filters: map, side, buy, vs_buy, result, team, date_from, date_to, rank_own, rank_opp, min_rounds. A raised "limit" never gives new rows. A question over maps ("best map", "worst map", "where do they play well") is answered by one call per map with the map filter (every map in the pool, plus the team filter for a team's players; list_teams or find_rounds show which maps they have played), then comparing the numbers. Do not ask for a map column; there is none. Run the per-map calls together in one step.
 - To find specific rounds call find_rounds; read one with round_timeline (positions and play) or round_details (the event list). Name a round to the user by its label ("fnatic vs Phantom, Ancient round 2"); the round file is only for tool calls, never in an answer. team_documents reads the user's notes and sheets, team_rankings the world ranking, site_map the pages to point to.
 - When screenshot_round is available, use it to check a position or setup before stating it: find a round with find_rounds, take a picture at the clock time that matters, and describe only what the picture and its text show. Take a second picture at another clock time to see what changed. Do not describe anything you cannot see.
-- Judging a play ("was that good", "what went wrong", "what decided the round", "explain the round"): call round_value for the round first. A move is good when it raised its side's round win chance and bad when it lowered it. Do not judge from habit or from how a move is usually described; the numbers decide. Say a move was a mistake only when its swing or its fight numbers show a cost, and say when something that looks wrong cost nothing.
+- Plays ("what did they do", "summarize the round", "was that a default", "what was the play"): round_moves first, then your own reading of each side's plays as round_plays guess (side, kind, site, clock for each), then answer from round_plays. Tell the round in simple terms from its summary: what each side did and when, which parts were default and which were plays, and how usual each play is on the map. If the check found your guess wrong or missing something, say so in one line, using its definitions.
+- Was a decision good or bad (a hit, a default, a rotation, a stack, a push, a retake, a save, "how could they have done it better"): round_plays for the play ids, then play_review for that play with your own verdict as guess. Lead with the verdict and the decision and execution reads, then why with the counts (what similar rounds chose from that moment and how often each won, how this one went against those that chose the same), then up to three improvements from improve, each with its counts. Say how far to trust it (confidence and trust; thin or loose means a lean, not a finding). guidelines are the autocoach's rules, not measurements: use them only when they are given, and say they are rules. Never invent a comparison the review does not give.
+- Judging a single kill or moment ("was that good", "what went wrong", "what decided the round", "explain the round"): call round_value for the round first. A move is good when it raised its side's round win chance and bad when it lowered it. Do not judge from habit or from how a move is usually described; the numbers decide. Say a move was a mistake only when its swing or its fight numbers show a cost, and say when something that looks wrong cost nothing.
 - A gunfight is read in the moment. In each kill's fight, killer_* numbers are the killer's win chance and victim_* the victim's; they add to 100, so never mix the two up. xK is a player's win chances summed over the fights they are in (in a 1v1 it is the win chance). To judge a death ("was it a bad take", "was it his fault"), go by fight.victim_read, which reads the victim's win chance when the fight opened: "behind" means they were in a losing fight from the start, "close" means it could have gone either way, "favoured" means they were expected to win and losing was variance, not a mistake. Answer from victim_read even when the question assumes it was a mistake, and quote victim_win_at_contact. The numbers cannot say whether a player chose a fight or was caught in it, so before calling a "behind" death their own mistake, use screenshot_round or moment_value at that clock to see where everyone stood. Use moment_value at two clock times to see where a fight or a position turned.
 - What happened in a round, what a team did in it, or how rounds differ: call round_timeline for each round (by match and number), then tell it like a commentator, in order: the buys and what each team set up (where the players stood, who was alone, how the defenders were spread), the plan (map control, a split, a default, a fake), the utility and where it landed, the key fights with where they happened, how it ended. Use player names and the callouts the timeline gives.
   Comparing rounds: compare what the teams did (setup, plan, utility, timing, where the fights were), not the facts around them. Mention buys, sides, opponent or result only when they explain a difference.
@@ -149,6 +151,34 @@ Rules:
 - Do not end with a menu of options ("Would you like me to 1. 2. 3."). When the next step is clear, do it; otherwise end with at most one short offer.
 - Answer what was asked and nothing else: a question about one match gets that match, not the team's antistrat or other matches.
 - Speak to the user as "you" and "your team". Give dates as people write them ("17 Oct"), never as raw timestamps or ids.`;
+
+/** Grade corrections the prompt carries at most, and how long each may be. */
+const MAX_LESSONS = 12;
+const LESSON_CHARS = 320;
+
+/**
+ * The corrections admins wrote under "Bad" answers, as a note the system
+ * prompt ends with: what the eye was told it got wrong, newest first, so a
+ * grade changes the next answer and not only the next fine-tune
+ * (server/admin/trainingStore.js gradeLessons).
+ *
+ * @param {Array<{ question?: string, comment: string }>} lessons
+ */
+export function gradeLessonsNote(lessons) {
+  const rows = (Array.isArray(lessons) ? lessons : [])
+    .filter((l) => l?.comment)
+    .slice(0, MAX_LESSONS)
+    .map((l) => {
+      const q = String(l.question || '').replace(/\s+/g, ' ').trim();
+      const line = `${q ? `Asked "${q.length > 120 ? `${q.slice(0, 117)}...` : q}": ` : ''}${String(l.comment).replace(/\s+/g, ' ').trim()}`;
+      return `- ${line.length > LESSON_CHARS ? `${line.slice(0, LESSON_CHARS - 3)}...` : line}`;
+    });
+  if (!rows.length) return '';
+  return `Corrections from answers you were graded on, newest first. They come from the person you are working for: follow them.\n${rows.join('\n')}`;
+}
+
+/** The system prompt with a note (grade corrections) at its end. */
+export const systemWith = (note = '') => (note ? `${SYSTEM_PROMPT}\n\n${note}` : SYSTEM_PROMPT);
 
 /**
  * Reasoning characters one reply may spend before it is stopped (about 6,000 tokens). The 18 Oct
@@ -555,7 +585,8 @@ export function fallbackAnswer(steps, lastDisplay) {
  * }} opts  serverBudget: the reasoning tokens the model server stops a reply at by itself (the app says
  *   so in its hello); 0 when it does not, and then the page stops reasoning that runs away
  */
-export async function runAgentTurn(messages, { onEvent, signal, vision = false, confirm, serverBudget = 0 } = {}) {
+export async function runAgentTurn(messages, { onEvent, signal, vision = false, confirm, serverBudget = 0, systemNote = '' } = {}) {
+  const system = systemWith(systemNote);
   // Round ids in the question (a round opened from the viewer, a pasted link) are ones the tools may be asked for.
   for (const m of messages) if (m.role === 'user' && typeof m.content === 'string') noteRounds(roundIdsIn(m.content));
   /** Each call made this turn (name and arguments, limit aside) to the tool message holding its answer. */
@@ -575,7 +606,7 @@ export async function runAgentTurn(messages, { onEvent, signal, vision = false, 
   let refused = 0;
   // The system prompt and the tool list go with every request; what is left of the context, less
   // the reply's own room, is the conversation's budget (eyeContext.js historyBudget).
-  const fixedChars = SYSTEM_PROMPT.length + JSON.stringify(toolsFor({ vision })).length;
+  const fixedChars = system.length + JSON.stringify(toolsFor({ vision })).length;
   const budgetNow = () => historyBudget(fixedChars, calibration);
   // A long chat: the oldest finished questions are folded into a memory before this one is asked.
   await foldEarlier(messages, turnStart, { signal, onEvent });
@@ -596,7 +627,7 @@ export async function runAgentTurn(messages, { onEvent, signal, vision = false, 
     // text there, it would read again and plan more ("Wait, actually...").
     const view = () => {
       const history = modelMessages(messages);
-      return { convo: [{ role: 'system', content: SYSTEM_PROMPT }, ...history, ...(finalAsk ? [finalAsk] : [])], chars: history.reduce((n, m) => n + sizeOf(m), 0) };
+      return { convo: [{ role: 'system', content: system }, ...history, ...(finalAsk ? [finalAsk] : [])], chars: history.reduce((n, m) => n + sizeOf(m), 0) };
     };
     onEvent?.({ type: 'step', step, max: MAX_STEPS });
     // The forced last answer has nothing left to plan: reasoning there only risked an empty reply.
@@ -643,7 +674,7 @@ export async function runAgentTurn(messages, { onEvent, signal, vision = false, 
 ${reply.plan}
 """
 Carry it out now. Do not reconsider it. ` : '';
-      const again = [{ role: 'system', content: SYSTEM_PROMPT }, ...modelMessages(messages), { role: 'user', content: `${plan}${last ? finalAsk.content : ACT_NOW}` }];
+      const again = [{ role: 'system', content: system }, ...modelMessages(messages), { role: 'user', content: `${plan}${last ? finalAsk.content : ACT_NOW}` }];
       try {
         reply = await ask(again, { thinking: false });
       } catch (err) {

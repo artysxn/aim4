@@ -11,8 +11,13 @@
 //   GET  /api/similar/status   { available, threads, cache }
 //   POST /api/similar/scan     NDJSON, one event a line (see scan.js):
 //                              phase / start / progress / done, or error
+//   POST /api/similar/plays    NDJSON, the plays of a round (plays.js), the
+//                              same events; the first ask on a map learns
+//                              what is usual there
+//   POST /api/similar/review   NDJSON, one play judged against similar rounds
 // ---------------------------------------------------------------------------
 
+import { playsFor, reviewFor } from './plays.js';
 import { cacheStats, runScan, threadCount } from './scan.js';
 
 export function similarEnabled() {
@@ -82,6 +87,34 @@ export function parseAsk(body) {
   };
 }
 
+const KINDS = new Set(['default', 'execute', 'split', 'rush', 'contact', 'lurk', 'rotate', 'postplant', 'save', 'setup', 'stack', 'push', 'aggression', 'retake', 'opening']);
+const VERDICTS = new Set(['good', 'bad', 'mixed']);
+const short = (v, n = 24) => String(v ?? '').slice(0, n);
+
+/** A plays request: the round, and the eye's guess of its plays when it made one. */
+export function parsePlaysAsk(body) {
+  const file = String(body?.file || '');
+  if (!FILE_RE.test(file)) throw Object.assign(new Error('Name the round.'), { status: 400 });
+  let guess = null;
+  if (Array.isArray(body?.guess)) {
+    guess = body.guess
+      .slice(0, 20)
+      .map((g) => ({ side: short(g?.side, 2), kind: short(g?.kind).toLowerCase(), site: short(g?.site, 1), clock: short(g?.clock, 7) }))
+      .filter((g) => (g.side === 'T' || g.side === 'CT') && KINDS.has(g.kind));
+  }
+  return { file, guess, moves: body?.moves === true };
+}
+
+/** A review request: the round, the play (an id, a clock or words of its label), and the eye's guess of the verdict. */
+export function parseReviewAsk(body) {
+  const file = String(body?.file || '');
+  if (!FILE_RE.test(file)) throw Object.assign(new Error('Name the round.'), { status: 400 });
+  const play = short(body?.play, 60).trim();
+  if (!play) throw Object.assign(new Error('Name the play (its id from round_plays, for example T2).'), { status: 400 });
+  const verdict = short(body?.guess?.verdict, 8).toLowerCase();
+  return { file, play, guess: VERDICTS.has(verdict) ? { verdict, why: short(body?.guess?.why, 300) } : null };
+}
+
 /** This server, as the scan reaches it: the address the request came in on. */
 function selfBase(req) {
   let addr = String(req.socket?.localAddress || '127.0.0.1');
@@ -104,7 +137,7 @@ export async function handleSimilarRequest(req, res, url) {
   const p = url.pathname;
   if (!p.startsWith('/api/similar/')) return false;
   if (!similarEnabled()) {
-    json(res, 404, { error: 'Similar Rounds runs in the aim4 desktop app. Update the app to use it.' });
+    json(res, 404, { error: 'Similar Rounds and the play reviews run in the aim4 desktop app. Update the app to use them.' });
     return true;
   }
 
@@ -113,10 +146,16 @@ export async function handleSimilarRequest(req, res, url) {
     return true;
   }
 
-  if (req.method === 'POST' && p === '/api/similar/scan') {
+  const jobs = {
+    '/api/similar/scan': { parse: parseAsk, run: runScan, failed: 'The scan failed.' },
+    '/api/similar/plays': { parse: parsePlaysAsk, run: playsFor, failed: 'Could not read the plays.' },
+    '/api/similar/review': { parse: parseReviewAsk, run: reviewFor, failed: 'Could not review the play.' }
+  };
+  const job = req.method === 'POST' ? jobs[p] : null;
+  if (job) {
     let ask;
     try {
-      ask = parseAsk(await readBody(req));
+      ask = job.parse(await readBody(req));
     } catch (err) {
       json(res, err.status || 400, { error: err.message });
       return true;
@@ -135,14 +174,14 @@ export async function handleSimilarRequest(req, res, url) {
       if (!res.writableEnded && !res.destroyed) res.write(`${JSON.stringify(event)}\n`);
     };
     try {
-      await runScan({
+      await job.run({
         api: { base: selfBase(req), headers: forwardHeaders(req) },
         ask,
         emit,
         signal: controller.signal
       });
     } catch (err) {
-      if (!controller.signal.aborted) emit({ type: 'error', error: err?.message || 'The scan failed.' });
+      if (!controller.signal.aborted) emit({ type: 'error', error: err?.message || job.failed });
     }
     if (!res.writableEnded) res.end();
     return true;

@@ -54,6 +54,8 @@ export const adminApi = {
   labelStats: () => get('/api/admin/labels'),
   saveLabel: (stage, body) => send('POST', `/api/admin/labels/${stage}`, body),
   undoLabel: (stage, id) => send('DELETE', `/api/admin/labels/${stage}/${id}`),
+  // Corrections written under "Bad" aim4 eye answers, newest first.
+  gradeLessons: () => get('/api/admin/labels/lessons').then((r) => r.lessons || []),
   async exportLabels(stages = []) {
     const q = stages.length ? `?stages=${stages.join(',')}` : '';
     const res = await fetch(`${API_BASE}/api/admin/labels/export${q}`, { headers: await headers() });

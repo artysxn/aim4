@@ -155,6 +155,25 @@ export async function readStage(stage) {
   return out;
 }
 
+/**
+ * The corrections admins wrote under "Bad" eye answers, newest first: what
+ * the eye is told before its next answers (eyeAgent.js gradeLessonsNote), so
+ * a grade counts at once and not only after the next fine-tune.
+ *
+ * @param {number} [limit]
+ * @returns {Promise<Array<{ question: string, comment: string, at: number, model: string }>>}
+ */
+export async function gradeLessons(limit = 20) {
+  const rows = await readStage(6);
+  const out = [];
+  for (let i = rows.length - 1; i >= 0 && out.length < limit; i--) {
+    const r = rows[i];
+    if (r.verdict !== 'no' || !r.comment) continue;
+    out.push({ question: String(r.subject?.question || '').slice(0, 300), comment: String(r.comment).slice(0, 600), at: r.at, model: String(r.subject?.model || r.engine || '') });
+  }
+  return out;
+}
+
 /** Totals per stage, and the newest record of each so a page can offer "undo". */
 export async function trainingStats() {
   const counts = {};

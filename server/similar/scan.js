@@ -209,6 +209,30 @@ async function fetchPacks(api, files, signal) {
   return res.arrayBuffer();
 }
 
+async function getRoundList(api, params, signal) {
+  const res = await fetch(`${api.base}/api/replays/rounds?${params}`, { headers: api.headers, signal });
+  if (!res.ok) {
+    const err = new Error(
+      res.status === 401 ? 'Sign in to scan rounds.' : `Could not list the rounds on this map (${res.status}).`
+    );
+    err.status = res.status;
+    throw err;
+  }
+  return res.json();
+}
+
+function roundFiles(body) {
+  const files = [];
+  const seen = new Set();
+  for (const r of body?.rounds || []) {
+    const f = String(r?.file || r?.name || r?.id || '');
+    if (!f || seen.has(f) || !/^[A-Za-z0-9_~-]+$/.test(f)) continue;
+    seen.add(f);
+    files.push(f);
+  }
+  return files;
+}
+
 async function listRounds(api, query, signal) {
   const params = new URLSearchParams({ maps: query.map, limit: '1000000' });
   const [own, other] = query.sides;
@@ -221,24 +245,7 @@ async function listRounds(api, query, signal) {
     params.set('economies', String(econBucket(query.econ[own])));
   }
   if (query.team) params.set('teams', query.team);
-  const res = await fetch(`${api.base}/api/replays/rounds?${params}`, { headers: api.headers, signal });
-  if (!res.ok) {
-    const err = new Error(
-      res.status === 401 ? 'Sign in to scan rounds.' : `Could not list the rounds on this map (${res.status}).`
-    );
-    err.status = res.status;
-    throw err;
-  }
-  const body = await res.json();
-  const files = [];
-  const seen = new Set();
-  for (const r of body?.rounds || []) {
-    const f = String(r?.file || r?.name || r?.id || '');
-    if (!f || seen.has(f) || !/^[A-Za-z0-9_~-]+$/.test(f)) continue;
-    seen.add(f);
-    files.push(f);
-  }
-  return files;
+  return roundFiles(await getRoundList(api, params, signal));
 }
 
 /** A tiny counting semaphore: decoded batches waiting for a thread are memory. */
@@ -259,6 +266,123 @@ function gate(limit) {
       waiting.shift()?.();
     }
   };
+}
+
+// ---- downloading and indexing ----------------------------------------------
+
+/**
+ * Download rounds the cache does not hold and index them on the threads,
+ * scoring each against `query` when there is one. A fetch waits for a free
+ * thread before it takes another batch off the wire, so a slow PC never holds
+ * more than a few undecoded batches.
+ *
+ * @param {object} args
+ * @param {(out: { indexes: object[], results?: object[] }) => void} [args.onBuilt]
+ * @param {(count: number, failed: number) => void} [args.onBatch]  after each batch
+ */
+async function buildMissing({ api, missing, query = null, signal, onBuilt = () => {}, onBatch = () => {} }) {
+  const aborted = () => signal?.aborted;
+  const p = getPool();
+  const batches = [];
+  for (let i = 0; i < missing.length; i += BATCH_FILES) batches.push(missing.slice(i, i + BATCH_FILES));
+  let nextBatch = 0;
+  const room = gate(p.size + 2);
+  const work = [];
+  const fetcher = async () => {
+    while (nextBatch < batches.length && !aborted()) {
+      const files = batches[nextBatch++];
+      let buffer = null;
+      for (let attempt = 0; attempt < 2 && !buffer && !aborted(); attempt++) {
+        try {
+          buffer = await fetchPacks(api, files, signal);
+        } catch (err) {
+          if (err?.name === 'AbortError' || err?.status === 401) throw err;
+        }
+      }
+      if (aborted()) return;
+      if (!buffer) {
+        onBatch(files.length, files.length);
+        continue;
+      }
+      await room.take();
+      let lost = 0;
+      work.push(
+        p
+          .run({ kind: 'build', buffer, query }, [buffer])
+          .then((out) => {
+            for (const index of out.indexes || []) cachePut(index);
+            onBuilt(out);
+            lost = out.missing?.length || 0;
+          })
+          .catch(() => {
+            lost = files.length;
+          })
+          .finally(() => {
+            room.give();
+            onBatch(files.length, lost);
+          })
+      );
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(FETCH_CONCURRENCY, batches.length) }, fetcher));
+  await Promise.all(work);
+}
+
+/**
+ * Indexes of many rounds, kept ones from the cache and the rest downloaded:
+ * what the plays tools (plays.js) read a map's rounds through.
+ *
+ * @param {object} args
+ * @param {{ base: string, headers: Record<string, string> }} args.api
+ * @param {string[]} args.files
+ * @param {AbortSignal} [args.signal]
+ * @param {(done: number, total: number) => void} [args.onProgress]
+ */
+export async function collectIndexes({ api, files, signal, onProgress = () => {} }) {
+  const indexes = [];
+  const missing = [];
+  for (const f of files) {
+    const index = cacheGet(f);
+    if (index) indexes.push(index);
+    else missing.push(f);
+  }
+  let done = indexes.length;
+  onProgress(done, files.length);
+  await buildMissing({
+    api,
+    missing,
+    signal,
+    onBuilt: (out) => indexes.push(...(out.indexes || [])),
+    onBatch: (count) => {
+      done += count;
+      onProgress(done, files.length);
+    }
+  });
+  return indexes;
+}
+
+/** One round's index, from the cache or the library. */
+export async function sourceIndex(api, file, signal) {
+  const kept = cacheGet(file);
+  if (kept) return kept;
+  const packs = decodeRoundPacks(await fetchPacks(api, [file], signal));
+  const sp = packs?.[0];
+  if (!sp?.meta || !sp?.ticks) throw Object.assign(new Error('Could not open this round.'), { status: 404 });
+  const index = buildRoundIndex(sp.meta, sp.ticks, file);
+  if (!index) throw Object.assign(new Error('Could not read this round.'), { status: 422 });
+  cachePut(index);
+  return index;
+}
+
+/**
+ * Round files on a map, by the library's own filters (the names carry the
+ * buys, so nothing is opened to list them).
+ * @param {{ map: string, economies?: number[] }} filter
+ */
+export async function listMapRounds(api, { map, economies = [] }, signal) {
+  const params = new URLSearchParams({ maps: map, limit: '1000000' });
+  if (economies.length) params.set('economies', economies.join(','));
+  return roundFiles(await getRoundList(api, params, signal));
 }
 
 // ---- the scan ---------------------------------------------------------------
@@ -330,52 +454,19 @@ export async function runScan({ api, ask, emit, signal }) {
     );
   }
 
-  // 3b. The rest, downloaded while the threads work. A fetch waits for a
-  // free thread before it takes another batch off the wire, so a slow PC
-  // never holds more than a few undecoded batches.
-  const batches = [];
-  for (let i = 0; i < missing.length; i += BATCH_FILES) batches.push(missing.slice(i, i + BATCH_FILES));
-  let nextBatch = 0;
-  const room = gate(p.size + 2);
-  const fetcher = async () => {
-    while (nextBatch < batches.length && !aborted()) {
-      const files = batches[nextBatch++];
-      let buffer = null;
-      for (let attempt = 0; attempt < 2 && !buffer && !aborted(); attempt++) {
-        try {
-          buffer = await fetchPacks(api, files, signal);
-        } catch (err) {
-          if (err?.name === 'AbortError' || err?.status === 401) throw err;
-        }
-      }
-      if (aborted()) return;
-      if (!buffer) {
-        failed += files.length;
-        done += files.length;
-        progress();
-        continue;
-      }
-      await room.take();
-      work.push(
-        p
-          .run({ kind: 'build', buffer, query }, [buffer])
-          .then((out) => {
-            for (const index of out.indexes || []) cachePut(index);
-            take(out);
-            failed += out.missing?.length || 0;
-          })
-          .catch(() => {
-            failed += files.length;
-          })
-          .finally(() => {
-            done += files.length;
-            room.give();
-            progress();
-          })
-      );
+  // 3b. The rest, downloaded while the threads work.
+  await buildMissing({
+    api,
+    missing,
+    query,
+    signal,
+    onBuilt: take,
+    onBatch: (count, lost) => {
+      failed += lost;
+      done += count;
+      progress();
     }
-  };
-  await Promise.all(Array.from({ length: Math.min(FETCH_CONCURRENCY, batches.length) }, fetcher));
+  });
   await Promise.all(work);
   if (aborted()) return null;
   progress(true);

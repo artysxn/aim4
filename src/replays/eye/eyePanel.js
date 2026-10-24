@@ -12,7 +12,7 @@
 
 import { accessToken } from '../api.js';
 import { desktopApp } from '../../site/desktopApp.js';
-import { SYSTEM_PROMPT, runAgentTurn, summarizeChat } from './eyeAgent.js';
+import { SYSTEM_PROMPT, gradeLessonsNote, runAgentTurn, summarizeChat, systemWith } from './eyeAgent.js';
 import { HISTORY_BUDGET } from './eyeContext.js';
 import {
   COMMANDS,
@@ -38,6 +38,17 @@ const API_BASE = (import.meta.env?.VITE_API_URL || '').replace(/\/$/, '');
 /** Ratings go to the admin training store (stage 6); only admins can write there. */
 let rateable = null;
 const canRate = () => (rateable ||= adminApi.labelStats().then(() => true, () => false));
+/**
+ * The corrections written under "Bad" answers, as the note the system prompt
+ * ends with (eyeAgent.js gradeLessonsNote): a grade changes the next answer,
+ * not only the next fine-tune. Admins only; refetched after a new grade.
+ */
+let lessonsNote = null;
+const gradeNote = async () => {
+  if (!(await canRate())) return '';
+  lessonsNote ||= adminApi.gradeLessons().then(gradeLessonsNote, () => '');
+  return lessonsNote;
+};
 /** A tool result kept in a rated trace is cut to this; the whole record must stay under 240 KB. */
 const TRACE_TOOL_CHARS = 6000;
 
@@ -835,7 +846,7 @@ export function createEyePanel({ escapeHtml }) {
   }
 
   /** "Good" / "Bad" under an answer, for admins: the turn becomes fine-tune data. */
-  async function offerRating(question, turn, answer) {
+  async function offerRating(question, turn, answer, note = '') {
     if (!(await canRate())) return;
     const model = String((status?.devices || []).find((d) => d.model)?.model || 'unknown').toLowerCase().replace(/[^a-z0-9.-]/g, '-').slice(0, 32) || 'unknown';
     const row = bubble(
@@ -850,8 +861,10 @@ export function createEyePanel({ escapeHtml }) {
           verdict,
           comment,
           subject: { question, model },
-          bot: { text: answer, system: SYSTEM_PROMPT, tools: toolsFor({ vision: false }), messages: traceOf(turn) }
+          bot: { text: answer, system: systemWith(note), tools: toolsFor({ vision: false }), messages: traceOf(turn) }
         });
+        // A new correction is in the next answer's prompt.
+        if (verdict === 'no' && comment) lessonsNote = null;
         row.innerHTML = `<span class="an-muted">Saved as a ${verdict === 'yes' ? 'good' : 'bad'} example.</span>`;
       } catch (err) {
         row.innerHTML = `<span class="eye-error">${escapeHtml(err.message || 'Could not save.')}</span>`;
@@ -1084,6 +1097,8 @@ export function createEyePanel({ escapeHtml }) {
     userBubble(q, again ? again.ui?.chips : atts.map((a) => ({ kind: a.kind, label: a.label })));
     const turnStart = messages.length;
     let failed = false;
+    /** The grade corrections this turn's prompt carried, saved with its rating. */
+    let turnNote = '';
     messages.push(again || messageWith(q, atts));
     if (!fromQueue) {
       textEl.value = '';
@@ -1223,7 +1238,9 @@ export function createEyePanel({ escapeHtml }) {
     try {
       const live = (status?.devices || []).find((d) => d.state === 'ready');
       // An app whose model server ends reasoning itself says so; the agent then does not stop replies.
-      await runAgentTurn(messages, { onEvent, signal: ctrl.signal, vision: Boolean(live?.vision), serverBudget: live?.reasoningBudget || 0 });
+      const systemNote = await gradeNote();
+      turnNote = systemNote;
+      await runAgentTurn(messages, { onEvent, signal: ctrl.signal, vision: Boolean(live?.vision), serverBudget: live?.reasoningBudget || 0, systemNote });
     } catch (err) {
       failed = true;
       hidePending();
@@ -1234,7 +1251,7 @@ export function createEyePanel({ escapeHtml }) {
     closeReasoning();
     const finalText = replyText;
     endReply();
-    if (!failed && finalText.trim()) void offerRating(q, messages.slice(turnStart), finalText);
+    if (!failed && finalText.trim()) void offerRating(q, messages.slice(turnStart), finalText, turnNote);
     for (const t of tools.values()) {
       clearInterval(t.timer);
       if (t.node.classList.contains('is-running')) t.node.classList.replace('is-running', 'is-error');

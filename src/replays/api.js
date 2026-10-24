@@ -1041,7 +1041,53 @@ export async function fetchRoundPacks(files, { stride = 100, ticks = true, meta 
  * @param {{ signal?: AbortSignal, onEvent: (event: object) => void }} opts
  */
 export async function scanSimilarRounds(ask, { signal, onEvent }) {
-  const res = await safeFetch(`${API_BASE}/api/similar/scan`, {
+  return desktopStream('/api/similar/scan', ask, { signal, onEvent });
+}
+
+/**
+ * The plays of a round (default or play, when, by whom, and what each did to
+ * the win chance), with the eye's guess checked when it sends one, and the
+ * unlabelled round with `moves`. Desktop app only, like Similar Rounds; the
+ * first ask on a map learns what is usual there, which streams progress.
+ *
+ * @param {{ file: string, guess?: object[], moves?: boolean }} ask
+ * @param {{ signal?: AbortSignal, onEvent?: (event: object) => void }} [opts]
+ * @returns {Promise<object>} the `done` event
+ */
+export async function readRoundPlays(ask, opts = {}) {
+  return finalEvent('/api/similar/plays', ask, opts);
+}
+
+/**
+ * One play of a round judged against the rounds most like it. Desktop app only.
+ *
+ * @param {{ file: string, play: string, guess?: { verdict: string, why?: string } }} ask
+ * @param {{ signal?: AbortSignal, onEvent?: (event: object) => void }} [opts]
+ * @returns {Promise<object>} the `done` event
+ */
+export async function reviewRoundPlay(ask, opts = {}) {
+  return finalEvent('/api/similar/review', ask, opts);
+}
+
+async function finalEvent(path, ask, { signal, onEvent } = {}) {
+  let done = null;
+  let error = null;
+  await desktopStream(path, ask, {
+    signal,
+    onEvent: (event) => {
+      if (event.type === 'done') done = event;
+      else if (event.type === 'error') error = event.error;
+      onEvent?.(event);
+    }
+  });
+  if (error) throw new Error(error);
+  if (!done) throw new Error('The desktop app did not answer.');
+  return done;
+}
+
+/** POST to one of the desktop app's own routes and read its NDJSON events. */
+async function desktopStream(path, ask, { signal, onEvent }) {
+  const res = await safeFetch(`${API_BASE}${path}`, {
     method: 'POST',
     headers: await headers({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(ask),

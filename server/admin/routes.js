@@ -97,6 +97,7 @@ import { countPitchEdits, getPitchText, savePitchText } from '../pitchStore.js';
 import {
   appendRecord,
   exportTraining,
+  gradeLessons,
   makeRecord,
   removeRecord,
   TrainingError,
@@ -1876,6 +1877,10 @@ async function route(req, res, url, me) {
     try {
       if (req.method === 'GET' && p === '/api/admin/labels') {
         json(res, req, 200, await trainingStats());
+        return true;
+      }
+      if (req.method === 'GET' && p === '/api/admin/labels/lessons') {
+        json(res, req, 200, { lessons: await gradeLessons(Number(q.get('limit')) || 20) });
         return true;
       }
       if (req.method === 'GET' && p === '/api/admin/labels/export') {
