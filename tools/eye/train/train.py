@@ -206,7 +206,21 @@ def only_known(cls, **kwargs):
 
 
 def load_base(args, torch):
+    import importlib.util
+
+    import transformers.integrations.sdpa_attention as sdpa
     from transformers import AutoModelForCausalLM
+
+    # SDPA's grouped-query switch has only the flash kernel behind it; where that is
+    # missing (Windows builds) attention drops to the math path and holds the whole
+    # length x length table, ~100 GB at 20k tokens for the 27B. Repeating K and V
+    # costs a few hundred MB and keeps the memory-efficient kernels in play.
+    sdpa.use_gqa_in_sdpa = lambda *a, **k: False
+    # Qwen3.5/3.8's linear-attention layers run on these when installed (Linux);
+    # the PyTorch fallback is correct but several times slower.
+    missing = [p for p, m in (("flash-linear-attention", "fla"), ("causal-conv1d", "causal_conv1d")) if not importlib.util.find_spec(m)]
+    if missing and not args.cpu:
+        print(f"  (not installed: {', '.join(missing)}; linear-attention layers use the slow PyTorch path)")
 
     kwargs = {"torch_dtype": torch.float32 if args.cpu else torch.bfloat16, "trust_remote_code": True}
     if args.four_bit and not args.cpu:
@@ -230,7 +244,7 @@ def lora(args):
     return LoraConfig(r=args.rank, lora_alpha=args.alpha, lora_dropout=0.05, target_modules="all-linear", task_type="CAUSAL_LM")
 
 
-def train_sft(args, tok, model, rows, torch):
+def train_sft(args, tok, model, rows, torch, adapters):
     from peft import get_peft_model
     from transformers import Trainer, TrainingArguments
 
@@ -276,13 +290,29 @@ def train_sft(args, tok, model, rows, torch):
         seed=args.seed,
         use_cpu=args.cpu,
     )
-    Trainer(model=model, args=targs, train_dataset=data, data_collator=collate).train()
+    class LearnedOnly(Trainer):
+        """The loss over the learned tokens only. About 2% of a record is the
+        assistant's; the rest is prompt, tools and tool results, and projecting
+        every position onto a 248k vocabulary would take ~20 GB per record."""
+
+        def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+            labels = inputs.pop("labels")
+            target = labels[:, 1:]  # position t predicts token t + 1
+            keep = (target != -100).any(0).nonzero().squeeze(-1)
+            out = model(**inputs, logits_to_keep=keep)
+            tgt = target[:, keep]
+            loss = torch.nn.functional.cross_entropy(out.logits.float().flatten(0, 1), tgt.flatten(), ignore_index=-100, reduction="sum")
+            loss = loss / (num_items_in_batch if num_items_in_batch is not None else (tgt != -100).sum())
+            return (loss, out) if return_outputs else loss
+
+    LearnedOnly(model=model, args=targs, train_dataset=data, data_collator=collate).train()
     model.save_pretrained(os.path.join(args.out, "sft-adapter"))
+    adapters.append("sft-adapter")
     print(f"SFT adapter -> {os.path.join(args.out, 'sft-adapter')}")
     return model
 
 
-def train_dpo(args, tok, model, rows, torch):
+def train_dpo(args, tok, model, rows, torch, adapters):
     from datasets import Dataset
     from peft import PeftModel, get_peft_model
     from trl import DPOConfig, DPOTrainer
@@ -297,6 +327,8 @@ def train_dpo(args, tok, model, rows, torch):
     # so the SFT LoRA goes on learning and the reference is the base).
     if isinstance(model, PeftModel) and not args.four_bit:
         model = model.merge_and_unload()
+    elif isinstance(model, PeftModel) and "sft-adapter" in adapters:
+        adapters.remove("sft-adapter")  # dpo-adapter will hold both
     if not isinstance(model, PeftModel):
         model = get_peft_model(model, lora(args))
     cfg = only_known(
@@ -324,6 +356,7 @@ def train_dpo(args, tok, model, rows, torch):
     kwargs["processing_class" if "processing_class" in params else "tokenizer"] = tok
     DPOTrainer(**kwargs).train()
     model.save_pretrained(os.path.join(args.out, "dpo-adapter"))
+    adapters.append("dpo-adapter")
     print(f"DPO adapter -> {os.path.join(args.out, 'dpo-adapter')}")
     return model
 
@@ -359,21 +392,22 @@ def main():
     import torch
 
     model = load_base(args, torch)
+    adapters = []
     if sft_rows:
-        model = train_sft(args, tok, model, sft_rows, torch)
+        model = train_sft(args, tok, model, sft_rows, torch, adapters)
     if dpo_rows:
-        model = train_dpo(args, tok, model, dpo_rows, torch)
-    if args.merge:
-        from peft import PeftModel
+        model = train_dpo(args, tok, model, dpo_rows, torch, adapters)
+    with open(os.path.join(args.out, "adapters.json"), "w") as f:
+        json.dump(adapters, f)
+    if args.merge and adapters:
+        # Into the base's own checkpoint, not model.save_pretrained: that would
+        # leave out the vision tower and the MTP layer (see merge.py).
+        del model
+        torch.cuda.empty_cache()
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from merge import merge
 
-        if args.four_bit:
-            print("--merge with --4bit: load the base in bf16 and the adapter, then merge (see TRAINING.md); skipped here.")
-        else:
-            merged = model.merge_and_unload() if isinstance(model, PeftModel) else model
-            path = os.path.join(args.out, "merged")
-            merged.save_pretrained(path, safe_serialization=True)
-            tok.save_pretrained(path)
-            print(f"Merged weights -> {path}")
+        merge(args.base, [os.path.join(args.out, a) for a in adapters], os.path.join(args.out, "merged"))
 
 
 if __name__ == "__main__":
