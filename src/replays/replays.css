@@ -1325,6 +1325,19 @@ button.rp-side-name:hover {
   min-width: 40px;
 }
 
+/* A round's dominance, while the Dominance filter is on. */
+.rp-round-dom {
+  min-width: 26px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
 .rp-round-mark {
   display: inline-flex;
   color: var(--muted);

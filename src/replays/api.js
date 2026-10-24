@@ -1139,6 +1139,37 @@ export async function fetchRoundZoneEvents(files, ids = null) {
   return new Map(Object.entries(body.rounds));
 }
 
+/** Rounds per dominance request: the route takes up to 1000. */
+const DOMINANCE_BATCH = 500;
+
+/**
+ * Each round's dominance for both sides (Demo Manager's Dominance filter):
+ * 100 minus every point of win chance the side gave up on the way through
+ * the round. Asked in batches; resolves null from a server without the route.
+ *
+ * @param {string[]} files
+ * @param {{ onProgress?: (done: number, total: number) => void }} [opts]
+ * @returns {Promise<Map<string, { T: number, CT: number, winner: string, teams: { T: string, CT: string } } | null> | null>}
+ */
+export async function fetchRoundDominance(files, { onProgress } = {}) {
+  const out = new Map();
+  for (let i = 0; i < files.length; i += DOMINANCE_BATCH) {
+    const batch = files.slice(i, i + DOMINANCE_BATCH);
+    const res = await safeFetch(`${API_BASE}/api/replays/rounds/dominance`, {
+      method: 'POST',
+      headers: await headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ files: batch })
+    });
+    if (res.status === 404 || res.status === 405) return null;
+    if (!res.ok) throw new Error(`Could not read round dominance (${res.status})`);
+    if (!(res.headers.get('content-type') || '').includes('json')) return null;
+    const body = await res.json();
+    for (const [file, v] of Object.entries(body?.rounds || {})) out.set(file, v || null);
+    onProgress?.(Math.min(files.length, i + batch.length), files.length);
+  }
+  return out;
+}
+
 /** Longest text one note will keep; the server truncates to the same length. */
 export const NOTE_MAX = 800;
 

@@ -14,6 +14,7 @@ import {
   fetchDemos,
   fetchDemosByIds,
   fetchPlaylists,
+  fetchRoundDominance,
   fetchRoundMeta,
   fetchStatus,
   fetchUploadBatch,
@@ -244,6 +245,13 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     /** Which side won the round, read from the round itself (not its name). */
     /** @type {''|'T'|'CT'} */
     winnerSide: '',
+    /**
+     * Least dominance a round needs (0-100): how little win chance the side
+     * gave up on the way. Whose: the picked team's side, else the Side filter,
+     * else the side that won.
+     * @type {number|null}
+     */
+    dominanceMin: null,
     /** @type {number|null} */
     econA: null,
     /** @type {number|null} */
@@ -296,9 +304,9 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
   }
 
   /** setStatus for the filter, which yields to an upload in progress. */
-  function setQueryStatus(msg) {
+  function setQueryStatus(msg, isError = false) {
     if (uploadOwnsStatus) return;
-    setStatus(msg);
+    setStatus(msg, isError);
   }
 
   // ---- quota + parser -----------------------------------------------------
@@ -2401,6 +2409,19 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     );
   }
 
+  const DOMINANCE_STEPS = [50, 60, 70, 80, 90, 100];
+
+  function dominanceSelectHtml() {
+    const v = filters.dominanceMin;
+    return mbWrap(
+      'star',
+      `<select id="rp-dominance" class="site-input rp-econ-select" aria-label="Dominance">
+        <option value=""${v == null ? ' selected' : ''}>Dominance...</option>
+        ${DOMINANCE_STEPS.map((n) => `<option value="${n}"${v === n ? ' selected' : ''}>Dominance ${n === 100 ? '100' : `${n}+`}</option>`).join('')}
+      </select>`
+    );
+  }
+
   function renderFilters() {
     if (!filtersEl) return;
 
@@ -2453,6 +2474,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       <div class="rp-filter-group">
         ${teamClusters.length ? wonBySelectHtml() : ''}
         ${winnerSideSelectHtml()}
+        ${dominanceSelectHtml()}
       </div>
       ${roundTypeFilterHtml()}
       <div class="rp-filter-group">
@@ -2521,6 +2543,12 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       runQuery();
     });
 
+    filtersEl.querySelector('#rp-dominance')?.addEventListener('change', (e) => {
+      const n = Number(e.target.value);
+      filters.dominanceMin = e.target.value !== '' && Number.isFinite(n) ? n : null;
+      runQuery();
+    });
+
     filtersEl.querySelector('#rp-won-by')?.addEventListener('change', (e) => {
       const v = e.target.value;
       filters.wonByMode = v === 'selected' || v === 'opponent' ? v : '';
@@ -2545,6 +2573,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       filters.players.clear();
       filters.wonByMode = '';
       filters.winnerSide = '';
+      filters.dominanceMin = null;
       filters.econA = null;
       filters.econB = null;
       filters.hasAwpA = false;
@@ -2872,6 +2901,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
         filters.players.size ||
         filters.wonByMode ||
         filters.winnerSide ||
+        filters.dominanceMin != null ||
         Number.isFinite(filters.econA) ||
         Number.isFinite(filters.econB) ||
         filters.hasAwpA ||
@@ -3034,6 +3064,54 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     }
   }
 
+  /** Round file -> its dominance for both sides, as the server worked it out (null: none). */
+  const dominanceByFile = new Map();
+
+  /** Whose dominance a round is read by: the picked team's side, else the Side filter, else the winner. */
+  function dominanceOf(file) {
+    const d = dominanceByFile.get(file);
+    if (!d) return null;
+    const focus = focusTeamIds();
+    let side = '';
+    if (focus.size) {
+      if (focus.has(String(d.teams?.T || '').toLowerCase())) side = 'T';
+      else if (focus.has(String(d.teams?.CT || '').toLowerCase())) side = 'CT';
+    }
+    if (!side) side = filters.side === 'T' || filters.side === 'CT' ? filters.side : d.winner;
+    const v = d[side];
+    return Number.isFinite(v) ? v : null;
+  }
+
+  /** Keep rounds at or above the Dominance filter, asking the server for the ones not read yet. */
+  async function applyDominanceFilter(list, token) {
+    const missing = list.map((r) => r.file).filter((f) => f && !dominanceByFile.has(f));
+    if (missing.length) {
+      setQueryStatus(`Reading dominance: 0 of ${missing.length} rounds`);
+      let got;
+      try {
+        got = await fetchRoundDominance(missing, {
+          onProgress: (done, total) => {
+            if (token === queryToken) setQueryStatus(`Reading dominance: ${done} of ${total} rounds`);
+          }
+        });
+      } catch (err) {
+        setQueryStatus(err.message || 'Could not read round dominance.', true);
+        return list;
+      }
+      if (token !== queryToken) return list;
+      if (!got) {
+        setQueryStatus('This server cannot filter by dominance yet.', true);
+        return list;
+      }
+      for (const f of missing) dominanceByFile.set(f, got.get(f) || null);
+    }
+    setQueryStatus('');
+    return list.filter((r) => {
+      const v = dominanceOf(r.file);
+      return v != null && v >= filters.dominanceMin;
+    });
+  }
+
   /** Load metas with limited concurrency, then keep rounds that pass advanced filters. */
   async function applyAdvancedMetaFilters(list, token) {
     if (!needsMetaFilters()) return list;
@@ -3186,6 +3264,12 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
         rounds = await applyAdvancedMetaFilters(rounds, token);
         if (token !== queryToken) return;
         setQueryStatus('');
+      }
+
+      if (filters.dominanceMin != null) {
+        const kept = await applyDominanceFilter(rounds, token);
+        if (token !== queryToken) return;
+        rounds = kept;
       }
 
       notedFiles = new Set(res?.noted || []);
@@ -3345,6 +3429,10 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       marks.push(
         `<span class="rp-round-mark bookmark" title="In a playlist">${svgIcon(bookmarkIcon)}</span>`
       );
+    }
+    if (filters.dominanceMin != null) {
+      const dom = dominanceOf(r.file);
+      if (dom != null) marks.unshift(`<span class="rp-round-dom" title="Dominance">${dom}</span>`);
     }
     return `
       <button type="button" class="rp-round-row${selected ? ' selected' : ''} side-${side.toLowerCase()}"

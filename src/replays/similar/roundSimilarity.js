@@ -206,6 +206,33 @@ function tWinSeries(meta, view, header, timing) {
   return out;
 }
 
+/**
+ * A round's dominance for both sides, without building a whole index: what
+ * the demo list's Dominance filter reads (POST /api/replays/rounds/dominance).
+ * Same series and same arithmetic as the index, so a round reads the same in
+ * the filter and in Similar Rounds.
+ *
+ * @param {object} meta
+ * @param {ArrayBuffer|Uint8Array} ticks  a SCAN_STRIDE tick buffer
+ * @returns {null | { T: number, CT: number, winner: string, teams: { T: string, CT: string } }}
+ */
+export function roundDominance(meta, ticks) {
+  if (!meta || !ticks) return null;
+  const view = asView(ticks);
+  const header = readHeader(view);
+  const timing = timingFor(meta);
+  const series = tWinSeries(meta, view, header, timing);
+  if (series.length < 2) return null;
+  const sides = teamSides(meta);
+  const teamOf = (side) => String((sides[1] === side ? meta.team1 : meta.team2)?.id || '');
+  return {
+    T: dominanceOf(series).dominance,
+    CT: dominanceOf(series.map((v) => 100 - v)).dominance,
+    winner: meta.winnerSide || sides[meta.winner === 2 ? 2 : 1] || '',
+    teams: { T: teamOf('T'), CT: teamOf('CT') }
+  };
+}
+
 // ---- the index --------------------------------------------------------------
 
 function asView(buffer) {

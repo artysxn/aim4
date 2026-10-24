@@ -4,6 +4,7 @@
 // handleReplayRequest against a real temp library:
 //
 //   POST /api/replays/rounds/packs   meta + coarse ticks for many rounds
+//   POST /api/replays/rounds/dominance  each round's dominance, both sides
 //   GET  /api/replays/demos?ids=     records for an explicit id list
 //   GET  /api/replays/rounds         the collector, twice (round-name cache)
 
@@ -225,6 +226,27 @@ const base = `http://127.0.0.1:${server.address().port}`;
   });
   const packs = decodeRoundPacks(await res.arrayBuffer());
   assert(packs.every((p) => p.meta && p.ticks === null), 'ticks:false means meta only');
+}
+
+// ---- POST /rounds/dominance -------------------------------------------------
+{
+  const ask = async (files) =>
+    fetch(`${base}/api/replays/rounds/dominance`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ files }) });
+  const res = await ask([...stems, 'nope-round']);
+  assert(res.ok, 'dominance responds 200');
+  const { rounds } = await res.json();
+  for (const stem of stems) {
+    const d = rounds[stem];
+    assert(d && Number.isInteger(d.T) && Number.isInteger(d.CT), `${stem}: a dominance for each side`);
+    assert(d.T >= 0 && d.T <= 100 && d.CT >= 0 && d.CT <= 100, 'between 0 and 100');
+    assert(d.winner === 'T', `team 1 started T and won, so T won (got ${d.winner})`);
+    assert(d.teams.T === 'FZE' && d.teams.CT === 'VPX', 'and which team sat on each side');
+  }
+  assert(rounds['nope-round'] === null, 'a round that is not there is null, not an error');
+  const again = await (await ask(stems)).json();
+  assert(JSON.stringify(again.rounds[stems[0]]) === JSON.stringify(rounds[stems[0]]), 'asked again, the same answer');
+  assert((await ask([])).status === 400, 'no files is a bad request');
+  assert((await ask(['../etc/passwd'])).status === 400, 'and so is a name that is not a round');
 }
 
 // ---- GET /demos?ids= --------------------------------------------------------

@@ -18,6 +18,7 @@ import {
   dominanceOf,
   econClass,
   gateReason,
+  roundDominance,
   scoreRound,
   weaponClass
 } from './roundSimilarity.js';
@@ -310,7 +311,11 @@ const sim = (q, idx) => scoreRound(q, idx)?.similarity ?? null;
     const names = (await listSampleRoundNames()).slice(0, 12);
     for (const n of names) {
       const meta = await getSampleRoundMeta(n);
-      const idx = buildRoundIndex(meta, await getSampleRoundTicks(n, SCAN_STRIDE), n);
+      const ticks = await getSampleRoundTicks(n, SCAN_STRIDE);
+      const idx = buildRoundIndex(meta, ticks, n);
+      // The Demo Manager's filter reads the same numbers Similar Rounds shows.
+      const dom = roundDominance(meta, ticks);
+      assert.deepEqual([dom.T, dom.CT, dom.winner], [idx.dominance.T.dominance, idx.dominance.CT.dominance, idx.winnerSide], `${n}: the filter and the scan agree`);
       const last = idx.win[idx.win.length - 1];
       assert.equal(last, idx.winnerSide === 'T' ? 100 : 0, `${n}: the series ends at the result`);
       assert.ok(idx.win.length > 10, 'a series point every row of the live round');

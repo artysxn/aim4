@@ -15,6 +15,7 @@
 //   DELETE /api/replays/demos/:id                remove demo + its rounds
 //   GET    /api/replays/rounds?...               filter by name, no file reads
 //   POST   /api/replays/rounds/packs             meta + ticks for many rounds
+//   POST   /api/replays/rounds/dominance         each round's dominance, both sides (Demo Manager filter)
 //   GET    /api/replays/rounds/:file             round meta + events
 //   GET    /api/replays/rounds/:file/ticks       tick buffer, ?stride=N&fmt=packed
 //   GET    /api/replays/stats                    compact per-round index
@@ -140,6 +141,7 @@ import {
 } from './visibility.js';
 import { encodeRoundPacks } from '../../src/replays/shared/roundPackWire.js';
 import { roundZoneEvents } from '../../src/replays/shared/roundZoneEvents.js';
+import { roundDominance } from '../../src/replays/similar/roundSimilarity.js';
 import { importReplayPackage } from './importPackage.js';
 import { readChampion } from '../training/champion.js';
 import { spawnsForMap } from './spawnPoints.js';
@@ -175,6 +177,18 @@ const statsIo = {
   getZones,
   getCoachUtilities: getCoachSmokes
 };
+
+/** Rounds per dominance request, and how long a worked-out dominance is kept (a re-parse can change it). */
+const DOMINANCE_BATCH = 1000;
+const DOMINANCE_TTL_MS = 12 * 60 * 60 * 1000;
+const DOMINANCE_KEEP = 200_000;
+/** @type {Map<string, { value: object|null, at: number }>} round file -> dominance, oldest first */
+const dominanceCache = new Map();
+function rememberDominance(file, value) {
+  dominanceCache.delete(file);
+  dominanceCache.set(file, { value, at: Date.now() });
+  while (dominanceCache.size > DOMINANCE_KEEP) dominanceCache.delete(dominanceCache.keys().next().value);
+}
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -2939,6 +2953,60 @@ export async function handleReplayRequest(req, res, url) {
           if (!meta) continue;
           const ticks = await readRoundTicksMaybeSample(user, file, 100);
           rounds[file] = roundZoneEvents(meta, ticks, ids && ids.length ? ids : null);
+        } catch {
+          rounds[file] = null;
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(8, files.length) }, worker));
+    await jsonBig(res, 200, { rounds }, req, { 'Cache-Control': 'no-store' });
+    return true;
+  }
+
+  // Each round's dominance for both sides: how little win chance a side gave
+  // up on the way through the round (100 = never lost any). The Demo Manager
+  // filters on it. Worked out from the 100-tick pass and the round model on
+  // first ask, then kept: a few numbers a round, where the client would
+  // otherwise download ~30 KB of meta and ticks per round to work it out.
+  if (req.method === 'POST' && p === '/api/replays/rounds/dominance') {
+    let body;
+    try {
+      body = await readJson(req, 512 * 1024);
+    } catch (err) {
+      json(res, 400, { error: err.message });
+      return true;
+    }
+    const files = (Array.isArray(body.files) ? body.files : [])
+      .map((f) => String(f || ''))
+      .filter((f) => /^[A-Za-z0-9_~-]+$/.test(f));
+    if (!files.length) {
+      json(res, 400, { error: 'Pass files: [roundFile, …].' });
+      return true;
+    }
+    if (files.length > DOMINANCE_BATCH) {
+      json(res, 400, { error: `At most ${DOMINANCE_BATCH} rounds per request.` });
+      return true;
+    }
+    await roundLookup();
+    const rounds = {};
+    let cursor = 0;
+    const worker = async () => {
+      while (cursor < files.length) {
+        const file = files[cursor++];
+        rounds[file] = null;
+        try {
+          if (!(await canOpenRound(file))) continue;
+          const kept = dominanceCache.get(file);
+          if (kept && Date.now() - kept.at < DOMINANCE_TTL_MS) {
+            rounds[file] = kept.value;
+            continue;
+          }
+          const meta = await readRoundMetaMaybeSample(user, file);
+          if (!meta) continue;
+          const ticks = await readRoundTicksMaybeSample(user, file, 100);
+          const value = roundDominance(meta, ticks);
+          rememberDominance(file, value);
+          rounds[file] = value;
         } catch {
           rounds[file] = null;
         }
