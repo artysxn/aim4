@@ -15,6 +15,15 @@
 export const CHANGELOG = Object.freeze([
   {
     date: '2026-10-24',
+    title: 'Saved GIFs: page link and image link',
+    tag: 'improved',
+    points: [
+      'Every saved GIF now has two links. Page link opens a page with the GIF, its title and its description, where every setpos is a link that copies itself. Image link is the GIF file itself, which plays wherever you paste it, as Copy link did before.',
+      'Both are in the GIF\'s panel in Bookmarks (the red button is split in two), in the ... menu on every GIF on the wall, under a GIF you just made in the viewer, on GIFs aim4 eye shows in the chat, and on the share page itself.'
+    ]
+  },
+  {
+    date: '2026-10-24',
     title: 'Demo Manager: Dominance and Winner side fixed, clearer result filters',
     tag: 'fixed',
     points: [

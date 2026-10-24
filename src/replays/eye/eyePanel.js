@@ -11,7 +11,7 @@
 // ---------------------------------------------------------------------------
 
 import { accessToken, gifImageUrl } from '../api.js';
-import { gifShareUrl } from '../gif/gifCapture.js';
+import { gifPageUrl, gifShareUrl } from '../gif/gifCapture.js';
 import { desktopApp } from '../../site/desktopApp.js';
 import { SYSTEM_PROMPT, gradeLessonsNote, runAgentTurn, summarizeChat, systemWith } from './eyeAgent.js';
 import { HISTORY_BUDGET } from './eyeContext.js';
@@ -751,7 +751,11 @@ export function createEyePanel({ escapeHtml }) {
     if (stick) toBottom();
   }
 
-  /** A saved GIF in the chat: the picture, its title, and its share link (the GIF itself, so it embeds where it is pasted). */
+  /**
+   * A saved GIF in the chat: the picture, its title, and its two links: the
+   * share page (the GIF with its title and description) and the GIF itself,
+   * which embeds where it is pasted.
+   */
   function gifWidget(gif) {
     const id = String(gif.id || '');
     const node = document.createElement('figure');
@@ -760,18 +764,21 @@ export function createEyePanel({ escapeHtml }) {
     node.innerHTML = `<img src="${escapeHtml(gifImageUrl(id))}" alt="${escapeHtml(gif.title || 'GIF')}"${size} />
       <figcaption>
         <span>${escapeHtml(gif.title || 'GIF')}</span>
-        <button type="button" class="eye-gif-copy">Copy link</button>
+        <button type="button" class="eye-gif-copy" data-copy="page" title="A page with the GIF, its title and its description">Page link</button>
+        <button type="button" class="eye-gif-copy" data-copy="image" title="The GIF file itself, which plays wherever it is pasted">Image link</button>
         <a href="/bookmarks?tab=gifs" target="_blank" rel="noopener">Saved GIFs</a>
       </figcaption>`;
-    node.querySelector('.eye-gif-copy').addEventListener('click', async (e) => {
-      const link = gifShareUrl(id);
-      try {
-        await navigator.clipboard.writeText(link);
-        e.target.textContent = 'Copied';
-      } catch {
-        window.prompt('Copy the link:', link);
-      }
-    });
+    for (const btn of node.querySelectorAll('.eye-gif-copy')) {
+      btn.addEventListener('click', async () => {
+        const link = btn.dataset.copy === 'page' ? gifPageUrl(id) : gifShareUrl(id);
+        try {
+          await navigator.clipboard.writeText(link);
+          btn.textContent = 'Copied';
+        } catch {
+          window.prompt('Copy the link:', link);
+        }
+      });
+    }
     return node;
   }
 

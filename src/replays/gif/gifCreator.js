@@ -20,7 +20,7 @@ import { createRangeSlider } from '../../lib/rangeSlider.js';
 import { clockAt, timingFor, totalSeconds } from '../viewer/roundClock.js';
 import { DEFAULT_FPS, MAX_FPS, MAX_SECONDS, MIN_FPS, clampFps, frameTicks, outputSize, qualityScale } from './gifCore.js';
 import { GIF_CREATOR_DESCRIPTION_MAX, GIF_DESCRIPTION_MAX, GIF_TITLE_MAX, gifMetaFromRound } from './gifMeta.js';
-import { captureGif, downloadBlob, gifFileName, gifShareUrl, saveGifFitting } from './gifCapture.js';
+import { captureGif, downloadBlob, gifFileName, gifPageUrl, gifShareUrl, saveGifFitting } from './gifCapture.js';
 import { appendSetposLines, utilitySetposLines } from './gifSetpos.js';
 import { updateGif } from '../api.js';
 
@@ -111,7 +111,8 @@ export function createGifCreator({ panel, mapEl, canvas, photoIcon = '', escapeH
       <div class="rv-gif-result" data-gif-result hidden>
         <img alt="" data-gif-preview />
         <div class="rv-gif-actions">
-          <button type="button" class="btn btn-sm" data-gif-copy hidden>Copy link</button>
+          <button type="button" class="btn btn-sm" data-gif-copy="page" hidden title="A page with the GIF, its title and its description">Page link</button>
+          <button type="button" class="btn btn-sm" data-gif-copy="image" hidden title="The GIF file itself, which plays wherever it is pasted">Image link</button>
           <button type="button" class="btn btn-sm" data-gif-download>Download</button>
           <a class="btn btn-sm" href="/bookmarks?tab=gifs" data-gif-bookmarks hidden>Saved GIFs</a>
         </div>
@@ -141,7 +142,7 @@ export function createGifCreator({ panel, mapEl, canvas, photoIcon = '', escapeH
   const msgEl = $('[data-gif-msg]');
   const resultEl = $('[data-gif-result]');
   const previewImg = $('[data-gif-preview]');
-  const copyBtn = $('[data-gif-copy]');
+  const copyBtns = [...panel.querySelectorAll('[data-gif-copy]')];
   const downloadBtn = $('[data-gif-download]');
   const bookmarksLink = $('[data-gif-bookmarks]');
 
@@ -566,7 +567,7 @@ export function createGifCreator({ panel, mapEl, canvas, photoIcon = '', escapeH
     const controller = new AbortController();
     busy = controller;
     savedId = '';
-    copyBtn.hidden = true;
+    for (const b of copyBtns) b.hidden = true;
     bookmarksLink.hidden = true;
     setBusy(true);
     setMsg('');
@@ -639,7 +640,7 @@ export function createGifCreator({ panel, mapEl, canvas, photoIcon = '', escapeH
         onProgress: (done, total) => setMsg(`Downloaded (${mb} MB). Making a smaller copy for Bookmarks: frame ${done} of ${total}`)
       });
       savedId = gif.id;
-      copyBtn.hidden = false;
+      for (const b of copyBtns) b.hidden = false;
       bookmarksLink.hidden = false;
       const saved = copy
         ? `Downloaded (${mb} MB). Saved a smaller copy to Bookmarks: ${(copy.bytes / 1024 / 1024).toFixed(1)} MB, ${copy.width} x ${copy.height}, ${copy.fps} FPS.`
@@ -697,16 +698,19 @@ export function createGifCreator({ panel, mapEl, canvas, photoIcon = '', escapeH
   downloadBtn.addEventListener('click', () => {
     if (lastBlob) downloadBlob(lastBlob, lastName);
   });
-  copyBtn.addEventListener('click', async () => {
-    if (!savedId) return;
-    const link = gifShareUrl(savedId);
-    try {
-      await navigator.clipboard.writeText(link);
-      setMsg('Link copied.');
-    } catch {
-      window.prompt('Copy the link:', link);
-    }
-  });
+  for (const btn of copyBtns) {
+    btn.addEventListener('click', async () => {
+      if (!savedId) return;
+      const page = btn.dataset.gifCopy === 'page';
+      const link = page ? gifPageUrl(savedId) : gifShareUrl(savedId);
+      try {
+        await navigator.clipboard.writeText(link);
+        setMsg(page ? 'Page link copied.' : 'Image link copied.');
+      } catch {
+        window.prompt('Copy the link:', link);
+      }
+    });
+  }
 
   // ---- open / close -------------------------------------------------------------
 

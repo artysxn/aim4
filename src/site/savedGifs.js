@@ -7,9 +7,11 @@
 // a menu), packed into columns left to right. A row of filters sits above it.
 //
 // A pin opens in place at the top of the wall, four columns wide: the GIF on
-// the left; on the right the link button (the GIF's own address on aim4, so
-// it embeds wherever it is pasted), the title, the description and what the
-// GIF shows (map, round, both teams' sides and buys, who won). The rest of
+// the left; on the right the two link buttons (Page link: the share page
+// with the GIF, its title and its description; Image link: the GIF's own
+// address on aim4, so it embeds wherever it is pasted), the title, the
+// description and what the GIF shows (map, round, both teams' sides and
+// buys, who won). The rest of
 // the wall keeps flowing to the right of it and below it.
 //
 // In a description, text between < and > is a copy link: <setpos ...> copies
@@ -29,7 +31,7 @@ import {
   gifDisplayTitle,
   gifFilterOptions
 } from '../replays/gif/gifMeta.js';
-import { downloadBlob, gifFileName, gifShareUrl } from '../replays/gif/gifCapture.js';
+import { downloadBlob, gifFileName, gifPageUrl, gifShareUrl } from '../replays/gif/gifCapture.js';
 import { spinnerHtml } from '../lib/spinner.js';
 
 /** Narrowest column, gap between pins, the grid's row unit and the one line under each pin. */
@@ -247,7 +249,10 @@ export function createSavedGifs({ host, escapeHtml, openRound }) {
               <button type="button" class="bm-icon-btn" data-act="download" aria-label="Download" title="Download">${ICON.download}</button>
               ${g.file ? `<button type="button" class="bm-icon-btn" data-act="round" aria-label="Open the round" title="Open the round">${ICON.play}</button>` : ''}
               <button type="button" class="bm-icon-btn" data-act="menu" aria-label="More" title="More">${ICON.more}</button>
-              <button type="button" class="bm-link-btn" data-act="copy" title="Copy the direct link to this GIF">${ICON.link}<span>Copy link</span></button>
+              <div class="bm-link-split" role="group" aria-label="Copy link">
+                <button type="button" class="bm-link-btn" data-act="copy-page" title="Copy a link to a page with the GIF, its title and its description, setpos links included">${ICON.link}<span>Page link</span></button>
+                <button type="button" class="bm-link-btn" data-act="copy-image" title="Copy the link to the GIF file itself, which plays wherever it is pasted"><span>Image link</span></button>
+              </div>
             </div>
             ${text}
             <dl class="bm-detail-meta">${metaRows(g)}</dl>
@@ -432,7 +437,8 @@ export function createSavedGifs({ host, escapeHtml, openRound }) {
           ['delete', 'Delete']
         ]
       : [
-          ['copy', 'Copy link'],
+          ['copy-page', 'Copy page link'],
+          ['copy-image', 'Copy image link'],
           ['download', 'Download'],
           ...(g.file ? [['round', 'Open the round']] : []),
           ['delete', 'Delete']
@@ -462,10 +468,12 @@ export function createSavedGifs({ host, escapeHtml, openRound }) {
   }
 
   function run(act, g, btn) {
-    if (act === 'copy') {
-      copyText(gifShareUrl(g.id), () => {
-        if (openId === g.id) say('Link copied.');
-        else setStatus('Link copied.');
+    if (act === 'copy-page' || act === 'copy-image') {
+      const page = act === 'copy-page';
+      copyText(page ? gifPageUrl(g.id) : gifShareUrl(g.id), () => {
+        const msg = page ? 'Page link copied.' : 'Image link copied.';
+        if (openId === g.id) say(msg);
+        else setStatus(msg);
       });
     } else if (act === 'download') download(g);
     else if (act === 'round') openRound(g.file, g.fromTick);

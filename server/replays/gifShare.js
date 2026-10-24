@@ -101,7 +101,9 @@ ${g.width ? `<meta property="og:image:width" content="${g.width}" />\n<meta prop
   .desc { color: #e9e9ea; white-space: pre-wrap; }
   .cp { padding: 0 2px; border: 0; border-radius: 4px; background: rgba(255,255,255,.06); color: #8ab4ff; font: 500 13px/1.5 ui-monospace, Menlo, Consolas, monospace; text-decoration: underline dotted; cursor: copy; }
   .cp.ok { color: #7bd88f; }
-  .link { padding: 6px 14px; border: 0; border-radius: 16px; background: #e60611; color: #fff; font: 600 14px system-ui, sans-serif; cursor: pointer; }
+  .links { display: inline-flex; overflow: hidden; border-radius: 16px; }
+  .link { padding: 6px 14px; border: 0; background: #e60611; color: #fff; font: 600 14px system-ui, sans-serif; cursor: pointer; }
+  .link + .link { box-shadow: inset 1px 0 0 rgba(255,255,255,.35); }
   .link.ok { background: #2e7d43; }
 </style>
 </head>
@@ -112,7 +114,7 @@ ${g.width ? `<meta property="og:image:width" content="${g.width}" />\n<meta prop
   ${summary ? `<p>${escape(summary)}</p>` : ''}
   ${g.description ? `<p class="desc">${descriptionHtml(g.description)}</p>` : ''}
   <div class="row">
-    <button type="button" class="link" data-copy="${escape(image)}">Copy link</button>
+    <span class="links"><button type="button" class="link" data-copy="${escape(`${origin}/g/${g.id}`)}" title="A link to this page">Page link</button><button type="button" class="link" data-copy="${escape(image)}" title="The GIF file itself, which plays wherever it is pasted">Image link</button></span>
     ${round ? `<a href="${escape(round)}">Open the round</a>` : ''}
     <a href="/g/${escape(g.id)}.gif" download>Download</a>
     <a href="/">aim4</a>

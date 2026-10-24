@@ -2841,6 +2841,28 @@ body.rv-open:has(.side-collapsed) .rv-side-show {
   filter: brightness(1.1);
 }
 
+/* Page link | Image link: one pill split in two, pushed to the right of the bar. */
+.bm-link-split {
+  display: inline-flex;
+  margin-left: auto;
+  overflow: hidden;
+  border-radius: 20px;
+}
+
+.bm-link-split .bm-link-btn {
+  margin-left: 0;
+  border-radius: 0;
+  padding: 0 14px;
+}
+
+.bm-link-split .bm-link-btn:first-child {
+  padding-left: 14px;
+}
+
+.bm-link-split .bm-link-btn + .bm-link-btn {
+  box-shadow: inset 1px 0 0 rgba(255, 255, 255, 0.35);
+}
+
 .bm-detail-title {
   margin: 4px 0 0;
   color: var(--text);

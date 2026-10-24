@@ -314,7 +314,12 @@ export const DOC_GROUPS = [
             <li>Press <strong>Create GIF</strong>.</li>
           </ol>
           <p>The GIF downloads straight away and is saved to <a href="/bookmarks?tab=gifs">Bookmarks → Saved GIFs</a> with what it shows: the map, the round, both teams with their side and buy, and who won. Bookmarks keep GIFs up to 40 MB; a bigger one still downloads in full, and a smaller copy is made and saved for Bookmarks automatically. The round clock is stamped in the corner unless you switch it off.</p>
-          <p><strong>Copy link</strong> gives the GIF's own address on aim4.io, so it plays wherever you paste it (Discord, Slack, a forum). The same link without <code>.gif</code> opens a page with the title, description and its copy links.</p>
+          <p>Every saved GIF has two links:</p>
+          <ul>
+            <li><strong>Page link</strong> (<code>aim4.io/g/...</code>) opens a page with the GIF, its title and its description, where every setpos in the description is a link that copies itself. Use it when the words matter: a lineup, a call, a note for your team.</li>
+            <li><strong>Image link</strong> (<code>aim4.io/g/....gif</code>) is the GIF file itself, so it plays wherever you paste it (Discord, Slack, a forum). Use it when only the picture matters.</li>
+          </ul>
+          <p>Both are there after you create a GIF, on every GIF in Bookmarks, and on GIFs aim4 eye makes in the chat.</p>
           ${best([
             '2D GIFs are small and sharp; use them for setups, rotations and utility. Use 3D for a peek, a flash or a clutch.',
             'Keep 3D GIFs short. A few seconds at quality 2 is usually clearer than a long one at quality 3, and it stays under the Bookmarks limit.',
@@ -331,7 +336,7 @@ export const DOC_GROUPS = [
           <h3>Playlists</h3>
           <p>A playlist is a list of rounds from any matches, in the order you want. In the viewer, the bookmark button saves the round on screen to a playlist or creates a new one. A playlist is <strong>Private</strong> or shared with your <strong>Team</strong>, and can be searched by name.</p>
           <h3>Saved GIFs</h3>
-          <p>Every GIF you made is here as an image wall. Search it and filter by 2D or 3D, map, team, side, buy and the side that won. Click a GIF to open it next to the rest of the wall: the GIF on the left, and on the right <strong>Copy link</strong>, the title, the description and everything it was saved with. You can edit the title and description or delete it.</p>
+          <p>Every GIF you made is here as an image wall. Search it and filter by 2D or 3D, map, team, side, buy and the side that won. Click a GIF to open it next to the rest of the wall: the GIF on the left, and on the right <strong>Page link</strong> and <strong>Image link</strong> (see <a href="#gifs">GIFs</a>), the title, the description and everything it was saved with. You can edit the title and description or delete it.</p>
           ${best([
             'Build one playlist per idea ("NAVI B executes, Mirage") rather than one per match. A playlist that answers one question is one you will open again.',
             'Share prep playlists with your team so everyone watches the same rounds before a match.',
