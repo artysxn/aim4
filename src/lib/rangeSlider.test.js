@@ -172,4 +172,32 @@ function build(opts) {
   assert.equal(marks.children.length, 0, 'marks can be cleared');
 }
 
+// ---------------------------------------------------------------------------
+// It says which end moved, and carries a playhead that is not a handle
+// ---------------------------------------------------------------------------
+
+{
+  // The GIF creator shows the round at the end being dragged, so it needs to
+  // know which one it was; the round's own position rides on the same track.
+  const moved = [];
+  const rs = createRangeSlider({ min: 0, max: 200, onChange: (a, b, which) => moved.push(which) });
+  const [lo, hi] = rs.el.children.filter((c) => c.tagName === 'INPUT');
+  lo.value = '50';
+  lo.fire('input');
+  hi.value = '150';
+  hi.fire('input');
+  assert.deepEqual(moved, ['from', 'to'], 'the start, then the end');
+
+  const cursor = rs.el.children.find((c) => c.className === 'rs-cursor');
+  assert.equal(cursor.hidden, true, 'no playhead until one is given');
+  rs.setCursor(100);
+  assert.equal(cursor.hidden, false);
+  assert.equal(cursor.style.left, '50%', 'drawn where it is on the track');
+  rs.setCursor(500);
+  assert.equal(cursor.style.left, '100%', 'past the end it sits at the end');
+  assert.deepEqual(rs.get(), { from: 50, to: 150 }, 'and it never moves the selection');
+  rs.setCursor(null);
+  assert.equal(cursor.hidden, true, 'and it can be taken away');
+}
+
 console.log('rangeSlider.test.js ok');

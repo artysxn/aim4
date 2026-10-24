@@ -2580,6 +2580,7 @@
     "The activity calendars sit under the Aim tables rather than across the whole page, and scale to whatever width they are given instead of wrapping into a tall stack.": "pages",
     "The aim trainer now turns exactly as CS2 does, from the game movement code rather than an approximation. Your existing sensitivity was converted rather than reinterpreted, so the number in the settings box has changed but your aim has not. 800 CPI at 1.0 is 51.95 cm for a full turn, as it is in game.": "pages",
     "The aim4 comms recorder is one small program: record your channel, say \"record, three, two, one\" in round 1 freeze time, and the file syncs itself.": "pages",
+    "The aim4 server this page talks to does not have Saved GIFs yet: it runs an older version than the page. Restart it (close the desktop app and open it again), or update aim4 on the server.": "demos",
     "The average chance the model gave this player across every": "demos",
     "The average game lasts 21 rounds (13-8).": "coach",
     "The backend cannot verify sign-ins yet. Set SUPABASE_URL and SUPABASE_ANON_KEY on the server, then reload.": "team",

@@ -1488,9 +1488,30 @@ export async function deletePlaylist(id) {
 // body and what the GIF shows (map, teams, title) rides in one header, so a
 // 30 MB upload is never base64 inside JSON.
 
+/**
+ * The GIF routes' answers. A server that predates Saved GIFs answers them with
+ * its catch-all "Not found", which on its own says nothing; this says what it
+ * means: the page is newer than the server behind it.
+ */
+async function gifJson(res) {
+  try {
+    return await asJson(res);
+  } catch (err) {
+    if (err?.status === 404 && /^not found\.?$/i.test(String(err.message || '').trim())) {
+      throw Object.assign(
+        new Error(
+          'The aim4 server this page talks to does not have Saved GIFs yet: it runs an older version than the page. Restart it (close the desktop app and open it again), or update aim4 on the server.'
+        ),
+        { status: 404, code: 'no-gif-routes' }
+      );
+    }
+    throw err;
+  }
+}
+
 /** The caller's saved GIFs, newest first. */
 export async function fetchGifs() {
-  const body = await asJson(await safeFetch(`${API_BASE}/api/replays/gifs`, { headers: await headers() }));
+  const body = await gifJson(await safeFetch(`${API_BASE}/api/replays/gifs`, { headers: await headers() }));
   return body.gifs || [];
 }
 
@@ -1510,7 +1531,7 @@ function metaHeader(meta) {
  * @returns {Promise<object>} the stored record, with its id
  */
 export async function saveGif(blob, meta) {
-  const body = await asJson(
+  const body = await gifJson(
     await safeFetch(`${API_BASE}/api/replays/gifs`, {
       method: 'POST',
       headers: await headers({ 'Content-Type': 'image/gif', 'X-Aim4-Gif-Meta': metaHeader(meta) }),
@@ -1522,7 +1543,7 @@ export async function saveGif(blob, meta) {
 
 /** Change a saved GIF's title or description. */
 export async function updateGif(id, patch) {
-  const body = await asJson(
+  const body = await gifJson(
     await safeFetch(`${API_BASE}/api/replays/gifs/${encodeURIComponent(id)}`, {
       method: 'POST',
       headers: await headers({ 'Content-Type': 'application/json' }),
@@ -1533,7 +1554,7 @@ export async function updateGif(id, patch) {
 }
 
 export async function deleteGif(id) {
-  const body = await asJson(
+  const body = await gifJson(
     await safeFetch(`${API_BASE}/api/replays/gifs/${encodeURIComponent(id)}`, {
       method: 'DELETE',
       headers: await headers()

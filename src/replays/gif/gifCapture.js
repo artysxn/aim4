@@ -7,6 +7,8 @@
 // knows canvases and pixels.
 // ---------------------------------------------------------------------------
 
+import { saveGif } from '../api.js';
+import { MAX_GIF_BYTES } from './gifCore.js';
 import { createGifEncoder } from './gifEncoder.js';
 import { publicOrigin } from '../../site/publicOrigin.js';
 
@@ -130,6 +132,127 @@ export async function captureGif(opts) {
     encoder.cancel();
     throw err;
   }
+}
+
+// ---- fitting Bookmarks ---------------------------------------------------------
+
+/** A smaller copy aims at this share of what the server keeps, so it lands under it first time. */
+const FIT_TARGET = 0.85;
+/** Below this share of the original's width, every other frame goes too, so the picture keeps some size. */
+const KEEP_EVERY_FRAME_ABOVE = 0.5;
+const FIT_ATTEMPTS = 3;
+
+const mb = (bytes) => (bytes / 1024 / 1024).toFixed(1);
+
+/**
+ * A smaller copy of a GIF that fits in `maxBytes`: its frames decoded
+ * (WebCodecs ImageDecoder), scaled down, and when scaling alone would leave
+ * too small a picture, every other frame kept at twice the delay, so it plays
+ * as long. Resolves null where the browser cannot decode GIF frames.
+ *
+ * @param {Blob} blob
+ * @param {object} opts
+ * @param {number} opts.fps          the original's frame rate
+ * @param {'global'|'local'} [opts.palette]
+ * @param {number} [opts.maxBytes]
+ * @param {(done: number, total: number) => void} [opts.onProgress]
+ * @param {AbortSignal} [opts.signal]
+ * @returns {Promise<null | { blob: Blob, width: number, height: number, fps: number, frames: number }>}
+ */
+export async function shrinkGif(blob, { fps, palette = 'local', maxBytes = MAX_GIF_BYTES, onProgress, signal } = {}) {
+  if (typeof ImageDecoder === 'undefined' || !blob) return null;
+  try {
+    if (ImageDecoder.isTypeSupported && !(await ImageDecoder.isTypeSupported('image/gif'))) return null;
+  } catch {
+    return null;
+  }
+  const decoder = new ImageDecoder({ data: blob.stream(), type: 'image/gif' });
+  try {
+    await decoder.completed;
+    const count = decoder.tracks.selectedTrack?.frameCount || 0;
+    if (!count) return null;
+    const first = await decoder.decode({ frameIndex: 0 });
+    const srcW = first.image.displayWidth;
+    const srcH = first.image.displayHeight;
+    first.image.close();
+
+    let ratio = (maxBytes * FIT_TARGET) / blob.size;
+    for (let attempt = 0; attempt < FIT_ATTEMPTS; attempt++) {
+      let step = 1;
+      let scale = Math.sqrt(ratio);
+      if (scale < KEEP_EVERY_FRAME_ABOVE && count > 2) {
+        step = 2;
+        scale = Math.sqrt(ratio * 2);
+      }
+      scale = Math.min(0.95, scale);
+      const width = Math.max(64, Math.round(srcW * scale));
+      const height = Math.max(36, Math.round((width * srcH) / srcW));
+      const outFps = (Number(fps) || 15) / step;
+      const picks = [];
+      for (let i = 0; i < count; i += step) picks.push(i);
+
+      const canvas = scratchCanvas(width, height);
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      const frameAt = async (i) => {
+        const { image } = await decoder.decode({ frameIndex: i });
+        ctx.drawImage(image, 0, 0, width, height);
+        image.close();
+        return ctx.getImageData(0, 0, width, height).data;
+      };
+
+      const encoder = createGifEncoder({ width, height, fps: outFps, palette });
+      try {
+        if (palette !== 'local' && picks.length > 1) {
+          const samples = [];
+          for (const k of [...new Set([0, 0.25, 0.5, 0.75, 1].map((f) => picks[Math.round(f * (picks.length - 1))]))]) {
+            samples.push(new Uint8Array((await frameAt(k)).buffer.slice(0)));
+          }
+          encoder.setPalette(samples);
+        }
+        for (let n = 0; n < picks.length; n++) {
+          if (signal?.aborted) throw new DOMException('Cancelled', 'AbortError');
+          await encoder.addFrame(await frameAt(picks[n]));
+          onProgress?.(n + 1, picks.length);
+        }
+      } catch (err) {
+        encoder.cancel();
+        throw err;
+      }
+      const out = await encoder.finish();
+      if (out.size <= maxBytes) return { blob: out, width, height, fps: outFps, frames: picks.length };
+      // Bytes go roughly with pixels: aim the next try by how far this one missed.
+      ratio *= (maxBytes * FIT_TARGET) / out.size;
+    }
+    return null;
+  } finally {
+    decoder.close();
+  }
+}
+
+/**
+ * Save a GIF to Bookmarks. One over what the server keeps is never sent as it
+ * is (the upload would be cut off, and the browser only says it failed): a
+ * smaller copy that fits is made and saved instead, and the full one stays
+ * with the person who made it.
+ *
+ * @returns {Promise<{ gif: object, copy: null | { width: number, height: number, fps: number, bytes: number } }>}
+ */
+export async function saveGifFitting(blob, meta, { fps, palette, maxBytes = MAX_GIF_BYTES, onShrink, onProgress, signal } = {}) {
+  if (blob.size <= maxBytes) return { gif: await saveGif(blob, meta), copy: null };
+  onShrink?.();
+  const small = await shrinkGif(blob, { fps, palette, maxBytes, onProgress, signal });
+  if (!small) {
+    throw Object.assign(
+      new Error(
+        `it is ${mb(blob.size)} MB and Bookmarks keep up to ${mb(maxBytes)} MB, and a smaller copy could not be made here. Lower the quality or the FPS, or shorten the part of the round.`
+      ),
+      { code: 'too-big' }
+    );
+  }
+  const gif = await saveGif(small.blob, meta);
+  return { gif, copy: { width: small.width, height: small.height, fps: Math.round(small.fps * 10) / 10, bytes: small.blob.size } };
 }
 
 /** A file name that says what the GIF is: aim4-mirage-r14-1m30.gif */

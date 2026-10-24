@@ -1494,6 +1494,8 @@ export function createTimelineViewer({
     );
     if (local < freezeSecs) freezeSkip = false;
     playback.seek(sequence.offsetOf(index) + local);
+    // The GIF creator's part of the round moves with the timeline.
+    gifCreator?.followPlayhead(local);
   };
   /** End a drag: put the transport back the way it was found. */
   const endScrub = () => {
@@ -4052,6 +4054,20 @@ export function createTimelineViewer({
         if (state.playing) playback.play();
         syncPlayButton();
         draw();
+      },
+      /** An end of the GIF's part was dragged: stop and show the round there. */
+      seekLocal(seconds) {
+        const item = sequence.at(activeIndex);
+        if (!item || !Number.isFinite(seconds)) return;
+        if (playback.playing) {
+          playback.pause();
+          syncPlayButton();
+        }
+        const local = Math.max(0, Math.min(roundLocalMax(item), seconds));
+        // A part that starts in the buy is a deliberate choice, same as dragging there.
+        const timing = item.timing;
+        if (local < Math.max(0, (timing.freezeEndTick - timing.startTick) / timing.tickRate)) freezeSkip = false;
+        playback.seek(sequence.offsetOf(activeIndex) + local);
       }
     }
   });
@@ -5830,6 +5846,7 @@ export function createTimelineViewer({
     const pct = item?.seconds ? (local / item.seconds) * 100 : 0;
     fillEl.style.width = `${pct}%`;
     handleEl.style.left = `${pct}%`;
+    gifCreator?.playhead(local);
 
     syncScoreboard(tick);
     syncKillFeed(tick);
@@ -5896,6 +5913,7 @@ export function createTimelineViewer({
     const freezeSecs = Math.max(0, (timing.freezeEndTick - timing.startTick) / timing.tickRate);
     if (local < freezeSecs) freezeSkip = false;
     playback.seek(base + local);
+    gifCreator?.followPlayhead(local);
   }
 
   fwdBtn?.addEventListener('click', () => skipBy(SKIP_SECONDS));

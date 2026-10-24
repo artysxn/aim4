@@ -10983,6 +10983,24 @@ table.rp-mine-table td.rp-mine-match {
   background: #c8c8c8;
 }
 
+/* The linked playhead: where the round on screen is now. */
+.rs-cursor {
+  position: absolute;
+  top: 1px;
+  bottom: 1px;
+  width: 2px;
+  transform: translateX(-50%);
+  border-radius: 1px;
+  background: #f2f2f2;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+  z-index: 1;
+}
+
+.rs-cursor[hidden] {
+  display: none;
+}
+
 /* The two round-clock sliders and the buy pickers above a live map. */
 .doc-embed-filters {
   display: flex;

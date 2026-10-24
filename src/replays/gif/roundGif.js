@@ -11,7 +11,7 @@
 // saved to Bookmarks > Saved GIFs with the round's metadata.
 // ---------------------------------------------------------------------------
 
-import { fetchRoundMeta, fetchRoundTicks, saveGif } from '../api.js';
+import { fetchRoundMeta, fetchRoundTicks } from '../api.js';
 import { TickTrack } from '../tickStore.js';
 import { RadarRenderer } from '../viewer/radarRenderer.js';
 import { RADAR_SIZE, worldToRadar } from '../viewer/mapCalibration.js';
@@ -19,7 +19,7 @@ import { ROUND_SECONDS, clockAt, timingFor } from '../viewer/roundClock.js';
 import { cs3dMap } from '../../../shared/cs3d/maps.js';
 import { MAX_SECONDS, clampFps, frameTicks, outputSize } from './gifCore.js';
 import { gifMetaFromRound, mapNameOf } from './gifMeta.js';
-import { captureGif } from './gifCapture.js';
+import { captureGif, saveGifFitting } from './gifCapture.js';
 
 /** The radar's own pixel size: an offscreen 2D GIF's full resolution. */
 const RADAR_PX = 1024;
@@ -228,7 +228,12 @@ export async function makeRoundGif(opts) {
   if (opts.save !== false) {
     opts.onProgress?.('Saving to Bookmarks');
     try {
-      gif = await saveGif(blob, gifMeta);
+      ({ gif } = await saveGifFitting(blob, gifMeta, {
+        fps,
+        palette: kind === '3d' ? 'local' : 'global',
+        onShrink: () => opts.onProgress?.('Making a smaller copy for Bookmarks'),
+        signal: opts.signal
+      }));
     } catch (err) {
       saveError = err;
     }

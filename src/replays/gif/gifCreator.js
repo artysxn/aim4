@@ -14,12 +14,11 @@
 // title and description given here, ready to share by link.
 // ---------------------------------------------------------------------------
 
-import { saveGif } from '../api.js';
 import { createRangeSlider } from '../../lib/rangeSlider.js';
 import { clockAt, timingFor, totalSeconds } from '../viewer/roundClock.js';
 import { DEFAULT_FPS, MAX_FPS, MAX_SECONDS, MIN_FPS, clampFps, frameTicks, outputSize, qualityScale } from './gifCore.js';
 import { GIF_DESCRIPTION_MAX, GIF_TITLE_MAX, gifMetaFromRound } from './gifMeta.js';
-import { captureGif, downloadBlob, gifFileName, gifShareUrl } from './gifCapture.js';
+import { captureGif, downloadBlob, gifFileName, gifShareUrl, saveGifFitting } from './gifCapture.js';
 
 /** Smallest area worth a GIF, in screen pixels. */
 const MIN_AREA_PX = 40;
@@ -41,6 +40,12 @@ const MIN_AREA_PX = 40;
  *   drawAt(tick): void            draws the radar (and feeds the 3D scene) at a tick
  *   beginCapture(): object        pauses playback, returns what endCapture restores
  *   endCapture(state): void
+ *   seekLocal(seconds): void      pauses and shows the round at seconds from its start
+ *
+ * The part of the round and the viewer's timeline move together: dragging an
+ * end of the part shows the round there, and moving the round (the timeline,
+ * the skip buttons) carries the part along, its length kept, starting where
+ * the round now is. The round's position is drawn on the part's track.
  * @param {(gif: object) => void} [opts.onSaved]
  */
 export function createGifCreator({ panel, mapEl, canvas, photoIcon = '', escapeHtml, viewer, onSaved }) {
@@ -142,12 +147,20 @@ export function createGifCreator({ panel, mapEl, canvas, photoIcon = '', escapeH
   const fpsFor = { '2d': DEFAULT_FPS['2d'], '3d': DEFAULT_FPS['3d'] };
 
   /** Rebuilt for each round: a slider's ends are fixed when it is made, and rounds differ in length. */
+  let rangeTotal = 1;
   let range = makeRange(1);
 
   function makeRange(total) {
-    const r = createRangeSlider({ min: 0, max: total, from: 0, to: total, step: 0.25, label: 'Part of the round', onChange: paintRange });
+    rangeTotal = total;
+    const r = createRangeSlider({ min: 0, max: total, from: 0, to: total, step: 0.25, label: 'Part of the round', onChange: rangeMoved });
     rangeSlot.replaceChildren(r.el);
     return r;
+  }
+
+  /** An end of the part was dragged: the round shows that moment. */
+  function rangeMoved(from, to, moved) {
+    paintRange();
+    if (!busy && open) viewer.seekLocal?.(moved === 'to' ? to : from);
   }
 
   // ---- the area picker over the radar ---------------------------------------
@@ -567,11 +580,20 @@ export function createGifCreator({ panel, mapEl, canvas, photoIcon = '', escapeH
     const mb = (blob.size / 1024 / 1024).toFixed(1);
     setMsg(`Downloaded ${name} (${mb} MB). Saving to Bookmarks…`);
     try {
-      const gif = await saveGif(blob, meta);
+      const { gif, copy } = await saveGifFitting(blob, meta, {
+        fps,
+        palette: kind === '3d' ? 'local' : 'global',
+        onShrink: () => setMsg(`Downloaded (${mb} MB). That is more than Bookmarks keep, so a smaller copy is being made for them…`),
+        onProgress: (done, total) => setMsg(`Downloaded (${mb} MB). Making a smaller copy for Bookmarks: frame ${done} of ${total}`)
+      });
       savedId = gif.id;
       copyBtn.hidden = false;
       bookmarksLink.hidden = false;
-      setMsg(`Downloaded (${mb} MB) and saved to Bookmarks.`);
+      setMsg(
+        copy
+          ? `Downloaded (${mb} MB). Saved a smaller copy to Bookmarks: ${(copy.bytes / 1024 / 1024).toFixed(1)} MB, ${copy.width} x ${copy.height}, ${copy.fps} FPS.`
+          : `Downloaded (${mb} MB) and saved to Bookmarks.`
+      );
       onSaved?.(gif);
     } catch (err) {
       setMsg(
@@ -640,6 +662,8 @@ export function createGifCreator({ panel, mapEl, canvas, photoIcon = '', escapeH
       syncKindRows();
       if (r?.file !== roundKey) resetRange();
       else paintRange();
+      const t = timing();
+      if (t) range.setCursor((viewer.playheadTick() - t.startTick) / t.tickRate);
       syncLayer();
     },
     close() {
@@ -648,6 +672,23 @@ export function createGifCreator({ panel, mapEl, canvas, photoIcon = '', escapeH
       drag = null;
       panel.hidden = true;
       syncLayer();
+    },
+    /** Where the round on screen is now, in seconds from its start: drawn on the part's track. */
+    playhead(seconds) {
+      if (open && !busy) range.setCursor(seconds);
+    },
+    /**
+     * The round was moved by hand (the timeline, the skip buttons): the part
+     * moves with it, keeping its length, starting where the round now is.
+     */
+    followPlayhead(seconds) {
+      if (!open || busy || !Number.isFinite(seconds)) return;
+      const { from, to } = range.get();
+      const len = Math.max(0, to - from);
+      const start = Math.max(0, Math.min(seconds, rangeTotal - len));
+      range.set(start, start + len);
+      range.setCursor(seconds);
+      paintRange();
     },
     /** The round on screen changed: the range belongs to the old one. */
     roundChanged() {

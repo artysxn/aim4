@@ -18,10 +18,12 @@
  * @param {number} [opts.to]
  * @param {number} [opts.step]
  * @param {string} [opts.label]  what the pair is selecting, for screen readers
- * @param {(from: number, to: number) => void} [opts.onChange]
+ * @param {(from: number, to: number, moved: 'from'|'to') => void} [opts.onChange]
+ *   called as a handle is dragged, with the handle that moved
  * @returns {{ el: HTMLElement, get: () => {from: number, to: number},
  *   set: (from: number, to: number) => void,
- *   setMarks: (marks: Array<{ at: number, color?: string }>) => void }}
+ *   setMarks: (marks: Array<{ at: number, color?: string }>) => void,
+ *   setCursor: (at: number|null) => void }}
  */
 export function createRangeSlider({
   min = 0,
@@ -66,14 +68,18 @@ export function createRangeSlider({
       else hi = Math.max(v, lo);
       node.value = String(which === 'lo' ? lo : hi);
       paint();
-      onChange(lo, hi);
+      onChange(lo, hi, which === 'lo' ? 'from' : 'to');
     });
     return node;
   };
 
   const loEl = input('lo');
   const hiEl = input('hi');
-  el.append(track, marksEl, loEl, hiEl);
+  // Where a linked player is now (the round viewer's playhead), drawn over the track.
+  const cursorEl = document.createElement('span');
+  cursorEl.className = 'rs-cursor';
+  cursorEl.hidden = true;
+  el.append(track, marksEl, cursorEl, loEl, hiEl);
 
   // Whichever handle the pointer is nearer to comes to the front, so a pair
   // sitting on top of each other can still be pulled apart in either
@@ -124,6 +130,11 @@ export function createRangeSlider({
       hi = Math.max(lo, Math.min(max, nextTo));
       paint();
     },
-    setMarks: paintMarks
+    setMarks: paintMarks,
+    setCursor(at) {
+      const v = Number(at);
+      cursorEl.hidden = at == null || !Number.isFinite(v);
+      if (!cursorEl.hidden) cursorEl.style.left = `${((Math.max(min, Math.min(max, v)) - min) / span) * 100}%`;
+    }
   };
 }
