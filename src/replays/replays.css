@@ -742,6 +742,50 @@ button.rp-side-name:hover {
   height: 18px;
 }
 
+/* Round result: Won / Lost, T won / CT won, then Dominance, one under the other. */
+.rp-result-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.rp-seg-result .rp-seg-btn {
+  padding: 8px 6px;
+}
+
+/* Dominance: a flat field holding its name, its value and the slider. */
+.rp-dom-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 7px 10px 6px;
+  border-radius: var(--radius-sm, 8px);
+  background: var(--aim-ctrl-bg, #050505);
+  color: var(--aim-ctrl-text, #5c5c62);
+  font-size: 12px;
+}
+
+.rp-dom-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+/* Grey until a handle moves: a full red track would read as a filter that is on. */
+.rp-dom-field:not(.is-on) {
+  --accent: #5c5c62;
+}
+
+.rp-dom-field.is-on .rp-dom-read {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.rp-dom-range .rs {
+  min-width: 0;
+}
+
 .rp-seg-decided .rp-seg-btn {
   padding: 9px 8px;
   font-size: 11px;

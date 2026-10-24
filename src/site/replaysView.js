@@ -65,6 +65,7 @@ import bookmarkIcon from '../icons/demos_bookmarks_added.svg?raw';
 import { mbWrap } from '../icons/menubuttons.js';
 import { spinnerHtml, watchSlowLoad } from '../lib/spinner.js';
 import { yieldToPaint } from '../lib/frameBudget.js';
+import { createRangeSlider } from '../lib/rangeSlider.js';
 import { capabilityDef } from '../../shared/entitlements/catalogue.js';
 import { CAP } from '../../shared/entitlements/keys.js';
 
@@ -246,12 +247,12 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     /** @type {''|'T'|'CT'} */
     winnerSide: '',
     /**
-     * Least dominance a round needs (0-100): how little win chance the side
-     * gave up on the way. Whose: the picked team's side, else the Side filter,
-     * else the side that won.
-     * @type {number|null}
+     * Dominance a round must fall between (0-100): how little win chance the
+     * side gave up on the way. Whose: the picked team's side, else the Side
+     * filter, else the side that won. 0 to 100 is off.
      */
-    dominanceMin: null,
+    dominanceMin: 0,
+    dominanceMax: 100,
     /** @type {number|null} */
     econA: null,
     /** @type {number|null} */
@@ -283,6 +284,11 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     rankOwn: '',
     rankOpp: ''
   };
+  /** Why the last Dominance read failed, shown in place of the list; '' when it worked. */
+  let dominanceError = '';
+  /** Round file -> its dominance for both sides, as the server worked it out (null: none). */
+  const dominanceByFile = new Map();
+
   /** @type {Map<string, object|null>} */
   const roundMetaCache = new Map();
   /** Round-library tags from the stats index, keyed by round file. */
@@ -2383,43 +2389,92 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       </div>`;
   }
 
-  function wonBySelectHtml() {
+  /** Two-way switch: clicking the lit button again turns it off. */
+  function resultSegHtml(attr, current, options, { disabled = false, title = '', label = '' } = {}) {
+    return `<div class="rp-seg rp-seg-result" role="group" aria-label="${label}"${title ? ` title="${title}"` : ''}>
+      ${options
+        .map(
+          ([value, text, tip]) =>
+            `<button type="button" class="rp-seg-btn${current === value ? ' active' : ''}" ${attr}="${value}"${
+              tip ? ` title="${tip}"` : ''
+            }${disabled ? ' disabled' : ''}>${text}</button>`
+        )
+        .join('')}
+    </div>`;
+  }
+
+  /** Did the picked team win or lose the round. */
+  function wonBySegHtml() {
     const hasTeams = filters.teams.size > 0;
-    const mode = filters.wonByMode;
-    return mbWrap(
-      'star',
-      `<select id="rp-won-by" class="site-input rp-econ-select" ${hasTeams ? '' : 'disabled'}
-        aria-label="Round winner" title="${hasTeams ? '' : 'Select a team first'}">
-        <option value=""${mode === '' ? ' selected' : ''}>Round winner...</option>
-        <option value="selected"${mode === 'selected' ? ' selected' : ''}>Selected team</option>
-        <option value="opponent"${mode === 'opponent' ? ' selected' : ''}>Opponent</option>
-      </select>`
+    return resultSegHtml(
+      'data-won-by',
+      hasTeams ? filters.wonByMode : '',
+      [
+        ['selected', 'Won', 'Rounds the selected team won'],
+        ['opponent', 'Lost', 'Rounds the selected team lost']
+      ],
+      { disabled: !hasTeams, title: hasTeams ? '' : 'Select a team first', label: 'Round winner' }
     );
   }
 
-  function winnerSideSelectHtml() {
-    const v = filters.winnerSide;
-    return mbWrap(
-      'star',
-      `<select id="rp-winner-side" class="site-input rp-econ-select" aria-label="Winner side">
-        <option value=""${v === '' ? ' selected' : ''}>Winner side...</option>
-        <option value="T"${v === 'T' ? ' selected' : ''}>T won</option>
-        <option value="CT"${v === 'CT' ? ' selected' : ''}>CT won</option>
-      </select>`
+  /** Which side won the round, read from the round itself. */
+  function winnerSideSegHtml() {
+    return resultSegHtml(
+      'data-winner-side',
+      filters.winnerSide,
+      [
+        ['T', 'T won', ''],
+        ['CT', 'CT won', '']
+      ],
+      { label: 'Winner side' }
     );
   }
 
-  const DOMINANCE_STEPS = [50, 60, 70, 80, 90, 100];
+  function dominanceActive() {
+    return filters.dominanceMin > 0 || filters.dominanceMax < 100;
+  }
 
-  function dominanceSelectHtml() {
-    const v = filters.dominanceMin;
-    return mbWrap(
-      'star',
-      `<select id="rp-dominance" class="site-input rp-econ-select" aria-label="Dominance">
-        <option value=""${v == null ? ' selected' : ''}>Dominance...</option>
-        ${DOMINANCE_STEPS.map((n) => `<option value="${n}"${v === n ? ' selected' : ''}>Dominance ${n === 100 ? '100' : `${n}+`}</option>`).join('')}
-      </select>`
-    );
+  function dominanceReadout() {
+    if (!dominanceActive()) return 'Any';
+    if (filters.dominanceMin === filters.dominanceMax) return String(filters.dominanceMin);
+    return `${filters.dominanceMin} to ${filters.dominanceMax}`;
+  }
+
+  /** A flat field with its name and value, and a two-handle slider under them; mounted by mountDominanceRange. */
+  function dominanceRangeHtml() {
+    return `<div class="rp-dom-field${dominanceActive() ? ' is-on' : ''}"
+      title="Read for the selected team, else the side in the Side filter, else the side that won">
+      <div class="rp-dom-head">
+        <span>Dominance</span>
+        <span class="rp-dom-read" id="rp-dom-read">${dominanceReadout()}</span>
+      </div>
+      <div class="rp-dom-range" id="rp-dom-range"></div>
+    </div>`;
+  }
+
+  /** The slider is an element, not markup: mounted into its slot each time the sidebar is drawn. */
+  function mountDominanceRange() {
+    const slot = filtersEl?.querySelector('#rp-dom-range');
+    if (!slot) return;
+    const read = filtersEl.querySelector('#rp-dom-read');
+    const field = slot.closest('.rp-dom-field');
+    const range = createRangeSlider({
+      min: 0,
+      max: 100,
+      from: filters.dominanceMin,
+      to: filters.dominanceMax,
+      step: 5,
+      label: 'Dominance',
+      onChange(from, to) {
+        filters.dominanceMin = Math.round(from);
+        filters.dominanceMax = Math.round(to);
+        if (read) read.textContent = dominanceReadout();
+        field?.classList.toggle('is-on', dominanceActive());
+      }
+    });
+    slot.replaceChildren(range.el);
+    // The list is asked again when a handle is let go, not on every step of a drag.
+    range.el.addEventListener('change', () => runQuery());
   }
 
   function renderFilters() {
@@ -2472,9 +2527,11 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       </div>
       ${sideSegHtml(sideEnabled)}
       <div class="rp-filter-group">
-        ${teamClusters.length ? wonBySelectHtml() : ''}
-        ${winnerSideSelectHtml()}
-        ${dominanceSelectHtml()}
+        <div class="rp-result-stack">
+          ${teamClusters.length ? wonBySegHtml() : ''}
+          ${winnerSideSegHtml()}
+          ${dominanceRangeHtml()}
+        </div>
       </div>
       ${roundTypeFilterHtml()}
       <div class="rp-filter-group">
@@ -2537,23 +2594,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       });
     });
 
-    filtersEl.querySelector('#rp-winner-side')?.addEventListener('change', (e) => {
-      const v = e.target.value;
-      filters.winnerSide = v === 'T' || v === 'CT' ? v : '';
-      runQuery();
-    });
-
-    filtersEl.querySelector('#rp-dominance')?.addEventListener('change', (e) => {
-      const n = Number(e.target.value);
-      filters.dominanceMin = e.target.value !== '' && Number.isFinite(n) ? n : null;
-      runQuery();
-    });
-
-    filtersEl.querySelector('#rp-won-by')?.addEventListener('change', (e) => {
-      const v = e.target.value;
-      filters.wonByMode = v === 'selected' || v === 'opponent' ? v : '';
-      runQuery();
-    });
+    mountDominanceRange();
 
     filtersEl.querySelector('#rp-map-toggle')?.addEventListener('click', (e) => {
       e.preventDefault();
@@ -2573,7 +2614,8 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       filters.players.clear();
       filters.wonByMode = '';
       filters.winnerSide = '';
-      filters.dominanceMin = null;
+      filters.dominanceMin = 0;
+      filters.dominanceMax = 100;
       filters.econA = null;
       filters.econB = null;
       filters.hasAwpA = false;
@@ -2735,6 +2777,22 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       const next = scopeBtn.dataset.libraryScope === 'mine' ? 'mine' : 'public';
       if (filters.libraryScope === next) return;
       filters.libraryScope = next;
+      renderFilters();
+      runQuery();
+      return;
+    }
+    const wonBtn = e.target.closest('[data-won-by]');
+    if (wonBtn && !wonBtn.disabled) {
+      const v = wonBtn.dataset.wonBy === 'opponent' ? 'opponent' : 'selected';
+      filters.wonByMode = filters.wonByMode === v ? '' : v;
+      renderFilters();
+      runQuery();
+      return;
+    }
+    const winSideBtn = e.target.closest('[data-winner-side]');
+    if (winSideBtn) {
+      const v = winSideBtn.dataset.winnerSide === 'CT' ? 'CT' : 'T';
+      filters.winnerSide = filters.winnerSide === v ? '' : v;
       renderFilters();
       runQuery();
       return;
@@ -2901,7 +2959,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
         filters.players.size ||
         filters.wonByMode ||
         filters.winnerSide ||
-        filters.dominanceMin != null ||
+        dominanceActive() ||
         Number.isFinite(filters.econA) ||
         Number.isFinite(filters.econB) ||
         filters.hasAwpA ||
@@ -3064,8 +3122,6 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     }
   }
 
-  /** Round file -> its dominance for both sides, as the server worked it out (null: none). */
-  const dominanceByFile = new Map();
 
   /** Whose dominance a round is read by: the picked team's side, else the Side filter, else the winner. */
   function dominanceOf(file) {
@@ -3082,8 +3138,25 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     return Number.isFinite(v) ? v : null;
   }
 
-  /** Keep rounds at or above the Dominance filter, asking the server for the ones not read yet. */
+  function withinDominance(file) {
+    const v = dominanceOf(file);
+    return v != null && v >= filters.dominanceMin && v <= filters.dominanceMax;
+  }
+
+  /** With Dominance on, the rounds already read can be shown; null while any is still unread. */
+  function knownDominance(list) {
+    if (!dominanceActive()) return list;
+    if (list.some((r) => r.file && !dominanceByFile.has(r.file))) return null;
+    return list.filter((r) => withinDominance(r.file));
+  }
+
+  /**
+   * Keep rounds inside the Dominance range, asking the server for the ones not
+   * read yet. A read that fails keeps nothing and says why: letting every round
+   * through would look exactly like a filter that matched them all.
+   */
   async function applyDominanceFilter(list, token) {
+    dominanceError = '';
     const missing = list.map((r) => r.file).filter((f) => f && !dominanceByFile.has(f));
     if (missing.length) {
       setQueryStatus(`Reading dominance: 0 of ${missing.length} rounds`);
@@ -3095,21 +3168,21 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
           }
         });
       } catch (err) {
-        setQueryStatus(err.message || 'Could not read round dominance.', true);
-        return list;
+        dominanceError = `Dominance could not be read: ${err.message || 'the server did not answer'}.`;
+        setQueryStatus('');
+        return [];
       }
       if (token !== queryToken) return list;
       if (!got) {
-        setQueryStatus('This server cannot filter by dominance yet.', true);
-        return list;
+        dominanceError =
+          'Dominance could not be read: the aim4 server this page talks to does not have it yet (it runs an older version than the page). It works once that server runs the latest update.';
+        setQueryStatus('');
+        return [];
       }
       for (const f of missing) dominanceByFile.set(f, got.get(f) || null);
     }
     setQueryStatus('');
-    return list.filter((r) => {
-      const v = dominanceOf(r.file);
-      return v != null && v >= filters.dominanceMin;
-    });
+    return list.filter((r) => withinDominance(r.file));
   }
 
   /** Load metas with limited concurrency, then keep rounds that pass advanced filters. */
@@ -3187,12 +3260,17 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     if (token !== queryToken) return;
     if (!switchingWindow) {
       // Filter against the demo index immediately so an empty filter always
-      // shows every round, even if the rounds API is slow or empty.
-      rounds = filterLibraryRounds(query);
-      if (needsMetaFilters()) setQueryStatus('Applying advanced filters…');
-      else setQueryStatus('');
-      renderResults();
-      resultEl?.removeAttribute('aria-busy');
+      // shows every round, even if the rounds API is slow or empty. With
+      // Dominance on, rounds not read yet wait for the server phase below
+      // rather than showing as matches.
+      const now = knownDominance(filterLibraryRounds(query));
+      if (now) {
+        rounds = now;
+        if (needsMetaFilters()) setQueryStatus('Applying advanced filters…');
+        else setQueryStatus('');
+        renderResults();
+        resultEl?.removeAttribute('aria-busy');
+      }
     }
 
     // Coalesce filter bursts. The paint above already reflects the new filter
@@ -3212,7 +3290,9 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
         setQueryStatus('');
       }
       rounds = filterLibraryRounds(query);
-      if (switchingWindow) {
+      const now = switchingWindow ? knownDominance(rounds) : null;
+      if (now) {
+        rounds = now;
         if (needsMetaFilters()) setQueryStatus('Applying advanced filters…');
         else setQueryStatus('');
         renderResults();
@@ -3266,7 +3346,8 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
         setQueryStatus('');
       }
 
-      if (filters.dominanceMin != null) {
+      dominanceError = '';
+      if (dominanceActive()) {
         const kept = await applyDominanceFilter(rounds, token);
         if (token !== queryToken) return;
         rounds = kept;
@@ -3430,7 +3511,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
         `<span class="rp-round-mark bookmark" title="In a playlist">${svgIcon(bookmarkIcon)}</span>`
       );
     }
-    if (filters.dominanceMin != null) {
+    if (dominanceActive()) {
       const dom = dominanceOf(r.file);
       if (dom != null) marks.unshift(`<span class="rp-round-dom" title="Dominance">${dom}</span>`);
     }
@@ -3610,9 +3691,11 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
         ${
           demoBlocks ||
           `<p class="view-empty">${
-            hasActiveFilters()
-              ? 'No demos match these filters.'
-              : 'No replays yet. Upload a package (or a .dem).'
+            dominanceError
+              ? escapeHtml(dominanceError)
+              : hasActiveFilters()
+                ? 'No demos match these filters.'
+                : 'No replays yet. Upload a package (or a .dem).'
           }</p>`
         }
       </div>

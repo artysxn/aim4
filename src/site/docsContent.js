@@ -125,9 +125,9 @@ export const DOC_GROUPS = [
             <li><strong>Search teams</strong> and <strong>Any map</strong>: pick one or more teams and maps.</li>
             <li><strong>Team 1's buy</strong> and <strong>Team 2's buy</strong> (pistol, eco, half buy, force buy, full buy), each with an <strong>AWP</strong> switch.</li>
             <li><strong>Side</strong> (T or CT): with one team picked, the side that team played.</li>
-            <li><strong>Round winner</strong>: the team you picked, or its opponent.</li>
-            <li><strong>Winner side</strong>: T won or CT won, read from the round's own result.</li>
-            <li><strong>Dominance</strong>: rounds a side won without giving much away. See <a href="#dominance">Dominance</a>.</li>
+            <li><strong>Won</strong> / <strong>Lost</strong>: rounds the team you picked won, or lost. Click the lit button again to turn it off.</li>
+            <li><strong>T won</strong> / <strong>CT won</strong>: the side that won, read from the round's own result.</li>
+            <li><strong>Dominance</strong>: a slider with two handles. Keep rounds whose dominance is between them, from clean wins (90 to 100) to scrappy rounds (0 to 40). See <a href="#dominance">Dominance</a>.</li>
             <li><strong>Round type</strong> and <strong>vs round type</strong>: the kind of round a side played on that map, and what the other side played against it. Pick one map and a side first.</li>
             <li><strong>Rank</strong>: the world ranking of each team at the time.</li>
             <li><strong>Decided Midround</strong> / <strong>Decided Lateround</strong>: when the round was really decided.</li>
@@ -162,11 +162,12 @@ export const DOC_GROUPS = [
           <p>The win chance comes from aim4's round model: players alive and their health, equipment, the bomb, the clock and the economy, read through the whole round.</p>
           <h3>Where you find it</h3>
           <ul>
-            <li><strong>Demo Manager</strong>: the Dominance filter (50+ to 100). It reads the dominance of the team you picked; with no team, the side in the Side filter; with neither, the side that won. Each round in the list then shows its number.</li>
+            <li><strong>Demo Manager</strong>: the Dominance slider. Drag the left handle up for clean rounds, or the right handle down for close ones. It reads the dominance of the team you picked; with no team, the side in the Side filter; with neither, the side that won. Each round in the list then shows its number.</li>
             <li><strong>Similar Rounds</strong> shows it on every result and can filter by it.</li>
           </ul>
           ${best([
-            'To study how a team wins cleanly, pick the team and the map, then Dominance 90+. Those rounds are the ones worth copying.',
+            'To study how a team wins cleanly, pick the team and the map, then drag Dominance to 90 to 100. Those rounds are the ones worth copying.',
+            'To find the rounds a team nearly threw, pick the team and Won, then drag Dominance down to 0 to 40.',
             'To find a team\'s best rounds on one side, set Side as well: Dominance then reads that side.',
             'The first time you filter a large library it takes a moment to read every round; after that it is instant.'
           ])}`

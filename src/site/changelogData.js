@@ -15,6 +15,17 @@
 export const CHANGELOG = Object.freeze([
   {
     date: '2026-10-24',
+    title: 'Demo Manager: Dominance fixed, clearer result filters',
+    tag: 'fixed',
+    points: [
+      'The Dominance filter no longer shows every round when the server cannot read dominance. Before, a failed read let every round through, so every setting looked the same. Now the list stays empty and says why.',
+      'While dominance is being read, the list waits instead of showing every round first.',
+      'Dominance is a slider with two handles instead of a dropdown, so you can ask for a range: 90 to 100 for clean wins, 0 to 40 for rounds that were nearly thrown. It stays grey until you move a handle.',
+      'Round winner and Winner side are switches instead of dropdowns: Won / Lost for the team you picked, and T won / CT won. Click the lit one again to turn it off.'
+    ]
+  },
+  {
+    date: '2026-10-24',
     title: 'GIFs: setpos for every grenade',
     tag: 'new',
     points: [
