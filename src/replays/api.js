@@ -1027,6 +1027,50 @@ export async function fetchRoundPacks(files, { stride = 100, ticks = true, meta 
 }
 
 /**
+ * Similar Rounds: scan the map for rounds like this one at this moment.
+ *
+ * Desktop app only. The scan runs in the app's own server (server/similar),
+ * on the PC's threads, and streams one JSON event per line: `phase`, `start`
+ * ({ total }), `progress` ({ done, total }), then `done` with the results or
+ * `error`. Anywhere else the route answers 404 with an explanation, which
+ * this throws.
+ *
+ * @param {{ file: string, tick: number, side: 'T'|'CT', both?: boolean,
+ *   mode?: 'round'|'drawing'|'both', strokes?: Array<{ side?: string, pts: number[][] }>,
+ *   team?: string }} ask
+ * @param {{ signal?: AbortSignal, onEvent: (event: object) => void }} opts
+ */
+export async function scanSimilarRounds(ask, { signal, onEvent }) {
+  const res = await safeFetch(`${API_BASE}/api/similar/scan`, {
+    method: 'POST',
+    headers: await headers({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify(ask),
+    signal
+  });
+  if (!res.ok || !res.body) {
+    const body = await res.json().catch(() => ({}));
+    const err = new Error(body.error || `Similar Rounds is not available here (${res.status}).`);
+    err.status = res.status;
+    throw err;
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let pending = '';
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (value) pending += decoder.decode(value, { stream: true });
+    let nl;
+    while ((nl = pending.indexOf('\n')) >= 0) {
+      const line = pending.slice(0, nl).trim();
+      pending = pending.slice(nl + 1);
+      if (line) onEvent(JSON.parse(line));
+    }
+    if (done) break;
+  }
+  if (pending.trim()) onEvent(JSON.parse(pending));
+}
+
+/**
  * Kill / death / assist / hit positions for many rounds (roundZoneEvents).
  *
  * Resolves to a Map file -> record|null, or to null when the server has no

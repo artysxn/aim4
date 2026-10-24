@@ -27,20 +27,43 @@ const EXTS = ['.js', '.mjs', '.html', '.css', '.md', '.json'];
 const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'data', 'vrf', 'sampledemos', 'simdata']);
 
 /**
- * A UTF-8 lead byte as cp1252 renders it, followed by a continuation byte's
- * rendering. A mangled degree sign or em dash matches; a well-formed one does
- * not, because a lone accented letter is never followed by a C1 character.
+ * A UTF-8 lead byte as cp1252 renders it, followed by its continuation bytes'
+ * renderings. A mangled degree sign or em dash matches; a well-formed one does
+ * not.
  *
  * Built from code points rather than written literally, so this file cannot
  * itself be the thing that breaks — and so it does not trip its own check.
  */
-const LEAD = 'Â-ßà-ïð-ô';
 const CONT =
   '- -¿' +
   '€‚ƒ„…†‡ˆ‰Š‹' +
   'ŒŽ‘’“”•–—˜™' +
   'š›œžŸ';
-const MOJIBAKE = new RegExp(`[${LEAD}][${CONT}]`, 'u');
+
+/**
+ * A lead byte says how many continuation bytes follow it, and a mangled run
+ * carries exactly that many: one after a two-byte lead, two after a
+ * three-byte lead, three after a four-byte lead. Without the count, an
+ * accented letter that really does sit before an ellipsis (Finnish and French
+ * "loading..." strings) reads as a run, because cp1252 puts the ellipsis
+ * among the continuation bytes.
+ */
+const LEAD2 = '\u00C2-\u00DF';
+const LEAD3 = '\u00E0-\u00EF';
+const LEAD4 = '\u00F0-\u00F4';
+const MOJIBAKE = new RegExp(
+  `[${LEAD2}][${CONT}]|[${LEAD3}][${CONT}]{2}|[${LEAD4}][${CONT}]{3}`,
+  'u'
+);
+
+// The pattern itself: a mangled em dash and degree sign are caught, an
+// accented letter before an ellipsis is not.
+for (const bad of ['\u00E2\u20AC\u201D', '\u00C2\u00B0']) {
+  if (!MOJIBAKE.test(bad)) throw new Error(`pattern misses ${JSON.stringify(bad)}`);
+}
+for (const good of ['linkki\u00E4\u2026"', 'class\u00E9\u2026', 'partag\u00E9\u2026"']) {
+  if (MOJIBAKE.test(good)) throw new Error(`pattern flags ${JSON.stringify(good)}`);
+}
 
 function* walk(dir) {
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {

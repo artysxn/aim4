@@ -136,6 +136,8 @@ pub fn start(cfg: &Config) -> Result<Host, String> {
     cmd.arg(script)
         .current_dir(&cfg.repo)
         .env("AIM4_API_PORT", port.to_string())
+        // The app's own server, whatever script it runs: Similar Rounds scans here.
+        .env("AIM4_DESKTOP", "1")
         .stdin(Stdio::null())
         .stdout(log)
         .stderr(log_err);

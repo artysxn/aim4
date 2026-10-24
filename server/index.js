@@ -24,6 +24,7 @@ import { tryServeStatic, distExists } from './static.js';
 import { handleReplayRequest } from './replays/routes.js';
 import { handleRecorderRequest } from './recorder/routes.js';
 import { handleEyeRequest } from './eye/routes.js';
+import { handleSimilarRequest } from './similar/routes.js';
 import { eyeRelay } from './eye/relay.js';
 import { handleSampleDemoRequest } from './replays/sampleDemos.js';
 import { handleTeamRequest } from './replays/teamRoutes.js';
@@ -196,6 +197,12 @@ const server = http.createServer(async (req, res) => {
     // aim4 eye: linking the desktop app, and chats relayed to it. Streams its
     // answers back as server-sent events, so it reads its own bodies.
     if (url.pathname.startsWith('/api/eye/') && (await handleEyeRequest(req, res, url))) {
+      return;
+    }
+
+    // Similar Rounds: the desktop app's own scan over the library, on this
+    // PC's threads. Streams its progress, so it reads its own body.
+    if (url.pathname.startsWith('/api/similar/') && (await handleSimilarRequest(req, res, url))) {
       return;
     }
 

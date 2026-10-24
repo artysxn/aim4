@@ -10,9 +10,9 @@
 // the same person there, with the same plan and the same data.
 //
 // What stays on this machine is what only this machine can do: aim4 eye (the
-// relay to the model on this PC), the 3D asset packs read from disk, and the
+// relay to the model on this PC), the 3D asset packs read from disk, the
 // desktop app's update feed, so a local build is never replaced by the
-// published one.
+// published one, and the Similar Rounds scan, which runs on this PC's cores.
 //
 // Bytes are piped both ways as they come, so uploads, tick buffers and
 // streamed answers pass through without being held in memory.
@@ -32,7 +32,7 @@ import { CONNECT_TIMEOUT_MS, isNetworkError, isOnline, markOffline, noteToken, r
 export const UPSTREAM = String(process.env.AIM4_UPSTREAM || '').trim().replace(/\/$/, '');
 
 /** Routes that are answered here even with an upstream set. */
-const LOCAL_ONLY = ['/api/eye/', '/api/cs3d/', '/api/recorder', '/api/offline/'];
+const LOCAL_ONLY = ['/api/eye/', '/api/cs3d/', '/api/recorder', '/api/offline/', '/api/similar/'];
 /** The pages as well as the data (the desktop app's own server). */
 const SITE_UPSTREAM = process.env.AIM4_UPSTREAM_SITE === '1';
 

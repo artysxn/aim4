@@ -430,7 +430,10 @@ const tag = (k, at) => ({ k, m: at === null ? {} : { When: at } });
   assert.ok(html.includes('data-sort="faced"'), 'Faced is a column');
   assert.ok(html.includes('data-sort="facedRating"'), 'Faced rating sits next to Faced');
   assert.ok(html.includes('sorted'), 'a column is the default sort');
-  assert.ok(/data-sort="ran"[^>]*sorted|sorted[^>]*data-sort="ran"/.test(html), 'default sort is Ran');
+  assert.ok(
+    /data-sort="ranRating"[^>]*sorted|sorted[^>]*data-sort="ranRating"/.test(html),
+    'default sort is Ran rating, highest first'
+  );
   assert.ok(!html.includes('Grey'), 'no library-average caption');
   assert.ok(!html.includes('T rounds'), 'no T/CT section titles');
   assert.ok(html.includes('tm-rl-t'), 'T rows are tinted');

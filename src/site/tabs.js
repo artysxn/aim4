@@ -1,9 +1,10 @@
 // ---------------------------------------------------------------------------
 // src/site/tabs.js
-// Browser-style tabs for the site. The top window holds a strip of tabs and one
-// frame per tab; each frame runs the whole site on its own, so a tab keeps its
-// scroll, its page and any work in progress (an aim4 eye answer keeps streaming
-// in the background) while you look at another one.
+// Browser-style tabs for the desktop app, which has no browser chrome of its
+// own (entry.js mounts them only there). The top window holds a strip of tabs
+// and one frame per tab; each frame runs the whole site on its own, so a tab
+// keeps its scroll, its page and any work in progress (an aim4 eye answer
+// keeps streaming in the background) while you look at another one.
 // ---------------------------------------------------------------------------
 
 const STORE = 'aim4.tabs';

@@ -71,7 +71,10 @@ import duelsIcon from '../../icons/demos_duels.svg?raw';
 import povIcon from '../../icons/demo_pov.svg?raw';
 import mechanicsIcon from '../../icons/demo_mechanics.svg?raw';
 import commsIcon from '../../icons/sideicons/sideicon_comms.svg?raw';
+import similarIcon from '../../icons/demos_similar.svg?raw';
 import { commsSidebarHtml, commsSidebarKey, createCommsController } from './commsOverlay.js';
+import { createSimilarRounds } from './similarRounds.js';
+import { desktopApp } from '../../site/desktopApp.js';
 import { createPovVision, povDuelOverlay, povZonePaint } from './teamPov.js';
 import { rememberRound } from '../../site/homeView.js';
 import { createDuelOverlay } from '../duels/duelOverlay.js';
@@ -195,6 +198,12 @@ export function createTimelineViewer({
    * A playlist spanning several demos has no answer here, and gets no button.
    */
   const commsDemoId = statsDemoId || soleDemoId(rounds);
+
+  /**
+   * Similar Rounds scans the map on the PC's own threads, in the desktop
+   * app's server, so the button exists only inside the app.
+   */
+  const similarAvailable = Boolean(desktopApp());
 
   const el = document.createElement('div');
   el.className = 'rv-timeline';
@@ -364,6 +373,9 @@ export function createTimelineViewer({
              when they do. Hardcoding active here left every other tier with
              a lit button and no panel. -->
         <button type="button" class="rv-tool" id="rv-chart" title="Win chance chart">${icon(chartIcon)}</button>
+        <button type="button" class="rv-tool" id="rv-similar" title="Similar rounds" ${
+          similarAvailable ? '' : 'hidden'
+        }>${icon(similarIcon)}</button>
         <button type="button" class="rv-tool" id="rv-duels"
           title="Duel stats: xK beside fighters; hover a player or line for win %">${icon(duelsIcon)}</button>
         <button type="button" class="rv-tool" id="rv-pov"
@@ -5152,6 +5164,37 @@ export function createTimelineViewer({
     enterCoachRoundMoment();
   }
 
+  // ---- similar rounds -----------------------------------------------------
+  // The panel reads the viewer when Scan is pressed: this round, the moment on
+  // the clock, and the strokes drawn on it (similarRounds.js).
+  const similarBtn = el.querySelector('#rv-similar');
+  const similar = similarAvailable
+    ? createSimilarRounds({
+        escapeHtml,
+        getContext: () => {
+          const file = files[activeIndex];
+          const meta = (file && peekMeta(file)) || activeMeta;
+          if (!file || !meta) return null;
+          return {
+            file,
+            meta,
+            tick: playheadTick(),
+            mapCode: renderer.mapCode || meta.map || '',
+            strokes: drawing.strokes()
+          };
+        }
+      })
+    : null;
+  if (similar) {
+    el.querySelector('.rv-side-body')?.prepend(similar.el);
+    similar.onToggle((open) => similarBtn?.classList.toggle('active', open));
+    similarBtn?.addEventListener('click', () => {
+      const open = similar.toggle();
+      similarBtn.classList.toggle('active', open);
+      if (open) setSideOpen(true);
+    });
+  }
+
   chartBtn?.addEventListener('click', async () => {
     if (!chartOn && !spentRoundWin) {
       if (!(await useMeteredFeature(CAP.DEMOS_ROUND_WIN_PREDICTION, { host: el }))) return;
@@ -6090,6 +6133,7 @@ export function createTimelineViewer({
         noteSaveTimer = 0;
       }
       cancelViewAnim();
+      similar?.destroy();
       playback.destroy();
       // The store outlives this view (the mode switch reuses it), so retire the
       // prefetch rather than clearing what it loaded.
