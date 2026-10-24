@@ -15,6 +15,23 @@
 export const CHANGELOG = Object.freeze([
   {
     date: '2026-10-24',
+    title: 'Dominance in Demo Manager, GIFs on the timeline, new documentation',
+    tag: 'improved',
+    points: [
+      'Demo Manager has a Dominance filter, next to Round winner and Winner side. Pick 50+, 60+, 70+, 80+, 90+ or 100 to keep only the rounds a side won without giving much away. 100 means its win chance never dropped once; 90 means it gave up 10 points of win chance in total on the way.',
+      'Dominance reads the team you picked. With no team picked it reads the side in the Side filter, and with neither it reads the side that won. Combine it with a team, a map and a side to find a team\'s cleanest rounds in one step.',
+      'Every round in the list shows its dominance next to its marks while the filter is on. The first time you filter a large library it reads every round once; after that the same filter is instant.',
+      'The GIF creator\'s part of the round is now tied to the round\'s own timeline, both ways. Drag either end of the part and the round jumps to that moment, so you see exactly where the GIF starts and stops. Drag the round\'s timeline, or skip back and forward, and the part moves with it and keeps its length.',
+      'A white line on the GIF slider shows where the round is right now. A part that starts in the buy time stays in the buy time instead of skipping ahead to the round going live.',
+      'GIFs bigger than Bookmarks keep (40 MB) no longer fail to save. The full GIF still downloads, and a smaller copy that fits is made in the background and saved to Bookmarks. The creator says how big each one is, and the size, resolution and FPS of the copy it saved.',
+      'Long 3D GIFs at full quality no longer end with "Failed to fetch". When a smaller copy cannot be made in your browser, the creator says why and what to lower: the quality, the FPS or the length.',
+      'Saved GIFs and saving a GIF now say plainly when the aim4 server you are on is older than the page, instead of "Not found". In the desktop app, closing and opening it again starts its newest server.',
+      'The documentation is rewritten from top to bottom. It covers every part of the site, grouped the same way as the sidebar: your demos, watching rounds, stats and scouting, aim4 eye, team tools, training and your account.',
+      'Every section says what the feature is for, what to click and what comes back, and ends with how to use it for the best results. A search field above the section list narrows the page to the sections that mention what you type, and the list follows where you are on the page.'
+    ]
+  },
+  {
+    date: '2026-10-24',
     title: 'Major update: GIFs, Bookmarks and share links',
     tag: 'new',
     points: [

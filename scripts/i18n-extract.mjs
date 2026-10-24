@@ -42,7 +42,7 @@ const TARGET = path.join(ROOT, 'src', 'i18n', 'catalogue.en.json');
 const SURFACES = [
   ['shell', ['index.html', 'src/site/site.js', 'src/site/homeView.js', 'src/i18n/picker.js', 'src/site/mobileMode.js', 'src/site/notify.js', 'src/site/profileModal.js', 'src/site/ingestReminder.js']],
   ['account', ['src/site/account', 'src/site/upgradeGate.js', 'src/site/integrity.js', 'shared/entitlements/catalogue.js']],
-  ['pages', ['src/site/docsView.js', 'src/site/changelogData.js', 'src/site/changelogView.js', 'src/site/contactView.js', 'src/site/legalView.js', 'src/site/playerProfileView.js']],
+  ['pages', ['src/site/docsView.js', 'src/site/docsContent.js', 'src/site/changelogData.js', 'src/site/changelogView.js', 'src/site/contactView.js', 'src/site/legalView.js', 'src/site/playerProfileView.js']],
   ['training', ['src/site/trainingView.js', 'src/site/routinesView.js', 'src/site/leaderboardsView.js', 'src/site/mapPracticeView.js', 'src/site/activityCalendarView.js', 'src/lib/gamemodeCatalog.js', 'src/lib/routines.js', 'src/lib/aim4Ratings.js', 'src/lib/coachNotes.js', 'src/lib/spinner.js', 'src/lib/accountStats.js']],
   ['demos', ['src/site/replaysView.js', 'src/site/replayViewerView.js', 'src/replays/api.js', 'src/replays/viewer', 'src/replays/stats', 'src/replays/charts', 'src/replays/performance', 'src/replays/creator', 'src/replays/shared', 'src/replays/rounds', 'src/replays/duels', 'src/replays/models']],
   ['team', ['src/site/teamView.js', 'src/site/docsEditor.js', 'src/site/docEmbeds.js', 'src/site/drawingBoard.js', 'src/site/utilityArchive.js', 'src/site/strategyCreatorView.js', 'src/site/teamComms', 'src/site/stratNoteLinks.js']],

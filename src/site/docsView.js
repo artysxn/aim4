@@ -2,142 +2,219 @@
 // src/site/docsView.js
 // /docs: how to use the website, on one page.
 //
-// One long page with a sticky section list, not a docs site: everything a
-// new user needs fits in a ten-minute read, and a single page can be
-// Cmd+F'd. Every claim in here describes something the site actually does —
-// the keyboard table lists the keys timelineViewer.js binds, nothing more.
+// One long page with a sticky section list, not a docs site: a single page
+// can be Cmd+F'd, and the search field above the list narrows both sides to
+// the sections that mention every word typed. What the page says lives in
+// docsContent.js; this file only lays it out.
 // ---------------------------------------------------------------------------
 
-const SECTIONS = [
-  { id: 'start', label: 'Getting started' },
-  { id: 'upload', label: 'Uploading demos' },
-  { id: 'watch', label: 'Watching demos' },
-  { id: 'keys', label: 'Keyboard shortcuts' },
-  { id: 'comms', label: 'Voice comms' },
-  { id: 'stats', label: 'Stats and analytics' },
-  { id: 'team', label: 'Team tools' },
-  { id: 'practice', label: 'Practice' },
-  { id: 'plans', label: 'Plans and storage' },
-  { id: 'terms', label: 'Terms of service' },
-  { id: 'privacy', label: 'Privacy' },
-  { id: 'help', label: 'Getting help' }
-];
-
-const KEYS = [
-  ['Space', 'Play / pause'],
-  ['← / →', 'Step 2 seconds (hold Shift for 10)'],
-  ['O / P', 'Jump 15 seconds back / forward'],
-  ['J / K', 'Previous / next round'],
-  ['M', 'Cycle playback speed'],
-  ['1–0', 'Spectate a player by seat'],
-  ['V', 'Toggle POV'],
-  ['Tab (hold)', 'Stats board'],
-  ['F', '3D: follow the spectated player'],
-  ['G', '3D: free camera'],
-  ['X', '3D: x-ray through walls'],
-  ['Q (hold)', '3D: radar overview'],
-  ['Scroll', '3D: cycle cameras'],
-  ['E', 'Clear your drawings'],
-  ['S', 'Copy a setpos for the hovered player']
-];
+import { DOC_GROUPS, KEYS } from './docsContent.js';
 
 export function initDocsView(host, { escapeHtml }) {
   if (!host) return { onShow() {}, onHide() {} };
-  let rendered = false;
   const esc = escapeHtml;
+  let rendered = false;
+  /** @type {{ id: string, el: HTMLElement, link: HTMLElement, group: HTMLElement, navGroup: HTMLElement, text: string }[]} */
+  let index = [];
+  let observer = null;
+  let emptyEl = null;
+
+  const keysHtml = () => `
+    <div class="docs-table-wrap"><table class="docs-keys">
+      <tbody>
+        ${KEYS.map(([k, what]) => `<tr><td><kbd>${esc(k)}</kbd></td><td>${esc(what)}</td></tr>`).join('')}
+      </tbody>
+    </table></div>`;
 
   function render() {
     if (rendered) return;
     rendered = true;
+    const nav = DOC_GROUPS.map(
+      (g, gi) => `
+        <div class="docs-nav-group" data-group="${gi}">
+          <div class="docs-nav-label">${esc(g.label)}</div>
+          ${g.sections.map((s) => `<a href="#${s.id}" data-doc="${s.id}">${esc(s.title)}</a>`).join('')}
+        </div>`
+    ).join('');
+    const main = DOC_GROUPS.map(
+      (g, gi) => `
+        <div class="docs-group" data-group="${gi}">
+          <div class="docs-group-label">${esc(g.label)}</div>
+          ${g.sections
+            .map(
+              (s) => `
+            <section id="${s.id}" data-doc="${s.id}">
+              <h2>${esc(s.title)}</h2>
+              ${s.id === 'keys' ? keysHtml() : s.html}
+            </section>`
+            )
+            .join('')}
+        </div>`
+    ).join('');
+
     host.innerHTML = `
       <div class="view-pad docs-layout">
         <nav class="docs-nav" aria-label="Sections">
-          ${SECTIONS.map((s) => `<a href="#${s.id}">${esc(s.label)}</a>`).join('')}
+          <input type="search" class="site-input docs-search" placeholder="Search the docs"
+            aria-label="Search the docs" spellcheck="false" autocomplete="off" />
+          <div class="docs-nav-list">${nav}</div>
         </nav>
         <div class="docs-main page-narrow">
-          <header class="page-head-block">
-            <h1>How to use aim4</h1>
-            <p class="page-lede">Everything on this page exists on the site today. Ten minutes here covers it all; the <a href="/changelog">changelog</a> covers what is new.</p>
-          </header>
-
-          <section id="start">
-            <h2>Getting started</h2>
-            <p>You can watch demos, browse the database, and practise on every map <strong>without an account</strong>. An account adds uploads, teams, playlists, and settings that follow you between devices.</p>
-            <p>Two ways in: <strong>Continue with Google</strong>, or create an account with just a <strong>username and password</strong>. A username account does everything except upload demos — for that, link Google or Steam once under <a href="/account">Account</a> → Connections, so every demo in the shared library has a real identity behind it.</p>
-          </section>
-
-          <section id="upload">
-            <h2>Uploading demos</h2>
-            <p>Go to <a href="/uploads">My Uploads</a> and drag a <code>.dem</code> file in — or a <code>.zip</code>, <code>.rar</code> or <code>.gz</code> holding several. The server unpacks, parses each map, names the teams, and files the rounds into your library. A best-of-three archive becomes its maps automatically.</p>
-            <p>Everything you upload counts toward one storage meter — demos, extracted rounds, and voice comms together. Check it under <a href="/account/data">Account → Data</a>.</p>
-          </section>
-
-          <section id="watch">
-            <h2>Watching demos</h2>
-            <p>Open any match from <a href="/demos">Demo Manager</a> or the <a href="/database">Database</a>. The viewer starts on the 2D radar; the <strong>3D button</strong> rebuilds the round inside the real map, in your browser. The two views share one clock — switch mid-round and nothing moves.</p>
-            <p>The toolbar holds the rest: <strong>drawing tools</strong> for sketching executes on the radar, <strong>zones</strong> for position names, the <strong>win chance chart</strong>, the <strong>duels</strong> panel, <strong>coach</strong> notes flagging one team's mistakes, <strong>playlists</strong> for collecting rounds across matches, and <strong>notes</strong>. Every round has its own link — share the exact moment, and it works for people without an account.</p>
-          </section>
-
-          <section id="keys">
-            <h2>Keyboard shortcuts</h2>
-            <div class="docs-table-wrap"><table class="docs-keys">
-              <tbody>
-                ${KEYS.map(([k, what]) => `<tr><td><kbd>${esc(k)}</kbd></td><td>${esc(what)}</td></tr>`).join('')}
-              </tbody>
-            </table></div>
-          </section>
-
-          <section id="comms">
-            <h2>Voice comms</h2>
-            <p>The <strong>mic button</strong> in the viewer attaches a recorded TeamSpeak session to a demo. Captions appear over the player who spoke in 2D, and in a sidebar in 3D, synced to the round clock.</p>
-            <p>Recording is one small program you download from the site. It joins your TeamSpeak channel, records every speaker separately, and transcribes on your own machine — nothing leaves your PC until you upload the finished file. The sync ceremony is one sentence: during round 1's freeze time, say <em>"record, three, two, one"</em> so each number lands on that second of the freeze clock. Thirteen languages are supported, one per recording.</p>
-          </section>
-
-          <section id="stats">
-            <h2>Stats and analytics</h2>
-            <p>The <a href="/database">Database</a> is every parsed round, filterable by map, team, player, economy and more. <a href="/patterns">Pattern Finder</a> searches your whole library for rounds that match a setup, and its Charts chapter builds graphs from any stat column. <a href="/performance">Performance</a> tracks form over time. Upload your <em>opponents'</em> matches too and the antistrat tools read their habits.</p>
-          </section>
-
-          <section id="team">
-            <h2>Team tools</h2>
-            <p>On a team plan, <a href="/team">Team</a> unlocks the <strong>stratbook</strong> (strategies per map, linked to the demos that prove them), shared <strong>documents</strong>, the <strong>utility archive</strong>, a live <strong>drawing board</strong>, roles and positions, and team-wide match review. A team plan lends seats, so teammates get the plan without paying separately.</p>
-          </section>
-
-          <section id="practice">
-            <h2>Practice</h2>
-            <p>Every ported map is walkable in your browser: <a href="/dust2">aim4.io/dust2</a>, /mirage, /inferno, /nuke, /ancient, /anubis and /cache. Deathmatch with bots runs on all seven. Grenade practice uses real CS2 trajectories, wallbangs use CS2 penetration values, and the doors gamemode holds mid doors against real pro CT rounds. The <a href="/train">aim trainer</a> and <a href="/training">Play</a> modes run in the browser too.</p>
-          </section>
-
-          <section id="plans">
-            <h2>Plans and storage</h2>
-            <p>Free covers watching, browsing, and trying the tools. Paid plans raise upload limits, unlock full analytics, and add the team toolkit — the full feature matrix lives on <a href="/account/subscription">Account → Subscription</a>. When a plan lapses, nothing is deleted: over-limit demos lock and you choose what to keep.</p>
-          </section>
-
-          <section id="terms">
-            <h2>Terms of service</h2>
-            <p>The short version of the <a href="/terms">terms</a>: accounts are <strong>personal</strong> — one account, one person, and sharing is detected automatically (an account used from another country on different same-type hardware within hours gets a warning; a repeat means probation, where premium features pause until it is reviewed). Content you upload stays yours; you must have the right to upload it, which for voice recordings means everyone recorded agreed. Cancelling a plan keeps access to the end of the period, and a lapsed plan locks over-limit content rather than deleting it — with 90 days to export or trim. The full text is a five-minute read at <a href="/terms">aim4.io/terms</a>.</p>
-          </section>
-
-          <section id="privacy">
-            <h2>Privacy</h2>
-            <p>The short version of the <a href="/privacy">privacy page</a>: no ads, no third-party analytics, no selling data. aim4 keeps your account details, your content, and per-sign-in security data (IP, country, device) used only for the sharing checks — the country is looked up locally, so your IP never goes to a third party. Voice recordings are made and transcribed on <em>your</em> machine and only uploaded when you choose. Export everything or delete your account yourself under <a href="/account/data">Account → Data</a> — deletion has a 14-day grace window, cancelled by signing back in. Details at <a href="/privacy">aim4.io/privacy</a>.</p>
-          </section>
-
-          <section id="help">
-            <h2>Getting help</h2>
-            <p>Something broken, confusing, or missing? <a href="/contact">Open a ticket</a> — it lands directly with the site admin, and if you are signed in the reply comes back as a notification here. The <a href="/changelog">changelog</a> lists what shipped recently.</p>
-          </section>
+          <header class="page-head-block"><h1>How to use aim4</h1></header>
+          ${main}
+          <p class="docs-empty" hidden>Nothing found.</p>
         </div>
       </div>`;
+
+    emptyEl = host.querySelector('.docs-empty');
+    index = [...host.querySelectorAll('.docs-main section[data-doc]')].map((el) => {
+      const id = el.dataset.doc;
+      return {
+        id,
+        el,
+        link: host.querySelector(`.docs-nav a[data-doc="${id}"]`),
+        group: el.closest('.docs-group'),
+        navGroup: host.querySelector(`.docs-nav a[data-doc="${id}"]`)?.closest('.docs-nav-group'),
+        text: el.textContent.toLowerCase()
+      };
+    });
+
+    const search = host.querySelector('.docs-search');
+    search.addEventListener('input', () => filter(search.value));
+    search.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && search.value) {
+        search.value = '';
+        filter('');
+      }
+    });
+  }
+
+  /** Show the sections that mention every word of `query`, hide the rest. */
+  function filter(query) {
+    const words = String(query || '')
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(Boolean);
+    const shownGroups = new Set();
+    const shownNavGroups = new Set();
+    let shown = 0;
+    for (const s of index) {
+      const on = words.every((w) => s.text.includes(w) || s.id.includes(w));
+      s.el.hidden = !on;
+      if (s.link) s.link.hidden = !on;
+      if (on) {
+        shown++;
+        shownGroups.add(s.group);
+        shownNavGroups.add(s.navGroup);
+      }
+    }
+    for (const g of host.querySelectorAll('.docs-group')) g.hidden = !shownGroups.has(g);
+    for (const g of host.querySelectorAll('.docs-nav-group')) g.hidden = !shownNavGroups.has(g);
+    if (emptyEl) emptyEl.hidden = shown > 0;
+  }
+
+  /** Mark one section's link as the one being read, and keep it inside the list's own scroll. */
+  function setActive(id) {
+    let link = null;
+    for (const s of index) {
+      const on = s.id === id;
+      s.link?.classList.toggle('active', on);
+      if (on) link = s.link;
+    }
+    const list = host.querySelector('.docs-nav-list');
+    if (!list || !link) return;
+    // By hand, not scrollIntoView: that would move the page as well.
+    const above = link.offsetTop - list.offsetTop - list.scrollTop;
+    if (above < 0) list.scrollTop += above - 24;
+    else if (above + link.offsetHeight > list.clientHeight) list.scrollTop += above + link.offsetHeight - list.clientHeight + 24;
+  }
+
+  /**
+   * A section jumped to (a link, a deep link) stays marked until the reader
+   * scrolls themselves: the last few sections can never reach the top of the
+   * page, so the reading band alone would mark the one above them.
+   */
+  let pinned = '';
+  const unpin = () => {
+    pinned = '';
+  };
+  const onHash = () => {
+    const id = window.location.hash.slice(1);
+    if (!index.some((s) => s.id === id)) return;
+    pinned = id;
+    setActive(id);
+  };
+
+  /**
+   * Jump to a section on arrival. The page is still settling then (the site
+   * font, the phone layout), and every section above the target that reflows
+   * moves it, so for a few seconds it lands again on each change, until the
+   * reader scrolls themselves. Instant, not smooth: a smooth scroll aims at
+   * where the section was when it started.
+   */
+  let settle = null;
+  function land(id) {
+    const target = document.getElementById(id);
+    if (!target) return;
+    const jump = () => {
+      try {
+        target.scrollIntoView({ behavior: 'instant', block: 'start' });
+      } catch {
+        target.scrollIntoView();
+      }
+    };
+    jump();
+    onHash();
+    if (typeof ResizeObserver === 'undefined') return;
+    settle?.disconnect();
+    settle = new ResizeObserver(() => {
+      if (pinned === id) jump();
+    });
+    settle.observe(host.querySelector('.docs-main'));
+    setTimeout(() => {
+      settle?.disconnect();
+      settle = null;
+    }, 4000);
+  }
+
+  /** The section list follows the reading position. */
+  function watchPosition() {
+    if (observer || typeof IntersectionObserver === 'undefined') return;
+    const visible = new Set();
+    observer = new IntersectionObserver(
+      (entries) => {
+        for (const e of entries) {
+          if (e.isIntersecting) visible.add(e.target);
+          else visible.delete(e.target);
+        }
+        if (pinned) return;
+        const top = index.find((s) => visible.has(s.el));
+        if (top) setActive(top.id);
+      },
+      // The band just under the sticky page header: the section read now.
+      { rootMargin: '-90px 0px -65% 0px' }
+    );
+    for (const s of index) observer.observe(s.el);
+    window.addEventListener('hashchange', onHash);
+    for (const type of ['wheel', 'touchstart', 'keydown']) window.addEventListener(type, unpin, { passive: true });
   }
 
   return {
     onShow() {
       render();
+      watchPosition();
       // Deep links to a section land on it once the content exists.
       const hash = window.location.hash.slice(1);
-      if (hash) document.getElementById(hash)?.scrollIntoView();
+      // After the router's own scroll to the top, which runs once onShow returns.
+      if (hash) requestAnimationFrame(() => land(hash));
     },
-    onHide() {}
+    onHide() {
+      observer?.disconnect();
+      observer = null;
+      settle?.disconnect();
+      settle = null;
+      window.removeEventListener('hashchange', onHash);
+      for (const type of ['wheel', 'touchstart', 'keydown']) window.removeEventListener(type, unpin);
+    }
   };
 }
