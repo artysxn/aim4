@@ -11,17 +11,23 @@
 //
 // The finished GIF downloads straight away and goes to Bookmarks > Saved GIFs
 // with what it shows (map, both teams' sides and buys, who won) and the
-// title and description given here, ready to share by link.
+// title and description given here, ready to share by link. In 3D,
+// "Automatically append setpos" adds a line per grenade thrown in the part,
+// with the thrower's setpos as a copy link (gifSetpos.js).
 // ---------------------------------------------------------------------------
 
 import { createRangeSlider } from '../../lib/rangeSlider.js';
 import { clockAt, timingFor, totalSeconds } from '../viewer/roundClock.js';
 import { DEFAULT_FPS, MAX_FPS, MAX_SECONDS, MIN_FPS, clampFps, frameTicks, outputSize, qualityScale } from './gifCore.js';
-import { GIF_DESCRIPTION_MAX, GIF_TITLE_MAX, gifMetaFromRound } from './gifMeta.js';
+import { GIF_CREATOR_DESCRIPTION_MAX, GIF_DESCRIPTION_MAX, GIF_TITLE_MAX, gifMetaFromRound } from './gifMeta.js';
 import { captureGif, downloadBlob, gifFileName, gifShareUrl, saveGifFitting } from './gifCapture.js';
+import { appendSetposLines, utilitySetposLines } from './gifSetpos.js';
+import { updateGif } from '../api.js';
 
 /** Smallest area worth a GIF, in screen pixels. */
 const MIN_AREA_PX = 40;
+/** "Automatically append setpos": remembered, because whoever wants it once wants it every time. */
+const SETPOS_KEY = 'aim4.gif.appendSetpos';
 
 /**
  * @param {object} opts
@@ -41,6 +47,7 @@ const MIN_AREA_PX = 40;
  *   beginCapture(): object        pauses playback, returns what endCapture restores
  *   endCapture(state): void
  *   seekLocal(seconds): void      pauses and shows the round at seconds from its start
+ *   fullTrack(): TickTrack | Promise<TickTrack|null>  the round's every-tick data, for setpos
  *
  * The part of the round and the viewer's timeline move together: dragging an
  * end of the part shows the round there, and moving the round (the timeline,
@@ -86,11 +93,17 @@ export function createGifCreator({ panel, mapEl, canvas, photoIcon = '', escapeH
         </label>
       </div>
       <input type="text" class="site-input" data-gif-title maxlength="${GIF_TITLE_MAX}" placeholder="Title" aria-label="Title" />
-      <textarea class="site-input rv-gif-desc" data-gif-desc maxlength="${GIF_DESCRIPTION_MAX}" rows="3" placeholder="Description. <setpos ...> becomes a copy link." aria-label="Description"></textarea>
-      <label class="rv-strat-check">
-        <input type="checkbox" data-gif-clock checked />
-        <span>Round clock</span>
-      </label>
+      <textarea class="site-input rv-gif-desc" data-gif-desc maxlength="${GIF_CREATOR_DESCRIPTION_MAX}" rows="3" placeholder="Description. <setpos ...> becomes a copy link." aria-label="Description"></textarea>
+      <div class="rv-gif-checks">
+        <label class="rv-strat-check">
+          <input type="checkbox" data-gif-clock checked />
+          <span>Round clock</span>
+        </label>
+        <label class="rv-strat-check" data-gif-only="3d" hidden>
+          <input type="checkbox" data-gif-setpos />
+          <span>Automatically append setpos</span>
+        </label>
+      </div>
       <p class="rv-gif-est" data-gif-est></p>
       <button type="button" class="rv-playlist-strategy rv-gif-go" data-gif-go>${photoIcon}<span>CREATE GIF</span></button>
       <div class="rv-gif-progress" data-gif-progress hidden><span></span></div>
@@ -119,6 +132,7 @@ export function createGifCreator({ panel, mapEl, canvas, photoIcon = '', escapeH
   const titleInput = $('[data-gif-title]');
   const descInput = $('[data-gif-desc]');
   const clockInput = $('[data-gif-clock]');
+  const setposInput = $('[data-gif-setpos]');
   const estEl = $('[data-gif-est]');
   const goBtn = $('[data-gif-go]');
   const goLabel = goBtn.querySelector('span');
@@ -145,6 +159,32 @@ export function createGifCreator({ panel, mapEl, canvas, photoIcon = '', escapeH
   let savedId = '';
   /** fps the user typed for each view, so flipping 2D/3D keeps both. */
   const fpsFor = { '2d': DEFAULT_FPS['2d'], '3d': DEFAULT_FPS['3d'] };
+
+  try {
+    setposInput.checked = localStorage.getItem(SETPOS_KEY) === '1';
+  } catch {
+    /* storage blocked: off */
+  }
+  setposInput.addEventListener('change', () => {
+    try {
+      localStorage.setItem(SETPOS_KEY, setposInput.checked ? '1' : '0');
+    } catch {
+      /* storage blocked: this session only */
+    }
+    paintEstimate();
+  });
+
+  /** Setpos lines go in when the toggle is on and the GIF is 3D. */
+  const wantSetpos = () => kind === '3d' && setposInput.checked;
+
+  /** Grenades thrown between two ticks: what "Automatically append setpos" would write a line for. */
+  function throwsBetween(fromTick, toTick) {
+    const r = viewer.round();
+    return (r?.meta?.events?.grenades || []).filter((g) => {
+      const t = Number(g.throwTick);
+      return Number.isFinite(t) && t >= fromTick && t <= toTick;
+    }).length;
+  }
 
   /** Rebuilt for each round: a slider's ends are fixed when it is made, and rounds differ in length. */
   let rangeTotal = 1;
@@ -344,9 +384,10 @@ export function createGifCreator({ panel, mapEl, canvas, photoIcon = '', escapeH
     const ticks = frameTicks({ fromTick: tickOf(from), toTick: tickOf(to), tickRate: t.tickRate, fps, kind });
     const size = frameSize();
     const capped = to - from > MAX_SECONDS[kind] + 1e-6;
+    const throws = wantSetpos() && ticks.length ? throwsBetween(ticks[0], ticks[ticks.length - 1]) : 0;
     estEl.textContent = `${ticks.length} frames at ${fps} FPS, ${size.width} x ${size.height} (${Math.round(qualityScale(kind, quality) * 100)}%)${
       capped ? `. ${kind.toUpperCase()} GIFs stop at ${MAX_SECONDS[kind]} s` : ''
-    }`;
+    }${wantSetpos() ? `. Setpos for ${throws} ${throws === 1 ? 'grenade' : 'grenades'}` : ''}`;
   }
 
   // ---- 2D / 3D, camera, quality -----------------------------------------------
@@ -511,6 +552,17 @@ export function createGifCreator({ panel, mapEl, canvas, photoIcon = '', escapeH
     const size = frameSize();
     const px = areaPixels();
     const look = perspective();
+    // Read before capturing: the part is fixed now, and a track that cannot
+    // load should say so before a minute of drawing, not after.
+    let setposLines = [];
+    if (wantSetpos() && ticks.length) {
+      const track = await viewer.fullTrack?.();
+      if (!track) {
+        setMsg('The round\'s positions are still loading, so the setpos cannot be read yet. Try again in a moment.', true);
+        return;
+      }
+      setposLines = utilitySetposLines(r.meta, track, { fromTick: ticks[0], toTick: ticks[ticks.length - 1], timing: t });
+    }
     const controller = new AbortController();
     busy = controller;
     savedId = '';
@@ -589,12 +641,29 @@ export function createGifCreator({ panel, mapEl, canvas, photoIcon = '', escapeH
       savedId = gif.id;
       copyBtn.hidden = false;
       bookmarksLink.hidden = false;
-      setMsg(
-        copy
-          ? `Downloaded (${mb} MB). Saved a smaller copy to Bookmarks: ${(copy.bytes / 1024 / 1024).toFixed(1)} MB, ${copy.width} x ${copy.height}, ${copy.fps} FPS.`
-          : `Downloaded (${mb} MB) and saved to Bookmarks.`
-      );
-      onSaved?.(gif);
+      const saved = copy
+        ? `Downloaded (${mb} MB). Saved a smaller copy to Bookmarks: ${(copy.bytes / 1024 / 1024).toFixed(1)} MB, ${copy.width} x ${copy.height}, ${copy.fps} FPS.`
+        : `Downloaded (${mb} MB) and saved to Bookmarks.`;
+      setMsg(saved);
+      let kept = gif;
+      if (setposLines.length) {
+        // A separate edit, not the save itself: the save carries its metadata in
+        // a request header, which proxies cap long before a setpos per grenade.
+        const { text, added, left } = appendSetposLines(descInput.value, setposLines, GIF_DESCRIPTION_MAX);
+        try {
+          kept = await updateGif(gif.id, { description: text });
+          setMsg(
+            `${saved} Setpos for ${added} ${added === 1 ? 'grenade' : 'grenades'} added to its description${
+              left ? `; ${left} more did not fit in ${GIF_DESCRIPTION_MAX} characters` : ''
+            }.`
+          );
+        } catch (err) {
+          setMsg(`${saved} The setpos lines could not be added: ${err?.message || 'the edit failed'}`, true);
+        }
+      } else if (wantSetpos()) {
+        setMsg(`${saved} No grenades were thrown in this part, so there was no setpos to add.`);
+      }
+      onSaved?.(kept);
     } catch (err) {
       setMsg(
         err?.status === 401

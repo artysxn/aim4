@@ -11,7 +11,14 @@
 import { MAPS, economyLabel, winningSide } from '../shared/roundId.js';
 
 export const GIF_TITLE_MAX = 80;
-export const GIF_DESCRIPTION_MAX = 500;
+/** Room for the description someone writes plus a setpos line per grenade (gifSetpos.js). */
+export const GIF_DESCRIPTION_MAX = 4000;
+/**
+ * What the creator's description field takes. The save sends its metadata in
+ * a request header (api.js saveGif), and a proxy can refuse a header of 8 KB;
+ * the setpos lines go on afterwards as an edit, which has a body.
+ */
+export const GIF_CREATOR_DESCRIPTION_MAX = 500;
 /** Ids are random hex: the share link is the id, so it must not be guessable. */
 export const GIF_ID = /^[a-f0-9]{16}$/;
 

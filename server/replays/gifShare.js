@@ -30,6 +30,9 @@ export function sendGifBytes(req, res, buf) {
   res.end(req.method === 'HEAD' ? undefined : buf);
 }
 
+/** At most `max` characters, cut at a word with an ellipsis. */
+const clip = (s, max) => (s.length <= max ? s : `${s.slice(0, max).replace(/\s+\S*$/, '')}…`);
+
 function notFound(res) {
   res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
   res.end('That GIF does not exist, or it was deleted.');
@@ -65,7 +68,8 @@ const COPY_SCRIPT = `document.addEventListener('click',function(e){var b=e.targe
 export function sharePageHtml(g, origin) {
   const title = gifDisplayTitle(g);
   const summary = summaryOf(g);
-  const plain = descriptionPlain(g.description);
+  // A link preview shows a line or two; a description carrying a setpos per grenade is far longer.
+  const plain = clip(descriptionPlain(g.description), 300);
   const image = `${origin}/g/${g.id}.gif`;
   const round = g.file ? `/demos?round=${encodeURIComponent(g.file)}${g.fromTick ? `&tick=${g.fromTick}` : ''}` : '';
   return `<!doctype html>

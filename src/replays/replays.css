@@ -2342,6 +2342,17 @@ body.rv-open:has(.side-collapsed) .rv-side-show {
   display: none;
 }
 
+.rv-gif-checks {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+}
+
+.rv-gif-checks .rv-strat-check[hidden] {
+  display: none;
+}
+
 .rv-gif-form .site-input,
 .rv-gif-form .site-select {
   box-sizing: border-box;

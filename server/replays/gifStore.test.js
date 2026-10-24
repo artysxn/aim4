@@ -7,6 +7,7 @@ import path from 'node:path';
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aim4-gifs-'));
 process.env.AIM4_REPLAY_DIR = root;
 
+const { GIF_DESCRIPTION_MAX } = await import('../../src/replays/gif/gifMeta.js');
 const { addGif, gifFrameCount, gifDimensions, listGifs, readGifFile, removeGif, updateGif, gifRecord } = await import('./gifStore.js');
 const { handleGifShare, sharePageHtml } = await import('./gifShare.js');
 const { createGifWriter } = await import('../../src/replays/gif/gifCore.js');
@@ -107,9 +108,9 @@ assert.equal((await listGifs(LIB, null)).length, 0);
 // Only the owner edits or deletes.
 await assert.rejects(updateGif(LIB, g.id, { title: 'mine now' }, bob), /someone else/);
 await assert.rejects(removeGif(LIB, g.id, bob), /someone else/);
-const edited = await updateGif(LIB, g.id, { title: 'Retake B', description: 'x'.repeat(900) }, alice);
+const edited = await updateGif(LIB, g.id, { title: 'Retake B', description: 'x'.repeat(GIF_DESCRIPTION_MAX + 400) }, alice);
 assert.equal(edited.title, 'Retake B');
-assert.equal(edited.description.length, 500);
+assert.equal(edited.description.length, GIF_DESCRIPTION_MAX);
 assert.equal(edited.map, 'MIR', 'an edit keeps what the GIF shows');
 
 assert.deepEqual(await readGifFile(LIB, g.id), bytes);

@@ -309,6 +309,7 @@ export const DOC_GROUPS = [
             <li>Pick the part of the round on the slider. It is tied to the round's own timeline: drag either end and the round shows that moment; move the round's timeline and the part moves with it, keeping its length. The white line on the slider is where the round is now.</li>
             <li>Choose the <strong>quality</strong> (1 to 3) and the <strong>FPS</strong>. 2D defaults to 18 FPS and 3D to 24.</li>
             <li>Give it a title and a description. Anything between &lt; and &gt; in the description becomes a link that copies itself, so &lt;setpos 123 456 78; setang 0 90 0&gt; copies that setpos with one click.</li>
+            <li>In 3D, tick <strong>Automatically append setpos</strong> (next to Round clock) to add a line for every grenade thrown in the part, such as <code>01:43 dex Flash &lt;setpos ...; setang ... 0&gt;</code>. The position and aim are read the tick before the grenade leaves the thrower's hand, so the setpos stands you on the lineup. The line under the settings counts the grenades it will add.</li>
             <li>Press <strong>Create GIF</strong>.</li>
           </ol>
           <p>The GIF downloads straight away and is saved to <a href="/bookmarks?tab=gifs">Bookmarks → Saved GIFs</a> with what it shows: the map, the round, both teams with their side and buy, and who won. Bookmarks keep GIFs up to 40 MB; a bigger one still downloads in full, and a smaller copy is made and saved for Bookmarks automatically. The round clock is stamped in the corner unless you switch it off.</p>
@@ -317,7 +318,8 @@ export const DOC_GROUPS = [
             '2D GIFs are small and sharp; use them for setups, rotations and utility. Use 3D for a peek, a flash or a clutch.',
             'Keep 3D GIFs short. A few seconds at quality 2 is usually clearer than a long one at quality 3, and it stays under the Bookmarks limit.',
             'Select an area in 2D to cut out the half of the map nothing happens on: the GIF gets bigger where it matters.',
-            'Put the setpos of the key spot in the description so your teammates can practise it straight from the GIF.'
+            'Put the setpos of the key spot in the description so your teammates can practise it straight from the GIF. For a GIF of an execute, Automatically append setpos does it for every grenade at once.',
+            'A jump throw\'s setpos is in the air, because that is where the thrower was the tick before release. Paste it, then jump-throw from there as usual.'
           ])}`
       },
       {

@@ -15,6 +15,17 @@
 export const CHANGELOG = Object.freeze([
   {
     date: '2026-10-24',
+    title: 'GIFs: setpos for every grenade',
+    tag: 'new',
+    points: [
+      'The 3D GIF creator has an Automatically append setpos switch next to Round clock. It adds a line to the description for every grenade thrown in the part of the round, for example "01:43 dex Flash <setpos ...; setang ... 0>", and Bookmarks and the share page show each one as a link that copies the setpos.',
+      'The position and aim are read the tick before the grenade leaves the thrower\'s hand, so pasting the setpos stands you on the lineup, looking where they aimed.',
+      'The line under the GIF settings counts the grenades the switch will add, and the switch remembers being on.',
+      'Descriptions can now be up to 4000 characters long, room for your own text and a setpos for every grenade of a round.'
+    ]
+  },
+  {
+    date: '2026-10-24',
     title: 'Dominance in Demo Manager, GIFs on the timeline, new documentation',
     tag: 'improved',
     points: [

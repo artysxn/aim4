@@ -4036,6 +4036,8 @@ export function createTimelineViewer({
         return on ? Boolean(mode3d && view3d?.ready) : !mode3d;
       },
       view3d: () => (mode3d ? view3d : null),
+      /** Every tick of the round on screen, for the setpos of each grenade. Never the coarse track. */
+      fullTrack: () => (files[activeIndex] ? store.get(files[activeIndex])?.full || store.loadFull(files[activeIndex]) : null),
       drawAt(tick) {
         const item = sequence.at(activeIndex);
         if (!item) return;
