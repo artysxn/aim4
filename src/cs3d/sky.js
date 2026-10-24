@@ -25,6 +25,7 @@ import { clamp, dot, max, mix, normalize, positionLocal, pow, uniform } from 'th
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
 import { MapFog } from './fog.js';
 import { loadWithRetry } from './packFetch.js';
+import { markStaticUniformsDirty } from './threePatches.js';
 
 /** Half-width, in units, of the region the sun's shadow map covers. */
 const SHADOW_EXTENT = 2200;
@@ -462,6 +463,7 @@ export class MapLighting {
       const rt = pmrem.fromScene(envScene, 0.04, 0.1, 100);
       this.scene.environment = rt.texture;
       this.scene.environmentIntensity = this.envIntensity;
+      markStaticUniformsDirty();
       this.envRT = rt;
     } catch (e) {
       console.warn('cs3d: PMREM failed, falling back to hemisphere', e);
@@ -535,6 +537,8 @@ export class MapLighting {
     this.envRT = rt;
     this.scene.environment = rt.texture;
     this.scene.environmentIntensity = this.envIntensity;
+    // The map's batches read the intensity through a scene reference.
+    markStaticUniformsDirty();
 
     this.scene.background = tex;
     this.scene.backgroundIntensity = this.bgIntensity;

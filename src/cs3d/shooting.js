@@ -154,8 +154,9 @@ export class Shooting {
       const geo = new THREE.BufferGeometry();
       const pos = new THREE.BufferAttribute(new Float32Array(TRACE_VERTS * 3), 3);
       const col = new THREE.BufferAttribute(new Float32Array(TRACE_VERTS * 3), 3);
-      pos.setUsage(THREE.DynamicDrawUsage);
-      col.setUsage(THREE.DynamicDrawUsage);
+      // Static usage: _rebuild flags needsUpdate, and r169's WebGPU backend
+      // re-uploads a DynamicDrawUsage buffer whole on every pass that draws it,
+      // changed or not.
       geo.setAttribute('position', pos);
       geo.setAttribute('color', col);
       geo.setDrawRange(0, 0);

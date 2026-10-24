@@ -31,6 +31,25 @@ assert.equal(parseOnOff('nope', true), null);
 }
 
 {
+  // The frame-cost switches default on, stay on in the cheap cluster, and flip on their own.
+  const p = createPerfFlags({});
+  assert.equal(p.flags.oneSubmit, true);
+  assert.equal(p.flags.staticRefresh, true);
+  assert.equal(p.flags.bundles, true);
+  assert.equal(p.flags.fpsMax, 0, 'display rate by default');
+  assert.equal(p.command('r_bundles', ['0']), 'r_bundles 0');
+  assert.equal(p.flags.bundles, false);
+  assert.equal(p.command('r_static', []), 'r_static 0');
+  assert.equal(p.command('r_onesubmit', ['0']), 'r_onesubmit 0');
+  p.command('r_perf', ['1']);
+  assert.equal(p.flags.bundles, true);
+  assert.equal(p.flags.staticRefresh, true);
+  assert.equal(p.flags.oneSubmit, true);
+  assert.ok(p.dump().includes('r_bundles 1'));
+  for (const c of ['r_onesubmit', 'r_static', 'r_bundles']) assert.ok(PERF_HELP.some((l) => l.startsWith(c)), c);
+}
+
+{
   const lines = dumpFlags({
     profile: true,
     msaa: false,

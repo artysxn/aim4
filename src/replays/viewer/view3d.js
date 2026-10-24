@@ -25,7 +25,7 @@ import * as THREE from 'three/webgpu';
 import '../../cs3d/cs3d.css';
 import { MapPack, assetBase } from '../../cs3d/mapLoader.js';
 import { MapLighting } from '../../cs3d/sky.js';
-import { patchWebGPUPartialAttributeUpload, patchNodeMaterialTypeLookup, patchSharedBatchShaders } from '../../cs3d/threePatches.js';
+import { patchWebGPUPartialAttributeUpload, patchNodeMaterialTypeLookup, patchSharedBatchShaders, patchFrameSubmits, patchStaticRefresh } from '../../cs3d/threePatches.js';
 import { createLook, createMapRenderer, loadPostLut, installMapGrade, setupBloom } from '../../cs3d/look.js';
 import { createBootScreen } from '../../cs3d/bootScreen.js';
 import { sharedPlayerModels } from '../../cs3d/playerModels.js';
@@ -81,6 +81,7 @@ import {
   scaledAimPunch,
   scaledCameraPunch
 } from '../../cs3d/demoHits.js';
+import { demoSprayPunch, shotsByPlayer } from '../../cs3d/demoRecoil.js';
 import { canSpectateSlot, DEATH_FOLLOW_SECONDS, deathFollowShouldSnap, nextCamMode, nextFollowSlot } from './view3dFollow.js';
 import { keysAt } from './keypresses.js';
 
@@ -120,6 +121,8 @@ const _fwd = new THREE.Vector3();
 const _povFeet = new THREE.Vector3();
 const _camPunch = [0, 0, 0];
 const _aimPunch = [0, 0, 0];
+/** The POV's spray punch this frame (src/cs3d/demoRecoil.js); zero outside POV. */
+const _spray = { aim: [0, 0, 0], camera: [0, 0, 0], viewPunch: [0, 0], state: null };
 
 // CS2 / Source horizontal FOV (4:3). Three.js cameras take the matching
 // vertical; passing 90 through raw was much wider than the game.
@@ -139,6 +142,8 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange, pixelR
   canvas.className = 'rv-3d-canvas';
 
   let renderer = null;
+  /** One GPU submit per frame (threePatches.js); null on WebGL. */
+  let frameSubmits = null;
   let scene = null;
   let camera = null;
   let pack = null;
@@ -235,6 +240,9 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange, pixelR
   let povState = null;
   /** Tick the shot scan last ran to, so each shot kicks the gun exactly once. */
   let lastShotTick = null;
+  /** The round's shots, one tick-ordered list per player, for the spray punch. */
+  let sprayShots = null;
+  let sprayShotsOf = null;
   let lastShotRound = '';
   let lastHurtTick = null;
   let lastHurtRound = '';
@@ -397,7 +405,15 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange, pixelR
   }
 
   async function bootScene(container) {
-    renderer = new THREE.WebGPURenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
+    // No MSAA unless the explorer's `r_msaa 1` turned it on: it was a fifth of
+    // the frame for edges nobody needs smoothed.
+    let msaa = false;
+    try {
+      msaa = localStorage.getItem('cs3d_aa') === '1';
+    } catch {
+      /* private mode */
+    }
+    renderer = new THREE.WebGPURenderer({ canvas, antialias: msaa, powerPreference: 'high-performance' });
     renderer.setPixelRatio(pixelRatio || Math.min(window.devicePixelRatio || 1, 2));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.NeutralToneMapping;
@@ -473,6 +489,11 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange, pixelR
     // One shader build per material SHAPE instead of one per batch: most of
     // what opening the map used to cost (see threePatches.js).
     if (!patchSharedBatchShaders(renderer, THREE)) console.warn('cs3d: shared batch shaders unavailable, every batch compiles on its own');
+    // One queue submit per frame instead of one per pass (see threePatches.js).
+    frameSubmits = patchFrameSubmits(renderer);
+    // ...and the map's batches skip the per-draw uniform refresh while nothing
+    // they read has changed (threePatches.js).
+    if (!patchStaticRefresh(renderer)) console.warn('cs3d: static refresh unavailable, every batch refreshes every draw');
 
     try {
       bodyShadows = new BodyShadows(renderer);
@@ -726,6 +747,22 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange, pixelR
    * pause returns 0 — a rewind must not fire the gun, and a held frame must not
    * fire it again.
    */
+  /**
+   * The POV player's spray punch at `tick`: their current spray replayed from
+   * its first shot through CS2's recoil model, so a scrub or a rewind shows
+   * the same kick as playing through.
+   */
+  function povSprayPunch(tick, rate) {
+    const shots = frame?.events?.shots || null;
+    if (shots !== sprayShotsOf) {
+      sprayShotsOf = shots;
+      sprayShots = shotsByPlayer(shots);
+    }
+    const id = (frame?.players || []).find((p) => p.slot === povSlot)?.id;
+    const statsOf = (w) => vmAssets.stats?.(bareWeapon(w) || String(w || '').replace(/^weapon_/, '')) || null;
+    return demoSprayPunch(id != null ? sprayShots.get(id) : null, tick, rate, statsOf, _spray);
+  }
+
   function consumeShots(tick, rate) {
     const shots = frame?.events?.shots;
     const from = lastShotTick;
@@ -991,6 +1028,14 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange, pixelR
    * `dt` is demo time, same as the bodies. A paused playhead must freeze the
    * clip and the bob, not settle them on wall time.
    */
+  /** The gun takes the whole aim punch, flinch and spray together (as main.js does). */
+  function addSpray(punch) {
+    punch[0] += _spray.aim[0];
+    punch[1] += _spray.aim[1];
+    punch[2] += _spray.aim[2];
+    return punch;
+  }
+
   function updateViewModel(dt) {
     if (vmAssets.ready && !viewModel.ready) viewModel.setSide('T');
     if (!viewModel.ready) return;
@@ -1027,8 +1072,8 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange, pixelR
       onGround: !pov.airborne,
       viewYaw: pov.yaw,
       viewPitch: pov.pitch,
-      punch: scaledAimPunch(povFlinch, _aimPunch),
-      viewPunch: [0, 0]
+      punch: addSpray(scaledAimPunch(povFlinch, _aimPunch)),
+      viewPunch: _spray.viewPunch
     });
     const eye = pov.eye;
     const grid = pack?.probeGrid;
@@ -1321,11 +1366,11 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange, pixelR
       cancelDeathFollow();
     }
     const holdingDeath = follow && deathFollowUntilTick != null && !live.includes(povSlot);
-    // Demo seconds since the last drawn frame: forward only (a scrub back
-    // holds the pose at its new tick), and a jump of more than a quarter
-    // second is a seek, not motion.
+    // Demo seconds since the last drawn frame, signed: a rewind (hold R) or a
+    // slow scrub back runs the bodies' clips backwards. A jump of more than a
+    // quarter second either way is a seek, not motion.
     const dTicks = lastTick === null ? 0 : tick - lastTick;
-    const animDt = dTicks > 0 && dTicks <= rate / 4 ? dTicks / rate : 0;
+    const animDt = dTicks !== 0 && Math.abs(dTicks) <= rate / 4 ? dTicks / rate : 0;
     lastTick = tick;
     demoAnimDt = animDt;
     const useModels = models.ready;
@@ -1366,6 +1411,16 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange, pixelR
       if (hit.slot === povSlot) addPovFlinch(povFlinch, punch, { replacePitch: hit.blast });
     }
     scaledCameraPunch(povFlinch, _camPunch);
+    // ...plus the spray's kick, which is what the shooter actually saw.
+    if (mode === 'pov') {
+      povSprayPunch(tick, rate);
+      _camPunch[0] += _spray.camera[0];
+      _camPunch[1] += _spray.camera[1];
+      _camPunch[2] += _spray.camera[2];
+    } else {
+      _spray.aim.fill(0);
+      _spray.viewPunch.fill(0);
+    }
 
     const roundKey = frame.roundKey || '';
     if (roundKey !== corpseRound) {
@@ -1674,9 +1729,10 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange, pixelR
     if (!ready || !visible) return;
     if (isFree() && player) player.update(dt);
     else if (mode === 'third') applyThirdOrbit();
+    // The gun's idle and bob only ever run forward; shots fire on forward steps.
     const vmDt = demoAnimDt;
     demoAnimDt = 0;
-    updateViewModel(vmDt);
+    updateViewModel(Math.abs(vmDt));
     nadeEffects?.update(dt, t / 1000, camera);
     interactives?.update(dt);
     shooting?.update(dt);
@@ -1694,6 +1750,13 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange, pixelR
     _xraySubjects = xray?.enabled ? collectXraySubjects() : [];
     xray?.updateLabels(camera, _xraySubjects);
     updateMatchHud();
+    if (frameSubmits) frameSubmits.run(drawPasses);
+    else drawPasses();
+    if (DEBUG_3D) frameStamp.total = performance.now() - t;
+  }
+
+  /** Everything that reaches the GPU in a frame: the body shadows, then the map. */
+  function drawPasses() {
     if (bodyShadows) {
       const tb = DEBUG_3D ? performance.now() : 0;
       casters.length = 0;
@@ -1709,10 +1772,7 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange, pixelR
     if (DEBUG_3D) frameStamp.culled = culled;
     if (mapRenderer) mapRenderer.render(camera);
     else renderer.render(scene, camera);
-    if (DEBUG_3D) {
-      frameStamp.render = performance.now() - tr;
-      frameStamp.total = performance.now() - t;
-    }
+    if (DEBUG_3D) frameStamp.render = performance.now() - tr;
   }
 
   return {

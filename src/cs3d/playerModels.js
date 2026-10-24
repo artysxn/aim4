@@ -954,7 +954,8 @@ export class PlayerBody {
   _blend(set, dt) {
     const sw = this.setWeights;
     if (!sw.has(set)) sw.set(set, sw.size ? 0 : 1);
-    const ease = 1 - Math.exp(-dt / 0.12);
+    // |dt|, like the smoothers in update(): a rewind still blends toward the set.
+    const ease = 1 - Math.exp(-Math.abs(dt) / 0.12);
     let total = 0;
     for (const [k, w] of sw) {
       const nw = w + ((k === set ? 1 : 0) - w) * ease;
@@ -1038,7 +1039,8 @@ export class PlayerBody {
       rate += cps(`${gaitName}_n`, w);
       rateW += w;
     }
-    if (rateW > 0 && dt > 0) {
+    // Signed: a demo played backwards walks its legs backwards.
+    if (rateW > 0 && dt !== 0) {
       this.phase += (rate / rateW) * dt;
       this.phase -= Math.floor(this.phase);
     }

@@ -117,7 +117,9 @@ export class Tracers {
     g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(MAX_TRACERS * 6 * 3), 3));
     g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(MAX_TRACERS * 6 * 2), 2));
     g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(MAX_TRACERS * 6 * 3), 3));
-    for (const a of Object.values(g.attributes)) a.setUsage(THREE.DynamicDrawUsage);
+    // Static usage: the writer flags needsUpdate itself, and r169's WebGPU
+    // backend re-uploads a DynamicDrawUsage buffer whole on every pass that
+    // draws it, changed or not.
     g.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e7);
     const mat = new THREE.MeshBasicNodeMaterial({
       transparent: true,

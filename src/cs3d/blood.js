@@ -55,7 +55,9 @@ export class BloodSpray {
     const mesh = new THREE.InstancedMesh(geo, mat, MAX);
     mesh.frustumCulled = false;
     mesh.count = 0;
-    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    // Static usage: update() flags needsUpdate, and r169's WebGPU backend
+    // re-uploads a DynamicDrawUsage buffer whole on every pass that draws it,
+    // changed or not.
     // Per-instance colour: red spray vs darker mist.
     const colors = new THREE.InstancedBufferAttribute(new Float32Array(MAX * 3), 3);
     mesh.instanceColor = colors;

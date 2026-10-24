@@ -1,5 +1,62 @@
 # CS3D renderer notes
 
+## Status after the sixth pass (2026-10-25): frame rate
+
+Dust 2 at 1080p on an RTX 4090 / 7950X ran ~100 fps uncapped, and on a 360 Hz
+panel that showed as 120-180 (a frame that misses a vsync waits for the next).
+It was never GPU work: half the frame was the number of GPU submits, the other
+half three's per-object bookkeeping. Measured while turning the camera every
+frame (`npm run cs3d:bench -- <map> --spin`, headless Edge, uncapped):
+
+| map | before | after |
+|---|---|---|
+| dust2 | 94 | 398 |
+| mirage | 90 | 356 |
+| inferno | 56 | 242 |
+| nuke | 96 | 330 |
+| ancient | 116 | 416 |
+
+With `?msaa=1` the new build is pixel-identical to the old one (max 1/255 on
+fixed views of five maps); the only visible change in the default is that MSAA
+is off. In order of what each one bought:
+
+- **One GPU submit per frame** (`threePatches.js patchFrameSubmits`). r169 ends
+  every render() and clear() with a `queue.submit()`, ~53 a frame, and Chrome
+  charges ~130 µs each whatever they carry. Submits are held and handed over
+  once; uniform writes that land between passes are staged and copied in order,
+  so every pass reads what it would have. `r_onesubmit 0` turns it off.
+- **Static map batches skip the per-object refresh** (`patchStaticRefresh`,
+  `TileBatch.cs3dStatic`). Only the camera moves; everything else is checked
+  (textures exactly, app uniforms by value, the look through
+  `markStaticUniformsDirty()`, a backstop every 32 draws). `r_static 0`.
+  One trap: with `patchSharedBatchShaders`, one texture node serves every
+  material of a shape, so `node.value` is the last object's texture, and
+  `NodeSampledTexture.update()` re-reads it. Never call it outside a refresh.
+- **Render bundles** (`createStaticBundle`, a marker per root sorted after its
+  members). The opaque batches are replayed with one `executeBundles()`, and
+  recorded again only when a member's pipeline, bind groups, buffers or draw
+  list change. Bundled batches draw every tile: per-tile culling only ever cut
+  10-20% of the triangles, and a culled list changes whenever the view does.
+  Passes with an override material (shadows) draw normally. `r_bundles 0`.
+  **Two r169 bugs showed up the moment the lists stopped being rebuilt every
+  frame**: `BatchedMesh.addInstance()` never marks the list stale, and the
+  WebGPU backend widens a Uint16 index to Uint32 on its first upload, after the
+  first list was built with 2-byte offsets. Either one draws garbage (Nuke's
+  sky turned into a slab of skybox asphalt). `TileBatch` handles both.
+- **Bloom in one encoder** (`fastBloom.js`). The map's bloom and the effects'
+  bloom were 24 three renders plus 22 clears; now 12 raw passes that run both
+  chains at once (two outputs each) and add them in the composite. Same
+  kernels, sizes and weights as BloomNode. `?fastbloom=0` falls back.
+- Smaller: MSAA off unless asked (`?msaa=1`, `r_msaa 1`; stored under
+  `cs3d_aa` because the old key was written as 1 on every visit), decal /
+  tracer / sprite buffers no longer DynamicDrawUsage (r169 re-uploads those
+  whole on every pass: 3.7 MB a frame with nothing shot), `fps_max` defaults
+  to the display rate (a 240 cap on a 360 Hz panel dropped every third vsync).
+
+What is left is GPU-process scheduling, not page work: a trace puts the main
+thread at ~1.6 ms a frame. The 90th-percentile frame is still 4-6 ms in
+headless runs, and with vsync on that is what decides 360 vs 180.
+
 ## Status after the fifth pass (2026-08-19): delivery, the sky, and real utility in replays
 
 Three unrelated-looking symptoms, two shared causes.

@@ -10,6 +10,8 @@ import { packFetch } from './packFetch.js';
 import { bloom, screenUV, texture } from 'three/webgpu';
 import { installGrade, makeLut } from './grade.js';
 import { mapBloomParams } from './lookBloom.js';
+import { markStaticUniformsDirty, patchBloomClears } from './threePatches.js';
+import { createFastBloom } from './fastBloom.js';
 
 export { mapBloomParams };
 
@@ -89,6 +91,9 @@ export function createLook({ scene, getPack, getLighting, slug, knobs = null }) 
   function apply(key) {
     const v = values[key];
     if (v === undefined) return;
+    // `sky` lands on scene.environmentIntensity, which the map's materials read
+    // through a reference rather than a uniform; tell the static batches.
+    markStaticUniformsDirty();
     const pack = getPack?.();
     const lighting = getLighting?.();
     const mats = pack?.materials;
@@ -174,10 +179,14 @@ export function setupBloom(renderer, manifest, params = new URLSearchParams()) {
     }
   };
   if (!(mapStrength > 0) && !(fxStrength > 0)) return noop;
+  // The bloom's redundant clear passes go (threePatches.js); same pixels.
+  patchBloomClears(THREE.BloomNode);
   let sceneRT = null;
   let composite = null;
   let bloomOut = null;
   let copyOut = null;
+  /** Both blooms in one command encoder (fastBloom.js); null on WebGL, where three's nodes do it. */
+  let fast = null;
   try {
     const size = renderer.getDrawingBufferSize(new THREE.Vector2());
     sceneRT = new THREE.RenderTarget(Math.max(1, size.x), Math.max(1, size.y), {
@@ -188,14 +197,25 @@ export function setupBloom(renderer, manifest, params = new URLSearchParams()) {
     const src = texture(sceneRT.texture, screenUV);
     copyOut = src;
     bloomOut = src;
-    if (mapStrength > 0) bloomOut = bloomOut.add(bloom(src, mapStrength, radius, threshold));
-    if (fxStrength > 0) bloomOut = bloomOut.add(bloom(src, fxStrength, FX_BLOOM.radius, FX_BLOOM.threshold));
+    if (params.get?.('fastbloom') !== '0') {
+      fast = createFastBloom(renderer, THREE, {
+        a: { strength: mapStrength > 0 ? mapStrength : 0, radius, threshold },
+        b: { strength: fxStrength > 0 ? fxStrength : 0, radius: FX_BLOOM.radius, threshold: FX_BLOOM.threshold }
+      });
+    }
+    if (fast) {
+      bloomOut = bloomOut.add(texture(fast.texture, screenUV));
+    } else {
+      if (mapStrength > 0) bloomOut = bloomOut.add(bloom(src, mapStrength, radius, threshold));
+      if (fxStrength > 0) bloomOut = bloomOut.add(bloom(src, fxStrength, FX_BLOOM.radius, FX_BLOOM.threshold));
+    }
     composite = new THREE.PostProcessing(renderer, bloomOff ? copyOut : bloomOut);
     composite.update();
     renderer.toneMapping = THREE.NoToneMapping;
   } catch (e) {
     console.warn('cs3d: bloom unavailable, rendering direct', e);
     sceneRT?.dispose?.();
+    fast?.dispose();
     return noop;
   }
   let active = !bloomOff;
@@ -218,6 +238,7 @@ export function setupBloom(renderer, manifest, params = new URLSearchParams()) {
       renderer.setRenderTarget(sceneRT);
       draw();
       const t = stamp ? performance.now() : 0;
+      if (active && fast) fast.run(sceneRT.texture);
       renderer.setRenderTarget(null);
       composite.render();
       if (stamp) stamp.bloom = active ? performance.now() - t : 0;

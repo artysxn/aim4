@@ -7,7 +7,7 @@
 // ---------------------------------------------------------------------------
 
 export const PERF_HELP = [
-  'fps_max [n]           cap present rate, 0 = rAF, default 240',
+  'fps_max [n]           cap present rate, 0 = display rate (default)',
   'r_profile [0|1]       frame times, 1% / 10% lows',
   'r_msaa [0|1]          framebuffer MSAA (reload)',
   'r_dpr 0.5|1|2         backbuffer scale',
@@ -16,6 +16,9 @@ export const PERF_HELP = [
   'r_shadow_bodies [0|1] redraw shadows for moving bodies',
   'r_simple [0|1]        lightmap-only world shader',
   'r_skypass [0|1]       3D sky two-pass',
+  'r_onesubmit [0|1]     one GPU submit per frame',
+  'r_static [0|1]        skip unchanged map uniform refreshes',
+  'r_bundles [0|1]       replay the map from recorded bundles',
   'r_perf [0|1]          all cheap opts (1) or quality (0)'
 ];
 
@@ -40,7 +43,10 @@ export function dumpFlags(f) {
     `r_shadow_bodies ${f.shadowBodies ? 1 : 0}`,
     `r_simple ${f.simple ? 1 : 0}`,
     `r_skypass ${f.skyPass ? 1 : 0}`,
-    `fps_max ${f.fpsMax ?? 240}`
+    `r_onesubmit ${f.oneSubmit !== false ? 1 : 0}`,
+    `r_static ${f.staticRefresh !== false ? 1 : 0}`,
+    `r_bundles ${f.bundles !== false ? 1 : 0}`,
+    `fps_max ${f.fpsMax ?? 0}`
   ];
 }
 
@@ -71,12 +77,16 @@ function cheapOf(f) {
     shadows: false,
     shadowBodies: false,
     simple: true,
-    skyPass: false
+    skyPass: false,
+    // Pure savings, same pixels: the cheap cluster keeps them.
+    oneSubmit: true,
+    staticRefresh: true,
+    bundles: true
   };
 }
 
 /**
- * @param {Partial<{profile:boolean,msaa:boolean,dpr:number,bloom:boolean,shadows:boolean,shadowBodies:boolean,simple:boolean,skyPass:boolean,fpsMax:number}>} init
+ * @param {Partial<{profile:boolean,msaa:boolean,dpr:number,bloom:boolean,shadows:boolean,shadowBodies:boolean,simple:boolean,skyPass:boolean,oneSubmit:boolean,staticRefresh:boolean,bundles:boolean,fpsMax:number}>} init
  * @param {(flags: object) => void} [onChange]
  */
 export function createPerfFlags(init = {}, onChange) {
@@ -89,7 +99,13 @@ export function createPerfFlags(init = {}, onChange) {
     shadowBodies: init.shadowBodies !== false,
     simple: !!init.simple,
     skyPass: init.skyPass !== false,
-    fpsMax: Number.isFinite(init.fpsMax) ? Math.max(0, init.fpsMax) : 240
+    oneSubmit: init.oneSubmit !== false,
+    staticRefresh: init.staticRefresh !== false,
+    bundles: init.bundles !== false,
+    // Display rate by default. A cap under the panel's refresh does not save a
+    // frame, it drops one: at 360 Hz a 240 cap skipped every third vsync and
+    // paced the rest unevenly.
+    fpsMax: Number.isFinite(init.fpsMax) ? Math.max(0, init.fpsMax) : 0
   };
   const quality = { ...flags };
 
@@ -132,6 +148,12 @@ export function createPerfFlags(init = {}, onChange) {
         return setBool('simple', args[0], 'r_simple');
       case 'r_skypass':
         return setBool('skyPass', args[0], 'r_skypass');
+      case 'r_onesubmit':
+        return setBool('oneSubmit', args[0], 'r_onesubmit');
+      case 'r_static':
+        return setBool('staticRefresh', args[0], 'r_static');
+      case 'r_bundles':
+        return setBool('bundles', args[0], 'r_bundles');
       case 'fps_max': {
         if (args[0] == null) return `fps_max ${flags.fpsMax}`;
         const n = Number(args[0]);

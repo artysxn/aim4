@@ -17,7 +17,7 @@ globalThis.window ??= globalThis;
 
 const assert = (await import('node:assert/strict')).default;
 const THREE = await import('three/webgpu');
-const { patchNodeMaterialTypeLookup } = await import('./threePatches.js');
+const { patchNodeMaterialTypeLookup, patchFrameSubmits } = await import('./threePatches.js');
 
 /** three's own lookup, so the test asserts on the code path the renderer takes. */
 const lookup = (renderer, material) => renderer.nodes.library.getMaterialNodeClass(material.type) || null;
@@ -83,5 +83,98 @@ assert.equal(patchNodeMaterialTypeLookup(null, THREE), 0);
 assert.equal(patchNodeMaterialTypeLookup({}, THREE), 0);
 assert.equal(patchNodeMaterialTypeLookup({ nodes: {} }, THREE), 0);
 assert.equal(patchNodeMaterialTypeLookup(fakeRenderer([]), null), 0);
+
+// ---- one submit per frame: every pass still reads what it would have -------
+// A model of the WebGPU queue timeline: writeBuffer and every submitted
+// command buffer's commands run in the order they reach the queue, and a pass
+// reads buffer memory at its place in that order. The frame is the shape three
+// produces: each render() writes its uniforms, then submits one pass that
+// reads them, and later passes overwrite the same buffer.
+{
+  const makeDevice = () => {
+    const timeline = [];
+    const reads = [];
+    const device = {
+      createBuffer: ({ size, usage }) => ({ size, usage, mem: new Uint8Array(size), destroy() {} }),
+      createCommandEncoder: () => {
+        const cmds = [];
+        return {
+          copyBufferToBuffer: (src, so, dst, d0, n) => cmds.push(() => dst.mem.set(src.mem.subarray(so, so + n), d0)),
+          finish: () => ({ cmds })
+        };
+      },
+      queue: {
+        submits: 0,
+        submit(cbs) {
+          this.submits++;
+          for (const cb of cbs) for (const c of cb.cmds) timeline.push(c);
+        },
+        writeBuffer(buf, off, data, dataOffset = 0, size) {
+          const per = data.BYTES_PER_ELEMENT || 1;
+          const n = (size ?? data.length - dataOffset) * per;
+          const bytes = new Uint8Array(data.buffer, data.byteOffset + dataOffset * per, n).slice();
+          timeline.push(() => buf.mem.set(bytes, off));
+        },
+        writeTexture() {},
+        onSubmittedWorkDone: async () => {}
+      }
+    };
+    const run = () => {
+      for (const op of timeline.splice(0)) op();
+    };
+    /** A pass that reads `buf` as a float when the GPU gets to it. */
+    const pass = (tag, buf) => ({ cmds: [() => reads.push([tag, new Float32Array(buf.mem.buffer, 0, 1)[0]])] });
+    return { device, run, reads, pass };
+  };
+
+  const frame = (gpu, uniform, vertex) => {
+    const { device, pass } = gpu;
+    for (let i = 1; i <= 5; i++) {
+      device.queue.writeBuffer(uniform, 0, new Float32Array([i, 0, 0, 0]));
+      if (i === 3) device.queue.writeBuffer(vertex, 16, new Float32Array([7, 7, 7, 7, 9, 9]), 4, 2);
+      device.queue.submit([pass(`p${i}`, uniform)]);
+    }
+  };
+
+  const COPY_DST = 0x0008;
+  const plain = makeDevice();
+  const pu = plain.device.createBuffer({ size: 64, usage: COPY_DST });
+  const pv = plain.device.createBuffer({ size: 64, usage: COPY_DST });
+  frame(plain, pu, pv);
+  plain.run();
+
+  const batched = makeDevice();
+  const fakeRenderer = { backend: { isWebGPUBackend: true, device: batched.device } };
+  const frames = patchFrameSubmits(fakeRenderer);
+  assert.ok(frames, 'patch applies to a WebGPU backend');
+  const bu = batched.device.createBuffer({ size: 64, usage: COPY_DST });
+  const bv = batched.device.createBuffer({ size: 64, usage: COPY_DST });
+  const before = batched.device.queue.submits;
+  frames.run(() => frame(batched, bu, bv));
+  batched.run();
+
+  assert.equal(batched.device.queue.submits - before, 1, 'five passes, one submit');
+  assert.deepEqual(batched.reads, plain.reads, 'every pass reads the value written for it');
+  assert.deepEqual([...batched.reads.map((r) => r[1])], [1, 2, 3, 4, 5]);
+  assert.deepEqual(new Float32Array(bv.mem.buffer, 16, 2), new Float32Array(pv.mem.buffer, 16, 2), 'an element-offset write lands the same bytes');
+  assert.equal(patchFrameSubmits(fakeRenderer), frames, 'patching twice returns the same instance');
+
+  // Outside a frame nothing is held.
+  const n = batched.device.queue.submits;
+  batched.device.queue.submit([batched.pass('loose', bu)]);
+  assert.equal(batched.device.queue.submits, n + 1);
+
+  // A texture write inside a frame lands after what was recorded before it.
+  frames.begin();
+  batched.device.queue.submit([batched.pass('a', bu)]);
+  batched.device.queue.writeTexture();
+  assert.equal(batched.device.queue.submits, n + 2, 'held work is handed over before a texture write');
+  frames.end();
+  assert.equal(batched.device.queue.submits, n + 2, 'nothing left to submit');
+
+  // Not WebGPU: nothing to patch.
+  assert.equal(patchFrameSubmits(null), null);
+  assert.equal(patchFrameSubmits({ backend: { isWebGPUBackend: false } }), null);
+}
 
 console.log('threePatches.test.js OK');

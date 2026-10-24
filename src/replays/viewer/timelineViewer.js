@@ -497,6 +497,7 @@ export function createTimelineViewer({
       <span class="rv-keys-key">E</span><span class="rv-keys-action">Erase drawing</span>
       <span class="rv-keys-key">J</span><span class="rv-keys-action">Previous round</span>
       <span class="rv-keys-key">K</span><span class="rv-keys-action">Next round</span>
+      <span class="rv-keys-key">Hold R</span><span class="rv-keys-action">3D rewind</span>
       <span class="rv-keys-key">O</span><span class="rv-keys-action">Rewind 15s</span>
       <span class="rv-keys-key">P</span><span class="rv-keys-action">Forward 15s</span>
       <span class="rv-keys-key">M</span><span class="rv-keys-action">Toggle speed</span>
@@ -4329,6 +4330,31 @@ export function createTimelineViewer({
     setRadarOverview(false);
   }
 
+  // Hold R in the 3D view: the demo runs backwards at 1x until it is let go.
+  function onRDown(e) {
+    if (e.code !== 'KeyR') return;
+    if (e.target.matches?.('input, textarea, select')) return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (!mode3d) return;
+    e.preventDefault();
+    if (e.repeat) return;
+    playback.rewind(true);
+    syncPlayButton();
+  }
+
+  function onRUp(e) {
+    if (e.code !== 'KeyR' || !playback.rewinding) return;
+    e.preventDefault();
+    playback.rewind(false);
+    syncPlayButton();
+  }
+
+  function onRCancel() {
+    if (!playback.rewinding) return;
+    playback.rewind(false);
+    syncPlayButton();
+  }
+
   function onXDown(e) {
     if (e.code !== 'KeyX') return;
     if (e.target.matches?.('input, textarea, select')) return;
@@ -4346,6 +4372,9 @@ export function createTimelineViewer({
   window.addEventListener('keyup', onQUp, true);
   window.addEventListener('blur', onQCancel);
   window.addEventListener('keydown', onXDown, true);
+  window.addEventListener('keydown', onRDown, true);
+  window.addEventListener('keyup', onRUp, true);
+  window.addEventListener('blur', onRCancel);
 
   // ---- coach --------------------------------------------------------------
   //
@@ -5747,7 +5776,8 @@ export function createTimelineViewer({
       // Playing: keep wall-clock position (freezetime skip above). Paused seek
       // across a boundary (e.g. nudge) lands at the next round's entry instead
       // of leaving the scrubber pinned at 100% and chaining advances.
-      selectRound(loc.index, { seek: !playback.playing });
+      // A rewind crossing back into the previous round keeps its position too.
+      selectRound(loc.index, { seek: !playback.playing && !playback.rewinding });
       return;
     }
     draw(loc);
@@ -6256,6 +6286,9 @@ export function createTimelineViewer({
       window.removeEventListener('keyup', onQUp, true);
       window.removeEventListener('blur', onQCancel);
       window.removeEventListener('keydown', onXDown, true);
+      window.removeEventListener('keydown', onRDown, true);
+      window.removeEventListener('keyup', onRUp, true);
+      window.removeEventListener('blur', onRCancel);
       window.removeEventListener('resize', onResize);
       window.removeEventListener('keydown', onGraphShiftKey);
       window.removeEventListener('keyup', onGraphShiftKey);

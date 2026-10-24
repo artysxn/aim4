@@ -15,7 +15,7 @@ import { MapPack, assetBase } from './mapLoader.js';
 import { MapLighting } from './sky.js';
 import { installGrade } from './grade.js';
 import { createLook, createMapRenderer, loadPostLut, LIGHT_KEYS, LOOK_DEFAULTS, MAP_LOOK, setupBloom } from './look.js';
-import { patchWebGPUPartialAttributeUpload, patchNodeMaterialTypeLookup, patchSharedBatchShaders } from './threePatches.js';
+import { patchWebGPUPartialAttributeUpload, patchNodeMaterialTypeLookup, patchSharedBatchShaders, patchFrameSubmits, patchStaticRefresh } from './threePatches.js';
 import { Player } from './player.js';
 import { Controls } from './controls.js';
 import { Hud } from './hud.js';
@@ -158,12 +158,23 @@ let spectateEyes = true;
 let skipNadeHurt = false;
 
 // ---- renderer / scene ------------------------------------------------------
+const MSAA_PREF = 'cs3d_aa';
+function readPref(key) {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
 // WebGPU, with three's built-in WebGL2 fallback when the browser has no
 // adapter (`forceWebGL` also forces it for A/B testing via ?webgl=1). The
 // whole island imports from 'three/webgpu'. GLTF addons are pointed at that
 // same build in build/build.mjs so loaders and mixers share one Mesh/Vector3.
 const forceWebGL = params.get('webgl') === '1';
-const msaaBoot = params.get('msaa') !== '0' && localStorage.getItem('cs3d_msaa') !== '0';
+// No MSAA unless asked for (`?msaa=1`, or `r_msaa 1`, which is remembered).
+// It was a fifth of the frame on Dust 2 at 1080p, for edges nobody needs
+// smoothed. The old key is not read: every visit used to write it as 1.
+const msaaBoot = params.has('msaa') ? params.get('msaa') === '1' : readPref(MSAA_PREF) === '1';
 const renderer = new THREE.WebGPURenderer({
   canvas,
   antialias: msaaBoot,
@@ -233,6 +244,8 @@ let lighting = null;
 let mapRenderer = null;
 let bloomPass = { render: (d) => d(), resize() {}, enabled: false, setActive() {} };
 let pauseMenu = null;
+/** One GPU submit per frame (threePatches.js); null on WebGL or before init(). */
+let frameSubmits = null;
 let perf = null;
 let xray = null;
 let _xraySubjects = [];
@@ -578,7 +591,7 @@ function applyPerf() {
   const f = perf.flags;
   if (!f.profile) hud.setProfile(null);
   try {
-    localStorage.setItem('cs3d_msaa', f.msaa ? '1' : '0');
+    localStorage.setItem(MSAA_PREF, f.msaa ? '1' : '0');
   } catch {
     /* private mode */
   }
@@ -589,6 +602,10 @@ function applyPerf() {
   if (f.shadows) lighting?.markShadowDirty();
   pack?.setShadowKeep?.(f.shadows);
   pack?.materials?.setSimple(f.simple);
+  // Bundles ride on the static path (threePatches.js patchStaticRefresh).
+  const statics = renderer._cs3dStaticRefresh;
+  if (statics) statics.enabled = f.staticRefresh;
+  if (statics && pack?.bundling !== (f.bundles && f.staticRefresh)) pack?.setBundles?.(f.bundles && f.staticRefresh);
 }
 const bootBuf = practiceBackbuffer(
   vmSettings.activeSettings(),
@@ -1088,6 +1105,8 @@ const demoNades = new DemoNades({
 const demoView = new DemoView({
   camera,
   getPack: () => pack,
+  // The POV's spray punch is rebuilt from its shots with the weapons pack.
+  statsOf: (name) => vmAssets.stats?.(name) || null,
   playerModels,
   nades: demoNades,
   blood,
@@ -1453,6 +1472,12 @@ async function boot() {
     // ...and one shader build per material shape rather than one per batch,
     // which was most of the time it took to open a map. See threePatches.js.
     if (!patchSharedBatchShaders(renderer, THREE)) console.warn('cs3d: shared batch shaders unavailable, every batch compiles on its own');
+    // ...and one queue submit per frame rather than one per pass, which is
+    // what bounded the frame rate with the GPU nearly idle. See threePatches.js.
+    frameSubmits = patchFrameSubmits(renderer);
+    // ...and the map's batches skip the per-draw uniform refresh while nothing
+    // they read has changed: the other half of the frame (threePatches.js).
+    if (!patchStaticRefresh(renderer)) console.warn('cs3d: static refresh unavailable, every batch refreshes every draw');
     hud.setBackend(renderer.backend?.isWebGPUBackend ? 'webgpu' : 'webgl');
     // Manifest first: the sun, exposure and spawns come from it, and the
     // lighting has to exist before the first tile arrives.
@@ -1822,7 +1847,7 @@ function updateViewModel(dt, inThird) {
       viewYaw: pov.yaw,
       viewPitch: pov.pitch,
       punch: pov.punch || [0, 0, 0],
-      viewPunch: [0, 0]
+      viewPunch: pov.viewPunch || [0, 0]
     });
   } else {
     viewModel.setSide(lastSide);
@@ -1871,6 +1896,11 @@ function updateViewModel(dt, inThird) {
 }
 
 function renderFrame() {
+  if (frameSubmits && perf?.flags.oneSubmit !== false) frameSubmits.run(renderPasses);
+  else renderPasses();
+}
+
+function renderPasses() {
   passStamp.sky = 0;
   passStamp.world = 0;
   passStamp.bloom = 0;
@@ -2013,6 +2043,7 @@ function updateProfile(now, dtMs) {
       `shadow ${passStamp.shadowDirty ? 'dirty' : 'cached'}${draws}\n` +
       `msaa ${f.msaa ? 1 : 0}  dpr ${f.dpr}  bloom ${f.bloom ? 1 : 0}  shadows ${f.shadows ? 1 : 0}\n` +
       `bodies ${f.shadowBodies ? 1 : 0}  simple ${f.simple ? 1 : 0}  skypass ${f.skyPass ? 1 : 0}\n` +
+      `onesubmit ${f.oneSubmit ? 1 : 0}  static ${f.staticRefresh ? 1 : 0}  bundles ${f.bundles ? 1 : 0}\n` +
       `fps_max ${f.fpsMax}`
   );
 }
@@ -2216,8 +2247,9 @@ void mapPracticeAllowed().then((allowed) => {
   requestAnimationFrame(frame);
 });
 
-if (import.meta.env.DEV) {
+if (import.meta.env.DEV || params.get('bench') === '1') {
   // `frame` too: a hidden tab gets no rAF, so driving it by hand is the only
   // way to render (and screenshot) the real path from a headless session.
+  // `?bench=1` hands the same handle to scripts/cs3d-bench.mjs on a real build.
   window.__cs3d = { THREE, scene, camera, player, nadeEffects, demoNades, projectiles, dropped, throwControl, get pack() { return pack; }, renderer, lighting: () => lighting, fpsView, demoView, playerModels, practiceBots, viewModel, vmPass, vmTuner, buyMenu, pauseMenu, match, matchHud, frame, renderFrame, sunTracker, get mapRenderer() { return mapRenderer; }, get perf() { return perf; } };
 }

@@ -33,7 +33,8 @@ import * as THREE from 'three/webgpu';
 import { FLAG_DUCKING, FLAG_AIRBORNE, PLAYER_SLOTS, readRecord, lerpAngle } from '../replays/shared/tickFormat.js';
 import { cameraYawFromSource } from '../../shared/sim3d/units.js';
 import { HULL_STAND, HULL_DUCK, EYE_STAND, EYE_DUCK, HULL_HALF_WIDE } from '../../shared/sim3d/constants.js';
-import { hudLoadout, inventoryAt } from '../replays/viewer/equipmentIcons.js';
+import { hudLoadout, inventoryAt, bareWeapon } from '../replays/viewer/equipmentIcons.js';
+import { demoSprayPunch, shotsByPlayer } from './demoRecoil.js';
 import { markXrayObject, xrayIconList } from './xray.js';
 import {
   consumeForward,
@@ -75,8 +76,10 @@ export class DemoView {
    * @param {import('./blood.js').BloodSpray} [o.blood]
    * @param {(view: DemoView) => void} [o.onChange]  fired on state changes
    *   (round, play, POV) — not per frame; the HUD polls status() for the clock.
+   * @param {(weapon: string) => object|null} [o.statsOf]  weapons-pack row by
+   *   bare name, for the POV's spray punch; without it the view does not kick
    */
-  constructor({ camera, getPack, playerModels, nades, blood, onChange }) {
+  constructor({ camera, getPack, playerModels, nades, blood, onChange, statsOf }) {
     this.camera = camera;
     this.getPack = getPack;
     this.playerModels = playerModels || null;
@@ -100,6 +103,11 @@ export class DemoView {
     this._flinch = createPovFlinch();
     this._camPunch = [0, 0, 0];
     this._aimPunch = [0, 0, 0];
+    /** The POV's spray, replayed from its shots (demoRecoil.js). */
+    this.statsOf = statsOf || null;
+    this._spray = { aim: [0, 0, 0], camera: [0, 0, 0], viewPunch: [0, 0], state: null };
+    this._sprayShots = null;
+    this._sprayShotsOf = null;
     this._hurtTick = null;
     this._hurtRound = -1;
     this._hitStates = Array.from({ length: 10 }, () => ({}));
@@ -727,6 +735,8 @@ export class DemoView {
         // snap the view 18 units.
         this._eye = amount > 0 ? eye : this._eye + (eye - this._eye) * Math.min(1, dt * 14);
         scaledCameraPunch(this._flinch, this._camPunch);
+        const spray = this._sprayAt(slot, tick, h.tickRate || 64);
+        for (let k = 0; k < 3; k++) this._camPunch[k] += spray.camera[k];
         this.camera.position.set(x, z + this._eye, -y);
         this.camera.rotation.set(
           -(pitch + this._camPunch[0]) * DEG,
@@ -743,12 +753,26 @@ export class DemoView {
           pitch,
           eye: this.camera.position,
           shots: this._shotsCrossed(slot),
-          punch: scaledAimPunch(this._flinch, this._aimPunch)
+          punch: scaledAimPunch(this._flinch, this._aimPunch).map((v, k) => v + spray.aim[k]),
+          viewPunch: spray.viewPunch
         };
       }
     }
 
     this._updateNades();
+  }
+
+  /** The slot's spray punch at `tick`; see src/cs3d/demoRecoil.js. */
+  _sprayAt(slot, tick, rate) {
+    const shots = this.meta?.events?.shots || null;
+    if (shots !== this._sprayShotsOf) {
+      this._sprayShotsOf = shots;
+      this._sprayShots = shotsByPlayer(shots);
+    }
+    const id = (this.meta?.players || []).find((p) => p.slot === slot)?.id;
+    const list = this.statsOf && id != null ? this._sprayShots.get(id) : null;
+    const statsOf = (w) => this.statsOf(bareWeapon(w) || String(w || '').replace(/^weapon_/, ''));
+    return demoSprayPunch(list, tick, rate, statsOf, this._spray);
   }
 
   // ---- grenades -----------------------------------------------------------

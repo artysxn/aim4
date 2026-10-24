@@ -255,10 +255,10 @@ export class SpriteCardBatch {
       iLitTop: new THREE.InstancedBufferAttribute(this.litTop, 3),
       iLitBot: new THREE.InstancedBufferAttribute(this.litBot, 3)
     };
-    for (const [name, a] of Object.entries(this._attr)) {
-      a.setUsage(THREE.DynamicDrawUsage);
-      geo.setAttribute(name, a);
-    }
+    // Static usage: flush() flags needsUpdate, and r169's WebGPU backend
+    // re-uploads a DynamicDrawUsage buffer whole on every pass that draws it,
+    // changed or not.
+    for (const [name, a] of Object.entries(this._attr)) geo.setAttribute(name, a);
     this.geometry = geo;
 
     const seq = sheet.sequences?.[sequence] ?? { start: 0, count: sheet.frames };

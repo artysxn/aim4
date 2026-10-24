@@ -28,6 +28,7 @@ import { MaterialLibrary } from './materials.js';
 import { surfaceArea as sumSurfaceArea } from '../../shared/cs3d/flatGreys.js';
 import { decodeRgbeAdd, RGBE_BYTES } from '../../shared/cs3d/rgbe.js';
 import { packFetch, packFetchOk, packFetchStats } from './packFetch.js';
+import { createStaticBundle } from './threePatches.js';
 
 export const PACK_VERSION = 2;
 /** Tiles in flight: a browser opens six connections per host, and these share them. */
@@ -336,6 +337,14 @@ class TileBatch extends THREE.BatchedMesh {
   constructor(maxInstances, maxVerts, maxIdx, material) {
     super(maxInstances, maxVerts, maxIdx, material);
     this.isTileBatch = true;
+    // Map geometry: three's per-draw refresh runs only when something it reads
+    // changed (threePatches.js patchStaticRefresh).
+    this.cs3dStatic = true;
+    // Never moved: the matrix stays identity, and the world matrix is worked
+    // out once from the parent (the sky3d group is placed once, too) rather
+    // than recomposed on every render call.
+    this.matrixAutoUpdate = false;
+    this.matrixWorldNeedsUpdate = true;
     this.keepRadius = SHADOW_KEEP_RADIUS;
     this._camPos = new THREE.Vector3();
     this._sph = new THREE.Sphere();
@@ -353,6 +362,8 @@ class TileBatch extends THREE.BatchedMesh {
     this._lastIndirect = new Uint32Array(0);
     this._lastCullCount = -1;
     this._cullDirty = true;
+    /** Bumped whenever the draw list is rebuilt; a recorded bundle of it is then stale. */
+    this.cs3dDrawVersion = 0;
     /** Sphere around every tile, in the batch's own space; see worldSphere(). */
     this._union = new THREE.Sphere();
     this._unionDirty = true;
@@ -362,11 +373,22 @@ class TileBatch extends THREE.BatchedMesh {
     this.sortObjects = false;
   }
 
+  addInstance(geometryId) {
+    const id = super.addInstance(geometryId);
+    // r169's addInstance does not mark the draw list stale. The culled path
+    // rebuilds it whenever the view moves, so it never showed; an unculled
+    // (bundled) batch would keep drawing the tiles it had on its first frame.
+    this._visibilityChanged = true;
+    return id;
+  }
+
   setTileVisible(iid, vis) {
     const di = this._drawInfo[iid];
     if (!di || di.visible === vis) return;
     di.visible = vis;
     this._cullDirty = true;
+    // ...and for the unculled path (bundled batches), BatchedMesh's own flag.
+    this._visibilityChanged = true;
   }
 
   cacheTileSphere(iid, gid) {
@@ -467,6 +489,16 @@ class TileBatch extends THREE.BatchedMesh {
 
   onBeforeRender(renderer, scene, camera, geometry, material) {
     if (!this.perObjectFrustumCulled) {
+      // r169's WebGPU backend widens a Uint16 index to Uint32 when it first
+      // uploads it (WebGPUAttributeUtils.createAttribute), which is after the
+      // first draw list was built with 2-byte offsets. The culled path rebuilt
+      // on the next view change; an unculled list has to be told.
+      const bytes = geometry.getIndex()?.array.BYTES_PER_ELEMENT ?? 1;
+      if (bytes !== this._listBytes) {
+        this._listBytes = bytes;
+        this._visibilityChanged = true;
+      }
+      if (this._visibilityChanged) this.cs3dDrawVersion++;
       return super.onBeforeRender(renderer, scene, camera, geometry, material);
     }
     const e = camera.matrixWorldInverse.elements;
@@ -593,6 +625,12 @@ export class MapPack {
     this.materials = null;
     this.world = new THREE.Group();
     this.world.name = 'world';
+    // The world's opaque batches are replayed from one GPU bundle at this
+    // marker (threePatches.js patchStaticRefresh); the 3D skybox gets its own.
+    this.worldBundle = createStaticBundle(THREE, 0);
+    this.worldBundle.visible = false;
+    this.world.add(this.worldBundle);
+    this.skyBundle = null;
     this.sky3d = null; // Group, when the map has a 3D skybox
     this.batches = new Map(); // matId → TileBatch
     /** matId → world-space surface area, summed over its tiles (see surfaceArea). */
@@ -737,7 +775,38 @@ export class MapPack {
     );
     g.updateMatrixWorld(true);
     this.sky3d = g;
+    this.skyBundle = createStaticBundle(THREE, -2);
+    this.skyBundle.visible = this.bundling;
+    g.add(this.skyBundle);
     this.scene.add(g);
+  }
+
+  /**
+   * Whether the static batches are drawn from recorded bundles: on WebGPU with
+   * the static patch, unless `r_bundles 0` turned it off.
+   */
+  get bundling() {
+    return !!this.renderer?._cs3dStaticRefresh?.bundles;
+  }
+
+  /**
+   * Bundles on or off. A bundled batch draws every tile: re-recording the
+   * bundle whenever the camera's tile set changes would cost more than it
+   * saves, and per-tile culling only trimmed 10-20% of the triangles
+   * (keepRadius keeps everything near the camera for the shadow pass anyway).
+   */
+  setBundles(on) {
+    const ctl = this.renderer?._cs3dStaticRefresh;
+    if (!ctl) return false;
+    ctl.bundles = !!on;
+    this.worldBundle.visible = ctl.bundles;
+    if (this.skyBundle) this.skyBundle.visible = ctl.bundles;
+    for (const b of this.batches.values()) {
+      b.perObjectFrustumCulled = !ctl.bundles;
+      b._visibilityChanged = true;
+      b._cullDirty = true;
+    }
+    return ctl.bundles;
   }
 
   async _fetchGlb(url) {
@@ -1012,8 +1081,10 @@ export class MapPack {
     // colour in it; creating the texture on the first tinted tile after the
     // first frame would need a recompile the node material does not notice.
     b._initColorsTexture();
-    b.perObjectFrustumCulled = true;
+    b.perObjectFrustumCulled = !this.bundling;
     b.frustumCulled = false; // per-tile culling covers it; the whole-batch sphere is the map
+    b.cs3dBundle = root === this.sky3d ? this.skyBundle : this.worldBundle;
+    this.worldBundle.visible = this.bundling;
     const decal = !!m.decal;
     // The world's own shadows are baked into its lightmap, so lightmapped
     // geometry never *receives* the dynamic sun; it still *casts*, so a prop
@@ -1054,6 +1125,9 @@ export class MapPack {
    * @param {THREE.Camera} camera
    */
   cullBatches(camera) {
+    // A bundle is recorded with its members; switching batches on and off by
+    // view would re-record it every few frames for no saving (see setBundles).
+    if (this.bundling) return 0;
     camera.updateMatrixWorld();
     _cullProj.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
     _cullFrustum.setFromProjectionMatrix(_cullProj, this.renderer?.coordinateSystem);

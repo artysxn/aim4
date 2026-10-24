@@ -72,6 +72,9 @@ export class Playback {
     this.speed = 1;
     this.playing = false;
     this.loop = false;
+    /** Running backwards at 1x while a key is held (see rewind). */
+    this.rewinding = false;
+    this._resume = false;
     this._raf = 0;
     this._last = 0;
     this._tick = this._tick.bind(this);
@@ -83,6 +86,11 @@ export class Playback {
   }
 
   play() {
+    // Mid-rewind, play means "play forward once the key is let go".
+    if (this.rewinding) {
+      this._resume = true;
+      return;
+    }
     if (this.playing || this.duration <= 0) return;
     this.playing = true;
     this._last = performance.now();
@@ -90,14 +98,42 @@ export class Playback {
   }
 
   pause() {
+    if (this.rewinding) {
+      this._resume = false;
+      return;
+    }
     this.playing = false;
     if (this._raf) cancelAnimationFrame(this._raf);
     this._raf = 0;
   }
 
   toggle() {
-    if (this.playing) this.pause();
+    if (this.rewinding) this._resume = !this._resume;
+    else if (this.playing) this.pause();
     else this.play();
+  }
+
+  /**
+   * Hold-to-rewind: backwards at 1x, whatever the play speed, until
+   * `rewind(false)`. Forward play picks up again on release if it was running
+   * when the rewind began (or was asked for during it); a paused transport
+   * stays paused where the rewind left it.
+   */
+  rewind(on) {
+    on = !!on;
+    if (on === this.rewinding) return;
+    if (on) {
+      this._resume = this.playing;
+      if (this.playing) this.pause();
+      this.rewinding = true;
+      this._last = performance.now();
+      this._raf = requestAnimationFrame(this._tick);
+      return;
+    }
+    this.rewinding = false;
+    if (this._raf) cancelAnimationFrame(this._raf);
+    this._raf = 0;
+    if (this._resume) this.play();
   }
 
   setSpeed(speed) {
@@ -114,10 +150,19 @@ export class Playback {
   }
 
   _tick(now) {
-    if (!this.playing) return;
+    if (!this.playing && !this.rewinding) return;
     // A tab that was backgrounded should not fast-forward on return.
     const dt = Math.min(0.25, (now - this._last) / 1000);
     this._last = now;
+    if (this.rewinding) {
+      const back = Math.max(0, this.position - dt);
+      if (back !== this.position) {
+        this.position = back;
+        this.onFrame(back, -dt);
+      }
+      this._raf = requestAnimationFrame(this._tick);
+      return;
+    }
     let next = this.position + dt * this.speed;
     if (next >= this.duration) {
       if (this.loop) {
@@ -136,6 +181,7 @@ export class Playback {
   }
 
   destroy() {
+    this.rewinding = false;
     this.pause();
     this.onFrame = () => {};
   }

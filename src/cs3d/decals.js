@@ -130,7 +130,10 @@ export function createDecalRingGeometry(kind) {
     g.setAttribute('_amb', f(3));
     g.setAttribute('_sun', f(1));
   }
-  for (const a of Object.values(g.attributes)) a.setUsage(THREE.DynamicDrawUsage);
+  // Default (static) usage on purpose: every write below flags its own range
+  // with needsUpdate, and three r169's WebGPU backend re-uploads a
+  // DynamicDrawUsage buffer whole on every pass that draws it, changed or not.
+  // For these two rings that was 3.7 MB a frame with no decal on the map.
   const nAttr = Object.keys(g.attributes).length;
   if (nAttr > DECAL_MAX_VERTEX_BUFFERS) {
     throw new Error(`decal ${kind} ring has ${nAttr} vertex buffers, WebGPU max is ${DECAL_MAX_VERTEX_BUFFERS}`);

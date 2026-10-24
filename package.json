@@ -39,6 +39,7 @@
     "cs3d:spray-truth": "node --max-old-space-size=8192 scripts/cs3d-spray-truth.mjs",
     "cs3d:upload": "node scripts/cs3d-upload.mjs",
     "cs3d:audit": "node scripts/cs3d-audit.mjs",
+    "cs3d:bench": "node scripts/cs3d-bench.mjs",
     "cs3d:interactives": "node scripts/cs3d-interactives.mjs",
     "cs3d:surfaces": "node scripts/cs3d-surfaces.mjs",
     "cs3d:split": "node scripts/cs3d-split-interactives.mjs",
