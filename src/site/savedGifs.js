@@ -210,8 +210,6 @@ export function createSavedGifs({ host, escapeHtml, openRound }) {
         : '';
     add('Map', escapeHtml(g.mapName || g.map || ''));
     add('Round', g.round ? String(g.round) : '');
-    add('Clip', g.clockFrom && g.clockTo ? `${escapeHtml(g.clockFrom)} to ${escapeHtml(g.clockTo)}` : '');
-    add('View', g.kind === '3d' ? `3D${g.player ? `, following ${escapeHtml(g.player)}` : ''}` : '2D radar');
     add('Side', g.side ? `<span class="bm-team side-${g.side.toLowerCase()}">${g.side}</span>` : '');
     add('Team 1', team(g.teams?.[0]));
     add('Team 2', team(g.teams?.[1]));
@@ -223,7 +221,6 @@ export function createSavedGifs({ host, escapeHtml, openRound }) {
     );
     add('Size', g.width ? `${g.width} x ${g.height}, ${g.frames || '?'} frames, ${((g.bytes || 0) / 1024 / 1024).toFixed(1)} MB` : '');
     add('Made in', escapeHtml(SOURCE_LABEL[g.source] || ''));
-    add('Saved', g.createdAt ? escapeHtml(new Date(g.createdAt).toLocaleString()) : '');
     return rows.join('');
   }
 
