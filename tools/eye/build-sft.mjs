@@ -22,6 +22,14 @@
 //                team and map (tools/eye/gold-pairs.mjs), in the sheet's language
 //   out/eval.jsonl  what went wrong, kept out of training to test against:
 //                "Bad" eye answers with the admin's note, rejected opinions
+//   out/dpo.jsonl   preference pairs from the grades: a question answered once
+//                "Good" and once "Bad" becomes { prompt, chosen, rejected }, the
+//                good turn preferred to the bad one (tools/eye/train reads it)
+//
+// The notes written under "Bad" answers also reach the eye before any
+// fine-tune: admins' next answers carry them in the prompt (eyeAgent.js
+// gradeLessonsNote), and tools/eye/plays/self-train.mjs --grades turns them
+// into lessons the play tools attach.
 // ---------------------------------------------------------------------------
 
 import fs from 'node:fs';
@@ -49,6 +57,9 @@ const chat = (system, user, assistant) => ({
 
 const sft = [];
 const evals = [];
+/** Graded eye turns by question, for preference pairs. */
+const byQuestion = new Map();
+const questionKey = (q) => String(q || '').toLowerCase().replace(/\s+/g, ' ').trim();
 const counts = {};
 const count = (k) => (counts[k] = (counts[k] || 0) + 1);
 
@@ -65,6 +76,11 @@ for (const line of fs.readFileSync(input, 'utf8').split('\n')) {
   const bot = r.bot || {};
   const s = r.subject || {};
 
+  if (r.task === 'eye-trace' && Array.isArray(bot.messages) && s.question) {
+    const k = questionKey(s.question);
+    if (!byQuestion.has(k)) byQuestion.set(k, { yes: [], no: [] });
+    byQuestion.get(k)[yes ? 'yes' : 'no'].push(r);
+  }
   if (r.task === 'eye-trace') {
     if (yes && Array.isArray(bot.messages) && bot.messages.at(-1)?.role === 'assistant') {
       sft.push({ kind: 'eye-trace', messages: [{ role: 'system', content: bot.system || '' }, ...bot.messages], ...(bot.tools ? { tools: bot.tools } : {}) });
@@ -107,9 +123,33 @@ if (pairsFile) {
   }
 }
 
+// A question graded both ways: the good turn preferred to the bad one, from the question on.
+const dpo = [];
+for (const { yes: goods, no: bads } of byQuestion.values()) {
+  for (const good of goods) {
+    for (const bad of bads) {
+      const gm = good.bot.messages;
+      const bm = bad.bot.messages;
+      const gi = gm.findIndex((m) => m.role === 'user');
+      const bi = bm.findIndex((m) => m.role === 'user');
+      if (gi < 0 || bi < 0) continue;
+      dpo.push({
+        kind: 'eye-grade',
+        prompt: [{ role: 'system', content: good.bot.system || '' }, ...gm.slice(0, gi + 1)],
+        chosen: gm.slice(gi + 1),
+        rejected: bm.slice(bi + 1),
+        note: bad.comment || '',
+        ...(good.bot.tools ? { tools: good.bot.tools } : {})
+      });
+      count('dpo eye-grade');
+    }
+  }
+}
+
 fs.mkdirSync(outDir, { recursive: true });
 const write = (name, rows) => fs.writeFileSync(path.join(outDir, name), rows.map((x) => JSON.stringify(x)).join('\n') + (rows.length ? '\n' : ''));
 write('sft.jsonl', sft);
 write('eval.jsonl', evals);
-console.log(`${sft.length} training examples, ${evals.length} eval cases -> ${outDir}`);
+write('dpo.jsonl', dpo);
+console.log(`${sft.length} training examples, ${evals.length} eval cases, ${dpo.length} preference pairs -> ${outDir}`);
 console.log(counts);

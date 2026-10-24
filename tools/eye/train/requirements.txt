@@ -1,0 +1,10 @@
+# tools/eye/train: Python side of training aim4 eye (train.py).
+# Install torch for your GPU first (https://pytorch.org/get-started/locally/),
+# then: pip install -r tools/eye/train/requirements.txt
+transformers>=4.51
+trl>=0.19
+peft>=0.15
+datasets>=3.0
+accelerate>=1.0
+# --4bit (QLoRA) only:
+bitsandbytes>=0.45; platform_system != "Darwin"

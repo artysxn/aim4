@@ -61,6 +61,74 @@ What is graded (`valueScore.mjs`): the first call is `round_value` on the right 
 
 The doctrine in the Counter-Strike 101 PDF is not copied in. Where it makes a claim that can be measured ("the first pick converts at ~82%", "block at 1:00 and 0:40"), test it against `query_rounds` and the win model before it goes anywhere near a prompt or a training set.
 
+## Plays: what is default, what is a play, and was it good
+
+Two skills, both measured in code first and then taught to the model:
+
+1. **Default or play.** A play is a decision: an execute, split, rush or contact hit, a fake, a lurk, a rotation, a stack, a push, a retake, a save, how the post-plant is held. A default is what a side does before it commits, or a setup many teams use. Which is which is learned from the library, not written down: `src/replays/plays/playMap.js` learns per map where each side stands per economy and per 10 seconds of the clock, how unusual one round's shape is against that, and how often each kind of play is run. `findPlays.js` reads a round against it (kinds and their definitions are at the top of the file and in `DEFINITIONS`), and `summarize` tells the round in simple terms.
+2. **Good or bad.** `playReview.js` puts the moment a play started to Similar Rounds: the closest rounds on the map in the same buys. It reports what the same side chose from there and how each choice went (rounds won, win-chance change), how this play went against the rounds that chose the same, and which grenades and timings went with winning ("with a flash on A site 12 of 12 won, without it 0 of 12"). Those the play lacked become the improvements. The verdict has two parts: the decision (the choice against the alternatives) and the execution (against the same choice). The autocoach's rules come in only when there are too few similar rounds, and are marked as rules, not measurements.
+
+In the app (desktop only, like Similar Rounds; the work runs in the app's own server, `server/similar/plays.js`):
+
+| Tool | What it returns |
+| --- | --- |
+| `round_moves` | the round with no labels: each player's path, both sides' shape every 10 s, utility, kills, plant |
+| `round_plays` | the plays, default or play, how usual, what each did to the win chance, a summary; with `guess`, the model's own reading checked (right, wrong, missed, and the definitions of what it missed) |
+| `play_review` | one play judged against similar rounds; with `guess`, the model's verdict checked |
+
+The prompt has the eye guess before it checks: `round_moves`, then its reading as `round_plays`' guess, then the answer. Lessons it learned in training (`public/eye/play-notes.json`) ride in the play tools' results for the map in question.
+
+A map's baseline comes from `public/eye/play-baselines/<MAP>.json` when there is one, otherwise the app's server learns it from the library on the first question about that map (a few seconds to a minute) and keeps it for 12 hours.
+
+### How it learns: guess, check, confirm, note
+
+`tools/eye/plays/self-train.mjs` asks the current model about many rounds, the way the app asks:
+
+- **plays**: it reads the moves and guesses the plays; the check scores the guess (F1 over the plays, half credit for the right idea with the wrong kind); then it answers.
+- **review**: it guesses a play's verdict; the review checks it; then it answers.
+
+What it got right stays in its own words (confirmed). What it got wrong is replaced by the right guess and the reference answer, and the right turn is paired against its own as a preference pair (DPO): it learns from its real mistakes. Items it got wrong come back first in the next run (reinforced); an item right twice in a row is confirmed and left alone. Repeated mistakes ("on Mirage you read 7 of 10 B contacts as executes") become lessons with the definition of what it confused, in `play-notes.json`.
+
+Your grades count too:
+
+- **Good / Bad under any answer** (admins): a "Bad" with a note is in the eye's prompt from the next answer on (`gradeLessonsNote`, newest twelve), so it is remembered before any training.
+- `tools/eye/build-sft.mjs` turns the export into training data. Good answers are traces to learn from, and a question graded both ways becomes a preference pair.
+- `self-train.mjs --grades export.jsonl` turns the notes into lessons. It also pairs a bad answer to a plays or review question with the answer that turn's own tool results support.
+
+### Training it on your PC
+
+Node builds the data; Python (`tools/eye/train/train.py`) trains. A whole cycle is one command:
+
+```powershell
+# Windows
+powershell -ExecutionPolicy Bypass -File tools/eye/train/run-cycle.ps1 `
+  -Corpus '--base http://127.0.0.1:<app port> --token <sign-in token>' `
+  -BaseModel Qwen/Qwen3.5-4B -Llama http://127.0.0.1:8899 -LlamaCpp C:\llama.cpp `
+  -Out runs/eye-plays-1 -Items 400 -Cycles 2 -Grades aim4-training.jsonl
+```
+
+```bash
+# Linux / a rented GPU
+CORPUS="--rounds-dir server/data/replays/<you>/rounds" BASE_MODEL=Qwen/Qwen3.5-4B \
+LLAMA=http://127.0.0.1:8899 LLAMA_CPP=~/llama.cpp OUT=runs/eye-plays-1 ITEMS=400 CYCLES=2 \
+bash tools/eye/train/run-cycle.sh
+```
+
+Step by step, what it runs:
+
+1. **The rounds** (`tools/eye/plays/corpus.mjs`, flags shared by every script). Use `--dir <folder>` for `.aim4replay` packages (the default is `sampledemos/`). Use `--rounds-dir` for a server library on disk. Use `--base <url> --token <token>` for the library through a running aim4 server: the desktop app's own, with the Bearer token from any `/api` request in the browser's network tab. Downloads are cached in `tools/eye/plays/out/cache/`, so an expired token loses nothing. More rounds mean better baselines and closer similar rounds: a few hundred a map is a start, a few thousand is good. Run `node scripts/fetch-zone-networks.mjs` once first, so places get their real callouts and bombsites their real names.
+2. `node --max-old-space-size=8192 tools/eye/plays/build-baselines.mjs <corpus> --publish` learns each map's default and writes `public/eye/play-baselines/`.
+3. `node tools/eye/plays/build-plays-sft.mjs <corpus>` writes the first lessons, no model needed. It writes `out/plays-sft.jsonl` and `out/plays-dpo.jsonl`, and `out/plays-eval.jsonl` from held-out matches (one in five, never split within a match).
+4. **Guess, check, learn.** Serve the current model (`llama-server -m <model>.gguf --jinja -c 32768 --port 8899`). Then run `node tools/eye/plays/self-train.mjs --llama http://127.0.0.1:8899 <corpus> --items 400 --publish`, as many runs as you like; each one adds to `out/self-train/`.
+5. **Train.** `pip install -r tools/eye/train/requirements.txt` (torch for your GPU first), then `python tools/eye/train/train.py --base Qwen/Qwen3.5-4B --sft <files> --dpo <files> --out runs/eye-plays-1 --merge`. It trains a LoRA on the SFT traces (rank 16, 2 epochs, lr 1e-4, assistant turns only), merges it, trains a second LoRA on the preference pairs (beta 0.1, lr 5e-6; the reference is the model after SFT), and writes merged weights. `--check-data` renders and measures the data without training; `--4bit` fits 9B on 24 GB. Every record carries the app's whole system prompt and tool list (about 16k tokens before the question), so records run to about 20k tokens and `--max-len` is 24k. On a smaller card, `--keep-tools round_moves,round_plays,play_review,round_value,moment_value` renders only those tool schemas (about 10k tokens less), at the price of training on a shorter list than the app sends.
+6. **GGUF.** `python convert_hf_to_gguf.py runs/eye-plays-1/merged --outfile eye-bf16.gguf`, then `llama-quantize eye-bf16.gguf eye-Q4_K_M.gguf Q4_K_M` (llama.cpp b11706, the version the app runs).
+7. **Compare before you ship.** Serve the base and the fine-tune in turn and run `self-train.mjs --eval <corpus>` against each. It scores the held-out matches (guess score, verdicts right, answers grounded) and learns nothing. Ship the fine-tune only if it beats the base without losing grounding. Shipping means a new entry in `recorder/app/src/eye/models.rs` and in `EYE_MODELS` in `eyePanel.js`.
+8. **Again.** Serve the new model and go back to step 4. Each cycle it guesses better, so what it gets wrong is harder and the lessons get finer.
+
+On a rented GPU (24 GB or more): build the data at home (steps 1 to 4 need your library and a served model), copy `tools/eye/plays/out/*.jsonl`, `tools/eye/plays/out/self-train/*.jsonl` and `tools/eye/train/` over, and run step 5 there. The JSONL files are self-contained: system prompt, tool schemas and tool results are in every record.
+
+Where the thresholds are, if a reading looks wrong: hit kinds, lurks, stacks, pushes and retakes are in the constants at the top of `findPlays.js`; similar-round selection, the evidence needed for an improvement and the verdict rules are at the top of `playReview.js`. Change them, rebuild the baselines and the data, and the eye learns the new definitions (they are also what its lessons quote).
+
 ## 2. Fine-tuning, from what admins rate
 
 Data comes from two places. Both end up in the admin training store (`/api/admin/labels`, JSON Lines):
@@ -87,7 +155,9 @@ node tools/eye/build-sft.mjs export.jsonl sft-out/ gold-pairs.jsonl           # 
 
 A pair needs that team's demos on that map in the library you point `--base` at. The local library has NAVI Junior (Mirage) and WBT (Anubis), which gives 3 pairs. Pointed at a full library, it pairs all 13 sheets. Each new manual sheet you add to `gold/` and `index.json` becomes another example. What the sheets show the rule-based generators are missing is in `GENERATOR_GAPS.md`.
 
-**When it's worth it:** once there are roughly 300+ good `eye-trace` examples. Until then the prompt and the tools give more for the effort.
+**When it's worth it:** once there are roughly 300+ good `eye-trace` examples. Until then the prompt and the tools give more for the effort. (The plays data above needs no grades: it can be trained on as soon as the corpus is big enough.)
+
+`tools/eye/train/train.py` trains on any of these files (SFT and DPO JSONL, see its header). The recipe below is what it does; the steps are kept for other trainers.
 
 **Recipe (LoRA, ~1–2 h for 4B):**
 
