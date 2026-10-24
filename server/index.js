@@ -22,6 +22,7 @@ import { MultiplayerServer } from './lobby.js';
 import { FootballServer } from './football.js';
 import { tryServeStatic, distExists } from './static.js';
 import { handleReplayRequest } from './replays/routes.js';
+import { handleGifShare } from './replays/gifShare.js';
 import { handleRecorderRequest } from './recorder/routes.js';
 import { handleEyeRequest } from './eye/routes.js';
 import { handleSimilarRequest } from './similar/routes.js';
@@ -332,6 +333,12 @@ const server = http.createServer(async (req, res) => {
         region: process.env.AIM4_REGION || null,
         machineId: process.env.AIM4_INSTANCE_ID || null
       });
+      return;
+    }
+
+    // A saved GIF's share link (/g/<id> and /g/<id>.gif): public, ahead of the
+    // SPA fallback that would otherwise answer it with the trainer.
+    if (url.pathname.startsWith('/g/') && (await handleGifShare(req, res, url))) {
       return;
     }
 

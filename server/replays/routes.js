@@ -74,6 +74,8 @@ import {
   writeRecord,
   writeRoundNotes
 } from './demoStore.js';
+import { MAX_GIF_BYTES, addGif, listGifs, readGifFile, removeGif, updateGif } from './gifStore.js';
+import { sendGifBytes } from './gifShare.js';
 import { applyTeamRename } from './teamRescan.js';
 import { cpuProbe, memorySnapshot } from './hostMemory.js';
 import { forgetDemoIndex, loadStoredEntry, refreshLibraryStats, scheduleStatsIndex, STATS_LIBRARY_PAGE, statsPayload } from './statsIndex.js';
@@ -178,7 +180,7 @@ const CORS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
   'Access-Control-Allow-Headers':
-    'Authorization, Content-Type, X-Aim4-User, X-Aim4-Filename, X-Aim4-Visibility, X-Aim4-Impersonate'
+    'Authorization, Content-Type, X-Aim4-User, X-Aim4-Filename, X-Aim4-Visibility, X-Aim4-Impersonate, X-Aim4-Gif-Meta'
 };
 
 /**
@@ -2640,6 +2642,81 @@ export async function handleReplayRequest(req, res, url) {
       return true;
     }
     json(res, 200, { playlists: await playlistsFor() });
+    return true;
+  }
+
+  // ---- saved GIFs -----------------------------------------------------------
+  // The GIF creator's output (gifStore.js). The picture answers anyone with
+  // its id, which is the share link anyway; listing and every change are the
+  // owner's.
+  const gifImageMatch = p.match(/^\/api\/replays\/gifs\/([a-f0-9]{16})\.gif$/);
+  if (gifImageMatch && (req.method === 'GET' || req.method === 'HEAD')) {
+    const buf = await readGifFile(user, gifImageMatch[1]);
+    if (!buf) json(res, 404, { error: 'GIF not found.' });
+    else sendGifBytes(req, res, buf);
+    return true;
+  }
+
+  if (p === '/api/replays/gifs') {
+    const actor = { id: me.id, username: me.username, admin: me.admin };
+    if (req.method === 'GET') {
+      json(res, 200, { gifs: me.signedIn ? await listGifs(user, actor) : [] });
+      return true;
+    }
+    if (req.method === 'POST') {
+      if (!me.signedIn) {
+        await refuseUpload(req, res, 401, { error: 'Sign in to save GIFs.' });
+        return true;
+      }
+      const tooBig = { error: `That GIF is over ${MAX_GIF_BYTES / 1024 / 1024} MB, too large to keep in Bookmarks.` };
+      if (Number(req.headers['content-length'] || 0) > MAX_GIF_BYTES) {
+        await refuseUpload(req, res, 413, tooBig);
+        return true;
+      }
+      let meta = {};
+      try {
+        meta = JSON.parse(Buffer.from(String(req.headers['x-aim4-gif-meta'] || ''), 'base64').toString('utf8') || '{}');
+      } catch {
+        meta = {};
+      }
+      // Read to the end even past the cap (keeping nothing), so the refusal
+      // reaches a client that did not declare its length.
+      const chunks = [];
+      let size = 0;
+      for await (const chunk of req) {
+        size += chunk.length;
+        if (size <= MAX_GIF_BYTES) chunks.push(chunk);
+      }
+      if (size > MAX_GIF_BYTES) {
+        json(res, 413, tooBig);
+        return true;
+      }
+      try {
+        const gif = await addGif(user, Buffer.concat(chunks), meta, actor);
+        json(res, 200, { gif });
+      } catch (err) {
+        json(res, err.status || 400, { error: err.message || 'Could not save the GIF.' });
+      }
+      return true;
+    }
+  }
+
+  const gifMatch = p.match(/^\/api\/replays\/gifs\/([a-f0-9]{16})$/);
+  if (gifMatch && (req.method === 'POST' || req.method === 'DELETE')) {
+    if (!requireUser()) return true;
+    const actor = { id: me.id, username: me.username, admin: me.admin };
+    try {
+      if (req.method === 'POST') {
+        const body = await readJson(req);
+        json(res, 200, { gif: await updateGif(user, gifMatch[1], body, actor) });
+      } else if (await removeGif(user, gifMatch[1], actor)) {
+        json(res, 200, { gifs: await listGifs(user, actor) });
+      } else {
+        json(res, 404, { error: 'GIF not found.' });
+      }
+    } catch (err) {
+      json(res, err.status || 400, { error: err.message || 'Could not change that GIF.' });
+    }
     return true;
   }
 

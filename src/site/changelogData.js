@@ -14,6 +14,71 @@
 
 export const CHANGELOG = Object.freeze([
   {
+    date: '2026-10-24',
+    title: 'Major update: GIFs, Bookmarks and share links',
+    tag: 'new',
+    points: [
+      'A GIF button in the round viewer turns any part of a round into a GIF. In 2D, drag a box over the part of the radar you want, or keep the whole map. In 3D, follow a player in first or third person, or park the camera where you want it and keep it there.',
+      'Pick the part of the round on a slider that shows every kill. GIFs run at 18 FPS in 2D and 24 FPS in 3D by default, and quality goes from 1 to 3: 2D starts at half the resolution on screen and 3D at three quarters, up to full resolution at 3. The round clock is stamped in the corner, unless you switch it off.',
+      'Give a GIF a title and a description. Anything you write between < and > becomes a link that copies itself, so <setpos 123 456 78; setang 0 90 0> in a description copies that setpos with one click.',
+      'A finished GIF downloads straight away and is saved to Bookmarks with what it shows: the map, the round, both teams with their side and buy, and who won.',
+      'Demo Playlists is now Bookmarks, below Performance in the sidebar, with two tabs in the top right. Playlists can be searched by name. Saved GIFs is an image wall you can search and filter by 2D or 3D, map, team, side, buy and the side that won.',
+      'Click a GIF to open it next to the rest of the wall: the GIF on the left, and on the right a Copy link button, the title, the description and everything the GIF was saved with.',
+      'The link is the GIF itself on aim4.io (aim4.io/g/...gif), so it plays wherever you paste it: Discord, Slack, a forum. aim4.io/g/... without the .gif opens a page with the title, the description and its copy links, for anyone with the link.',
+      'aim4 eye can make GIFs for you in the chat, saved to your Bookmarks. The antistrat summary can add GIF highlights at the end of a document: executes, opening kills and retakes from the rounds the sheet was written from.'
+    ]
+  },
+  {
+    date: '2026-10-24',
+    title: 'Similar Rounds, and what a play was worth',
+    tag: 'new',
+    points: [
+      'A Similar rounds button in the desktop app\'s viewer finds every round on the map that went through the same situation as the one on screen, at the same moment on the clock. Players are matched by how they moved over the last ten seconds and what they carry, and utility by where the same kind landed over the last thirty. Ask about T, CT or both.',
+      'Draw on the map to ask your own question: a line with the T or CT pen is a path someone walked, a dot is a spot someone stood on.',
+      'Rounds are only compared with rounds of the same buy. Each result shows its dominance, how little win chance that side gave up on the way, and you can filter by it, by won or lost, and to the closest few. A result opens at the same moment in a new tab.',
+      'The scan runs on your own PC\'s cores inside the desktop app, and a second scan of the same map reuses what the first one read.',
+      'The desktop app learns what is default on each map from your library and reads every round as plays: for T a default, execute, split, rush or contact hit (with fakes), lurk, rotation, post-plant or save; for CT a setup, stack, push, rotation, retake or save. Each play says how usual it is and what it did to the win chance.',
+      'Any play can be judged against similar rounds: what other teams chose from the same spot and how each choice went, whether this one went better or worse than the others who chose the same, and which grenades and timings went with winning. The verdict is split into the choice and how it was carried out.'
+    ]
+  },
+  {
+    date: '2026-10-24',
+    title: 'aim4 eye: playlists, round notes, plays',
+    tag: 'improved',
+    points: [
+      'Ask the eye to make, change or delete a playlist, or to pick rounds for you: for example eight pistol rounds on Ancient that the T side won without ever being two players down.',
+      'It writes a short coach\'s note on each round of a playlist, where the round viewer shows it, and can brief you on several rounds at once.',
+      'Reviewing a document now edits the points and sections in place and keeps its links, tables and layout.',
+      'In the desktop app the eye reads rounds as plays and judges them against similar rounds, guessing first and then checking itself.',
+      'Ctrl+Enter queues a follow-up while an answer is still being written. The 27B model writes about twice as fast on the same PC, and two chats at once no longer run each other out of room.',
+      'The eye decides once and follows what you asked, instead of reasoning in circles. Admins: a Bad grade with a note is remembered from the eye\'s next answer on.'
+    ]
+  },
+  {
+    date: '2026-10-24',
+    title: 'Strategies from rounds, written like a coach',
+    tag: 'new',
+    points: [
+      'Add strategy in the viewer writes one note per player the way a coach writes a stratbook: the buy in stratbook shorthand (K, SFF, SF+P250), where they go, what they throw and who they trade. With aim4 eye running, the eye writes the notes from what the round actually shows.',
+      'It runs in the background with a small badge in the corner, and tells you when the strategy is saved. The strategy keeps a link to the round it came from.',
+      'Setpos in notes writes each grenade as its setpos and setang instead of a link, for teams that keep their book in a sheet.',
+      'The Stratbook Editor can copy one map or the whole book, and My Strategies can copy everything, as rows that paste straight into a spreadsheet.'
+    ]
+  },
+  {
+    date: '2026-10-24',
+    title: 'Desktop app, 3D maps and fixes',
+    tag: 'improved',
+    points: [
+      'The desktop app carries its own server, so it works offline on any PC with the demos stored on it, and goes back to your aim4.io library when it is online.',
+      'Tabs are a desktop app feature. In a browser the address bar now shows the page you are actually on.',
+      'Links copied or saved in the desktop app point at aim4.io instead of your own PC, including team invites, shared documents and strategies saved to the stratbook.',
+      'Demo Manager can filter rounds by the side that won, read from each round\'s recorded result.',
+      'The 3D maps light surfaces from the direction the light really comes from, so wall and floor detail shows in the shade too. Maps open faster.',
+      'Fixed: icons and the logo sometimes showed as empty squares. Notes you save now show in the viewer straight away.'
+    ]
+  },
+  {
     date: '2026-10-18',
     title: 'aim4 eye: longer chats, kinds of hit, player habits',
     tag: 'new',

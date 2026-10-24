@@ -25,6 +25,8 @@ import { loadRadar } from '../replays/viewer/radarRenderer.js';
 import { RADAR_SIZE, worldToRadar } from '../replays/viewer/mapCalibration.js';
 import { NADE_COLORS, paintPanel } from '../replays/analytics/heatImage.js';
 import { createRangeSlider } from '../lib/rangeSlider.js';
+import { gifImageUrl } from '../replays/api.js';
+import { publicOrigin } from './publicOrigin.js';
 
 const NADE_WORD = {
   smokegrenade: 'smoke',
@@ -297,6 +299,7 @@ export function enhanceDocEmbeds(surface) {
       else if (node.dataset.kind === 'nade-paths') mountNadePaths(node, data);
       else if (node.dataset.kind === 'ct-spread') mountCtSpread(node, data);
       else if (node.dataset.kind === 'spacing') mountSpacing(node, data);
+      else if (node.dataset.kind === 'gif') mountGif(node, data);
     } catch (err) {
       // A broken embed must not take the document down, but it must not
       // disappear in silence either: half a widget on the page and nothing in
@@ -348,6 +351,43 @@ function roundsLink(label, files) {
   a.rel = 'noopener noreferrer';
   a.textContent = label;
   return a;
+}
+
+// ---- gif --------------------------------------------------------------------
+
+/**
+ * A saved GIF (Bookmarks > Saved GIFs), by id, with its caption. The picture
+ * comes from aim4's own address: the document stores the id rather than a
+ * URL, because a remote image would show readers' addresses to whoever hosts
+ * it (the reason the sanitizer refuses remote images at all).
+ *
+ * @param {HTMLElement} node
+ * @param {{ id: string, caption?: string, width?: number, height?: number }} data
+ */
+function mountGif(node, data) {
+  const id = String(data?.id || '');
+  if (!/^[a-f0-9]{16}$/.test(id)) throw new Error('not a saved GIF id');
+  const fig = document.createElement('figure');
+  fig.className = 'doc-embed-gif';
+  const img = document.createElement('img');
+  img.src = gifImageUrl(id);
+  img.alt = String(data.caption || 'GIF');
+  img.loading = 'lazy';
+  if (data.width > 0 && data.height > 0) {
+    img.width = Math.round(data.width);
+    img.height = Math.round(data.height);
+  }
+  fig.appendChild(img);
+  const cap = document.createElement('figcaption');
+  if (data.caption) cap.appendChild(document.createTextNode(`${data.caption} `));
+  const link = document.createElement('a');
+  link.href = `${publicOrigin()}/g/${id}`;
+  link.target = '_blank';
+  link.rel = 'noopener noreferrer';
+  link.textContent = 'Open';
+  cap.appendChild(link);
+  fig.appendChild(cap);
+  node.appendChild(fig);
 }
 
 // ---- heat -----------------------------------------------------------------

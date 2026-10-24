@@ -10,7 +10,8 @@
 // to the account in one click, since it is signed in already.
 // ---------------------------------------------------------------------------
 
-import { accessToken } from '../api.js';
+import { accessToken, gifImageUrl } from '../api.js';
+import { gifShareUrl } from '../gif/gifCapture.js';
 import { desktopApp } from '../../site/desktopApp.js';
 import { SYSTEM_PROMPT, gradeLessonsNote, runAgentTurn, summarizeChat, systemWith } from './eyeAgent.js';
 import { HISTORY_BUDGET } from './eyeContext.js';
@@ -148,6 +149,7 @@ const TOOL_VERBS = {
   classify_rounds: 'Sorting rounds by kind of hit',
   player_patterns: 'Reading how the players play',
   screenshot_round: 'Looking at a round',
+  make_gif: 'Making a GIF',
   antistrat_summary: 'Reading antistrat',
   create_antistrat_document: 'Creating document'
 };
@@ -733,14 +735,44 @@ export function createEyePanel({ escapeHtml }) {
     toBottom();
   }
 
-  /** A round the model put in the chat: a small player, or a still of one moment that plays on. */
+  /** A round the model put in the chat: a small player, a still of one moment that plays on, or a GIF it made. */
   function showWidget(spec) {
+    if (spec?.gif?.id) {
+      const stick = nearBottom();
+      logEl.appendChild(gifWidget(spec.gif));
+      if (stick) toBottom();
+      return;
+    }
     if (!spec?.file) return;
     const stick = nearBottom();
     const node = createRoundPlayer(spec, escapeHtml);
     node.classList.add('eye-msg');
     logEl.appendChild(node);
     if (stick) toBottom();
+  }
+
+  /** A saved GIF in the chat: the picture, its title, and its share link (the GIF itself, so it embeds where it is pasted). */
+  function gifWidget(gif) {
+    const id = String(gif.id || '');
+    const node = document.createElement('figure');
+    node.className = 'eye-msg eye-gif';
+    const size = gif.width && gif.height ? ` width="${Number(gif.width) | 0}" height="${Number(gif.height) | 0}"` : '';
+    node.innerHTML = `<img src="${escapeHtml(gifImageUrl(id))}" alt="${escapeHtml(gif.title || 'GIF')}"${size} />
+      <figcaption>
+        <span>${escapeHtml(gif.title || 'GIF')}</span>
+        <button type="button" class="eye-gif-copy">Copy link</button>
+        <a href="/bookmarks?tab=gifs" target="_blank" rel="noopener">Saved GIFs</a>
+      </figcaption>`;
+    node.querySelector('.eye-gif-copy').addEventListener('click', async (e) => {
+      const link = gifShareUrl(id);
+      try {
+        await navigator.clipboard.writeText(link);
+        e.target.textContent = 'Copied';
+      } catch {
+        window.prompt('Copy the link:', link);
+      }
+    });
+    return node;
   }
 
   /** The first line of what the model said before a tool call, cut short. */

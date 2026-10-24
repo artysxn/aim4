@@ -13,7 +13,11 @@
 // the same way the viewer spends one for auto coach.
 // ---------------------------------------------------------------------------
 
-import { fetchRoster, fetchTeams, saveTeamDocument, formatApiError } from '../api.js';
+import { fetchRoster, fetchRoundMeta, fetchTeams, saveTeamDocument, formatApiError } from '../api.js';
+import { buildHighlights } from '../gif/gifHighlights.js';
+
+/** GIF highlights per map when the summary asks for them. */
+const HIGHLIGHTS_PER_MAP = 4;
 import { getStatsPayload } from '../statsCache.js';
 import { CAP } from '../../../shared/entitlements/keys.js';
 import { PLAN_NAMES } from '../../../shared/entitlements/catalogue.js';
@@ -106,6 +110,12 @@ export function createAntistratPanel({ escapeHtml }) {
      * for whoever checks it.
      */
     summaryLinks: false,
+    /**
+     * Summary mode: radar GIFs of a few rounds the sheet was written from
+     * (executes, openings, retakes), saved to Bookmarks and embedded at the
+     * end. Off by default: each one is seconds of drawing and encoding.
+     */
+    summaryGifs: false,
     /**
      * Summary mode, what the document looks like:
      *   'full'     the whole sheet
@@ -409,6 +419,14 @@ export function createAntistratPanel({ escapeHtml }) {
               <span>Open rounds from the summary</span>
             </label>
             <p class="an-muted">Every heading and line links to the rounds it was written from.</p>
+          </div>
+          <div class="as-cat-group">
+            <p class="an-side-title">Highlights</p>
+            <label class="as-cat-main">
+              <input type="checkbox" data-as-summary-gifs ${state.summaryGifs ? 'checked' : ''} />
+              <span>GIF highlights</span>
+            </label>
+            <p class="an-muted">Up to ${HIGHLIGHTS_PER_MAP} radar GIFs per map of executes, openings and retakes from the sheet's rounds, also saved to Bookmarks.</p>
           </div>`
         : '';
     return `<section class="an-card as-step">
@@ -728,7 +746,7 @@ export function createAntistratPanel({ escapeHtml }) {
         specs.push({ teamName: job.teamName, mapCode: job.mapCode, categories, report, links: state.summaryLinks });
       }
       if (!specs.length) throw new Error(stopped || 'Nothing was analysed.');
-      const html =
+      let html =
         style.key === 'sixpack'
           ? buildSixpackDocHtml(specs, escapeHtml)
           : specs
@@ -742,9 +760,26 @@ export function createAntistratPanel({ escapeHtml }) {
       }
       const what = [...byTeam].map(([team, maps]) => `${team} on ${joinList(maps)}`).join('; ');
       const title = `${style.title}: ${what}`;
+      let gifNote = '';
+      if (state.summaryGifs) {
+        const extra = await buildHighlights({
+          specs,
+          count: HIGHLIGHTS_PER_MAP,
+          esc: escapeHtml,
+          metaOf: fetchRoundMeta,
+          onProgress: (text) => {
+            state.progress = text;
+            renderProgress();
+          }
+        });
+        html += extra.html;
+        gifNote = ` ${extra.made} GIF${extra.made === 1 ? '' : 's'} added${
+          extra.failed.length ? `, ${extra.failed.length} could not be made (${extra.failed[0]})` : ''
+        }.`;
+      }
       await saveTeamDocument(dest.id, { title, html });
       state.outcome = 'ok';
-      state.outcomeMsg = `Saved "${title}" to ${dest.name}. ${rounds} rounds scanned.${stopped ? ` ${stopped}` : ''}`;
+      state.outcomeMsg = `Saved "${title}" to ${dest.name}. ${rounds} rounds scanned.${gifNote}${stopped ? ` ${stopped}` : ''}`;
       // What was written is done; anything the allowance stopped stays queued.
       state.queue = state.queue.slice(specs.length);
     } catch (err) {
@@ -803,6 +838,10 @@ export function createAntistratPanel({ escapeHtml }) {
     }
     if (t.matches('[data-as-summary-links]')) {
       state.summaryLinks = t.checked;
+      return;
+    }
+    if (t.matches('[data-as-summary-gifs]')) {
+      state.summaryGifs = t.checked;
       return;
     }
     const cat = t.closest('[data-as-cat]');

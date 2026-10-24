@@ -129,7 +129,12 @@ const FOV_MAX = 90;
 const ORBIT_MIN = 40;
 const ORBIT_MAX = 500;
 
-export function createView3d({ slug, onModeChange, sampleSlot, tickRange }) {
+/**
+ * @param {object} opts
+ * @param {number} [opts.pixelRatio]  canvas pixels per CSS pixel; the screen's (up to 2) by default.
+ *   An offscreen GIF render fixes it so the picture is the same size on any screen.
+ */
+export function createView3d({ slug, onModeChange, sampleSlot, tickRange, pixelRatio = null }) {
   const canvas = document.createElement('canvas');
   canvas.className = 'rv-3d-canvas';
 
@@ -172,6 +177,8 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange }) {
     crosshair.hidden = !on;
   }
   let lastNow = 0;
+  /** A GIF is being captured: the live loop is stopped and frames are drawn on the capture's clock. */
+  let capturing = false;
   let altHeld = false;
   let corpseRound = '';
 
@@ -391,7 +398,7 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange }) {
 
   async function bootScene(container) {
     renderer = new THREE.WebGPURenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.setPixelRatio(pixelRatio || Math.min(window.devicePixelRatio || 1, 2));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.NeutralToneMapping;
     renderer.toneMappingExposure = 1.0;
@@ -1756,6 +1763,39 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange }) {
       return p?.name || null;
     },
     cancelDeathFollow,
+
+    // ---- GIF capture --------------------------------------------------------
+    // The live loop stops while a GIF is made. Each captureFrame draws one frame
+    // on the capture's own clock, 1/fps apart, so smoke, tracers and the
+    // viewmodel advance with the clip and not with how long encoding takes. The
+    // canvas holds that frame until the task ends, which is when the caller
+    // copies it.
+
+    beginCapture() {
+      cancelAnimationFrame(raf);
+      raf = 0;
+      capturing = true;
+      lastNow = 0;
+    },
+    /** Draw one frame at `nowMs` on the capture clock. Returns the canvas holding it. */
+    captureFrame(nowMs) {
+      drawFrame(nowMs);
+      return canvas;
+    },
+    endCapture() {
+      if (!capturing) return;
+      capturing = false;
+      lastNow = 0;
+      if (renderer && ready && !failed) loop();
+    },
+    /** How white a flashbang has the screen, 0 to 1. It is a DOM overlay, so a capture paints it in itself. */
+    get flash() {
+      return _flashShown;
+    },
+    /** The crosshair, when it is on screen: a canvas over the scene, so a capture paints it in too. */
+    get crosshairCanvas() {
+      return crosshair && !crosshair.hidden && mode === 'pov' ? crosshair : null;
+    },
 
     /** Create the scene. Safe to call once; later calls are no-ops. */
     async start(container) {

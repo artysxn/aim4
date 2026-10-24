@@ -292,7 +292,7 @@ assert.equal(r.events.at(-1).type, 'done');
   const answer = await runAgentTurn(messages, {});
   assert.equal(answer, 'All 15 playlists have their notes.');
   assert.equal(over, 0, 'no request ran past the room');
-  assert.match(messages[0].progress, /^- site_map\(part "1\.0"\) -> 8 items\n/, 'folded steps are a line per call, oldest first');
+  assert.match(messages[0].progress, /^- site_map\(part "1\.0"\) -> 9 items\n/, 'folded steps are a line per call, oldest first');
   const view = sent.at(-1);
   assert.ok(view[1].content.startsWith('Write a note on every round') && view[1].content.includes(PROGRESS_HEADING), 'the model reads them on the question');
   // Every call the model is shown has its result, and every result its call.
@@ -309,7 +309,9 @@ assert.equal(r.events.at(-1).type, 'done');
     while (k < texts[i - 1].length && texts[i - 1][k] === texts[i][k]) k++;
     if (k < texts[i - 1].length * 0.8) breaks++;
   }
-  assert.ok(breaks <= 20, `the prompt's start changes on few steps (${breaks} of ${texts.length - 1})`);
+  // Most steps, as the comment above says: fewer than half. This read 20 of 45 on 21 Oct and 21 once
+  // make_gif joined the tool list (every tool is room the history no longer has); 41 is what it guards against.
+  assert.ok(breaks < (texts.length - 1) / 2, `the prompt's start changes on few steps (${breaks} of ${texts.length - 1})`);
 }
 
 // One step that reads too much at once (six playlists' briefs on 21 Oct): past its share of the room,

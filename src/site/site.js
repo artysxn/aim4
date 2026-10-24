@@ -23,7 +23,7 @@ import pfExplore from '../icons/patternfinder/patternfinder_explore.svg?raw';
 import pfMeta from '../icons/patternfinder/patternfinder_meta.svg?raw';
 import pfSearch from '../icons/patternfinder/patternfinder_search.svg?raw';
 import sideDemoManager from '../icons/sideicons/sideicon_replays.svg?raw';
-import sidePlaylists from '../icons/sideicons/sideicon_playlists.svg?raw';
+import sideBookmarks from '../icons/bookmark_check_24dp_E3E3E3_FILL0_wght200_GRAD-25_opsz24.svg?raw';
 import sideDatabase from '../icons/sideicons/sideicon_database.svg?raw';
 import sideCharts from '../icons/sideicons/sideicon_charts.svg?raw';
 import sideInspector from '../icons/sideicons/sideicon_inspector.svg?raw';
@@ -175,7 +175,7 @@ const ICONS = {
   replays: replaysIcon,
   // Sidebar (sideicon_*.svg)
   'demo-manager': sideDemoManager,
-  'demo-playlists': sidePlaylists,
+  bookmarks: sideBookmarks,
   database: sideDatabase,
   charts: sideCharts,
   eye: sideEye,
@@ -666,7 +666,6 @@ setTimeout(stripAuthFragment, 4000);
 const ROUTES = {
   home: { title: 'Home', path: '/', shell: 'home' },
   demos: { title: 'Demo Manager', path: '/demos', shell: 'replays', page: 'library' },
-  playlists: { title: 'Demo Playlists', path: '/playlists', shell: 'replays', page: 'playlists' },
   database: { title: 'Database', path: '/database', shell: 'replays', page: 'stats' },
   patterns: {
     title: 'Pattern Finder',
@@ -682,6 +681,8 @@ const ROUTES = {
     requires: 'analytics.pattern_finder'
   },
   performance: { title: 'Performance', path: '/performance', shell: 'performance' },
+  // Playlists and Saved GIFs, two tabs of one page (?tab=gifs for the second).
+  bookmarks: { title: 'Bookmarks', path: '/bookmarks', shell: 'replays', page: 'playlists' },
   uploads: { title: 'My Uploads', path: '/uploads', shell: 'replays', page: 'upload' },
   // The team pages carry `requires` so the shared upgrade banner appears on
   // the ones a plan does not include. Two of them deliberately do not:
@@ -804,7 +805,8 @@ const ROUTES = {
 /** Old /replays/* bookmarks → new top-level paths. Destinations may include a query. */
 const LEGACY_PATHS = {
   '/replays': '/demos',
-  '/replays/playlists': '/playlists',
+  '/replays/playlists': '/bookmarks',
+  '/playlists': '/bookmarks',
   '/replays/stats': '/database',
   '/charts': '/patterns?chapter=charts',
   '/replays/charts': '/patterns?chapter=charts',

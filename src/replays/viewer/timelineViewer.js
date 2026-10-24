@@ -72,6 +72,8 @@ import povIcon from '../../icons/demo_pov.svg?raw';
 import mechanicsIcon from '../../icons/demo_mechanics.svg?raw';
 import commsIcon from '../../icons/sideicons/sideicon_comms.svg?raw';
 import similarIcon from '../../icons/demos_similar.svg?raw';
+import gifIcon from '../../icons/photo_library_24dp_E3E3E3_FILL0_wght200_GRAD-25_opsz24.svg?raw';
+import { createGifCreator } from '../gif/gifCreator.js';
 import { commsSidebarHtml, commsSidebarKey, createCommsController } from './commsOverlay.js';
 import { createSimilarRounds } from './similarRounds.js';
 import { desktopApp } from '../../site/desktopApp.js';
@@ -353,6 +355,7 @@ export function createTimelineViewer({
           </div>
           <span class="rv-popover-msg" id="rv-playlist-msg"></span>
         </div>
+        <div class="rv-popover rv-gif-panel" id="rv-gif-panel" hidden></div>
       </div>
       <div class="rv-tools" id="rv-tools">
         <button type="button" class="rv-tool" id="rv-zones"
@@ -361,6 +364,7 @@ export function createTimelineViewer({
           statsDemoId ? '' : 'hidden'
         }>${icon(coachIcon)}</button>
         <button type="button" class="rv-tool" id="rv-bookmark" title="Save to a playlist">${icon(bookmarkAddIcon)}</button>
+        <button type="button" class="rv-tool" id="rv-gif" title="Create GIF">${icon(gifIcon)}</button>
         <button type="button" class="rv-tool" id="rv-note" title="Notes">${icon(commentsIcon)}</button>
         <!-- Always in the bar. It is one of the nine tools, and a tool that
              comes and goes leaves a hole where the user learned a button was;
@@ -575,6 +579,12 @@ export function createTimelineViewer({
   const coachPickGo = el.querySelector('#rv-coach-pick-go');
   const bookmarkBtn = el.querySelector('#rv-bookmark');
   const playlistPanel = el.querySelector('#rv-playlist-panel');
+  const gifBtn = el.querySelector('#rv-gif');
+  const gifPanel = el.querySelector('#rv-gif-panel');
+  /** The GIF creator (gif/gifCreator.js), made once the viewer's own functions exist. */
+  let gifCreator = null;
+  /** A GIF is being captured: only its own frames draw, and they skip the chrome. */
+  let gifCapturing = false;
   const playlistLabelEl = el.querySelector('#rv-playlist-label');
   const playlistBrowseEl = el.querySelector('#rv-playlist-browse');
   const playlistListEl = el.querySelector('#rv-playlist-list');
@@ -1119,6 +1129,7 @@ export function createTimelineViewer({
       view3d?.hide();
     }
     sync3dButtons();
+    gifCreator?.viewChanged();
     if (!destroyed) draw();
   }
 
@@ -1682,6 +1693,8 @@ export function createTimelineViewer({
         if (!coachOn) autoOpenNotesIfPresent();
       }
     }
+    // The GIF range and its cameras belong to the round they were set on.
+    gifCreator?.roundChanged();
 
     // Zones / chart / duels all need the map network; duels also need a clean
     // overlay pass once real meta is in place (flag stays on across rounds).
@@ -2828,12 +2841,14 @@ export function createTimelineViewer({
   function closePopovers(except = null) {
     if (notePanel !== except) notePanel.hidden = true;
     if (playlistPanel !== except) playlistPanel.hidden = true;
+    if (gifPanel !== except && gifCreator?.isOpen) gifCreator.close();
     if (playlistPanel.hidden) {
       closePlaylistScopeMenu();
       setPlaylistStratMode(false);
     }
     noteBtn.classList.toggle('active', !notePanel.hidden);
     bookmarkBtn.classList.toggle('open', !playlistPanel.hidden);
+    gifBtn.classList.toggle('open', Boolean(gifCreator?.isOpen));
     syncCoachBtn();
     syncKeysVisibility();
   }
@@ -3995,6 +4010,61 @@ export function createTimelineViewer({
       setPlaylistStratMode(false);
       setNoteOpen(true, { focus: false });
     }
+    syncKeysVisibility();
+  });
+
+  // ---- GIF creator ----------------------------------------------------------
+  //
+  // Same dock as the bookmarks. Frames are this viewer's own draws at chosen
+  // ticks: the radar as it is on screen in 2D, the 3D scene in 3D.
+
+  gifCreator = createGifCreator({
+    panel: gifPanel,
+    mapEl,
+    canvas,
+    photoIcon: icon(gifIcon),
+    escapeHtml,
+    viewer: {
+      round: () => (activeMeta && files[activeIndex] ? { file: files[activeIndex], meta: activeMeta } : null),
+      playheadTick: () => sequence.locate(playback.position).tick,
+      can3d: () => Boolean(resolveMapSlug()),
+      is3d: () => mode3d && Boolean(view3d),
+      async set3d(on) {
+        await setMode3d(on);
+        return on ? Boolean(mode3d && view3d?.ready) : !mode3d;
+      },
+      view3d: () => (mode3d ? view3d : null),
+      drawAt(tick) {
+        const item = sequence.at(activeIndex);
+        if (!item) return;
+        draw({ index: activeIndex, tick, local: (tick - item.timing.startTick) / item.timing.tickRate });
+      },
+      beginCapture() {
+        const state = { position: playback.position, playing: playback.playing };
+        playback.pause();
+        syncPlayButton();
+        gifCapturing = true;
+        return state;
+      },
+      endCapture(state) {
+        gifCapturing = false;
+        playback.seek(state.position);
+        if (state.playing) playback.play();
+        syncPlayButton();
+        draw();
+      }
+    }
+  });
+
+  gifBtn.addEventListener('click', () => {
+    const opening = !gifCreator.isOpen;
+    closePopovers(opening ? gifPanel : null);
+    if (opening) gifCreator.open();
+    else {
+      gifCreator.close();
+      setNoteOpen(true, { focus: false });
+    }
+    gifBtn.classList.toggle('open', opening);
     syncKeysVisibility();
   });
 
@@ -5684,6 +5754,9 @@ export function createTimelineViewer({
 
   function draw(loc = null) {
     if (!activeMeta) return;
+    // While a GIF is captured only its frames draw. Anything else (an icon
+    // landing, the store filling in) would move the 3D scene's clock between them.
+    if (gifCapturing && !loc) return;
     const at = loc || sequence.locate(playback.position);
     if (at.index !== activeIndex) return;
     const timing = timingFor(activeMeta);
@@ -5748,6 +5821,9 @@ export function createTimelineViewer({
     const clock = clockAt(timing, tick);
     clockEl.textContent = clock.label;
     clockEl.dataset.phase = clock.phase;
+    // A GIF frame needs the picture only: the scrubber, feeds and the address
+    // bar (hundreds of replaceState calls a clip) are put back when it ends.
+    if (gifCapturing) return;
 
     const item = sequence.at(activeIndex);
     const local = at.local;
@@ -6039,6 +6115,7 @@ export function createTimelineViewer({
   const onResize = () => {
     syncChromeInset();
     view3d?.resize();
+    gifCreator?.relayout();
     draw();
   };
   window.addEventListener('resize', onResize);
@@ -6107,6 +6184,10 @@ export function createTimelineViewer({
 
   return {
     el,
+    /** Escape ends a GIF area pick or a capture before it closes the viewer. */
+    handleEscape() {
+      return Boolean(gifCreator?.handleEscape());
+    },
     /** Jump to a tick of one round of the list, paused there. */
     async seekTo(index, tick) {
       if (destroyed || index < 0 || index >= files.length) return;
@@ -6134,6 +6215,7 @@ export function createTimelineViewer({
       }
       cancelViewAnim();
       similar?.destroy();
+      gifCreator?.destroy();
       playback.destroy();
       // The store outlives this view (the mode switch reuses it), so retire the
       // prefetch rather than clearing what it loaded.

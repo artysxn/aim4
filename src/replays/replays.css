@@ -2305,6 +2305,607 @@ body.rv-open:has(.side-collapsed) .rv-side-show {
   color: #ff6b81;
 }
 
+/* ---- GIF creator (side dock) ------------------------------------------------ */
+
+.rv-side-dock > .rv-gif-panel {
+  max-height: min(72vh, 680px);
+  overflow-y: auto;
+}
+
+.rv-gif-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.rv-gif-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+}
+
+.rv-gif-row[hidden] {
+  display: none;
+}
+
+.rv-gif-form .site-input,
+.rv-gif-form .site-select {
+  box-sizing: border-box;
+  height: 32px;
+  min-height: 32px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: #050505;
+  color: var(--text);
+  font: 400 13px var(--font-body);
+  outline: none;
+  box-shadow: none;
+}
+
+.rv-gif-form .site-input {
+  width: 100%;
+  padding: 0 10px;
+}
+
+.rv-gif-form .site-input::placeholder {
+  color: #5c5c62;
+}
+
+.rv-gif-form .site-select {
+  width: 100%;
+  appearance: none;
+  -webkit-appearance: none;
+  padding: 0 28px 0 10px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath fill='%235c5c62' d='M1 1l4 4 4-4'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  background-size: 10px 6px;
+}
+
+.rv-gif-form textarea.site-input {
+  height: auto;
+  min-height: 64px;
+  padding: 8px 10px;
+  line-height: 1.4;
+  resize: vertical;
+}
+
+.rv-gif-form .rp-seg-btn {
+  padding: 7px 4px;
+}
+
+.rv-gif-row > .rp-seg {
+  flex: 1;
+  width: auto;
+}
+
+.rv-gif-label,
+.rv-gif-read,
+.rv-gif-est {
+  color: var(--muted);
+  font: 400 12px var(--font-body);
+}
+
+.rv-gif-est {
+  margin: 0;
+}
+
+.rv-gif-link {
+  appearance: none;
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: 400 12px var(--font-body);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.rv-gif-link:hover {
+  color: var(--text);
+}
+
+.rv-gif-fps {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font: 400 12px var(--font-body);
+}
+
+.rv-gif-form .rv-gif-fps .site-input {
+  width: 56px;
+  padding: 0 6px;
+  text-align: center;
+}
+
+.rv-gif-go {
+  flex: none;
+  width: 100%;
+}
+
+.rv-gif-go.is-busy {
+  background: #3a1513;
+}
+
+.rv-gif-progress {
+  height: 4px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: #050505;
+}
+
+.rv-gif-progress[hidden],
+.rv-gif-result[hidden] {
+  display: none;
+}
+
+.rv-gif-progress span {
+  display: block;
+  width: 0;
+  height: 100%;
+  background: #e0453c;
+  transition: width 0.15s linear;
+}
+
+.rv-gif-panel .rv-popover-msg {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.rv-gif-result img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: var(--radius-sm);
+  background: #050505;
+}
+
+.rv-gif-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.rv-gif-actions .btn {
+  flex: 1;
+  justify-content: center;
+  text-decoration: none;
+}
+
+/* The area picker over the radar: crosshair while picking, the chosen box
+   outlined (and everything outside it dimmed) while the panel is open. */
+.rv-gif-area-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 8;
+  pointer-events: none;
+}
+
+.rv-gif-area-layer[hidden] {
+  display: none;
+}
+
+.rv-gif-area-layer.is-picking {
+  pointer-events: auto;
+  cursor: crosshair;
+}
+
+.rv-gif-area-box {
+  position: absolute;
+  box-sizing: border-box;
+  border: 2px dashed #e0453c;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+
+.rv-gif-area-box[hidden] {
+  display: none;
+}
+
+/* ---- Bookmarks > Saved GIFs ------------------------------------------------- */
+
+.bm-gifs-panel[hidden],
+.rp-playlists-panel[hidden] {
+  display: none;
+}
+
+.bm-gifs {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  /* Below the page's sticky header when a pin opens and scrolls here. */
+  scroll-margin-top: 96px;
+}
+
+/* One row of filters over the wall. */
+.bm-filterbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.bm-filterbar .site-input,
+.bm-filterbar .site-select {
+  box-sizing: border-box;
+  height: 34px;
+  border: 0;
+  border-radius: 17px;
+  background: #1b1b1d;
+  color: var(--text);
+  font: 400 13px var(--font-body);
+}
+
+.bm-search {
+  flex: 1 1 220px;
+  max-width: 340px;
+  padding: 0 14px;
+}
+
+.bm-filterbar .site-select {
+  width: auto;
+  min-width: 112px;
+  padding: 0 28px 0 12px;
+}
+
+.bm-seg {
+  width: auto;
+  flex: 0 0 auto;
+  height: 34px;
+  border-radius: 17px;
+}
+
+.bm-seg .rp-seg-btn {
+  flex: 0 0 auto;
+  padding: 0 12px;
+}
+
+.bm-clear {
+  padding: 0 4px;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: 400 13px var(--font-body);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.bm-clear:hover {
+  color: var(--text);
+}
+
+.bm-clear[hidden] {
+  display: none;
+}
+
+.bm-gif-status {
+  margin-left: auto;
+  color: var(--muted);
+  font: 400 12px var(--font-body);
+}
+
+.bm-gif-status.is-error {
+  color: #ff6b81;
+}
+
+/* The wall: 2px rows, each pin spanning its own height (savedGifs.js sets the
+   spans), packed densely so the open pin's neighbours flow around it. */
+.bm-wall {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(236px, 1fr));
+  grid-auto-rows: 2px;
+  grid-auto-flow: row dense;
+  column-gap: 16px;
+  row-gap: 0;
+}
+
+.bm-wall-empty {
+  grid-column: 1 / -1;
+  grid-row: span 40;
+}
+
+.bm-pin {
+  align-self: start;
+  min-width: 0;
+}
+
+.bm-pin-img {
+  display: block;
+  width: 100%;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 16px;
+  background: #101012;
+  cursor: zoom-in;
+}
+
+.bm-pin-img img {
+  display: block;
+  width: 100%;
+  height: auto;
+  transition: filter 0.15s;
+}
+
+.bm-pin-img:hover img {
+  filter: brightness(0.82);
+}
+
+.bm-pin-line {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 34px;
+  padding: 0 2px 0 6px;
+}
+
+.bm-pin-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font: 600 13px var(--font-body);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bm-icon-btn {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.bm-icon-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.bm-pin-more {
+  width: 28px;
+  height: 28px;
+  color: var(--muted);
+}
+
+/* The open pin: the GIF on the left, everything about it on the right. */
+.bm-detail {
+  min-width: 0;
+  align-self: start;
+}
+
+.bm-detail-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  overflow: hidden;
+  border: 1px solid #2a2a2e;
+  border-radius: 24px;
+  background: #18181a;
+}
+
+.bm-detail.is-narrow .bm-detail-card {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.bm-detail-media {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  background: #101012;
+}
+
+.bm-detail-media img {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 78vh;
+  object-fit: contain;
+  border-radius: 16px;
+}
+
+.bm-round-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(16, 16, 18, 0.82);
+  color: #fff;
+  cursor: pointer;
+}
+
+.bm-round-btn:hover {
+  background: rgba(40, 40, 44, 0.92);
+}
+
+.bm-detail-back {
+  position: absolute;
+  top: 22px;
+  left: 22px;
+}
+
+.bm-detail-side {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  padding: 18px 20px 20px;
+}
+
+.bm-detail-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.bm-link-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 40px;
+  margin-left: auto;
+  padding: 0 18px 0 14px;
+  border: 0;
+  border-radius: 20px;
+  background: var(--accent, #e0453c);
+  color: #fff;
+  font: 600 14px var(--font-body);
+  cursor: pointer;
+}
+
+.bm-link-btn:hover {
+  filter: brightness(1.1);
+}
+
+.bm-detail-title {
+  margin: 4px 0 0;
+  color: var(--text);
+  font: 700 22px/1.25 var(--font-body);
+  overflow-wrap: anywhere;
+}
+
+.bm-detail-desc {
+  margin: 0;
+  color: var(--text);
+  font: 400 14px/1.55 var(--font-body);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* <setpos ...> in a description: a link that copies its text. */
+.bm-copy {
+  padding: 0 2px;
+  border-radius: 4px;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  background: rgba(255, 255, 255, 0.06);
+  color: #8ab4ff;
+  font: 500 13px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  text-decoration: underline dotted;
+  cursor: copy;
+  overflow-wrap: anywhere;
+}
+
+.bm-copy:hover {
+  background: rgba(138, 180, 255, 0.14);
+}
+
+.bm-copy.is-copied {
+  color: #7bd88f;
+}
+
+.bm-detail-meta {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 8px 16px;
+  margin: 4px 0 0;
+  padding-top: 14px;
+  border-top: 1px solid #2a2a2e;
+  font: 400 13px var(--font-body);
+}
+
+.bm-detail-meta dt {
+  color: var(--muted);
+}
+
+.bm-detail-meta dd {
+  margin: 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.bm-team.side-t {
+  color: #d9a24a;
+}
+
+.bm-team.side-ct {
+  color: #7fa6f0;
+}
+
+.bm-detail-msg {
+  min-height: 16px;
+  color: var(--muted);
+  font: 400 12px var(--font-body);
+  overflow-wrap: anywhere;
+}
+
+.bm-detail-msg.bad {
+  color: #ff6b81;
+}
+
+.bm-detail-side .site-input {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 12px;
+  background: #0d0d0f;
+  color: var(--text);
+  font: 400 14px var(--font-body);
+}
+
+.bm-edit-title {
+  font-weight: 600;
+}
+
+.bm-edit-desc {
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.bm-edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.bm-menu {
+  position: fixed;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  min-width: 190px;
+  padding: 6px;
+  border-radius: 12px;
+  background: #222225;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+}
+
+.bm-menu-item {
+  padding: 9px 12px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--text);
+  font: 500 13px var(--font-body);
+  text-align: left;
+  cursor: pointer;
+}
+
+.bm-menu-item:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.bm-menu-item.danger {
+  color: #ff6b81;
+}
+
 .rv-playlist-newbox {
   position: relative;
   display: flex;
@@ -10437,6 +11038,25 @@ table.rp-mine-table td.rp-mine-match {
 
 .doc-embed-stale {
   margin: 0;
+  color: var(--muted);
+  font: 500 12px var(--font-body);
+}
+
+/* A saved GIF in a document. */
+.doc-embed-gif {
+  margin: 0;
+}
+
+.doc-embed-gif img {
+  display: block;
+  max-width: min(100%, 640px);
+  height: auto;
+  border-radius: var(--radius-sm);
+  background: #050505;
+}
+
+.doc-embed-gif figcaption {
+  margin-top: 4px;
   color: var(--muted);
   font: 500 12px var(--font-body);
 }

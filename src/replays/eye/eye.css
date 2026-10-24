@@ -721,6 +721,46 @@
   cursor: zoom-out;
 }
 
+/* A GIF aim4 eye made and saved to Bookmarks. */
+.eye-gif {
+  margin: 0;
+  max-width: min(100%, 560px);
+}
+.eye-gif img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 10px;
+  background: #050505;
+}
+.eye-gif figcaption {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 6px;
+  color: var(--muted, #8a8a90);
+  font-size: 12px;
+}
+.eye-gif figcaption span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.eye-gif-copy {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.eye-gif a {
+  color: inherit;
+}
+
 .eye-confirm {
   padding: 12px 16px;
   border-radius: 14px;

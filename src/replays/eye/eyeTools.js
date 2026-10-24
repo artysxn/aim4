@@ -34,6 +34,8 @@
 //   list_playlists             the user's round playlists, or one playlist's rounds
 //   save_playlist              create or edit a playlist (asks the user first)
 //   delete_playlist            delete a playlist (asks the user first)
+//   make_gif                   part of a round as a 2D or 3D GIF, saved to Bookmarks and
+//                              shown in the chat with its share link
 //   screenshot_round           (vision only) one moment of a round, as a picture
 // ---------------------------------------------------------------------------
 
@@ -59,6 +61,8 @@ import {
 } from '../api.js';
 import { aliveGaps, gapFits, gapWords, sideOfTeam, winnerSide } from './roundSample.js';
 import { screenshotRound } from './eyeVision.js';
+import { parseClock } from './eyeImages.js';
+import { gifDisplayTitle } from '../gif/gifMeta.js';
 import { momentValueTool, roundValueTool } from './eyeValue.js';
 import { playReviewTool, roundMovesTool, roundPlaysTool } from './eyePlays.js';
 import { KINDS as PLAY_KINDS } from '../plays/findPlays.js';
@@ -546,7 +550,8 @@ export const TOOLS = [
           team: { type: 'string' },
           maps: { type: 'array', items: { type: 'string' } },
           style: { type: 'string', enum: ['full', 'outline', 'sixpack'] },
-          side: { type: 'string', enum: ['T', 'CT', 'both'], description: 'Only one side when the user asks for one (default both).' }
+          side: { type: 'string', enum: ['T', 'CT', 'both'], description: 'Only one side when the user asks for one (default both).' },
+          gifs: { type: 'number', description: 'GIF highlights per map, 0 to 6. Only if asked.' }
         },
         required: ['team', 'maps']
       }
@@ -1001,7 +1006,7 @@ TOOLS.push(
             type: 'array',
             items: {
               type: 'object',
-              properties: { team: { type: 'string' }, maps: { type: 'array', items: { type: 'string' } }, style: { type: 'string', enum: ['full', 'outline', 'sixpack'] }, side: { type: 'string', enum: ['T', 'CT', 'both'] } },
+              properties: { team: { type: 'string' }, maps: { type: 'array', items: { type: 'string' } }, style: { type: 'string', enum: ['full', 'outline', 'sixpack'] }, side: { type: 'string', enum: ['T', 'CT', 'both'] }, gifs: { type: 'number' } },
               required: ['team', 'maps']
             }
           }
@@ -1135,6 +1140,28 @@ TOOLS.push(
         required: ['notes']
       }
     }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'make_gif',
+      description:
+        "A GIF of part of a round, saved to the user's Bookmarks and shown in the chat with a share link. 2d (default) is the radar; 3d follows one player. 3 to 12 seconds; from and to are round clock times.",
+      parameters: {
+        type: 'object',
+        properties: {
+          from: { type: 'string' },
+          to: { type: 'string' },
+          view: { type: 'string', enum: ['2d', '3d'] },
+          player: { type: 'string', description: '3d: who to follow.' },
+          camera: { type: 'string', enum: ['first_person', 'third_person'] },
+          quality: { type: 'number', description: '1 (default) to 3.' },
+          title: { type: 'string' },
+          description: { type: 'string' }
+        },
+        required: ['from', 'to']
+      }
+    }
   }
 );
 
@@ -1166,7 +1193,7 @@ export const VISION_TOOLS = [
  * the pattern of other files and got "Round not found"; a number cannot be
  * guessed wrong that way.
  */
-const ROUND_TOOLS = new Set(['round_details', 'round_timeline', 'round_value', 'moment_value', 'round_moves', 'round_plays', 'play_review', 'screenshot_round', 'show_round', 'strategy_draft']);
+const ROUND_TOOLS = new Set(['round_details', 'round_timeline', 'round_value', 'moment_value', 'round_moves', 'round_plays', 'play_review', 'screenshot_round', 'show_round', 'strategy_draft', 'make_gif']);
 for (const t of [...TOOLS, ...VISION_TOOLS]) {
   if (!ROUND_TOOLS.has(t.function.name)) continue;
   const p = t.function.parameters;
@@ -1190,6 +1217,7 @@ const SITE_PAGES = [
   { page: 'Player scouting', link: '/patterns?chapter=scout', about: 'One player at a time: roles, positions, habits.' },
   { page: 'Charts', link: '/patterns?chapter=charts', about: 'Scatter and bar charts over the Database columns.' },
   { page: 'Team documents', link: '/team/documents', about: "The team's written notes and generated sheets (team_documents reads these)." },
+  { page: 'Bookmarks', link: '/bookmarks', about: 'Playlists, and Saved GIFs (?tab=gifs).' },
   { page: 'Aim trainer', link: '/trainer', about: 'Aim scenarios and routines.' }
 ];
 
@@ -1267,7 +1295,7 @@ const partNote = (p) => (p.parts > 1 ? { part: `${p.part} of ${p.parts}`, ...(p.
 const sideOf = (side) => (String(side || '').toUpperCase() === 'T' ? 'T' : String(side || '').toUpperCase() === 'CT' ? 'CT' : 'both');
 
 /** @returns {Promise<{ title: string, id: string }>} */
-async function writeAntistratDoc(team, maps, style, dest, onProgress, side = 'both') {
+async function writeAntistratDoc(team, maps, style, dest, onProgress, side = 'both', gifs = 0) {
   const drop = side === 'T' ? 'sideCT' : side === 'CT' ? 'sideT' : '';
   const categories = SUMMARY_CATEGORIES.map((c) => c.key).filter((k) => k !== drop);
   const specs = [];
@@ -1275,15 +1303,23 @@ async function writeAntistratDoc(team, maps, style, dest, onProgress, side = 'bo
     const scan = await teamScan(team.name, m, onProgress);
     specs.push({ teamName: team.name, mapCode: m, categories, report: scan.report(), links: false });
   }
-  const html =
+  let html =
     style === 'sixpack'
       ? buildSixpackDocHtml(specs, escapeHtml)
       : specs.map((sp) => (style === 'outline' ? buildOutlineDocHtml(sp, escapeHtml) : buildSummaryDocHtml(sp, escapeHtml))).join('<hr>');
+  // GIF highlights: a few rounds the sheet was written from, saved to Bookmarks and embedded at the end.
+  let highlights = null;
+  const perMap = Math.max(0, Math.min(6, Math.round(Number(gifs) || 0)));
+  if (perMap) {
+    const { buildHighlights } = await import('../gif/gifHighlights.js');
+    highlights = await buildHighlights({ specs, count: perMap, esc: escapeHtml, metaOf: fetchRoundMeta, onProgress });
+    html += highlights.html;
+  }
   // Dated, so a second sheet for the same team and maps can be told from the first.
   const sideWords = side === 'both' ? '' : ` ${side} side`;
   const title = `${styleTitle(style)}: ${team.name} on ${maps.map(mapName).join(', ')}${sideWords} (${shortDate(Date.now(), false)})`;
   const saved = await saveTeamDocument(dest.id, { title, html });
-  return { title, id: saved?.document?.id || '' };
+  return { title, id: saved?.document?.id || '', gifs: highlights?.made || 0, gifFailures: highlights?.failed || [] };
 }
 
 /** A team's maps: named ones, or "all" for every map with at least `min` demos. */
@@ -1657,11 +1693,13 @@ async function runToolInner(name, args = {}, ctx = {}) {
         const style = STYLES.includes(args.style) ? args.style : 'full';
         const side = sideOf(args.side);
         const dest = await myTeam();
-        const ok = (await ctx.confirm?.(`Create a ${style} antistrat document for ${team.name} on ${maps.map(mapName).join(', ')}${side === 'both' ? '' : `, ${side} side`} in your team's Documents (${dest.name})?`)) ?? true;
+        const gifs = Math.max(0, Math.min(6, Math.round(Number(args.gifs) || 0)));
+        const ok = (await ctx.confirm?.(`Create a ${style} antistrat document for ${team.name} on ${maps.map(mapName).join(', ')}${side === 'both' ? '' : `, ${side} side`}${gifs ? `, with up to ${gifs} GIF highlights per map` : ''} in your team's Documents (${dest.name})?`)) ?? true;
         if (!ok) return { content: 'The user declined. Nothing was created.', display: 'Document not created (declined)' };
-        const { title, id } = await writeAntistratDoc(team, maps, style, dest, ctx.onProgress, side);
+        const { title, id, gifs: made, gifFailures } = await writeAntistratDoc(team, maps, style, dest, ctx.onProgress, side, gifs);
+        const gifWords = gifs ? ` ${made} GIF highlight${made === 1 ? ' was' : 's were'} added at the end and saved to Bookmarks${gifFailures.length ? `; ${gifFailures.length} could not be made (${gifFailures[0]})` : ''}.` : '';
         return {
-          content: `Saved "${title}" to your team's Documents (${dest.name})${id ? `, id ${id}` : ''}. It was built from the current data just now, so its numbers are current; pass this id to review or rewrite it.`,
+          content: `Saved "${title}" to your team's Documents (${dest.name})${id ? `, id ${id}` : ''}. It was built from the current data just now, so its numbers are current; pass this id to review or rewrite it.${gifWords}`,
           display: `Saved "${title}"`,
           link: '/team/documents'
         };
@@ -1672,7 +1710,7 @@ async function runToolInner(name, args = {}, ctx = {}) {
         const jobs = [];
         for (const j of raw) {
           const team = await teamOf(j.team);
-          jobs.push({ team, maps: await mapsOf(team, j.maps), style: STYLES.includes(j.style) ? j.style : 'full', side: sideOf(j.side) });
+          jobs.push({ team, maps: await mapsOf(team, j.maps), style: STYLES.includes(j.style) ? j.style : 'full', side: sideOf(j.side), gifs: Math.max(0, Math.min(6, Math.round(Number(j.gifs) || 0))) });
         }
         const dest = await myTeam();
         const list = jobs.map((j, i) => `${i + 1}. ${j.team.name} on ${j.maps.map(mapName).join(', ')} (${j.style})`).join('\n');
@@ -1683,7 +1721,7 @@ async function runToolInner(name, args = {}, ctx = {}) {
         for (const [i, j] of jobs.entries()) {
           const before = new Set(scans.keys());
           try {
-            const { title, id } = await writeAntistratDoc(j.team, j.maps, j.style, dest, (label) => ctx.onProgress?.(`Document ${i + 1} of ${jobs.length}: ${label}`), j.side);
+            const { title, id } = await writeAntistratDoc(j.team, j.maps, j.style, dest, (label) => ctx.onProgress?.(`Document ${i + 1} of ${jobs.length}: ${label}`), j.side, j.gifs);
             done.push(id ? `${title} (id ${id})` : title);
           } catch (err) {
             failed.push(`${j.team.name}: ${err.message}`);
@@ -2396,6 +2434,44 @@ async function runToolInner(name, args = {}, ctx = {}) {
         if (!args.show) return shot;
         // Shown to the user as a still they can play on from, which a saved chat can draw again.
         return { ...shot, content: `${shot.content}\n(Shown to the user in the chat.)`, widget: { file: args.round, label: await roundLabelOf(args.round), at: String(args.clock || '1:55') } };
+      }
+      case 'make_gif': {
+        const file = String(args.round || '').trim();
+        if (!file) throw new ToolError('Give match and number (or a round file from find_rounds).');
+        if (parseClock(args.from) == null || parseClock(args.to) == null) throw new ToolError('Give from and to as round clock times, for example 1:30 and 1:20.');
+        const kind = args.view === '3d' ? '3d' : '2d';
+        const [{ makeRoundGif }, { gifShareUrl }] = await Promise.all([import('../gif/roundGif.js'), import('../gif/gifCapture.js')]);
+        ctx.onProgress?.(kind === '3d' ? 'Making a 3D GIF…' : 'Making a GIF…');
+        let res;
+        try {
+          res = await makeRoundGif({
+            file,
+            kind,
+            from: args.from,
+            to: args.to,
+            quality: args.quality,
+            camera: { player: args.player, mode: args.camera === 'third_person' ? 'third' : 'pov' },
+            title: args.title,
+            description: args.description,
+            source: 'eye',
+            onProgress: (text) => ctx.onProgress?.(text)
+          });
+        } catch (err) {
+          throw new ToolError(err?.message || 'The GIF could not be made.');
+        }
+        const m = res.meta;
+        const what = `${kind.toUpperCase()} GIF of ${m.mapName} round ${m.round}, ${m.clockFrom} to ${m.clockTo}${m.player ? `, following ${m.player}` : ''} (${res.frames} frames, ${res.size.width}x${res.size.height})`;
+        if (!res.gif) {
+          return {
+            content: `Made a ${what}, but it could not be saved to Bookmarks: ${res.saveError?.message || 'the upload failed'}. Tell the user it was not kept.`,
+            display: 'GIF made but not saved'
+          };
+        }
+        return {
+          content: `Saved a ${what} to the user's Bookmarks (Saved GIFs) and showed it in the chat. Share link: ${gifShareUrl(res.gif.id)}${res.capped ? `. It was cut to the longest a ${kind.toUpperCase()} GIF can be.` : ''}`,
+          display: `GIF saved: ${gifDisplayTitle(m)}`,
+          widget: { gif: { id: res.gif.id, title: gifDisplayTitle(m), width: res.gif.width, height: res.gif.height } }
+        };
       }
       case 'show_round': {
         const file = String(args.round || '').trim();

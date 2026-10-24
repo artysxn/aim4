@@ -101,9 +101,12 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
   const analyticsPageEl = document.getElementById('rp-analytics-page');
   const analyticsBodyEl = document.getElementById('rp-analytics-body');
 
+  const plPanelEl = document.getElementById('rp-pl-panel');
+  const gifsPanelEl = document.getElementById('rp-gifs-panel');
+
   const PAGE_PATHS = {
     library: '/demos',
-    playlists: '/playlists',
+    playlists: '/bookmarks',
     stats: '/database',
     analytics: '/patterns',
     upload: '/uploads'
@@ -3858,13 +3861,21 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
         '<p class="view-empty">No playlists yet. Open a round and use the bookmark button to start one.</p>';
       return;
     }
+    const query = playlistQuery.trim().toLowerCase();
+    const shown = query
+      ? playlistLists.filter((p) => String(p.name || '').toLowerCase().includes(query))
+      : playlistLists;
+    if (!shown.length) {
+      playlistsBody.innerHTML = `<p class="view-empty">No playlist name has "${escapeHtml(playlistQuery.trim())}" in it.</p>`;
+      return;
+    }
     playlistsBody.innerHTML = `
       <table class="rp-playlist-table">
         <thead>
           <tr><th>Playlist</th><th>Owner</th><th>Shared with</th><th>Last modified</th><th>Rounds</th><th></th></tr>
         </thead>
         <tbody>
-          ${playlistLists
+          ${shown
             .map((p) => {
               const scope = p.scope === 'team' ? 'team' : 'private';
               // The server already decided this (owner or site admin); it also
@@ -3920,6 +3931,91 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     }
   }
 
+  // ---- bookmarks: playlists and saved GIFs ---------------------------------
+  //
+  // One page, two tabs in the top right like the other pages' chapters. The
+  // tab rides in the address (?tab=gifs) so a link to the GIFs opens on them.
+
+  /** @type {'playlists' | 'gifs'} */
+  let bookmarksTab = 'playlists';
+  let playlistQuery = '';
+  /** The Saved GIFs library, built on first visit. */
+  let savedGifs = null;
+
+  function tabFromUrl() {
+    return new URLSearchParams(window.location.search).get('tab') === 'gifs' ? 'gifs' : 'playlists';
+  }
+
+  function mountBookmarksHead() {
+    const slot = document.getElementById('page-head-actions');
+    if (!slot || !visible || subpage !== 'playlists') return;
+    const nodes = [];
+    if (bookmarksTab === 'playlists') {
+      const search = document.createElement('input');
+      search.type = 'search';
+      search.className = 'tm-doc-search';
+      search.placeholder = 'Search playlists';
+      search.setAttribute('aria-label', 'Search playlists');
+      search.value = playlistQuery;
+      search.addEventListener('input', () => {
+        playlistQuery = search.value;
+        renderPlaylistsPage();
+      });
+      nodes.push(search);
+    }
+    const nav = document.createElement('nav');
+    nav.className = 'an-chapters';
+    nav.setAttribute('aria-label', 'Bookmarks');
+    for (const [id, label] of [
+      ['playlists', 'Playlists'],
+      ['gifs', 'Saved GIFs']
+    ]) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = `an-chapter-btn${id === bookmarksTab ? ' active' : ''}`;
+      btn.textContent = label;
+      btn.addEventListener('click', () => setBookmarksTab(id, { push: true }));
+      nav.appendChild(btn);
+    }
+    nodes.push(nav);
+    slot.replaceChildren(...nodes);
+  }
+
+  async function setBookmarksTab(tab, { push = false } = {}) {
+    bookmarksTab = tab === 'gifs' ? 'gifs' : 'playlists';
+    if (push) {
+      const url = new URL(window.location.href);
+      if (bookmarksTab === 'gifs') url.searchParams.set('tab', 'gifs');
+      else {
+        url.searchParams.delete('tab');
+        url.searchParams.delete('gif');
+      }
+      if (url.pathname + url.search !== window.location.pathname + window.location.search) {
+        window.history.pushState(window.history.state, '', url.pathname + url.search);
+      }
+    }
+    if (plPanelEl) plPanelEl.hidden = bookmarksTab !== 'playlists';
+    if (gifsPanelEl) gifsPanelEl.hidden = bookmarksTab !== 'gifs';
+    mountBookmarksHead();
+    if (bookmarksTab === 'playlists') {
+      savedGifs?.hide();
+      loadPlaylistsPage();
+      return;
+    }
+    if (!savedGifs && gifsPanelEl) {
+      gifsPanelEl.innerHTML = spinnerHtml('Loading saved GIFs…');
+      const { createSavedGifs } = await import('./savedGifs.js');
+      if (savedGifs) return;
+      savedGifs = createSavedGifs({
+        host: gifsPanelEl,
+        escapeHtml,
+        openRound: (file, tick) =>
+          openSharedRound(file, Number.isFinite(tick) && tick > 0 ? { tick, zoom: 0, panX: 0, panY: 0 } : null)
+      });
+    }
+    if (subpage === 'playlists' && bookmarksTab === 'gifs') savedGifs?.show();
+  }
+
   function setSubpage(name, { push = false } = {}) {
     const next =
       name === 'upload' ||
@@ -3946,9 +4042,10 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       }
     }
 
+    if (next !== 'playlists') savedGifs?.hide();
     if (next === 'playlists') {
       stopPolling();
-      loadPlaylistsPage();
+      void setBookmarksTab(tabFromUrl());
     } else if (next === 'stats') {
       stopPolling();
       openStatsPage(statsScope, Object.fromEntries(new URLSearchParams(window.location.search)));
@@ -4783,6 +4880,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     onHide() {
       visible = false;
       stopPolling();
+      savedGifs?.hide();
     }
   };
 }

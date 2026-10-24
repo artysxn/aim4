@@ -72,6 +72,8 @@ export const SITE_VIEW_PATHS = new Set([
   '/map-practice',
   '/replay-viewer',
   '/demos',
+  '/bookmarks',
+  // The old name of Bookmarks; the client sends it on.
   '/playlists',
   '/database',
   '/charts',

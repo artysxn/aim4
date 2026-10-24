@@ -1482,6 +1482,71 @@ export async function deletePlaylist(id) {
   return body.playlists || [];
 }
 
+// ---- saved GIFs -------------------------------------------------------------
+//
+// The GIF creator's output, kept in Bookmarks. The bytes go up as the request
+// body and what the GIF shows (map, teams, title) rides in one header, so a
+// 30 MB upload is never base64 inside JSON.
+
+/** The caller's saved GIFs, newest first. */
+export async function fetchGifs() {
+  const body = await asJson(await safeFetch(`${API_BASE}/api/replays/gifs`, { headers: await headers() }));
+  return body.gifs || [];
+}
+
+/** Header values must be ASCII: the metadata goes as base64 of its UTF-8 JSON. */
+function metaHeader(meta) {
+  const bytes = new TextEncoder().encode(JSON.stringify(meta || {}));
+  let bin = '';
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin);
+}
+
+/**
+ * Save a GIF to Bookmarks.
+ *
+ * @param {Blob} blob  image/gif
+ * @param {object} meta  gifMetaFromRound(...)
+ * @returns {Promise<object>} the stored record, with its id
+ */
+export async function saveGif(blob, meta) {
+  const body = await asJson(
+    await safeFetch(`${API_BASE}/api/replays/gifs`, {
+      method: 'POST',
+      headers: await headers({ 'Content-Type': 'image/gif', 'X-Aim4-Gif-Meta': metaHeader(meta) }),
+      body: blob
+    })
+  );
+  return body.gif;
+}
+
+/** Change a saved GIF's title or description. */
+export async function updateGif(id, patch) {
+  const body = await asJson(
+    await safeFetch(`${API_BASE}/api/replays/gifs/${encodeURIComponent(id)}`, {
+      method: 'POST',
+      headers: await headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(patch || {})
+    })
+  );
+  return body.gif;
+}
+
+export async function deleteGif(id) {
+  const body = await asJson(
+    await safeFetch(`${API_BASE}/api/replays/gifs/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: await headers()
+    })
+  );
+  return body.gifs || [];
+}
+
+/** Where this page loads a saved GIF's picture from (through the app's own server in the desktop app). */
+export function gifImageUrl(id) {
+  return `${API_BASE}/api/replays/gifs/${encodeURIComponent(id)}.gif`;
+}
+
 /**
  * Fetch a round's ticks. `stride` 100 is the timeline's coarse first pass;
  * stride 1 is the full-detail pass.
