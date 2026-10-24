@@ -273,6 +273,8 @@ export async function saveStrategyFromRound({
     // view of this strategy, and it is the first thing anyone reading the row
     // will want.
     link2d: roundUrl,
+    // The editor lists a strategy's links from this array.
+    links: roundUrl ? [{ url: roundUrl, label: '2D' }] : [],
     roleNotes,
     visibleAll: true
   });

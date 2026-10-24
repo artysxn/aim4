@@ -710,10 +710,14 @@ export async function upsertStrategy(actor, teamId, patch = {}) {
         patch.link3d === undefined ? existing?.link3d || '' : sanitizeUrl(patch.link3d),
       link2d:
         patch.link2d === undefined ? existing?.link2d || '' : sanitizeUrl(patch.link2d),
+      // A row made with only link3d / link2d has no list yet: those two become
+      // it, or the editor shows no link at all.
       links:
-        patch.links === undefined
-          ? normalizeLinks(existing)
-          : normalizeLinks({ links: patch.links }),
+        patch.links !== undefined
+          ? normalizeLinks({ links: patch.links })
+          : existing
+            ? normalizeLinks(existing)
+            : normalizeLinks({ link3d: patch.link3d, link2d: patch.link2d }),
       roleNotes:
         patch.roleNotes === undefined
           ? normalizeRoleNotes(existing?.roleNotes)
