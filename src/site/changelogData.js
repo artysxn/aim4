@@ -15,9 +15,11 @@
 export const CHANGELOG = Object.freeze([
   {
     date: '2026-10-24',
-    title: 'Demo Manager: Dominance fixed, clearer result filters',
+    title: 'Demo Manager: Dominance and Winner side fixed, clearer result filters',
     tag: 'fixed',
     points: [
+      'T won and CT won now filter straight away. Every demo already records which side won each round, so the filter reads that instead of downloading every round first. Before, the list kept showing every round, under an unchanged count, until those downloads finished, which on a large library took minutes. Side with a team picked works the same way.',
+      'While a filter that does need each round\'s data is working (Opening, Decided, round types), the list waits and counts the rounds it has read instead of showing every round.',
       'The Dominance filter no longer shows every round when the server cannot read dominance. Before, a failed read let every round through, so every setting looked the same. Now the list stays empty and says why.',
       'While dominance is being read, the list waits instead of showing every round first.',
       'Dominance is a slider with two handles instead of a dropdown, so you can ask for a range: 90 to 100 for clean wins, 0 to 40 for rounds that were nearly thrown. It stays grey until you move a handle.',

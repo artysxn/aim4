@@ -288,6 +288,8 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
   let dominanceError = '';
   /** Round file -> its dominance for both sides, as the server worked it out (null: none). */
   const dominanceByFile = new Map();
+  /** Demo record -> its rounds by stem, for the filters a record answers on its own. */
+  const recordRoundIndex = new WeakMap();
 
   /** @type {Map<string, object|null>} */
   const roundMetaCache = new Map();
@@ -2934,11 +2936,14 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     };
   }
 
+  /**
+   * Filters only a round's full meta can answer, one download per round.
+   * Winner side and Side are not among them: the demo record already says
+   * which side won each round and where both teams stood (applyRecordFilters).
+   */
   function needsMetaFilters() {
     return Boolean(
-      filters.side ||
-        filters.winnerSide ||
-        filters.situations.size ||
+      filters.situations.size ||
         filters.afterplant ||
         filters.decidedPhases.size ||
         filters.roundOwn.size ||
@@ -3069,6 +3074,103 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     return (meta.events?.bomb || []).some((b) => b.type === 'planted');
   }
 
+  /** A round's own entry in its demo's record, or null when the record is not loaded. */
+  function recordRound(r) {
+    const { stem, demoId } = splitStoredName(r?.file || '');
+    const d = demoById(r?.demoId || demoId);
+    if (!d) return null;
+    let byStem = recordRoundIndex.get(d);
+    if (!byStem) {
+      byStem = new Map();
+      for (const x of d.rounds || []) {
+        const key = splitStoredName(x.file || x.id || '').stem;
+        if (key) byStem.set(key, x);
+      }
+      recordRoundIndex.set(d, byStem);
+    }
+    return byStem.get(stem) || null;
+  }
+
+  /**
+   * Winner side, and Side for a picked team, as one round answers them:
+   * true, false, or null when what it carries cannot tell (a record from
+   * before those fields, or a round's meta that lacks them).
+   */
+  function sideFiltersPass(src, listRound) {
+    if (!src) return null;
+    if (filters.winnerSide) {
+      let won = src.winnerSide === 'T' || src.winnerSide === 'CT' ? src.winnerSide : '';
+      if (!won && (src.team1Side === 'T' || src.team1Side === 'CT') && (src.winner === 1 || src.winner === 2)) {
+        won = src.winner === 1 ? src.team1Side : src.team1Side === 'T' ? 'CT' : 'T';
+      }
+      if (!won) return null;
+      if (won !== filters.winnerSide) return false;
+    }
+    const focus = focusTeamIds();
+    if (filters.side && focus.size) {
+      const idx = focusTeamIndex(src, listRound, focus);
+      if (idx) {
+        const side = idx === 1 ? src.team1Side : src.team2Side;
+        if (side !== 'T' && side !== 'CT') return null;
+        if (side !== filters.side) return false;
+      }
+    }
+    return true;
+  }
+
+  /** Rounds that pass Winner side and Side by their records alone, and the ones a record cannot answer. */
+  function recordFilter(list) {
+    const kept = [];
+    const unknown = [];
+    if (!filters.winnerSide && !filters.side) return { kept: list, unknown };
+    for (const r of list) {
+      const pass = sideFiltersPass(recordRound(r), r);
+      if (pass === true) kept.push(r);
+      else if (pass === null) unknown.push(r);
+    }
+    return { kept, unknown };
+  }
+
+  /**
+   * Winner side and Side, answered by the demo records with no download. Only
+   * rounds whose record predates those fields fetch their meta.
+   */
+  async function applyRecordFilters(list, token) {
+    const { kept, unknown } = recordFilter(list);
+    if (!unknown.length) return kept;
+    const extra = new Set();
+    let i = 0;
+    let done = 0;
+    setQueryStatus(`Reading round sides: 0 of ${unknown.length}`);
+    async function worker() {
+      while (i < unknown.length) {
+        if (token !== queryToken) return;
+        const r = unknown[i++];
+        const meta = await getCachedRoundMeta(r.file);
+        if (token !== queryToken) return;
+        if (sideFiltersPass(meta, r) === true) extra.add(r.file);
+        done++;
+        setQueryStatus(`Reading round sides: ${done} of ${unknown.length}`);
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(6, unknown.length) }, () => worker()));
+    setQueryStatus('');
+    const keep = new Set([...kept.map((r) => r.file), ...extra]);
+    return list.filter((r) => keep.has(r.file));
+  }
+
+  /**
+   * What can be shown before the server phase. Null while any filter still
+   * waits on a download: showing those rounds now would list rounds the
+   * filter is about to drop, under a count that has not moved.
+   */
+  function paintableNow(list) {
+    if (needsMetaFilters()) return null;
+    const { kept, unknown } = recordFilter(list);
+    if (unknown.length) return null;
+    return knownDominance(kept);
+  }
+
   function matchesAdvancedMeta(meta, listRound) {
     if (!needsMetaFilters()) return true;
     if (!meta) return false;
@@ -3191,6 +3293,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     const out = [];
     const concurrency = 6;
     let i = 0;
+    let done = 0;
     async function worker() {
       while (i < list.length) {
         if (token !== queryToken) return;
@@ -3199,6 +3302,8 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
         const meta = await getCachedRoundMeta(r.file);
         if (token !== queryToken) return;
         if (matchesAdvancedMeta(meta, r)) out.push(r);
+        done++;
+        setQueryStatus(`Applying advanced filters: ${done} of ${list.length} rounds`);
       }
     }
     await Promise.all(Array.from({ length: Math.min(concurrency, list.length) }, () => worker()));
@@ -3263,11 +3368,10 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       // shows every round, even if the rounds API is slow or empty. With
       // Dominance on, rounds not read yet wait for the server phase below
       // rather than showing as matches.
-      const now = knownDominance(filterLibraryRounds(query));
+      const now = paintableNow(filterLibraryRounds(query));
       if (now) {
         rounds = now;
-        if (needsMetaFilters()) setQueryStatus('Applying advanced filters…');
-        else setQueryStatus('');
+        setQueryStatus('');
         renderResults();
         resultEl?.removeAttribute('aria-busy');
       }
@@ -3290,11 +3394,10 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
         setQueryStatus('');
       }
       rounds = filterLibraryRounds(query);
-      const now = switchingWindow ? knownDominance(rounds) : null;
+      const now = switchingWindow ? paintableNow(rounds) : null;
       if (now) {
         rounds = now;
-        if (needsMetaFilters()) setQueryStatus('Applying advanced filters…');
-        else setQueryStatus('');
+        setQueryStatus('');
         renderResults();
         resultEl?.removeAttribute('aria-busy');
       }
@@ -3332,6 +3435,9 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
         if (token !== queryToken) return;
       }
       rounds = rounds.filter(roundMatchesScope);
+      if (token !== queryToken) return;
+
+      rounds = await applyRecordFilters(rounds, token);
       if (token !== queryToken) return;
 
       if (needsMetaFilters()) {
