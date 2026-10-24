@@ -47,7 +47,7 @@ import { timingFor } from '../viewer/roundClock.js';
 export const SCAN_STRIDE = 100;
 
 /** Bumped when the index layout changes, so a kept index is rebuilt. */
-export const INDEX_VERSION = 1;
+export const INDEX_VERSION = 2;
 
 /**
  * Economy classes a scan stays inside. Full buy covers both stored digits
@@ -276,14 +276,39 @@ export function buildRoundIndex(meta, ticks, file = '') {
 
   // Deaths at their exact tick: a row is 1.5 s, and a kill inside it decides
   // whether that player is still part of the picture at the asked moment.
+  const rate = timing.tickRate || 64;
+  const secondsOf = (tick) => Math.round(((Number(tick) - timing.freezeEndTick) / rate) * 10) / 10;
   const death = new Int32Array(slots).fill(-1);
+  // Who killed whom, in seconds since freeze end (plays/findPlays.js reads the
+  // trades and the opening duel off it). A killer with no slot (the world, a
+  // fall) is -1.
+  const kills = [];
   for (const k of meta.events?.kills || []) {
     const s = slotOf.get(k.victim);
     if (s === undefined || death[s] >= 0) continue;
     death[s] = Number(k.tick) || 0;
+    kills.push({ t: secondsOf(k.tick), a: slotOf.get(k.attacker) ?? -1, v: s });
   }
+  kills.sort((a, b) => a.t - b.t);
 
-  const rate = timing.tickRate || 64;
+  // The plant and the defuse: where a play ends, and what a post-plant is.
+  let plant = null;
+  let defuse = null;
+  for (const b of meta.events?.bomb || []) {
+    if (b.type === 'planted' && !plant) {
+      plant = {
+        t: secondsOf(b.tick),
+        site: String(b.site || '').toUpperCase(),
+        x: Math.round(Number(b.x) || 0),
+        y: Math.round(Number(b.y) || 0),
+        slot: slotOf.get(b.player) ?? -1
+      };
+    } else if (b.type === 'defused' && defuse === null) {
+      defuse = secondsOf(b.tick);
+    }
+  }
+  if (!plant && Number.isFinite(meta.plantTick)) plant = { t: secondsOf(meta.plantTick), site: '', x: 0, y: 0, slot: -1 };
+  const names = ids.map((id) => (meta.players || []).find((p) => p.id === id)?.name || id || '');
   const nades = [];
   for (const g of meta.events?.grenades || []) {
     const kind = nadeKind(g.type);
@@ -298,7 +323,8 @@ export function buildRoundIndex(meta, ticks, file = '') {
       x: Math.round(at.x),
       y: Math.round(at.y),
       z: Math.round(at.z || 0),
-      t: Math.round(((tick - timing.freezeEndTick) / rate) * 10) / 10
+      t: secondsOf(tick),
+      slot: slotOf.get(g.player) ?? -1
     });
   }
 
@@ -332,6 +358,7 @@ export function buildRoundIndex(meta, ticks, file = '') {
     winnerSide: meta.winnerSide || sides[meta.winner === 2 ? 2 : 1],
     teams: teamBySide,
     ids,
+    names,
     slotSide,
     px,
     py,
@@ -339,6 +366,9 @@ export function buildRoundIndex(meta, ticks, file = '') {
     alive,
     gun,
     death,
+    kills,
+    plant,
+    defuse,
     nades,
     win: Uint8Array.from(series, (v) => Math.round(v)),
     dominance: { T: domT, CT: domCt }
@@ -349,7 +379,7 @@ export function buildRoundIndex(meta, ticks, file = '') {
 export function indexBytes(index) {
   if (!index) return 0;
   const typed = ['px', 'py', 'pz', 'alive', 'gun', 'death', 'slotSide', 'win'];
-  let n = 512 + (index.nades?.length || 0) * 64;
+  let n = 512 + ((index.nades?.length || 0) + (index.kills?.length || 0)) * 64;
   for (const k of typed) n += index[k]?.byteLength || 0;
   return n;
 }
