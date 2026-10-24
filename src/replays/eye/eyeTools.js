@@ -2440,7 +2440,7 @@ async function runToolInner(name, args = {}, ctx = {}) {
         if (!file) throw new ToolError('Give match and number (or a round file from find_rounds).');
         if (parseClock(args.from) == null || parseClock(args.to) == null) throw new ToolError('Give from and to as round clock times, for example 1:30 and 1:20.');
         const kind = args.view === '3d' ? '3d' : '2d';
-        const [{ makeRoundGif }, { gifShareUrl }] = await Promise.all([import('../gif/roundGif.js'), import('../gif/gifCapture.js')]);
+        const [{ makeRoundGif }, { gifPageUrl, gifShareUrl }] = await Promise.all([import('../gif/roundGif.js'), import('../gif/gifCapture.js')]);
         ctx.onProgress?.(kind === '3d' ? 'Making a 3D GIF…' : 'Making a GIF…');
         let res;
         try {
@@ -2468,7 +2468,7 @@ async function runToolInner(name, args = {}, ctx = {}) {
           };
         }
         return {
-          content: `Saved a ${what} to the user's Bookmarks (Saved GIFs) and showed it in the chat. Share link: ${gifShareUrl(res.gif.id)}${res.capped ? `. It was cut to the longest a ${kind.toUpperCase()} GIF can be.` : ''}`,
+          content: `Saved a ${what} to the user's Bookmarks (Saved GIFs) and showed it in the chat. Page link (the GIF with its title and description): ${gifPageUrl(res.gif.id)}. Image link (the GIF file itself): ${gifShareUrl(res.gif.id)}${res.capped ? `. It was cut to the longest a ${kind.toUpperCase()} GIF can be.` : ''}`,
           display: `GIF saved: ${gifDisplayTitle(m)}`,
           widget: { gif: { id: res.gif.id, title: gifDisplayTitle(m), width: res.gif.width, height: res.gif.height } }
         };

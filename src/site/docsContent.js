@@ -125,9 +125,9 @@ export const DOC_GROUPS = [
             <li><strong>Search teams</strong> and <strong>Any map</strong>: pick one or more teams and maps.</li>
             <li><strong>Team 1's buy</strong> and <strong>Team 2's buy</strong> (pistol, eco, half buy, force buy, full buy), each with an <strong>AWP</strong> switch.</li>
             <li><strong>Side</strong> (T or CT): with one team picked, the side that team played.</li>
-            <li><strong>Round winner</strong>: the team you picked, or its opponent.</li>
-            <li><strong>Winner side</strong>: T won or CT won, read from the round's own result.</li>
-            <li><strong>Dominance</strong>: rounds a side won without giving much away. See <a href="#dominance">Dominance</a>.</li>
+            <li><strong>Won</strong> / <strong>Lost</strong>: rounds the team you picked won, or lost. Click the lit button again to turn it off.</li>
+            <li><strong>T won</strong> / <strong>CT won</strong>: the side that won, read from the round's own result.</li>
+            <li><strong>Dominance</strong>: a slider with two handles. Keep rounds whose dominance is between them, from clean wins (90 to 100) to scrappy rounds (0 to 40). See <a href="#dominance">Dominance</a>.</li>
             <li><strong>Round type</strong> and <strong>vs round type</strong>: the kind of round a side played on that map, and what the other side played against it. Pick one map and a side first.</li>
             <li><strong>Rank</strong>: the world ranking of each team at the time.</li>
             <li><strong>Decided Midround</strong> / <strong>Decided Lateround</strong>: when the round was really decided.</li>
@@ -162,11 +162,12 @@ export const DOC_GROUPS = [
           <p>The win chance comes from aim4's round model: players alive and their health, equipment, the bomb, the clock and the economy, read through the whole round.</p>
           <h3>Where you find it</h3>
           <ul>
-            <li><strong>Demo Manager</strong>: the Dominance filter (50+ to 100). It reads the dominance of the team you picked; with no team, the side in the Side filter; with neither, the side that won. Each round in the list then shows its number.</li>
+            <li><strong>Demo Manager</strong>: the Dominance slider. Drag the left handle up for clean rounds, or the right handle down for close ones. It reads the dominance of the team you picked; with no team, the side in the Side filter; with neither, the side that won. Each round in the list then shows its number.</li>
             <li><strong>Similar Rounds</strong> shows it on every result and can filter by it.</li>
           </ul>
           ${best([
-            'To study how a team wins cleanly, pick the team and the map, then Dominance 90+. Those rounds are the ones worth copying.',
+            'To study how a team wins cleanly, pick the team and the map, then drag Dominance to 90 to 100. Those rounds are the ones worth copying.',
+            'To find the rounds a team nearly threw, pick the team and Won, then drag Dominance down to 0 to 40.',
             'To find a team\'s best rounds on one side, set Side as well: Dominance then reads that side.',
             'The first time you filter a large library it takes a moment to read every round; after that it is instant.'
           ])}`
@@ -313,7 +314,12 @@ export const DOC_GROUPS = [
             <li>Press <strong>Create GIF</strong>.</li>
           </ol>
           <p>The GIF downloads straight away and is saved to <a href="/bookmarks?tab=gifs">Bookmarks → Saved GIFs</a> with what it shows: the map, the round, both teams with their side and buy, and who won. Bookmarks keep GIFs up to 40 MB; a bigger one still downloads in full, and a smaller copy is made and saved for Bookmarks automatically. The round clock is stamped in the corner unless you switch it off.</p>
-          <p><strong>Copy link</strong> gives the GIF's own address on aim4.io, so it plays wherever you paste it (Discord, Slack, a forum). The same link without <code>.gif</code> opens a page with the title, description and its copy links.</p>
+          <p>Every saved GIF has two links:</p>
+          <ul>
+            <li><strong>Page link</strong> (<code>aim4.io/g/...</code>) opens a page with the GIF, its title and its description, where every setpos in the description is a link that copies itself. Use it when the words matter: a lineup, a call, a note for your team.</li>
+            <li><strong>Image link</strong> (<code>aim4.io/g/....gif</code>) is the GIF file itself, so it plays wherever you paste it (Discord, Slack, a forum). Use it when only the picture matters.</li>
+          </ul>
+          <p>Both are there after you create a GIF, on every GIF in Bookmarks, and on GIFs aim4 eye makes in the chat.</p>
           ${best([
             '2D GIFs are small and sharp; use them for setups, rotations and utility. Use 3D for a peek, a flash or a clutch.',
             'Keep 3D GIFs short. A few seconds at quality 2 is usually clearer than a long one at quality 3, and it stays under the Bookmarks limit.',
@@ -330,7 +336,7 @@ export const DOC_GROUPS = [
           <h3>Playlists</h3>
           <p>A playlist is a list of rounds from any matches, in the order you want. In the viewer, the bookmark button saves the round on screen to a playlist or creates a new one. A playlist is <strong>Private</strong> or shared with your <strong>Team</strong>, and can be searched by name.</p>
           <h3>Saved GIFs</h3>
-          <p>Every GIF you made is here as an image wall. Search it and filter by 2D or 3D, map, team, side, buy and the side that won. Click a GIF to open it next to the rest of the wall: the GIF on the left, and on the right <strong>Copy link</strong>, the title, the description and everything it was saved with. You can edit the title and description or delete it.</p>
+          <p>Every GIF you made is here as an image wall. Search it and filter by 2D or 3D, map, team, side, buy and the side that won. Click a GIF to open it next to the rest of the wall: the GIF on the left, and on the right <strong>Page link</strong> and <strong>Image link</strong> (see <a href="#gifs">GIFs</a>), the title, the description and everything it was saved with. You can edit the title and description or delete it.</p>
           ${best([
             'Build one playlist per idea ("NAVI B executes, Mirage") rather than one per match. A playlist that answers one question is one you will open again.',
             'Share prep playlists with your team so everyone watches the same rounds before a match.',
