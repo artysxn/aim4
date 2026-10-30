@@ -2847,6 +2847,23 @@ export async function handleReplayRequest(req, res, url) {
     return out;
   }
 
+  /**
+   * The grenades projection: where each grenade landed and who threw it, and
+   * what it takes to tell the side and the clock. About 500 bytes a round
+   * against 8 KB for a full meta (measured over 200 Mirage rounds, gzipped), for
+   * the eye's question about grenades in a region drawn on the map.
+   */
+  function nadesProjection(meta) {
+    if (!meta || typeof meta !== 'object') return meta;
+    const out = {};
+    for (const [k, v] of Object.entries(meta)) if (v === null || typeof v !== 'object') out[k] = v;
+    out.players = (meta.players || []).map((pl) => ({ id: pl.id, team: pl.team }));
+    out.events = {
+      grenades: (meta.events?.grenades || []).map((g) => ({ type: g.type, player: g.player, throwTick: g.throwTick, detonateTick: g.detonateTick, at: g.at }))
+    };
+    return out;
+  }
+
   if (req.method === 'POST' && p === '/api/replays/rounds/packs') {
     let body;
     try {
@@ -2874,7 +2891,7 @@ export async function handleReplayRequest(req, res, url) {
     // a 150-round batch that is megabytes of transfer whose only visible
     // effect was a ten-second gap between the client's progress bursts.
     const projection =
-      body.meta === 'match' ? matchProjection : body.meta === 'similar' ? similarProjection : null;
+      body.meta === 'match' ? matchProjection : body.meta === 'similar' ? similarProjection : body.meta === 'nades' ? nadesProjection : null;
     const stride = Math.max(1, Math.min(1000, Number(body.stride) || 100));
     // Warm both lookups once; every canOpenRound below is then map reads.
     await roundLookup();

@@ -32,6 +32,13 @@
 //   { "won": true | false }
 //   { "pace": "rush"|"pop"|"contact"|"full-exec"|"default"|"slow-default"|"other" }  (T rounds)
 //   { "not": condition }
+//   { "any": [ condition, ... ] }       at least one of them holds
+//
+// players_in, utility, kill and first_kill take "region": 1, a place the user
+// drew on the map (mapRegions.js), where they take "zone" or along with it. A
+// region is tested on the point itself (where a grenade landed, where a player
+// stood), so it needs no zone network. Their who and by also take "T" or "CT",
+// whichever side the team read was on.
 //
 // players_in, utility and kill can take their window around the moment the
 // team got onto a site instead of the round clock: "around": "entry" with
@@ -48,6 +55,7 @@
 
 import { ROUND_SECONDS } from '../viewer/roundClock.js';
 import { classifyPace, paceSite } from '../analytics/antistratScan.js';
+import { inRegion } from './mapRegions.js';
 
 // "bought" is half, force or full: the pool the antistrat's pace section counts,
 // so a document's "Rush 11% (12 rounds)" can be checked with the same rounds.
@@ -125,14 +133,14 @@ function buyOk(econ, buy) {
  * Compile one condition into a test of a round. Zone names are resolved
  * once, here, against the map.
  */
-const KINDS = new Set(['not', 'players_in', 'utility', 'kill', 'first_kill', 'site', 'plant', 'won', 'pace']);
+const KINDS = new Set(['not', 'any', 'players_in', 'utility', 'kill', 'first_kill', 'site', 'plant', 'won', 'pace']);
 
 /**
  * Small models drop the wrapper and write `{ "zone": "Silo", "min": 1 }` for
  * `{ "players_in": { ... } }`, or `{ "type": "smoke", ... }` for utility. The
  * intent is unambiguous, so it is read the way it was meant.
  */
-function normalizeCondition(cond) {
+export function normalizeCondition(cond) {
   const keys = Object.keys(cond);
   if (keys.length === 1 && KINDS.has(keys[0])) return cond;
   if (keys.some((k) => KINDS.has(k))) {
@@ -140,14 +148,64 @@ function normalizeCondition(cond) {
     return { [kind]: cond[kind] };
   }
   if ('type' in cond && ['smoke', 'molotov', 'flash', 'he', 'any'].includes(cond.type)) return { utility: cond };
-  if ('zone' in cond) return { players_in: cond };
+  if ('zone' in cond || 'region' in cond) return { players_in: cond };
   return cond;
 }
 
-function compile(raw, zones, unknown) {
+/** Can a condition be told from where a round's grenades landed, without its movement? */
+export function grenadeOnly(raw) {
+  if (!raw || typeof raw !== 'object') return false;
+  const [kind, arg] = Object.entries(normalizeCondition(raw))[0] || [];
+  if (kind === 'utility') return arg?.region != null && !arg.zone && !arg.around;
+  if (kind === 'not') return grenadeOnly(arg);
+  if (kind === 'any') return Array.isArray(arg) && arg.length > 0 && arg.every(grenadeOnly);
+  return false;
+}
+
+/** Every region number a where list names. */
+export function regionsNamed(where) {
+  const out = new Set();
+  const walk = (raw) => {
+    if (!raw || typeof raw !== 'object') return;
+    const [kind, arg] = Object.entries(normalizeCondition(raw))[0] || [];
+    if (kind === 'not') walk(arg);
+    else if (kind === 'any' && Array.isArray(arg)) arg.forEach(walk);
+    else if (arg?.region != null) out.add(Number(arg.region));
+  };
+  (Array.isArray(where) ? where : []).forEach(walk);
+  return [...out];
+}
+
+/**
+ * The map a where list's regions are on, or '' when it names none. A region that was never drawn, one
+ * on another map, or two on different maps are said here: tested anyway, they would match nothing.
+ */
+export function regionMap(where, regions = [], mapCode = '') {
+  const named = regionsNamed(where);
+  const maps = new Set();
+  for (const id of named) {
+    const hit = regions.find((r) => r.id === id);
+    if (!hit) throw new QueryError(`There is no region ${id}. ${regions.length ? `The user drew ${regions.map((r) => r.id).join(', ')}.` : 'The user has drawn none.'}`);
+    maps.add(hit.map);
+  }
+  if (maps.size > 1) throw new QueryError(`Regions ${named.join(', ')} are on different maps: one query can use one map's regions.`);
+  const [map = ''] = maps;
+  if (map && mapCode && map !== mapCode) throw new QueryError(`Region ${named[0]} was drawn on ${map}, not ${mapCode}.`);
+  return map;
+}
+
+function compile(raw, zones, unknown, regions = []) {
   if (!raw || typeof raw !== 'object') throw new QueryError('A condition must be an object.');
   const cond = normalizeCondition(raw);
   const [kind, arg] = Object.entries(cond)[0] || [];
+  const regionOf = (a) => {
+    if (a?.region === undefined || a?.region === null) return null;
+    const hit = regions.find((r) => r.id === Number(a.region));
+    if (!hit) throw new QueryError(`There is no region ${a.region}. ${regions.length ? `The user drew ${regions.map((r) => r.id).join(', ')}.` : 'The user has drawn none.'}`);
+    return hit;
+  };
+  /** Is this `who` the team read in this round? */
+  const isOurs = (who, r) => who === 'team' || who === r.side;
   const zoneSet = (name) => {
     if (!name) return null;
     const hit = zones.get(String(name).trim().toLowerCase());
@@ -161,7 +219,8 @@ function compile(raw, zones, unknown) {
     const v = String(w ?? 'team').toLowerCase();
     if (['team', 'us', 'ours', 'player', 'players', 'self'].includes(v)) return 'team';
     if (['opponent', 'opponents', 'enemy', 'enemies', 'them', 'other'].includes(v)) return 'opponent';
-    throw new QueryError(`"who" is "team" or "opponent", not "${w}".`);
+    if (v === 't' || v === 'ct') return v.toUpperCase();
+    throw new QueryError(`"who" is "team", "opponent", "T" or "CT", not "${w}".`);
   };
   /** The condition's window for a round, as [from, to] seconds since the round went live, or null (no entry). */
   const windowOf = (a) => {
@@ -185,19 +244,27 @@ function compile(raw, zones, unknown) {
         return [at - before, at + after];
       };
     }
-    const from = elapsedOfClock(a?.from, 0);
-    const to = elapsedOfClock(a?.to, ROUND_SECONDS);
+    // A region with no clock named takes the whole round: a smoke thrown after a late plant still landed there.
+    const whole = a?.region != null;
+    const from = a?.from == null && whole ? -Infinity : elapsedOfClock(a?.from, 0);
+    const to = a?.to == null && whole ? Infinity : elapsedOfClock(a?.to, ROUND_SECONDS);
     const fixed = from <= to ? [from, to] : [to, from];
     return () => fixed;
   };
   switch (kind) {
     case 'not': {
-      const inner = compile(arg, zones, unknown);
+      const inner = compile(arg, zones, unknown, regions);
       return (r) => !inner(r);
+    }
+    case 'any': {
+      if (!Array.isArray(arg) || !arg.length) throw new QueryError('"any" is a list of conditions.');
+      const tests = arg.map((c) => compile(c, zones, unknown, regions));
+      return (r) => tests.some((t) => t(r));
     }
     case 'players_in': {
       const set = zoneSet(arg?.zone);
-      if (!set) throw new QueryError('players_in needs a zone.');
+      const region = regionOf(arg);
+      if (!set && !region) throw new QueryError('players_in needs a zone.');
       const who = whoOf(arg.who);
       const min = Number.isFinite(arg.min) ? arg.min : 1;
       const max = Number.isFinite(arg.max) ? arg.max : 5;
@@ -209,9 +276,9 @@ function compile(raw, zones, unknown) {
         for (const s of r.series || []) {
           if (s.elapsed < from) continue;
           if (s.elapsed > to) break;
-          const pts = who === 'team' ? s.pts : s.opp || [];
+          const pts = isOurs(who, r) ? s.pts : s.opp || [];
           let n = 0;
-          for (const p of pts) if (p.pos && set.has(p.pos)) n++;
+          for (const p of pts) if ((!set || (p.pos && set.has(p.pos))) && (!region || inRegion(region, p.x, p.y, p.z))) n++;
           if (n >= min && n <= max) return true;
         }
         return false;
@@ -222,19 +289,21 @@ function compile(raw, zones, unknown) {
       const type = arg?.type && arg.type !== 'any' ? NADE_TYPES[arg.type] : null;
       if (arg?.type && arg.type !== 'any' && !type) throw new QueryError(`Unknown utility "${arg.type}". Use smoke, molotov, flash, he or any.`);
       const set = zoneSet(arg?.zone);
+      const region = regionOf(arg);
       const min = Number.isFinite(arg?.min) ? arg.min : 1;
       const win = windowOf(arg);
       return (r) => {
         const w = win(r);
         if (!w) return false;
         const [from, to] = w;
-        const list = who === 'team' ? r.nades : r.enemyNades || [];
+        const list = isOurs(who, r) ? r.nades : r.enemyNades || [];
         let n = 0;
         for (const g of list) {
           const t = Number.isFinite(g.throwAt) ? g.throwAt : g.at;
           if (t < from || t > to) continue;
           if (type && g.type !== type) continue;
           if (set && !set.has(g.zone) && !set.has(g.label)) continue;
+          if (region && !inRegion(region, g.x, g.y, g.z)) continue;
           n++;
         }
         return n >= min;
@@ -243,6 +312,7 @@ function compile(raw, zones, unknown) {
     case 'kill': {
       const by = whoOf(arg?.by);
       const set = zoneSet(arg?.zone);
+      const region = regionOf(arg);
       const min = Number.isFinite(arg?.min) ? arg.min : 1;
       const win = windowOf(arg);
       return (r) => {
@@ -252,18 +322,19 @@ function compile(raw, zones, unknown) {
         return r.kills.filter((k) => {
           const t = ROUND_SECONDS - k.clock;
           if (t < from || t > to) return false;
-          if ((by === 'team') !== k.attackerOurs) return false;
-          return !set || set.has(k.victimZone) || set.has(k.attackerZone);
+          if (isOurs(by, r) !== k.attackerOurs) return false;
+          return placed(k, set, region);
         }).length >= min;
       };
     }
     case 'first_kill': {
       const by = whoOf(arg?.by);
       const set = zoneSet(arg?.zone);
+      const region = regionOf(arg);
       return (r) => {
         const k = r.firstKill;
-        if (!k || (by === 'team') !== k.attackerOurs) return false;
-        return !set || set.has(k.victimZone) || set.has(k.attackerZone);
+        if (!k || isOurs(by, r) !== k.attackerOurs) return false;
+        return placed(k, set, region);
       };
     }
     case 'site': {
@@ -280,6 +351,12 @@ function compile(raw, zones, unknown) {
     default:
       throw new QueryError(`Unknown condition "${kind}".`);
   }
+}
+
+/** Did a kill happen on this ground? Either end of it counts: where the victim dropped or where the shooter stood. */
+function placed(k, set, region) {
+  if (set && !set.has(k.victimZone) && !set.has(k.attackerZone)) return false;
+  return !region || inRegion(region, k.x, k.y, k.z) || inRegion(region, k.ax, k.ay);
 }
 
 const siteOf = (r) => String((r.side === 'T' ? paceSite(r) : r.hitSite) || '').toUpperCase();
@@ -319,7 +396,7 @@ export function runRoundQuery(rounds, network, query = {}) {
   if (q.side && !['T', 'CT', 'any'].includes(q.side)) throw new QueryError('side is "T", "CT" or "any".');
   const zones = zoneIndex(network);
   const unknown = new Set();
-  const tests = (q.where || []).map((c) => compile(c, zones, unknown));
+  const tests = (q.where || []).map((c) => compile(c, zones, unknown, q.regions || []));
   const pool = rounds.filter((r) => r.hasTicks && sideOk(r, q.side) && buyOk(r.ownEcon, q.buy) && buyOk(r.oppEcon, q.vs_buy));
   const matched = pool.filter((r) => tests.every((t) => t(r)));
   const groups = new Map();

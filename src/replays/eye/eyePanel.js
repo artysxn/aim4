@@ -27,8 +27,11 @@ import {
   parseCommand,
   transcriptOf
 } from './eyeCommands.js';
-import { attachChoices, roundsOfTeam, toolsFor } from './eyeTools.js';
+import { attachChoices, placesOfRegion, roundsOfTeam, toolsFor } from './eyeTools.js';
+import { createMapSelect, regionThumbs } from './eyeMapSelect.js';
+import { chatRegions, nextRegionId, noteRegions, regionLines, regionRefs, resetRegions, ruleWords } from './mapRegions.js';
 import { noteRounds, roundIdsIn } from './roundRefs.js';
+import { MAPS } from '../shared/roundId.js';
 import { createRoundPlayer } from './eyeRoundPlayer.js';
 import './eye.css';
 import chatsIcon from '../../icons/sideicons/sideicon_chats.svg?raw';
@@ -246,6 +249,24 @@ export function createEyePanel({ escapeHtml }) {
   let shown = false;
   let linking = false;
   let linkError = '';
+  const mapSelect = createMapSelect({
+    escapeHtml,
+    drafts: () => draftRegions(),
+    sent: chatRegions,
+    nextId: () => nextRegionId([...chatRegions(), ...draftRegions(), ...queued.flatMap((x) => x.atts).filter((a) => a.kind === 'region').map((a) => a.region)]),
+    onAdd(region) {
+      attachments.push({ kind: 'region', label: regionLabel(region), value: String(region.id), region });
+      renderChips();
+    },
+    onRemove(id) {
+      attachments = attachments.filter((a) => !(a.kind === 'region' && a.region.id === id));
+      renderChips();
+    },
+    onChange: renderChips,
+    onInsert: insertHere,
+    placeOf: placesOfRegion
+  });
+  form.before(mapSelect.el);
   /** The saved-chat id of this conversation, made with its first question. */
   let chatId = '';
   /** A title for the chat when its first message is not a question (a compacted chat). */
@@ -445,14 +466,27 @@ export function createEyePanel({ escapeHtml }) {
     void refreshStatus();
   }
 
-  const KIND_LABEL = { image: 'Image', round: 'Round', team: 'Team', player: 'Player' };
+  const KIND_LABEL = { image: 'Image', round: 'Round', team: 'Team', player: 'Player', map: 'Map', region: 'Region' };
+
+  const draftRegions = () => attachments.filter((a) => a.kind === 'region').map((a) => a.region);
+  const regionLabel = (r) => [MAPS[r.map]?.name || r.map, ruleWords(r.rule), r.place].filter(Boolean).join(', ');
+
+  /** "here(1)" into the message at the cursor. */
+  function insertHere(id) {
+    const at = textEl.selectionStart ?? textEl.value.length;
+    const before = textEl.value[at - 1];
+    textEl.setRangeText(`${before && !/\s/.test(before) ? ' ' : ''}here(${id})`, at, textEl.selectionEnd ?? at, 'end');
+    textEl.focus();
+    textEl.dispatchEvent(new Event('input'));
+  }
 
   function renderChips() {
+    for (const a of attachments) if (a.kind === 'region') a.label = regionLabel(a.region);
     chipsEl.hidden = !attachments.length;
     chipsEl.innerHTML = attachments
       .map(
         (a, i) => `<span class="eye-chip" title="${escapeHtml(KIND_LABEL[a.kind])}">
-          ${a.kind === 'image' ? `<img src="${escapeHtml(a.value)}" alt="" />` : `<span class="eye-chip-kind">${KIND_LABEL[a.kind]}</span>`}
+          ${a.kind === 'image' ? `<img src="${escapeHtml(a.value)}" alt="" />` : a.kind === 'region' ? `<button type="button" class="eye-region-num" data-eye-here="${a.region.id}" title="Insert here(${a.region.id})" aria-label="Insert here(${a.region.id})">${a.region.id}</button>` : `<span class="eye-chip-kind">${KIND_LABEL[a.kind]}</span>`}
           <span class="eye-chip-label">${escapeHtml(a.label)}</span>
           <button type="button" class="eye-chip-x" data-eye-unattach="${i}" aria-label="Remove">×</button>
         </span>`
@@ -483,6 +517,7 @@ export function createEyePanel({ escapeHtml }) {
     queued.push({ text, atts: attachments });
     attachments = [];
     renderChips();
+    mapSelect.refresh();
     textEl.value = '';
     textEl.style.height = '';
     renderCommands();
@@ -495,6 +530,7 @@ export function createEyePanel({ escapeHtml }) {
     textEl.value = [textEl.value.trim(), ...items.map((x) => x.text)].filter(Boolean).join('\n\n');
     for (const a of items.flatMap((x) => x.atts)) if (!attachments.some((b) => b.kind === a.kind && b.value === a.value)) attachments.push(a);
     renderChips();
+    mapSelect.refresh();
     textEl.dispatchEvent(new Event('input'));
   }
 
@@ -535,9 +571,10 @@ export function createEyePanel({ escapeHtml }) {
       image: vision ? 'A screenshot or a photo' : 'Needs a model that reads pictures',
       round: 'One round of a team',
       team: 'A team of the library',
-      player: 'A player of the library'
+      player: 'A player of the library',
+      map: 'Draw places on an overview'
     };
-    attachPop.innerHTML = ['image', 'round', 'team', 'player']
+    attachPop.innerHTML = ['image', 'round', 'team', 'player', 'map']
       .map((k) => {
         const off = k === 'image' && !vision;
         return `<button type="button" class="eye-pop-item" data-eye-attach="${k}"${off ? ' disabled' : ''}>
@@ -626,13 +663,18 @@ export function createEyePanel({ escapeHtml }) {
   /** The message the model reads: the question, plus what was attached as plain text and pictures. */
   function messageWith(question, atts) {
     const lines = atts
-      .filter((a) => a.kind !== 'image')
+      .filter((a) => a.kind !== 'image' && a.kind !== 'region')
       .map((a) => (a.kind === 'round' ? `- Round: ${a.value} (${a.label})` : a.kind === 'player' ? `- Player: ${a.label} (id ${a.value})` : `- Team: ${a.label}`));
+    const regions = atts.filter((a) => a.kind === 'region').map((a) => a.region);
+    lines.push(...regionLines(regions));
+    noteRegions(regions);
+    const missing = regionRefs(question).filter((id) => !chatRegions().some((r) => r.id === id));
+    if (missing.length) lines.push(`- ${missing.map((id) => `here(${id})`).join(', ')}: the user drew no such region.`);
     const text = lines.length ? `${question}\n\nAttached by the user:\n${lines.join('\n')}` : question;
     noteRounds(atts.filter((a) => a.kind === 'round').map((a) => a.value));
     const images = atts.filter((a) => a.kind === 'image');
     const content = images.length ? [{ type: 'text', text }, ...images.map((a) => ({ type: 'image_url', image_url: { url: a.value } }))] : text;
-    return { role: 'user', content, ui: { text: question, chips: atts.map((a) => ({ kind: a.kind, label: a.label })) } };
+    return { role: 'user', content, ui: { text: question, chips: atts.map((a) => ({ kind: a.kind, label: a.label })), ...(regions.length ? { regions } : {}) } };
   }
 
   // ---- past chats -------------------------------------------------------------------
@@ -678,7 +720,9 @@ export function createEyePanel({ escapeHtml }) {
     chatId = '';
     titleOverride = '';
     attachments = [];
+    resetRegions();
     renderChips();
+    mapSelect.refresh();
     historyEl.hidden = true;
     logEl.replaceChildren();
     renderEmpty();
@@ -693,6 +737,8 @@ export function createEyePanel({ escapeHtml }) {
       titleOverride = '';
       historyEl.hidden = true;
       noteRounds(messages.flatMap((m) => (typeof m.content === 'string' ? roundIdsIn(m.content) : [])));
+      resetRegions(messages.flatMap((m) => m.ui?.regions || []));
+      mapSelect.refresh();
       renderSaved();
     } catch (err) {
       historyEl.innerHTML = `<p class="eye-error">${escapeHtml(err.message)}</p>`;
@@ -706,7 +752,7 @@ export function createEyePanel({ escapeHtml }) {
     const widgets = new Map(messages.filter((m) => m.role === 'tool' && m.ui?.widget).map((m) => [m.tool_call_id, m.ui.widget]));
     for (const m of messages) {
       if (m.role === 'user' && (m.ui || typeof m.content === 'string')) {
-        userBubble(m.ui?.text ?? m.content, m.ui?.chips);
+        userBubble(m.ui?.text ?? m.content, m.ui?.chips, m.ui?.regions);
       } else if (m.role === 'assistant') {
         if (String(m.content || '').trim()) {
           if (m.tool_calls?.length) {
@@ -806,9 +852,11 @@ export function createEyePanel({ escapeHtml }) {
   }
 
   /** The user's message: what they attached, then the words, in a bubble. */
-  function userBubble(text, chips = []) {
-    const sent = (chips || []).map((c) => `${KIND_LABEL[c.kind] || ''}: ${c.label}`).join(', ');
-    return bubble('eye-user-wrap', `<div class="eye-user"><p>${escapeHtml(text)}</p></div>${sent ? `<div class="eye-sent">${escapeHtml(sent)}</div>` : ''}`);
+  function userBubble(text, chips = [], regions = []) {
+    const sent = (chips || []).filter((c) => c.kind !== 'region').map((c) => `${KIND_LABEL[c.kind] || ''}: ${c.label}`).join(', ');
+    const rules = (regions || []).map((r) => `${r.id}: ${ruleWords(r.rule) || r.place || MAPS[r.map]?.name || r.map}`).join(', ');
+    const thumbs = regions?.length ? `<div class="eye-sent-maps">${regionThumbs(regions, escapeHtml)}</div>` : '';
+    return bubble('eye-user-wrap', `<div class="eye-user"><p>${escapeHtml(text)}</p></div>${thumbs}${sent || rules ? `<div class="eye-sent">${escapeHtml([sent, rules].filter(Boolean).join(', '))}</div>` : ''}`);
   }
 
   // ---- the conversation -----------------------------------------------------------
@@ -1006,6 +1054,11 @@ export function createEyePanel({ escapeHtml }) {
       const summary = await summarizeChat(transcriptOf(messages), SUMMARY_PROMPT, { signal: ctrl.signal });
       if (!summary) throw new Error('The model returned no summary.');
       messages = compactedMessages(summary);
+      // The regions outlive the summary: their numbers still mean something, in this chat and when it is reopened.
+      if (chatRegions().length) {
+        messages[0].content += `\n\n${regionLines(chatRegions()).join('\n')}`;
+        messages[0].ui.regions = chatRegions();
+      }
       chatId = '';
       titleOverride = `${title} (compacted)`.slice(0, 60);
       renderSaved();
@@ -1133,12 +1186,15 @@ export function createEyePanel({ escapeHtml }) {
       attachments = [];
       renderChips();
     }
-    userBubble(q, again ? again.ui?.chips : atts.map((a) => ({ kind: a.kind, label: a.label })));
+    userBubble(q, again ? again.ui?.chips : atts.map((a) => ({ kind: a.kind, label: a.label })), again ? again.ui?.regions : atts.filter((a) => a.kind === 'region').map((a) => a.region));
     const turnStart = messages.length;
     let failed = false;
     /** The grade corrections this turn's prompt carried, saved with its rating. */
     let turnNote = '';
     messages.push(again || messageWith(q, atts));
+    // A message with regions is done with the overview: the answer needs the room. What was sent stays on it, behind what is drawn next.
+    if (atts.some((a) => a.kind === 'region')) mapSelect.close();
+    mapSelect.refresh();
     if (!fromQueue) {
       textEl.value = '';
       textEl.style.height = '';
@@ -1391,6 +1447,7 @@ export function createEyePanel({ escapeHtml }) {
     if (e.key === 'Escape') {
       closePops();
       historyEl.hidden = true;
+      if (mapSelect.isOpen()) mapSelect.escape();
     }
   });
   el.addEventListener('click', async (e) => {
@@ -1404,6 +1461,9 @@ export function createEyePanel({ escapeHtml }) {
       if (kind === 'image') {
         attachPop.hidden = true;
         fileEl.click();
+      } else if (kind === 'map') {
+        attachPop.hidden = true;
+        mapSelect.open();
       } else {
         openPicker(kind);
       }
@@ -1418,10 +1478,16 @@ export function createEyePanel({ escapeHtml }) {
       void useModel(model);
       return;
     }
+    const here = e.target.closest('[data-eye-here]');
+    if (here) {
+      insertHere(Number(here.dataset.eyeHere));
+      return;
+    }
     const unattach = e.target.closest('[data-eye-unattach]');
     if (unattach) {
       attachments.splice(Number(unattach.dataset.eyeUnattach), 1);
       renderChips();
+      mapSelect.refresh();
       return;
     }
     const unqueue = e.target.closest('[data-eye-unqueue]');

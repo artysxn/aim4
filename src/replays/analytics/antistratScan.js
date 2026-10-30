@@ -85,7 +85,7 @@ export function fmtClock(seconds) {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
-function normNade(type) {
+export function normNade(type) {
   const t = String(type || '')
     .toLowerCase()
     .replace(/^weapon_/, '');
@@ -93,7 +93,7 @@ function normNade(type) {
   return t;
 }
 
-const NADE_KINDS = ['smokegrenade', 'molotov', 'flashbang', 'hegrenade'];
+export const NADE_KINDS = ['smokegrenade', 'molotov', 'flashbang', 'hegrenade'];
 export const NADE_LABEL = {
   smokegrenade: 'Smokes',
   molotov: 'Molotovs',
@@ -392,6 +392,7 @@ export function roundFeatures({ meta, track, row, teamIdx, opponent, context, ne
       player: g.player,
       x,
       y,
+      z: Number(g.at?.z),
       fx: Number.isFinite(g.from?.x) ? g.from.x : null,
       fy: Number.isFinite(g.from?.y) ? g.from.y : null,
       fromZone:
@@ -427,6 +428,7 @@ export function roundFeatures({ meta, track, row, teamIdx, opponent, context, ne
       throwAt: elapsedOf(Number(g.throwTick ?? det)),
       x,
       y,
+      z: Number(g.at?.z),
       zone,
       label: aliasSpot(mapCode, zone),
       player: g.player

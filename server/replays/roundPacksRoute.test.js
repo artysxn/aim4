@@ -217,6 +217,28 @@ const base = `http://127.0.0.1:${server.address().port}`;
   }
 }
 
+// The grenades projection (the eye's regions drawn on a map): the landing, who
+// threw it, and what tells the side and the clock. Nothing else of the round.
+{
+  const res = await fetch(`${base}/api/replays/rounds/packs`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ files: stems, ticks: false, meta: 'nades' })
+  });
+  assert(res.ok, `nades packs respond 200 (${res.status})`);
+  const packs = decodeRoundPacks(await res.arrayBuffer());
+  for (const pack of packs) {
+    const m = pack.meta;
+    assert(pack.ticks === null, 'no ticks');
+    assert(m.events.grenades.length === 1 && m.events.grenades[0].at?.z === 3 && m.events.grenades[0].player === 'p1', 'the landing and who threw it survive');
+    assert(m.events.grenades[0].path === undefined, 'grenade flight path is dropped');
+    assert(m.events.kills === undefined && m.events.bomb === undefined && m.events.shots === undefined, 'every other event is dropped');
+    assert(m.stats === undefined && m.team1 === undefined, 'so is everything heavy at the top level');
+    assert(m.freezeEndTick === 9200 && m.winner === 1, 'the scalars the clock and the side read pass through');
+    assert(m.players.length === 2 && m.players[0].team === 1 && m.players[0].name === undefined, 'players are id and team');
+  }
+}
+
 // Meta-only batches skip the tick blobs entirely.
 {
   const res = await fetch(`${base}/api/replays/rounds/packs`, {

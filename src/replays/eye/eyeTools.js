@@ -49,6 +49,7 @@ import {
   fetchRoster,
   fetchRoundDominance,
   fetchRoundMeta,
+  fetchRoundPacks,
   fetchRoundTicks,
   fetchTeamDocument,
   fetchTeams,
@@ -65,7 +66,8 @@ import {
   saveRoundNotes
 } from '../api.js';
 import { gapWords, sideOfTeam, winnerSide } from './roundSample.js';
-import { aliveWords, askedWords, buyWord, needsPositions, needsRecord, needsSides, noteProblem, parseScout, recordFacts, recordFits, ScoutError, subjectSeat } from './roundScout.js';
+import { aliveWords, askedWords, buyWord, grenadesOf, needsPositions, needsRecord, needsSides, noteProblem, parseScout, recordFacts, recordFits, regionHits, ScoutError, subjectSeat } from './roundScout.js';
+import { chatRegions, placesIn } from './mapRegions.js';
 import { describeRound } from './roundDescribe.js';
 import { screenshotRound } from './eyeVision.js';
 import { parseClock } from './eyeImages.js';
@@ -93,7 +95,8 @@ import {
 import { opinionsFrom } from '../training/opinions.js';
 import { pointsFromSummaryHtml } from '../training/trainingSources.js';
 import { publicOrigin } from '../../site/publicOrigin.js';
-import { QueryError, runRoundQuery, zoneNames } from './roundQuery.js';
+import { QueryError, regionMap, regionsNamed, runRoundQuery, zoneNames } from './roundQuery.js';
+import { positionsAtPoint } from '../zones/pointInZone.js';
 import { buildRewrite, editDocument, editKey, outlineOfHtml, reviewOutline, sectionName, sectionsOfOutline } from './docReview.js';
 import { findWeaknesses } from './weaknesses.js';
 import { findExecute, roundStory } from './roundStory.js';
@@ -482,7 +485,8 @@ const CONDITION_HELP =
   '{"players_in":{"zone":"Silo","who":"team"|"opponent","min":1,"max":5,"from":"1:55","to":"1:20"}}, ' +
   '{"utility":{"who":"team"|"opponent","type":"smoke"|"molotov"|"flash"|"he"|"any","zone":"Heaven","from":"1:55","to":"0:00","min":1}}, ' +
   '{"kill":{"by":"team"|"opponent","zone":"...","from":"...","to":"...","min":1}}, {"first_kill":{"by":"team"|"opponent","zone":"..."}}, ' +
-  '{"site":"A"|"B"|"none"}, {"plant":true|false}, {"won":true|false}, {"pace":"rush"|"pop"|"contact"|"full-exec"|"default"|"slow-default"|"other"}, {"not":<condition>}. ' +
+  '{"site":"A"|"B"|"none"}, {"plant":true|false}, {"won":true|false}, {"pace":"rush"|"pop"|"contact"|"full-exec"|"default"|"slow-default"|"other"}, {"not":<condition>}, {"any":[<condition>]}. ' +
+  'A region the user drew: "region":1 for "zone", who or by "T"|"CT". ' +
   'players_in, utility and kill can time their window from the moment the team got onto a site instead of the clock: "around":"entry","before":15,"after":15 (seconds; "entry_site":"A"|"B" for one site). ' +
   'Example, an A lurk while they hit B: [{"site":"B"},{"players_in":{"zone":"A","who":"team","min":1,"around":"entry","before":15,"after":15}}].';
 
@@ -1554,6 +1558,16 @@ function mapContext(mapCode) {
   return mapContexts.get(mapCode);
 }
 
+/** The callouts a drawn region mostly covers, '' when the map's zones cannot be read. */
+export async function placesOfRegion(region) {
+  try {
+    const { network } = await mapContext(region.map);
+    return placesIn(region, (x, y) => positionsAtPoint(x, y, network).map((z) => z.name));
+  } catch {
+    return '';
+  }
+}
+
 /** The newest rounds read: a note job or a scout asks for the same round's two sides. */
 const roundReads = new Map();
 const READS_KEPT = 24;
@@ -1643,6 +1657,8 @@ const BRIEFS_PER_PART = 8;
 /** Rounds read at most by one scout, per kind of read: each round is one or two requests. */
 const SCOUT_SIDE_BATCH = 200;
 const SCOUT_SIDES_MAX = 4000;
+/** Grenade landings for this many rounds is about a megabyte over the wire. */
+const SCOUT_GRENADES_MAX = 4000;
 const SCOUT_RECORDS_MAX = 400;
 const SCOUT_POSITIONS_MAX = 120;
 const SCOUT_LIST_CAP = 8000;
@@ -1662,7 +1678,10 @@ async function scoutRounds(args, ctx) {
   const a = parseScout(args);
   const { payload } = await library();
   const demoById = new Map(payload.demos.map((d) => [String(d.id), d]));
-  const mapCode = a.map ? mapCodeOf(a.map) : '';
+  const regions = chatRegions();
+  const namedMap = a.map ? mapCodeOf(a.map) : '';
+  // A region says its map, so naming the map as well is optional, and naming another one is a mistake.
+  const mapCode = regionMap(args.where, regions, namedMap) || namedMap;
   if (!mapCode && !a.team && !a.player) throw new ToolError('Name a map, a team or a player.');
   const query = {};
   if (mapCode) query.maps = [mapCode];
@@ -1773,16 +1792,50 @@ async function scoutRounds(args, ctx) {
   // A zone the map does not have is said before anything is read, not after 80 rounds of nothing.
   if (a.where.length && mapCode) {
     const { network } = await mapContext(mapCode);
-    const { unknownZones } = runRoundQuery([], network, { where: a.where });
+    const { unknownZones } = runRoundQuery([], network, { where: a.where, regions });
     if (unknownZones.length) throw new QueryError(`${mapName(mapCode)} has no zone called ${unknownZones.map((z) => `"${z}"`).join(', ')}. Call map_zones for its names, or leave that condition out.`);
   }
   const fits = [];
   const others = [];
   let records = 0;
   let positions = 0;
+  let grenadesRead = 0;
+  let landedCount = 0;
   let stoppedShort = false;
-  const atLimit = () => (usePositions && positions >= SCOUT_POSITIONS_MAX) || ((useRecord || usePositions) && records >= SCOUT_RECORDS_MAX);
+  const atLimit = () => (usePositions && positions >= SCOUT_POSITIONS_MAX) || ((useRecord || usePositions) && records >= SCOUT_RECORDS_MAX) || grenadesRead >= SCOUT_GRENADES_MAX;
   const full = () => fits.length >= a.count || atLimit();
+  /**
+   * The rounds whose grenades landed where the question says. One request for a few hundred rounds,
+   * about 500 bytes each: the record of each would be 8 KB and a request per round. A server older
+   * than the 'nades' projection sends the whole record in the same answer, which reads the same.
+   */
+  const landedFit = async (cands) => {
+    let packs = null;
+    try {
+      packs = await fetchRoundPacks(cands.map((c) => c.row.file), { ticks: false, meta: 'nades' });
+    } catch {
+      /* no batch route: the records say the same, a request per round */
+    }
+    grenadesRead += cands.length;
+    ctx.onProgress?.(`Reading where the grenades landed: ${grenadesRead} rounds, ${fits.length} of ${a.count} found…`);
+    const kept = [];
+    await eachFew(cands, packs ? cands.length : 8, async (c) => {
+      const meta = packs ? packs.get(c.row.file)?.meta : await recordOf(c.row.file).catch(() => null);
+      if (!meta) return;
+      c.side ||= sideOfTeam(meta, c.seat);
+      const read = grenadesOf(meta, c.side);
+      if (!runRoundQuery([read], null, { where: a.grenadeWhere, regions }).matched) return void seen.add(c.row.file);
+      c.landed = regionHits(read, a.grenadeWhere, regions);
+      landedCount++;
+      kept.push(c);
+    });
+    return kept;
+  };
+  /** One stretch of candidates through the landings, then what is left through the deep reads. */
+  const through = async (cands) => {
+    const kept = a.grenadeWhere.length ? await landedFit(cands) : cands;
+    await eachFew(kept, usePositions ? 4 : 8, deep, full);
+  };
   const deep = async (c) => {
     if (fits.length >= a.count) return;
     if (atLimit()) return void (stoppedShort = true);
@@ -1812,7 +1865,7 @@ async function scoutRounds(args, ctx) {
       try {
         const read = await sideReadOf(c.row.file, c.side);
         if (a.where.length) {
-          const asked = runRoundQuery([read.r], read.network, { where: a.where });
+          const asked = runRoundQuery([read.r], read.network, { where: a.where, regions });
           if (asked.unknownZones.length) throw new QueryError(`${mapName(read.mapCode)} has no zone called ${asked.unknownZones.map((z) => `"${z}"`).join(', ')}. Call map_zones for its names, or leave that condition out.`);
           if (!asked.matched) return;
         }
@@ -1861,12 +1914,20 @@ async function scoutRounds(args, ctx) {
         passed.push({ row, seat, side, dominance });
       }
       candidates.push(...passed);
-      if (!sorted) await eachFew(passed, usePositions ? 4 : 8, deep, full);
+      if (!sorted) await through(passed);
     }
     if (noSidesRoute && (a.dominance || a.sort === 'dominance')) throw new ToolError('Dominance could not be read: the server this page talks to does not have it yet.');
     if (sorted) {
       candidates.sort((x, y) => (y.dominance ?? -1) - (x.dominance ?? -1));
-      await eachFew(candidates, usePositions ? 4 : 8, deep, full);
+      if (a.grenadeWhere.length) {
+        // Every candidate's landings, not only as far as the first few: they cost a request per few
+        // hundred rounds, and "8 of 209" is a different answer from "8 fit" (30 Oct: the model said the latter).
+        const kept = [];
+        for (let i = 0; i < candidates.length && grenadesRead < SCOUT_GRENADES_MAX; i += SCOUT_SIDE_BATCH) kept.push(...(await landedFit(candidates.slice(i, i + SCOUT_SIDE_BATCH))));
+        await eachFew(kept, usePositions ? 4 : 8, deep, full);
+      } else {
+        for (let i = 0; i < candidates.length && !full(); i += SCOUT_SIDE_BATCH) await through(candidates.slice(i, i + SCOUT_SIDE_BATCH));
+      }
     }
     if (sidesRead && candidates.length !== sidesRead) funnel.push(`${candidates.length} of the ${sidesRead} read fit the side, buys, result${a.dominance ? ' and dominance' : ''}`);
   }
@@ -1882,14 +1943,19 @@ async function scoutRounds(args, ctx) {
       const side = seat === 1 ? seat1Side : seat1Side === 'T' ? 'CT' : 'T';
       if (!seat || (a.side && side !== a.side) || (a.winner && winnerSide(meta) !== a.winner) || !seatFits(row, seat)) return;
       candidates.push({ row, seat, side });
-      await deep(candidates.at(-1));
+      await through(candidates.slice(-1));
     }, full);
   } else if (!useSides) {
     const pool = list.map((row) => ({ row, seat: subjectSeat(row, { mine, theirs }) || (row.winner === 2 ? 2 : 1) }));
     candidates.push(...pool);
-    await eachFew(pool, usePositions ? 4 : 8, deep, full);
+    for (let i = 0; i < pool.length && !full(); i += SCOUT_SIDE_BATCH) await through(pool.slice(i, i + SCOUT_SIDE_BATCH));
   }
   if (atLimit() && fits.length < a.count) stoppedShort = true;
+  if (grenadesRead) {
+    // A search that stopped once enough fit has not counted the pool, and must not read as if it had (30 Oct: "11 fit").
+    const whole = useSides ? sidesRead >= list.length : grenadesRead >= list.length;
+    funnel.push(`${landedCount} of the ${whole ? '' : 'first '}${grenadesRead} whose grenades were read have them there${whole ? '' : ', not a total: the search stopped once enough fit'}`);
+  }
   if (useRecord && !usePositions) funnel.push(`${fits.length + others.length} of the ${records} records read fit`);
   if (usePositions) funnel.push(`${fits.length + others.length} of the ${positions} read in full fit`);
 
@@ -1932,13 +1998,14 @@ async function scoutRounds(args, ctx) {
       ...(facts ? { alive: aliveWords(gapWords(facts.gaps)) } : {}),
       ...(plant ? { plant } : {}),
       ...(facts ? { ended_by: facts.ending } : {}),
+      ...(c.landed ? { in_regions: c.landed } : {}),
       ...(did ? { did } : {}),
       ...(noted.has(row.file) ? { has_note: true } : {}),
       ...(a.gap && a.prefer ? { fits_gap: c.fit } : {})
     };
   });
   const allRead = !stoppedShort && !capped && (useSides ? sidesRead >= list.length : true);
-  const stoppedAt = stoppedShort ? ` (the search stops at ${usePositions ? `${SCOUT_POSITIONS_MAX} rounds read in full` : `${SCOUT_RECORDS_MAX} records`}: "more": ${a.more + 1} goes on from there)` : capped ? ` (the list stops at ${SCOUT_LIST_CAP} rounds: narrow it)` : ` (${sidesRead} of ${list.length} read)`;
+  const stoppedAt = stoppedShort ? ` (the search stops at ${usePositions ? `${SCOUT_POSITIONS_MAX} rounds read in full` : a.grenadeWhere.length && !useRecord ? `${SCOUT_GRENADES_MAX} rounds` : `${SCOUT_RECORDS_MAX} records`}: "more": ${a.more + 1} goes on from there)` : capped ? ` (the list stops at ${SCOUT_LIST_CAP} rounds: narrow it)` : ` (${sidesRead} of ${list.length} read)`;
   const short = fits.length < a.count;
   const asked = askedWords(a);
   // Over several calls of one search the running total is what a count is taken from (30 Oct: 12 rounds over 3 calls were reported as 8).
@@ -2059,6 +2126,8 @@ async function runToolInner(name, args = {}, ctx = {}) {
       case 'query_rounds': {
         const { payload } = await library();
         const byId = new Map(payload.demos.map((d) => [String(d.id), d]));
+        const regions = chatRegions();
+        if (regionsNamed(args.where).length) regionMap(args.where, regions, mapCodeOf(args.map));
         /** A few matched rounds by name, match and number: enough to open one, small enough to keep. */
         const examples = (refs, n) =>
           [...refs]
@@ -2084,7 +2153,7 @@ async function runToolInner(name, args = {}, ctx = {}) {
             try {
               const scan = await teamScan(t.name, mapCode, (label) => ctx.onProgress?.(`Team ${i + 1} of ${teams.length}: ${label}`));
               // The teams are the grouping here; a group_by ("team", or any other) is left out rather than failing every team.
-              const r = runRoundQuery(scan.results.extract.rounds, scan.results.extract.network, { ...args, group_by: undefined });
+              const r = runRoundQuery(scan.results.extract.rounds, scan.results.extract.network, { ...args, group_by: undefined, regions });
               counted ||= r.counted;
               rows.push({ team: scan.team.name, considered: r.considered, matched: r.matched, won: r.won, win_pct: r.matched ? Math.round((r.won / r.matched) * 100) : null, share_pct: r.share, examples: examples(r.refs, 2) });
             } catch (err) {
@@ -2108,7 +2177,7 @@ async function runToolInner(name, args = {}, ctx = {}) {
           };
         }
         const scan = await teamScan(args.team, args.map, ctx.onProgress);
-        const r = runRoundQuery(scan.results.extract.rounds, scan.results.extract.network, args);
+        const r = runRoundQuery(scan.results.extract.rounds, scan.results.extract.network, { ...args, regions });
         const { files, refs, ...rest } = r;
         const head = `${scan.team.name} on ${MAPS[scan.mapCode]?.name || scan.mapCode}: ${r.matched} of ${r.considered} rounds`;
         return { content: fit({ team: scan.team.name, map: MAPS[scan.mapCode]?.name, ...rest, examples: examples(refs, 5) }), display: head, link: roundsLink(files) };

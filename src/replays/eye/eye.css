@@ -1085,6 +1085,131 @@
   color: var(--text);
 }
 
+/* A region's number: on the chip and in the overview's list. Click to write here(n). */
+.eye-region-num {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--text);
+  color: #050505;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 22px;
+  text-align: center;
+  cursor: pointer;
+}
+.eye-chip .eye-region-num {
+  margin-left: -6px;
+}
+
+/* The map overview above the composer: the canvas, then its controls */
+.eye-mapsel {
+  display: grid;
+  flex: none;
+  grid-template-columns: minmax(0, 1fr) 280px;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 16px;
+  background: var(--eye-surface);
+}
+.eye-mapsel-board {
+  width: min(100%, 52vh);
+  aspect-ratio: 1;
+  justify-self: center;
+}
+.eye-mapsel-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 8px;
+  cursor: crosshair;
+  touch-action: none;
+}
+.eye-mapsel-canvas.is-full {
+  cursor: not-allowed;
+}
+.eye-mapsel-side {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  min-height: 0;
+}
+.eye-mapsel .site-select {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  padding: 0 24px 0 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  outline: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  background: #050505 url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath fill='%235c5c62' d='M1 1l4 4 4-4'/%3E%3C/svg%3E") no-repeat right 10px center / 10px 6px;
+  color: #5c5c62;
+  font-size: 13px;
+  font-weight: 400;
+}
+.eye-mapsel .rv-az-seg-btn {
+  height: 30px;
+  padding: 0 6px;
+}
+.eye-mapsel-list {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 40px;
+  overflow-y: auto;
+}
+.eye-mapsel-row {
+  display: grid;
+  grid-template-columns: 22px 92px minmax(0, 1fr) 22px;
+  align-items: center;
+  gap: 6px;
+}
+.eye-mapsel-place {
+  grid-column: 2 / -1;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.eye-mapsel-done {
+  flex: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+@media (max-width: 640px) {
+  .eye-mapsel {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .eye-mapsel-list {
+    flex: none;
+    max-height: 180px;
+  }
+}
+/* The regions a sent message carried, on their maps */
+.eye-sent-maps {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 6px;
+  padding: 0 10px;
+}
+.eye-sent-map {
+  width: 132px;
+  height: 132px;
+  border-radius: 8px;
+  background: #050505;
+}
+
 /* Questions queued with Ctrl+Enter while an answer runs, sent in order as each one ends */
 .eye-queue {
   display: flex;

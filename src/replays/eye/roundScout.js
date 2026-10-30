@@ -10,6 +10,7 @@
 //
 //   names      map, teams, players, buys, who won, round number: in the file name
 //   sides      who was T, dominance: one request per few hundred rounds
+//   grenades   where each landed, for a drawn region: one request per few hundred rounds
 //   record     the kills, the plant, how it ended: one request per round
 //   positions  where they stood, the kind of hit: two requests per round
 //
@@ -19,7 +20,10 @@
 // ---------------------------------------------------------------------------
 
 import { ROUND_SECONDS, timingFor } from '../viewer/roundClock.js';
+import { NADE_KINDS, normNade } from '../analytics/antistratScan.js';
 import { parseClock } from './eyeImages.js';
+import { inRegion } from './mapRegions.js';
+import { elapsedOfClock, grenadeOnly, normalizeCondition } from './roundQuery.js';
 import { aliveGaps, gapFits, sideOfTeam, winnerSide } from './roundSample.js';
 
 export class ScoutError extends Error {}
@@ -118,6 +122,7 @@ export function parseScout(args = {}) {
   const awp = args.awp ? String(args.awp).toLowerCase() : '';
   if (awp && !['team', 'opponent', 'both', 'none'].includes(awp)) throw new ScoutError('awp is team, opponent, both or none.');
   if (args.where !== undefined && !Array.isArray(args.where)) throw new ScoutError('where is a list of conditions, as in query_rounds.');
+  const given = Array.isArray(args.where) ? args.where : [];
   return {
     map: args.map || '',
     team: args.team || '',
@@ -146,7 +151,9 @@ export function parseScout(args = {}) {
     rankOwn: args.rank_own ? String(args.rank_own) : '',
     rankOpp: args.rank_opp ? String(args.rank_opp) : '',
     notInPlaylist: args.not_in_playlist ? String(args.not_in_playlist) : '',
-    where: Array.isArray(args.where) ? args.where : [],
+    // Grenades in a drawn region are told from the landings alone; the rest needs the round's movement.
+    where: given.filter((c) => !grenadeOnly(c)),
+    grenadeWhere: given.filter(grenadeOnly),
     hit,
     site,
     sort,
@@ -177,6 +184,61 @@ export function subjectSeat(row, { mine = null, theirs = null, side = '', seat1S
   if (side) return seat1Side ? (seat1Side === side ? 1 : 2) : 0;
   return row.winner === 2 ? 2 : 1;
 }
+
+/**
+ * One side's read of a round from its grenades alone, in the shape roundQuery.js tests: the same
+ * landings and times roundFeatures gives, for a question about no more than that.
+ */
+export function grenadesOf(meta, side) {
+  const timing = timingFor(meta);
+  const rate = timing.tickRate || 64;
+  const teamOf = new Map((meta?.players || []).map((p) => [p.id, p.team]));
+  const nades = [];
+  const enemyNades = [];
+  for (const g of meta?.events?.grenades || []) {
+    const type = normNade(g.type);
+    const det = Number(g.detonateTick ?? g.throwTick);
+    const x = Number(g.at?.x);
+    const y = Number(g.at?.y);
+    if (!NADE_KINDS.includes(type) || !teamOf.has(g.player) || !Number.isFinite(det) || !Number.isFinite(x) || !Number.isFinite(y)) continue;
+    const landed = { type, player: g.player, x, y, z: Number(g.at?.z), at: (det - timing.freezeEndTick) / rate, throwAt: (Number(g.throwTick ?? det) - timing.freezeEndTick) / rate, zone: '', label: '' };
+    (sideOfTeam(meta, teamOf.get(g.player)) === side ? nades : enemyNades).push(landed);
+  }
+  return { side, hasTicks: true, nades, enemyNades, kills: [], series: [], won: winnerSide(meta) === side };
+}
+
+const NADE_WORD = { smokegrenade: 'smoke', molotov: 'molotov', flashbang: 'flash', hegrenade: 'HE' };
+const NADE_TYPE = { smoke: 'smokegrenade', molotov: 'molotov', flash: 'flashbang', he: 'hegrenade' };
+
+/**
+ * What landed in each region a list of conditions asks about, for the answer: "1: smoke 1:12". So a
+ * round reads as evidence, and the model has no reason to open it to see why it fit.
+ */
+export function regionHits(read, where, regions) {
+  const out = [];
+  const seen = new Set();
+  const walk = (raw) => {
+    const [kind, arg] = Object.entries(normalizeCondition(raw))[0] || [];
+    if (kind === 'any') return void arg.forEach(walk);
+    if (kind !== 'utility' || seen.has(arg.region)) return;
+    const region = regions.find((r) => r.id === Number(arg.region));
+    if (!region) return;
+    seen.add(arg.region);
+    const who = String(arg.who ?? 'team').toLowerCase();
+    const ours = who === 'team' || who.toUpperCase() === read.side;
+    const from = elapsedOfClock(arg.from, -Infinity);
+    const to = elapsedOfClock(arg.to, Infinity);
+    const list = (ours ? read.nades : read.enemyNades).filter((g) => g.throwAt >= Math.min(from, to) && g.throwAt <= Math.max(from, to) && (!NADE_TYPE[arg.type] || g.type === NADE_TYPE[arg.type]) && inRegion(region, g.x, g.y, g.z));
+    if (list.length) out.push(`${region.id}: ${list.map((g) => `${NADE_WORD[g.type]} ${clockText(ROUND_SECONDS - g.throwAt)}`).join(', ')}`);
+  };
+  where.forEach(walk);
+  return out.join('; ');
+}
+
+const clockText = (left) => {
+  const s = Math.max(0, Math.round(left));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+};
 
 /** How a round ended, from its record. */
 export function endingOf(meta) {
