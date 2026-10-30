@@ -19,7 +19,7 @@ import { TICKZ_EXT } from './tickCodec.js';
 import { applyStandingsToRecord } from './teamStandingsDb.js';
 import { applyLibraryTeamNamesToRecord } from './lineupNames.js';
 import { scheduleImportIndex } from './autoIndex.js';
-import { discardDuplicateUpload } from './dupeScan.js';
+import { discardDuplicateUpload, duplicateUploadMessage } from './dupeScan.js';
 
 /**
  * @param {string} user
@@ -41,8 +41,15 @@ export async function importReplayPackage(user, buf, meta = {}) {
   const demoId = String(record.id || '').replace(/[^A-Za-z0-9_-]/g, '');
   if (!demoId) throw new Error('Package manifest has no demo id.');
 
-  if (await readRecord(user, demoId)) {
-    throw new Error('A replay with this id is already in the library.');
+  // Same refusal as the identity check further down. Without the 409 and the
+  // flag the upload queue reads this as a dead connection and drops every file
+  // after this one.
+  const existing = await readRecord(user, demoId);
+  if (existing) {
+    const err = new Error(duplicateUploadMessage(meta.filename || record.filename, existing));
+    err.status = 409;
+    err.duplicate = true;
+    throw err;
   }
 
   const rounds = Array.isArray(record.rounds) ? record.rounds : [];
