@@ -39,6 +39,8 @@ const DOORS = {
 };
 /** How far back a player's lane is looked for before he stepped on the site. */
 const LANE_LOOKBACK = 12;
+/** How far before a plant its site's ground is read, when the bombsite itself says nothing. */
+const GROUND_LOOKBACK = 30;
 /** Grenades onto the target site in this window before the wave count as its execute utility. */
 const UTIL_BEFORE = 15;
 const UTIL_AFTER = 5;
@@ -68,28 +70,38 @@ export function classifyRound(r, network, { nameOf = new Map(), mapCode = '' } =
   const pieces = r.sitePieces?.[site] || [];
 
   // When each player first stood on the target site, and where he came from.
-  const entries = [];
-  for (const id of r.ourIds || []) {
-    for (let i = 0; i < r.series.length; i++) {
-      const p = r.series[i].pts.find((x) => x.id === id);
-      if (!p || !onSite(p, pieces)) continue;
-      const siteZone = p.pos ? zoneOf(p.pos) : '';
-      let from = null;
-      for (let k = i - 1; k >= 0 && r.series[i].elapsed - r.series[k].elapsed <= LANE_LOOKBACK; k--) {
-        const q = r.series[k].pts.find((x) => x.id === id);
-        // A spawn is where every lane starts, never a lane: a player who ran through apartments
-        // between two samples would otherwise "come from T Spawn" and make a split of a rush.
-        if (q?.pos && !onSite(q, pieces) && zoneOf(q.pos) !== siteZone) {
-          if (/spawn/i.test(zoneOf(q.pos))) break;
-          from = q;
-          break;
+  const entriesOn = (isOn, fromElapsed = 0) => {
+    const out = [];
+    for (const id of r.ourIds || []) {
+      for (let i = 0; i < r.series.length; i++) {
+        const p = r.series[i].pts.find((x) => x.id === id);
+        if (!p || r.series[i].elapsed < fromElapsed || !isOn(p)) continue;
+        const siteZone = p.pos ? zoneOf(p.pos) : '';
+        let from = null;
+        for (let k = i - 1; k >= 0 && r.series[i].elapsed - r.series[k].elapsed <= LANE_LOOKBACK; k--) {
+          const q = r.series[k].pts.find((x) => x.id === id);
+          // A spawn is where every lane starts, never a lane: a player who ran through apartments
+          // between two samples would otherwise "come from T Spawn" and make a split of a rush.
+          if (q?.pos && !isOn(q) && zoneOf(q.pos) !== siteZone) {
+            if (/spawn/i.test(zoneOf(q.pos))) break;
+            from = q;
+            break;
+          }
         }
+        out.push({ id, t: r.series[i].elapsed, pos: from?.pos || '', zone: from?.pos ? laneOf(from.pos) : '' });
+        break;
       }
-      entries.push({ id, t: r.series[i].elapsed, pos: from?.pos || '', zone: from?.pos ? laneOf(from.pos) : '' });
-      break;
     }
+    return out.sort((a, b) => a.t - b.t);
+  };
+  let entries = entriesOn((p) => onSite(p, pieces));
+  // The painted bombsite can be small (Dust2's A leaves out Ramp): a planted round whose players
+  // barely touched it was still a hit, so it reads the site's ground instead, in the run-up to the
+  // plant only (the ground reaches lanes the Ts stand in at the start). 11% of T rounds read "no
+  // hit" with the bomb down.
+  if (r.plantSite && entries.length < 2 && r.siteNear && r.plantClock != null) {
+    entries = entriesOn((p) => r.siteNear(p.x, p.y, 0) === site, ROUND_SECONDS - r.plantClock - GROUND_LOOKBACK);
   }
-  entries.sort((a, b) => a.t - b.t);
 
   // The wave: the first player on the site who is joined by another within WAVE_SECONDS.
   let start = -1;
@@ -127,7 +139,7 @@ export function classifyRound(r, network, { nameOf = new Map(), mapCode = '' } =
   if (lanes.length >= 2 && wave.length >= 3) kind = 'split';
   else if (pace === 'rush' || pace === 'pop') kind = 'rush';
   else if (utility >= 3 && wave.length >= 2) kind = 'execute';
-  else if (wave.length >= 2) kind = 'contact';
+  else if (wave.length >= 2 || r.plantSite) kind = 'contact';
   else kind = 'no-hit';
 
   const S = site.toUpperCase();

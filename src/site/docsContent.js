@@ -152,22 +152,25 @@ export const DOC_GROUPS = [
         id: 'dominance',
         title: 'Dominance',
         html: `
-          <p>Dominance says how cleanly a side won a round: how little of its chance to win it gave up on the way. It runs from 0 to 100.</p>
+          <p>Dominance says how cleanly a side won a round: how little of its chance to win it gave up on the way. It runs from 0 to 100, and a side that lost the round reads 0.</p>
           <ul>
             <li><strong>100</strong>: the side's win chance never dropped. It was in control from the first second to the last.</li>
-            <li><strong>90</strong>: it gave up 10 points of win chance in total along the way, for example one fight it lost before taking the round anyway.</li>
-            <li><strong>50 or less</strong>: a scrappy round, or one the side lost.</li>
+            <li><strong>90</strong>: it won and gave up 10 points of win chance in total along the way, about what its own thrown utility and a few hits cost.</li>
+            <li><strong>About 75</strong>: one fight lost before taking the round anyway. A player down for good costs about 25 points.</li>
+            <li><strong>50 or less</strong>: a scrappy win.</li>
+            <li><strong>0</strong>: a round the side lost, or a win with so many swings that it gave up 100 points or more.</li>
           </ul>
-          <p>Every drop counts and nothing else does. A side that starts at 5% and climbs to the win scores 100: it never lost ground. A side that starts at 50%, dips to 40% and wins scores 90.</p>
+          <p>A side that starts at 5% and climbs to the win scores 100: it never lost ground. A side that starts at 50%, dips to 40% and wins scores 90. A kill traded straight away does not count as a drop: the side was only down a player for a moment.</p>
           <p>The win chance comes from aim4's round model: players alive and their health, equipment, the bomb, the clock and the economy, read through the whole round.</p>
           <h3>Where you find it</h3>
           <ul>
             <li><strong>Demo Manager</strong>: the Dominance slider. Drag the left handle up for clean rounds, or the right handle down for close ones. It reads the dominance of the team you picked; with no team, the side in the Side filter; with neither, the side that won. Each round in the list then shows its number.</li>
             <li><strong>Similar Rounds</strong> shows it on every result and can filter by it.</li>
+            <li><strong>Database</strong>: two columns for players and teams. <strong>Dom</strong> is the average over every round, with a lost round counting as 0. <strong>Dom W</strong> is the average over the rounds won: how clean the wins were, whatever the win rate. A player reads their side's dominance in the rounds they played.</li>
           </ul>
           ${best([
             'To study how a team wins cleanly, pick the team and the map, then drag Dominance to 90 to 100. Those rounds are the ones worth copying.',
-            'To find the rounds a team nearly threw, pick the team and Won, then drag Dominance down to 0 to 40.',
+            'To find the rounds a team nearly threw, pick the team and Won, then drag Dominance down to 0 to 40. Without Won, that range also lists every round the team lost.',
             'To find a team\'s best rounds on one side, set Side as well: Dominance then reads that side.',
             'The first time you filter a large library it takes a moment to read every round; after that it is instant.'
           ])}`
@@ -484,7 +487,8 @@ export const DOC_GROUPS = [
             <li>Count anything over many rounds ("when they have someone in B before 1:20, where do they go?").</li>
             <li>Look up stats for players and teams, scores and top performers of a match, and the world ranking.</li>
             <li>Write, review and rewrite anti-strat documents, and queue many at once.</li>
-            <li>Build, change and delete playlists, pick rounds for you ("eight pistol rounds on Ancient the T side won without ever being two down"), and write a note on every round of a playlist.</li>
+            <li>Find rounds by anything you ask for: buys on both sides, the enemy and their world rank, who won, <a href="#dominance">dominance</a>, how it went in players alive, the first kill, the plant, how it ended, the kind of hit and where players stood ("HAVU's cleanest T wins on Dust2 against the top 20", "eight pistol rounds on Ancient the T side won without ever being two down").</li>
+            <li>Build, change and delete playlists, and write a coach's line on every round of one, or only on the rounds with no note yet.</li>
             <li>Turn a round into a stratbook strategy, and make GIFs.</li>
             <li>With a model that reads pictures, look at a screenshot or a photo you attach.</li>
           </ul>

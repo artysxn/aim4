@@ -1271,7 +1271,11 @@ export async function handleReplayRequest(req, res, url) {
         });
       } catch (err) {
         const status = err.status || 400;
-        json(res, status, { error: err.message || 'Import failed.', usage: err.usage });
+        json(res, status, {
+          error: err.message || 'Import failed.',
+          usage: err.usage,
+          ...(err.duplicate ? { duplicate: true } : {})
+        });
       } finally {
         if (tmp) await rm(tmp, { force: true }).catch(() => {});
       }

@@ -561,6 +561,10 @@ export function accumulatePlayers(acc, rows, players, filter = {}, demos = null)
         psdtRounds: 0,
         dtSum: 0,
         dtRounds: 0,
+        /** Dominance of the rounds won, and the rounds that had a reading at all. */
+        domSum: 0,
+        domRounds: 0,
+        domWonRounds: 0,
         /** Aim counters (aimMetrics), summed across every round that passes. */
         aim: {},
         /** Aim MOTION counters (aimMotion), packed, same rounds. */
@@ -660,6 +664,13 @@ export function accumulatePlayers(acc, rows, players, filter = {}, demos = null)
           s.swingLostRounds++;
         }
       }
+      if (Number.isFinite(row.dom)) {
+        s.domRounds++;
+        if (row.w === team) {
+          s.domSum += row.dom;
+          s.domWonRounds++;
+        }
+      }
       // Aim measurements and utility effectiveness (stats index v11). Plain
       // sums here; the divisions happen once at the end, so a player filtered
       // down to three rounds averages over those three rounds and not the
@@ -743,6 +754,20 @@ export function accumulatePlayers(acc, rows, players, filter = {}, demos = null)
   }
 
   return acc;
+}
+
+/**
+ * The two dominance columns from a seat's counters, the same for a player and a
+ * team. A lost round counts in the rounds and adds nothing to the sum, so the
+ * first is the second times the win rate. Null until the demos have a reading.
+ */
+function dominanceAverages(s) {
+  return {
+    avgDominance: s.domRounds ? s.domSum / s.domRounds : null,
+    avgWonDominance: s.domWonRounds ? s.domSum / s.domWonRounds : null,
+    domRounds: s.domRounds,
+    domWonRounds: s.domWonRounds
+  };
 }
 
 /** Turn pooled counters into table rows. Safe to call once per query. */
@@ -883,6 +908,7 @@ export function derivePlayers(acc, benchmarks = null) {
       dt: s.dtRounds ? s.dtSum / s.dtRounds : null,
       dtTotal: s.dtSum,
       dtRounds: s.dtRounds,
+      ...dominanceAverages(s),
 
       // ---- duel model (stats index v13) ------------------------------------
       /** Average predicted fight winrate (%). Null until duels are indexed. */
@@ -1019,6 +1045,9 @@ export function teamSeat(acc, key, name) {
         posN: 0,
         utilDmgSum: 0,
         utilDmgRounds: 0,
+        domSum: 0,
+        domRounds: 0,
+        domWonRounds: 0,
         /** @type {Map<string, { posSum: number, posN: number, baseCt: number, baseT: number }>} */
         posByMap: new Map()
       };
@@ -1092,6 +1121,13 @@ export function accumulateTeams(acc, rows, players, demos, filter = {}) {
       if (Number.isFinite(utilDmg)) {
         s.utilDmgSum += utilDmg;
         s.utilDmgRounds++;
+      }
+      if (Number.isFinite(row.dom)) {
+        s.domRounds++;
+        if (row.w === team) {
+          s.domSum += row.dom;
+          s.domWonRounds++;
+        }
       }
     }
   }
@@ -1209,6 +1245,7 @@ export function deriveTeams(acc, playerRows, demos) {
       /** Average grenade (HE + fire) damage dealt by the team per round. */
       utilDmgPerRound: s.utilDmgRounds ? s.utilDmgSum / s.utilDmgRounds : null,
       utilDmgRounds: s.utilDmgRounds,
+      ...dominanceAverages(s),
       possessionByMap: [...s.posByMap.entries()].map(([map, m]) => ({
         map,
         possession: m.posN ? m.posSum / m.posN : null,

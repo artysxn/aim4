@@ -14,6 +14,34 @@
 
 export const CHANGELOG = Object.freeze([
   {
+    date: '2026-10-30',
+    title: 'Database: average round dominance',
+    tag: 'new',
+    points: [
+      'The Database has two new columns, for players and for teams. Dom is the average dominance over every round, with a lost round counting as 0. Dom W is the average over the rounds won: how clean the wins were, whatever the win rate.',
+      'They follow every Database filter, so you can compare a team\'s dominance on one map, on one side or against one kind of buy, and aim4 eye can read them too.'
+    ]
+  },
+  {
+    date: '2026-10-30',
+    title: 'aim4 eye: find rounds by anything, notes that read like a coach wrote them',
+    tag: 'new',
+    points: [
+      'aim4 eye can find rounds in one step by anything you ask for: buys on both sides, the enemy and their world rank, who won, dominance, how it went in players alive, the first kill, the plant, how it ended, the kind of hit and where players stood. Each round it finds comes with a line on what that side did.',
+      'Notes it writes on rounds are now one line that names the call, like "Full 5B execute from Tunnels: smoke Doors, molotov Window". It leaves out kills and results, and it can note only the rounds that have no note yet.',
+      'Notes on a whole playlist are much faster: it reads each round on its own instead of every round the team played on that map. It also no longer says notes are written when they are not.'
+    ]
+  },
+  {
+    date: '2026-10-30',
+    title: 'Dominance fixed: lost rounds no longer read as clean',
+    tag: 'fixed',
+    points: [
+      'A round a side lost now reads 0. Before, dominance only counted what a side gave up, so a team that lost an eco it never had a chance in could read 98, and about one round in eight in the 90 to 100 range was a loss.',
+      'A kill traded straight away no longer counts as a drop. Before, the same trade cost about 25 points or nothing, depending on the exact moment it was read at.'
+    ]
+  },
+  {
     date: '2026-10-24',
     title: 'Saved GIFs: page link and image link',
     tag: 'improved',

@@ -24,9 +24,10 @@
 //   drawing     strokes on the map: a path some player walked, or a spot a
 //               player stood on at the time
 //
-// Dominance is how little the side's win chance fell during the round. Every
-// drop counts against it and nothing else does: starting at 50%, dipping to
-// 40% and winning is 90; starting at 5% and climbing to a win is 100.
+// Dominance is how cleanly a side won: how little its win chance fell during
+// the round. Starting at 50%, dipping to 40% and winning is 90; starting at 5%
+// and climbing to a win is 100. A side that lost reads 0, and a dip one row
+// long (a kill traded at once) is not a fall: see sidesDominance.
 //
 // DOM-free: the desktop app's server scans with it (server/similar), and the
 // tests drive it directly.
@@ -47,7 +48,7 @@ import { timingFor } from '../viewer/roundClock.js';
 export const SCAN_STRIDE = 100;
 
 /** Bumped when the index layout changes, so a kept index is rebuilt. */
-export const INDEX_VERSION = 2;
+export const INDEX_VERSION = 3;
 
 /**
  * Economy classes a scan stays inside. Full buy covers both stored digits
@@ -184,6 +185,38 @@ export function dominanceOf(series, eps = 1) {
 }
 
 /**
+ * A series with its one-row dips lifted to the lower of the rows around them.
+ * A row is 1.5 s, so a dip one row long is a kill traded at once, and whether
+ * a row landed inside it was luck: the same trade cost 25 points or nothing
+ * (92 of 445 falls of 10+ points on the winner, over 400 rounds). Grouped into
+ * two rows or more, it was a real time down a man and stays.
+ */
+export function withoutTrades(series) {
+  const out = Array.from(series);
+  for (let i = 1; i + 1 < series.length; i++) out[i] = Math.max(series[i], Math.min(series[i - 1], series[i + 1]));
+  return out;
+}
+
+/**
+ * Both sides' dominance from the T side's series, whose last value is the
+ * result. Only a win can be clean, so a side that lost reads 0: read as what it
+ * gave up, a side with nothing to give up looked dominant (a lost eco from 4%
+ * read 98, and 13% of the 90-100 band were losses).
+ *
+ * @param {ArrayLike<number>} series  0-100, the T side's win chance, then 100 or 0
+ * @returns {{ T: ReturnType<typeof dominanceOf>, CT: ReturnType<typeof dominanceOf> }}
+ */
+export function sidesDominance(series) {
+  const t = Array.from(series);
+  const tWon = t[t.length - 1] >= 50;
+  const read = (values, won) => {
+    const d = dominanceOf(withoutTrades(values));
+    return won ? d : { ...d, dominance: 0 };
+  };
+  return { T: read(t, tWon), CT: read(t.map((v) => 100 - v), !tWon) };
+}
+
+/**
  * The T side's win chance at every row from freeze end to the round's end,
  * then the result. Bodies, money, utility, the clock and the bomb: the round
  * model without map geometry, which needs nothing but what the index is
@@ -225,9 +258,10 @@ export function roundDominance(meta, ticks) {
   if (series.length < 2) return null;
   const sides = teamSides(meta);
   const teamOf = (side) => String((sides[1] === side ? meta.team1 : meta.team2)?.id || '');
+  const dom = sidesDominance(series);
   return {
-    T: dominanceOf(series).dominance,
-    CT: dominanceOf(series.map((v) => 100 - v)).dominance,
+    T: dom.T.dominance,
+    CT: dom.CT.dominance,
     winner: meta.winnerSide || sides[meta.winner === 2 ? 2 : 1] || '',
     teams: { T: teamOf('T'), CT: teamOf('CT') }
   };
@@ -356,8 +390,6 @@ export function buildRoundIndex(meta, ticks, file = '') {
   }
 
   const series = tWinSeries(meta, view, header, timing);
-  const domT = dominanceOf(series);
-  const domCt = dominanceOf(series.map((v) => 100 - v));
 
   const teamBySide = {};
   for (const team of [1, 2]) {
@@ -398,7 +430,7 @@ export function buildRoundIndex(meta, ticks, file = '') {
     defuse,
     nades,
     win: Uint8Array.from(series, (v) => Math.round(v)),
-    dominance: { T: domT, CT: domCt }
+    dominance: sidesDominance(series)
   };
 }
 

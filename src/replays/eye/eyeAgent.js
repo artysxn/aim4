@@ -28,7 +28,7 @@ import {
   turnsOf
 } from './eyeContext.js';
 import { limitImages } from './eyeImages.js';
-import { resetTurnFacts, runTool, toolsFor } from './eyeTools.js';
+import { notesLeft, resetTurnFacts, runTool, toolsFor } from './eyeTools.js';
 import { noteRounds, roundIdsIn } from './roundRefs.js';
 
 const API_BASE = (import.meta.env?.VITE_API_URL || '').replace(/\/$/, '');
@@ -109,13 +109,13 @@ Rules:
 - Several documents (more than one team, or "all their maps"): call queue_antistrat_documents once with every job, not create_antistrat_document again and again. maps ["all"] means every map the team has 3+ demos on.
 - For player or team numbers (rating, ADR, KAST, opening duels, utility damage, AWP accuracy), call database_query. It pools every match that fits the filters.
   Use its filters: map, side, buy, vs_buy, result, team, date_from, date_to, rank_own, rank_opp, min_rounds. A raised "limit" never gives new rows. A question over maps ("best map", "worst map", "where do they play well") is answered by one call per map with the map filter (every map in the pool, plus the team filter for a team's players; list_teams or find_rounds show which maps they have played), then comparing the numbers. Do not ask for a map column; there is none. Run the per-map calls together in one step.
-- To find specific rounds call find_rounds; read one with round_timeline (positions and play) or round_details (the event list). Name a round to the user by its label ("fnatic vs Phantom, Ancient round 2"); the round file is only for tool calls, never in an answer. team_documents reads the user's notes and sheets, team_rankings the world ranking, site_map the pages to point to.
+- To find rounds by any condition call scout_rounds; find_rounds with match lists one match's rounds. Read one with round_timeline (positions and play) or round_details (the event list). Name a round to the user by its label ("fnatic vs Phantom, Ancient round 2"); the round file is only for tool calls, never in an answer. team_documents reads the user's notes and sheets, team_rankings the world ranking, site_map the pages to point to.
 - When screenshot_round is available, use it to check a position or setup before stating it: find a round with find_rounds, take a picture at the clock time that matters, and describe only what the picture and its text show. Take a second picture at another clock time to see what changed. Do not describe anything you cannot see.
 - Plays ("what did they do", "summarize the round", "was that a default", "what was the play"): round_moves first, then your own reading of each side's plays as round_plays guess (side, kind, site, clock for each), then answer from round_plays. Tell the round in simple terms from its summary: what each side did and when, which parts were default and which were plays, and how usual each play is on the map. If the check found your guess wrong or missing something, say so in one line, using its definitions.
 - Was a decision good or bad (a hit, a default, a rotation, a stack, a push, a retake, a save, "how could they have done it better"): round_plays for the play ids, then play_review for that play with your own verdict as guess. Lead with the verdict and the decision and execution reads, then why with the counts (what similar rounds chose from that moment and how often each won, how this one went against those that chose the same), then up to three improvements from improve, each with its counts. Say how far to trust it (confidence and trust; thin or loose means a lean, not a finding). guidelines are the autocoach's rules, not measurements: use them only when they are given, and say they are rules. Never invent a comparison the review does not give.
 - Judging a single kill or moment ("was that good", "what went wrong", "what decided the round", "explain the round"): call round_value for the round first. A move is good when it raised its side's round win chance and bad when it lowered it. Do not judge from habit or from how a move is usually described; the numbers decide. Say a move was a mistake only when its swing or its fight numbers show a cost, and say when something that looks wrong cost nothing.
 - A gunfight is read in the moment. In each kill's fight, killer_* numbers are the killer's win chance and victim_* the victim's; they add to 100, so never mix the two up. xK is a player's win chances summed over the fights they are in (in a 1v1 it is the win chance). To judge a death ("was it a bad take", "was it his fault"), go by fight.victim_read, which reads the victim's win chance when the fight opened: "behind" means they were in a losing fight from the start, "close" means it could have gone either way, "favoured" means they were expected to win and losing was variance, not a mistake. Answer from victim_read even when the question assumes it was a mistake, and quote victim_win_at_contact. The numbers cannot say whether a player chose a fight or was caught in it, so before calling a "behind" death their own mistake, use screenshot_round or moment_value at that clock to see where everyone stood. Use moment_value at two clock times to see where a fight or a position turned.
-- What happened in a round, what a team did in it, or how rounds differ: call round_timeline for each round (by match and number), then tell it like a commentator, in order: the buys and what each team set up (where the players stood, who was alone, how the defenders were spread), the plan (map control, a split, a default, a fake), the utility and where it landed, the key fights with where they happened, how it ended. Use player names and the callouts the timeline gives.
+- What happened in a round, what a team did in it, or how rounds differ: call round_timeline for each round (by match and number; in_short is what each side did in a line), then tell it like a commentator, in order: the buys and what each team set up (where the players stood, who was alone, how the defenders were spread), the plan (map control, a split, a default, a fake), the utility and where it landed, the key fights with where they happened, how it ended. Use player names and the callouts the timeline gives.
   Comparing rounds: compare what the teams did (setup, plan, utility, timing, where the fights were), not the facts around them. Mention buys, sides, opponent or result only when they explain a difference.
   Fast or slow is relative: say it only from the timeline's pace block, which compares the round with the same team's rounds with the same buys. Never call a round fast or slow from its kills.
 - Why a round was won or lost, or who decided it: round_value for the swings, then moment_value or screenshot_round at the moments that matter. Do not use round_value to say what happened.
@@ -142,8 +142,8 @@ Rules:
   5. Then add your findings to the document: review_antistrat_document, then rewrite_antistrat_document edits in the default mode (a new "Reviewed:" copy, the original stays): an add_section "Manual review" per side, nothing else. Do not put numbers in it that are not from a tool result.
 - The library: when the user says they uploaded demos, asks to refresh or reload the library, or says a team has demos you did not find, call refresh_library (with the team) first, then answer from it. Never say a team has no demos on a map without it when the user says otherwise.
 - Round playlists: list_playlists, save_playlist and delete_playlist. To make a playlist of rounds you just counted or found, run the query, then save_playlist with add_from "last_result" and a name a coach would give it ("HAVU B executes, Dust2"). Edit one by its id: rename, add, remove, replace, or share with the team (scope). The app asks the user before anything is saved or deleted, so just call it.
-- Picking rounds by buys, who won and how it went in players alive ("8 random pistol rounds on Ancient the Ts win clean"): one sample_rounds call. Clean means never two fewer players alive than the enemy (gap never_below -1) and two more at some point (reaches 2); "never down a man" is never_below 0. A time the user names ("for more than 3 seconds") is grace. To pick again, change an argument. "Preferably" means prefer true. Then save_playlist with add_from "last_result". Say how many fit everything and how many were filled in.
-- Notes on rounds ("write to the notes of each round of that playlist what the Ts do"): round_briefs for the playlist and side (every part), then one write_round_notes call with a note per round at 1:55. Each note is one or two short lines in a coach's plain words about that side only: the setup, map control, the hit (where, from which lanes, when) and the utility by where it landed, for example "1 fakes A at 1:30 with 2 smokes, rest walk up B for contact" or "Full A execute: smoke CT, smoke donut, molotov default, 2 flashes left side". No kills, no result, no names of the other team.
+- Finding rounds ("8 random pistol rounds on Ancient the Ts win clean", "HAVU's cleanest B executes against the top 20", "rounds they threw"): one scout_rounds call with everything asked in its arguments, never find_rounds then a timeline per round. query_rounds counts how often; scout_rounds picks which rounds. Clean means never two fewer players alive than the enemy (gap never_below -1) and two more at some point (reaches 2); "never down a man" is never_below 0. A time the user names ("for more than 3 seconds") is grace. "Cleanest" or "most dominant" is dominance with sort "dominance". To pick again change an argument; to find more pass not_in_playlist. "Preferably" means prefer true. Then save_playlist with add_from "last_result". Say how many fit everything and how many were filled in.
+- Notes on rounds ("write to the notes of each round of that playlist what the Ts do"): round_briefs for the playlist and side, write_round_notes for that part, then the next part: read a part, write a part, never read ahead. For the rounds without notes, pass missing_only. Each round's draft is worked out from the round: check it against its shape and utility, then write it in a coach's words, one line with the call first, for example "Full 5B execute with smoke door + molotov backsite" or "Slow default into short pop with 2 smokes & 1 late long lurk". Keep what makes this round different; at most 3 grenades; a clock only when the timing is the point. No kills, no result, no names of the other team. A round whose note_now is by the user keeps it unless asked. Never say a note was written unless write_round_notes said so; with_notes in list_playlists shows what is there.
 - Long jobs (every playlist, every match, many rounds or documents): one item at a time. Read it, write what it is for (its notes, its playlist, its part of a document), then go to the next. Do not read everything first: older results are folded away as the job goes on, and only what you have written stays. If you are told to answer before the end, say what is done and what is left.
 - Answer in plain, short sentences a CS2 coach would use. Lead with the answer, then the numbers behind it.
 - Between tool calls write nothing, or one short line saying what you are checking. Never repeat a line you already wrote. Do not announce what you are about to do or apologise for tool errors; say what failed once, at the end, if it matters.
@@ -565,6 +565,17 @@ function thinkRoom(historyChars, fixedChars) {
 /** What a step says for a read that waits: the step's results already fill its room. */
 const HELD = 'Not run yet: the results above already fill the room for one step. Use them first (write what they are for), then make this call again.';
 
+/** Does a reply say round notes were written? A question about writing them does not. */
+export function claimsNotesWritten(text) {
+  return /\bnotes?\b[^.?!\n]*\b(written|wrote|added|saved|done|filled|updated)\b|\b(wrote|written|added|saved|finished|filled)\b[^.?!\n]*\bnotes?\b|\bnow ha(s|ve)\b[^.?!\n]*\bnotes?\b/i.test(String(text || ''));
+}
+
+/** What a reply that said so is told, when write_round_notes says otherwise. */
+export function notesLeftAsk({ read, written, left, unread }) {
+  const facts = [`You read ${read} round${read === 1 ? '' : 's'} with round_briefs and wrote notes on ${written}`, left ? `${left} of them have no note` : '', unread ? `${unread} more ${unread === 1 ? 'is' : 'are'} not read yet` : ''].filter(Boolean).join(', ');
+  return `${facts}. Your last reply was not sent. If the user asked for notes on these rounds, write them now with write_round_notes${unread ? ' (round_briefs for the next part first)' : ''}. If you cannot, or they did not ask, answer again and say plainly what is done and what is left. Never say a note was written unless write_round_notes said so.`;
+}
+
 /** What a turn says when the model ends it without an answer of its own. */
 export function fallbackAnswer(steps, lastDisplay) {
   const did = steps ? `I ran ${steps} tool call${steps === 1 ? '' : 's'} but did not reach an answer.` : 'I did not reach an answer.';
@@ -604,6 +615,9 @@ export async function runAgentTurn(messages, { onEvent, signal, vision = false, 
   while (turnStart > 0 && messages[turnStart].role !== 'user') turnStart--;
   /** Calls refused this turn as repeats. Past STUCK_LIMIT the model is made to answer: in the 17 Oct chat it repeated one refused call 19 times. */
   let refused = 0;
+  /** A reply that says notes are written when they are not is asked again, once: what the next step is told. */
+  let nudge = null;
+  let nudged = false;
   // The system prompt and the tool list go with every request; what is left of the context, less
   // the reply's own room, is the conversation's budget (eyeContext.js historyBudget).
   const fixedChars = system.length + JSON.stringify(toolsFor({ vision })).length;
@@ -627,7 +641,8 @@ export async function runAgentTurn(messages, { onEvent, signal, vision = false, 
     // text there, it would read again and plan more ("Wait, actually...").
     const view = () => {
       const history = modelMessages(messages);
-      return { convo: [{ role: 'system', content: system }, ...history, ...(finalAsk ? [finalAsk] : [])], chars: history.reduce((n, m) => n + sizeOf(m), 0) };
+      const told = finalAsk || nudge;
+      return { convo: [{ role: 'system', content: system }, ...history, ...(told ? [told] : [])], chars: history.reduce((n, m) => n + sizeOf(m), 0) };
     };
     onEvent?.({ type: 'step', step, max: MAX_STEPS });
     // The forced last answer has nothing left to plan: reasoning there only risked an empty reply.
@@ -683,6 +698,15 @@ Carry it out now. Do not reconsider it. ` : '';
     }
     let content = reply.content;
     const calls = last ? [] : reply.toolCalls;
+    nudge = null;
+    // Said done with notes still unwritten (21 Oct: "notes written on all 10", four playlists over,
+    // with no write in that turn): told once what is left, and the reply is not kept.
+    const unfinished = !calls.length && !last && !nudged && claimsNotesWritten(content) ? notesLeft() : null;
+    if (unfinished) {
+      nudged = true;
+      nudge = { role: 'user', content: notesLeftAsk(unfinished) };
+      continue;
+    }
     // A turn never ends silent: with no answer and no call to make, say what happened.
     if (!calls.length && !content.trim()) {
       content = fallbackAnswer(toolCalls, lastDisplay);

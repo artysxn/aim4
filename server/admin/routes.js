@@ -80,6 +80,7 @@ import {
   refreshLibraryStats,
   STATS_FIELD_GROUPS
 } from '../replays/statsIndex.js';
+import { refreshHotStore } from '../replays/statsHotService.js';
 import { rescanPlayerNames } from './rescanPlayerNames.js';
 import { getZones } from '../zonesStore.js';
 import {
@@ -1424,6 +1425,10 @@ async function route(req, res, url, me) {
             fieldsRefreshJob.current = pr.current;
           }
         });
+        // The index files changed under record keys that did not, so the Database's
+        // resident columns would never see the patch: not at the next request, and
+        // not after a restart either, since the snapshot on disk still matches.
+        if (report.updated) refreshHotStore();
         if (!fieldsRefreshJob || fieldsRefreshJob.startedAt !== startedAt) return;
         fieldsRefreshJob.report = { ...report, ms: Date.now() - startedAt };
         fieldsRefreshJob.done = report.ready;

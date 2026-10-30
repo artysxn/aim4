@@ -54,6 +54,7 @@ const SCALARS = Object.freeze([
   'openKills', 'openDeaths', 'coreOpenKills', 'coreOpenDeaths', 'coreOpenSeen',
   'swingSum', 'swingRounds', 'swingWonSum', 'swingWonRounds', 'swingLostSum', 'swingLostRounds',
   'psdtSum', 'psdtRounds', 'dtSum', 'dtRounds', 'utilRounds',
+  'domSum', 'domRounds', 'domWonRounds',
   'duelW', 'duelP', 'duelN', 'duelDataRounds', 'akprKills', 'akprRounds',
   // Whether any round contributed aim / utility at all. addAim and addUtility
   // write every field including zeros, so a summed-to-zero field must still be
@@ -168,6 +169,7 @@ export function aggregateHot(store, filter = {}, allowDemo = null, benchmarks = 
   const {
     nRounds, seatsPerRound, duelStride,
     rDemo, rMap, rSide1, rEcon1, rEcon2, rWinner, rOkSeat, rOdSeat, rHasDuel, rHasCore, rFileIdx,
+    rDom, rHasDom,
     sStats, sPlayer, sTeam, sR3, sSwing, sHasSwing, sAim, sHasAim, sMot, sHasMot,
     sUtil, sHasUtil,
     sDuel, sHasDuelSeat, sPsdt, sHasPsdt, sDt, sHasDt, sAwHold, sCoreKill, sCoreDeath, sName
@@ -330,6 +332,13 @@ export function aggregateHot(store, filter = {}, allowDemo = null, benchmarks = 
         } else {
           acc[sc + S.swingLostSum] += sw;
           acc[sc + S.swingLostRounds] += 1;
+        }
+      }
+      if (rHasDom[r]) {
+        acc[sc + S.domRounds] += 1;
+        if (won) {
+          acc[sc + S.domSum] += rDom[r];
+          acc[sc + S.domWonRounds] += 1;
         }
       }
       if (sHasAim[seat]) {
@@ -499,7 +508,7 @@ export function aggregateTeamsHot(store, filter = {}, playerRows = null, allowDe
     nRounds, seatsPerRound,
     rDemo, rMap, rSide1, rEcon1, rEcon2, rWinner, rOkSeat, rOdSeat, rFileIdx,
     rPrw1, rPrw2, rHasPrw1, rHasPrw2, rPos1, rPos2, rHasPos1, rHasPos2,
-    rAca1, rAck1, rAca2, rAck2, rHasAc, rUtt1, rUtt2, rHasUtt1, rHasUtt2,
+    rAca1, rAck1, rAca2, rAck2, rHasAc, rUtt1, rUtt2, rHasUtt1, rHasUtt2, rDom, rHasDom,
     sPlayer, sTeam
   } = store;
 
@@ -631,6 +640,13 @@ export function aggregateTeamsHot(store, filter = {}, playerRows = null, allowDe
       if (team === 1 ? rHasUtt1[r] : rHasUtt2[r]) {
         s.utilDmgSum += team === 1 ? rUtt1[r] : rUtt2[r];
         s.utilDmgRounds++;
+      }
+      if (rHasDom[r]) {
+        s.domRounds++;
+        if (won) {
+          s.domSum += rDom[r];
+          s.domWonRounds++;
+        }
       }
     }
   }

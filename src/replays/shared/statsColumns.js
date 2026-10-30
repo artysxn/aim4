@@ -62,6 +62,8 @@ export const COLUMN_GROUPS = Object.freeze({
   roundLibrary: { rows: ['rl'],                        bytes: 81   },
   possession:   { rows: ['pos1', 'pos2'],              bytes: 34   },
   anchor:       { rows: ['aca1', 'ack1', 'aca2', 'ack2'], bytes: 4 },
+  // One number a round: the winner's dominance. The side that lost reads 0.
+  dominance:    { rows: ['dom'],                       bytes: 9    },
   roles:        { rows: [], entry: ['roles'],          bytes: 55   }
 });
 
@@ -123,7 +125,9 @@ export const COLUMN_PRESETS = Object.freeze({
     // one player's own matches.
     'movement',
     'utility',
-    'awpHold'
+    'awpHold',
+    // The same table's Dom and Dom W.
+    'dominance'
   ],
   /** Rating plus every Premium metric column the Database table adds. */
   full: [...COLUMN_GROUP_IDS],
@@ -152,7 +156,7 @@ export const COLUMN_PRESETS = Object.freeze({
    */
   patternsWithRating: [...RATING_CORE, 'coreOpenings', 'phase', 'roundLibrary', 'utility'],
   /** Team tables: team-level rates, no per-player rating. */
-  team: ['prw', 'possession', 'anchor', 'utility'],
+  team: ['prw', 'possession', 'anchor', 'utility', 'dominance'],
   /**
    * Performance, team page: the team rates plus RATING_CORE.
    *
@@ -169,6 +173,7 @@ export const COLUMN_PRESETS = Object.freeze({
     'possession',
     'anchor',
     'utility',
+    'dominance',
     // Same reason `rating` carries it: the Maps chapter reads the round-library
     // tags, and 81 bytes a round beats fetching the same demos twice.
     'roundLibrary'

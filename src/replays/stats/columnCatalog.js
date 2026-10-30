@@ -299,6 +299,20 @@ export const PLAYER_COLUMN_INFO = [
     about:
       'AWP kills per round, counting only rounds where the player held the AWP as their primary weapon for at least 10 seconds.',
     groups: ['awpHold']
+  },
+  {
+    key: 'avgDominance',
+    label: 'Dom',
+    about:
+      'Average round dominance of the rounds this player played, for their side. A round they won reads how little win chance the side gave up on the way (100 gave up none), and a round they lost reads 0.',
+    groups: ['dominance']
+  },
+  {
+    key: 'avgWonDominance',
+    label: 'Dom W',
+    about:
+      'Average dominance of the rounds this player won: how clean the wins were, whatever the win rate.',
+    groups: ['dominance']
   }
 ];
 
@@ -356,6 +370,20 @@ export const TEAM_COLUMN_INFO = [
     about:
       'Advantage conversion. Of the moments the model rated the side above 51% to win the round, the share where its chance never later fell below 50%. Not tied to the actual round winner.',
     groups: ['anchor']
+  },
+  {
+    key: 'avgDominance',
+    label: 'Dom',
+    about:
+      'Average round dominance. A round the side won reads how little win chance it gave up on the way (100 gave up none), and a round it lost reads 0.',
+    groups: ['dominance']
+  },
+  {
+    key: 'avgWonDominance',
+    label: 'Dom W',
+    about:
+      'Average dominance of the rounds the side won: how clean its wins were, whatever its win rate.',
+    groups: ['dominance']
   },
   {
     key: 'mapWinrate',

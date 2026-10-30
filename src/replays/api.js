@@ -833,7 +833,15 @@ function uploadBinary(url, file, onProgress, extraHeaders = {}) {
             /* server sent something that is not JSON */
           }
           if (xhr.status >= 200 && xhr.status < 300) resolve(body);
-          else reject(new Error(body.error || `Upload failed (${xhr.status})`));
+          else {
+            // Same shape precheckUpload throws: the queue tells "this file is a
+            // duplicate" from "the connection is dead" by status, not by text.
+            const err = new Error(body.error || `Upload failed (${xhr.status})`);
+            err.status = xhr.status;
+            err.body = body;
+            if (body.duplicate === true) err.duplicate = true;
+            reject(err);
+          }
         });
         // The browser gives no detail here on purpose: a blocked CORS preflight, a
         // proxy body-size limit and a dead backend all surface as the same opaque
@@ -1143,9 +1151,19 @@ export async function fetchRoundZoneEvents(files, ids = null) {
 const DOMINANCE_BATCH = 500;
 
 /**
+ * A round's dominance as the page reads it: a side that lost reads 0. A server
+ * from before that rule still sends what the loser "gave up", which reads high
+ * for a side that never had much to give up (a lost eco came back as 98).
+ */
+export function dominanceRead(value) {
+  if (!value || (value.winner !== 'T' && value.winner !== 'CT')) return value || null;
+  return { ...value, [value.winner === 'T' ? 'CT' : 'T']: 0 };
+}
+
+/**
  * Each round's dominance for both sides (Demo Manager's Dominance filter):
- * 100 minus every point of win chance the side gave up on the way through
- * the round. Asked in batches; resolves null from a server without the route.
+ * how cleanly a side won, 100 minus every point of win chance it gave up on
+ * the way. Asked in batches; resolves null from a server without the route.
  *
  * @param {string[]} files
  * @param {{ onProgress?: (done: number, total: number) => void }} [opts]
@@ -1164,7 +1182,7 @@ export async function fetchRoundDominance(files, { onProgress } = {}) {
     if (!res.ok) throw new Error(`Could not read round dominance (${res.status})`);
     if (!(res.headers.get('content-type') || '').includes('json')) return null;
     const body = await res.json();
-    for (const [file, v] of Object.entries(body?.rounds || {})) out.set(file, v || null);
+    for (const [file, v] of Object.entries(body?.rounds || {})) out.set(file, dominanceRead(v));
     onProgress?.(Math.min(files.length, i + batch.length), files.length);
   }
   return out;

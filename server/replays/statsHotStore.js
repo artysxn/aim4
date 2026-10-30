@@ -165,6 +165,9 @@ export function createPacker(capacityRounds = 1024, seed = null) {
   const rUtt2 = new Float64Array(nRounds);
   const rHasUtt1 = new Uint8Array(nRounds);
   const rHasUtt2 = new Uint8Array(nRounds);
+  // The winner's dominance, 0 to 100: the side that lost reads 0, so one column.
+  const rDom = new Uint8Array(nRounds);
+  const rHasDom = new Uint8Array(nRounds);
 
   // ---- per seat ------------------------------------------------------------
   const sPlayer = new Int32Array(nSeats);
@@ -212,7 +215,7 @@ export function createPacker(capacityRounds = 1024, seed = null) {
     rDemo, rMap, rSide1, rEcon1, rEcon2, rWinner, rOkSeat, rOdSeat, rHasDuel, rHasCore, rFileIdx,
     rTagOff, rTagLen,
     rPrw1, rPrw2, rHasPrw1, rHasPrw2, rPos1, rPos2, rHasPos1, rHasPos2,
-    rAca1, rAck1, rAca2, rAck2, rHasAc, rUtt1, rUtt2, rHasUtt1, rHasUtt2
+    rAca1, rAck1, rAca2, rAck2, rHasAc, rUtt1, rUtt2, rHasUtt1, rHasUtt2, rDom, rHasDom
   };
   const tagCols = { gTagKey, gTagSide, gTagAt };
   const seatCols = {
@@ -289,7 +292,7 @@ export function createPacker(capacityRounds = 1024, seed = null) {
       rDemo, rMap, rSide1, rEcon1, rEcon2, rWinner, rOkSeat, rOdSeat, rHasDuel, rHasCore, rFileIdx,
       rTagOff, rTagLen,
       rPrw1, rPrw2, rHasPrw1, rHasPrw2, rPos1, rPos2, rHasPos1, rHasPos2,
-      rAca1, rAck1, rAca2, rAck2, rHasAc, rUtt1, rUtt2, rHasUtt1, rHasUtt2
+      rAca1, rAck1, rAca2, rAck2, rHasAc, rUtt1, rUtt2, rHasUtt1, rHasUtt2, rDom, rHasDom
     } = roundCols;
     const {
       sPlayer, sTeam, sStats, sSwing, sHasSwing, sR3, sAim, sHasAim, sUtil, sHasUtil,
@@ -371,6 +374,7 @@ export function createPacker(capacityRounds = 1024, seed = null) {
       }
       if (Number.isFinite(row.utt?.[1])) { rUtt1[r] = row.utt[1]; rHasUtt1[r] = 1; }
       if (Number.isFinite(row.utt?.[2])) { rUtt2[r] = row.utt[2]; rHasUtt2[r] = 1; }
+      if (Number.isFinite(row.dom)) { rDom[r] = Math.max(0, Math.min(100, row.dom)); rHasDom[r] = 1; }
 
       // Rating 3.0 context: resolved once, here. This is the quadratic trade
       // scan that made a filtered query expensive; a query now reads its result.
@@ -489,7 +493,7 @@ export function createPacker(capacityRounds = 1024, seed = null) {
       rDemo, rMap, rSide1, rEcon1, rEcon2, rWinner, rOkSeat, rOdSeat, rHasDuel, rHasCore, rFileIdx,
       rTagOff, rTagLen,
       rPrw1, rPrw2, rHasPrw1, rHasPrw2, rPos1, rPos2, rHasPos1, rHasPos2,
-      rAca1, rAck1, rAca2, rAck2, rHasAc, rUtt1, rUtt2, rHasUtt1, rHasUtt2
+      rAca1, rAck1, rAca2, rAck2, rHasAc, rUtt1, rUtt2, rHasUtt1, rHasUtt2, rDom, rHasDom
     } = roundCols;
     const {
       sPlayer, sTeam, sStats, sSwing, sHasSwing, sR3, sAim, sHasAim, sUtil, sHasUtil,
@@ -532,6 +536,7 @@ export function createPacker(capacityRounds = 1024, seed = null) {
       rHasAc: cutR(rHasAc),
       rUtt1: cutR(rUtt1), rUtt2: cutR(rUtt2),
       rHasUtt1: cutR(rHasUtt1), rHasUtt2: cutR(rHasUtt2),
+      rDom: cutR(rDom), rHasDom: cutR(rHasDom),
       sPlayer: cutS(sPlayer, 1), sTeam: cutS(sTeam, 1), sStats: cutS(sStats, SEAT),
       sSwing: cutS(sSwing, 1), sHasSwing: cutS(sHasSwing, 1),
       sR3: cutS(sR3, R3_FIELDS.length),

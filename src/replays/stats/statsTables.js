@@ -21,6 +21,51 @@ const int = (n) => (Number.isFinite(n) ? String(Math.round(n)) : '—');
 const signed = (n) =>
   Number.isFinite(n) ? `${n > 0 ? '+' : ''}${n.toFixed(2)}` : '—';
 
+/**
+ * The two dominance columns, the same for a player and a team: both rows carry
+ * the same fields. Scores from 0 to 100, not percentages, so no percent sign.
+ */
+const DOMINANCE_MISSING = 'No dominance data yet. Patch the Dominance field from Admin → Tools.';
+const DOMINANCE_COLUMNS = [
+  {
+    key: 'avgDominance',
+    label: 'Dom',
+    headerTitle: 'Average round dominance',
+    get: (r) => (Number.isFinite(r.avgDominance) ? r.avgDominance : -1),
+    cell: (r) => f1(r.avgDominance),
+    avgOf: (r) => (Number.isFinite(r.avgDominance) ? r.avgDominance : null),
+    avgFormat: f1,
+    tip: (r) =>
+      Number.isFinite(r.avgDominance)
+        ? tip([
+            `Average round dominance: ${f1(r.avgDominance)}`,
+            'How little win chance the side gave up on the way to a win, 0 to 100.',
+            'A lost round reads 0.',
+            `Over ${int(r.domRounds)} rounds`
+          ])
+        : DOMINANCE_MISSING
+  },
+  {
+    key: 'avgWonDominance',
+    label: 'Dom W',
+    headerTitle: 'Average won round dominance',
+    get: (r) => (Number.isFinite(r.avgWonDominance) ? r.avgWonDominance : -1),
+    cell: (r) => f1(r.avgWonDominance),
+    avgOf: (r) => (Number.isFinite(r.avgWonDominance) ? r.avgWonDominance : null),
+    avgFormat: f1,
+    tip: (r) =>
+      Number.isFinite(r.avgWonDominance)
+        ? tip([
+            `Average won round dominance: ${f1(r.avgWonDominance)}`,
+            'How clean the wins were, whatever the win rate.',
+            `Over ${int(r.domWonRounds)} rounds won`
+          ])
+        : r.domRounds > 0
+          ? 'No rounds won in range.'
+          : DOMINANCE_MISSING
+  }
+];
+
 /** Accuracy is blank rather than 0% when the demo predates hit counts. */
 const accCell = (p) => (p.shots > 0 ? pct(p.accuracy) : '—');
 
@@ -148,7 +193,7 @@ export const PLAYER_FIXED_BASE = [
  * Scrollable metric columns (after fixed + optional roles).
  * Order: Rating, xRtg, xRtg%, True, A4R, Swing, KD, xK, Duel Win%, ADR, KAST,
  * OPKD, Impact, A4OR, Opatt, OR, PFW, PFO, Aim, Acc, C°, R%, AA%, 1st%, O%, U%,
- * DT, PSDT, util, 5k…0k, aKPR.
+ * DT, PSDT, util, 5k…0k, aKPR, Dom, Dom W.
  */
 export const PLAYER_METRIC_COLUMNS = [
   {
@@ -708,7 +753,8 @@ export const PLAYER_METRIC_COLUMNS = [
             'Rounds where the AWP was held as primary for at least 10 seconds'
           ])
         : 'No rounds with the AWP held as primary for at least 10 seconds. Stats index rebuilds on next library load (v17+).'
-  }
+  },
+  ...DOMINANCE_COLUMNS
 ];
 
 /** @deprecated Duel cols live inside PLAYER_METRIC_COLUMNS; kept for imports. */
@@ -1059,6 +1105,7 @@ export const TEAM_COLUMNS = [
           ])
         : 'No advantage samples yet. Stats index rebuilds on next library load (v16+).'
   },
+  ...DOMINANCE_COLUMNS,
   {
     key: 'mapWinrate',
     label: 'Win%',

@@ -22,7 +22,7 @@ export const winnerSide = (meta) => sideOfTeam(meta, meta?.winner === 1 ? 1 : 2)
  * The man advantage of `side` (its players alive minus the other side's) at
  * the start and after every kill, until one side has nobody left.
  *
- * A count held for `grace` seconds or less (a man down and traded at once) is left out of min and
+ * A count undone within `grace` seconds (a man down and traded at once) is left out of min and
  * max; rawMin and rawMax keep it.
  *
  * @param {object} meta  round meta: players [{ id, team }], team1Side, tickRate, events.kills [{ tick, victim }]
@@ -49,7 +49,9 @@ export function aliveGaps(meta, side = 'T', grace = 0) {
   const graceTicks = Math.max(0, Number(grace) || 0) * (Number(meta?.tickRate) || 64);
   let rawMin = min;
   let rawMax = max;
-  for (const [i, k] of live.entries()) {
+  /** The count after each kill, up to the one that ends it. */
+  const counts = [];
+  for (const k of live) {
     const s = sideOf.get(k.victim);
     if (!s || alive[s] <= 0) continue;
     alive[s]--;
@@ -57,13 +59,19 @@ export function aliveGaps(meta, side = 'T', grace = 0) {
     // The kill that ends it (2v1 to 2v0) is not an advantage anyone played with: every win would
     // otherwise be "up 2" at the end.
     if (!alive.T || !alive.CT) break;
-    rawMin = Math.min(rawMin, gap());
-    rawMax = Math.max(rawMax, gap());
+    counts.push({ tick: Number(k.tick), gap: gap() });
+  }
+  for (const [i, c] of counts.entries()) {
+    rawMin = Math.min(rawMin, c.gap);
+    rawMax = Math.max(rawMax, c.gap);
     // How long this count held: to the next kill, else to the end of the round.
-    const until = i + 1 < live.length ? Number(live[i + 1].tick) : Number.isFinite(end) && end > 0 ? end : Infinity;
-    if (until - Number(k.tick) <= graceTicks) continue;
-    min = Math.min(min, gap());
-    max = Math.max(max, gap());
+    const next = live.find((k) => Number(k.tick) > c.tick);
+    const until = next ? Number(next.tick) : Number.isFinite(end) && end > 0 ? end : Infinity;
+    // A brief count is left out only when it was undone in that time, a man down and traded at
+    // once. Going the same way (five kills in two seconds) it was real: a wiped side was not "never behind".
+    const soon = until - c.tick <= graceTicks ? counts.slice(i + 1).filter((x) => x.tick - c.tick <= graceTicks) : null;
+    if (!soon?.some((x) => x.gap > c.gap)) min = Math.min(min, c.gap);
+    if (!soon?.some((x) => x.gap < c.gap)) max = Math.max(max, c.gap);
   }
   return { min, max, rawMin, rawMax, grace: Math.max(0, Number(grace) || 0), steps };
 }

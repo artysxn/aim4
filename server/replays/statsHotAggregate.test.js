@@ -79,7 +79,10 @@ function makeEntry(i) {
       cok: rnd(2) ? [pids[rnd(10)]] : [], cod: rnd(2) ? [pids[rnd(10)]] : [],
       dur: 40 + rnd(50), pt: rnd(2) ? rnd(60) : null,
       kt: [], ev: [], ph: {}, utt: {}, rl: tagsFor(i, k),
-      pos1: 0.5, pos2: 0.5, prw1: 0.5, prw2: 0.5, aca1: 0, ack1: 0, aca2: 0, ack2: 0 };
+      pos1: 0.5, pos2: 0.5, prw1: 0.5, prw2: 0.5, aca1: 0, ack1: 0, aca2: 0, ack2: 0,
+      // Worked out rather than drawn: one more draw would move every number after it.
+      // Every fifth round has no reading, as a demo the patch has not reached.
+      ...(k % 5 === 4 ? {} : { dom: (i * 7 + k * 13) % 101 }) };
   });
   return { id: `d${i}`, v: 19, key: `19|${i}|${i}|${rounds.length}|T${i % 4}|T${(i + 1) % 4}`,
     map, mapName: map, t1: `t${i % 4}`, t2: `t${(i + 1) % 4}`,

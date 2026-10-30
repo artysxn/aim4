@@ -29,6 +29,7 @@ const DEFAULT_FIELD_GROUPS = [
   { id: 'core', label: 'Core openings' },
   { id: 'movement', label: 'Movement' },
   { id: 'awpHold', label: 'AWP hold' },
+  { id: 'dominance', label: 'Dominance' },
   { id: 'roles', label: 'Roles' }
 ];
 

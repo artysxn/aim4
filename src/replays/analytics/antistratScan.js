@@ -180,6 +180,22 @@ function bump(map, key, by = 1) {
   map.set(key, (map.get(key) || 0) + by);
 }
 
+/**
+ * The site a bomb went down on, 'a' or 'b': the painted site under it, else the nearer one. Read
+ * from where it landed: the site the demo's own event names reads the other site on Dust2.
+ */
+export function plantSiteAt(x, y, network, mapCode) {
+  const px = Number(x);
+  const py = Number(y);
+  if (!network || !Number.isFinite(px) || !Number.isFinite(py)) return null;
+  const site = bombSiteAtPoint(px, py, network, { mapCode });
+  if (site) return site;
+  const centers = bombSiteCenters(network, { mapCode });
+  const da = centers.a ? Math.hypot(centers.a.x - px, centers.a.y - py) : Infinity;
+  const db = centers.b ? Math.hypot(centers.b.x - px, centers.b.y - py) : Infinity;
+  return da === Infinity && db === Infinity ? null : da <= db ? 'a' : 'b';
+}
+
 // ---------------------------------------------------------------------------
 // Per-round feature extraction
 // ---------------------------------------------------------------------------
@@ -421,20 +437,7 @@ export function roundFeatures({ meta, track, row, teamIdx, opponent, context, ne
   // Plant, with a site letter where geometry allows one.
   const bombEv = (meta.events?.bomb || []).find((b) => b?.type === 'planted');
   const plantTick = Number.isFinite(meta.plantTick) ? meta.plantTick : bombEv?.tick ?? null;
-  let plantSite = null;
-  if (plantTick != null && network) {
-    const px = Number(bombEv?.x);
-    const py = Number(bombEv?.y);
-    if (Number.isFinite(px) && Number.isFinite(py)) {
-      plantSite = bombSiteAtPoint(px, py, network, { mapCode });
-      if (!plantSite) {
-        const centers = bombSiteCenters(network, { mapCode });
-        const da = centers.a ? Math.hypot(centers.a.x - px, centers.a.y - py) : Infinity;
-        const db = centers.b ? Math.hypot(centers.b.x - px, centers.b.y - py) : Infinity;
-        plantSite = da === Infinity && db === Infinity ? null : da <= db ? 'a' : 'b';
-      }
-    }
-  }
+  const plantSite = plantTick != null ? plantSiteAt(bombEv?.x, bombEv?.y, network, mapCode) : null;
 
   const sitePieces = network
     ? { a: bombSitePieces(network, 'a', { mapCode }), b: bombSitePieces(network, 'b', { mapCode }) }

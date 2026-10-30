@@ -59,7 +59,10 @@ function layoutStamp() {
     // here so every snapshot written before the tags existed is discarded — the
     // columns are read back by name, and a store missing them would answer a
     // call filter with "no round has ever made that call".
-    tags: 'off|len:key|side|at'
+    tags: 'off|len:key|side|at',
+    // Named for the same reason: a store without them would have no column to
+    // copy when a heal adopts it, and would read every round as unmeasured.
+    dominance: 'rDom|rHasDom'
   };
 }
 

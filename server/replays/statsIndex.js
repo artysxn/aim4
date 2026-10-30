@@ -56,6 +56,7 @@ import { applyMovementFields } from '../../src/replays/roles/movementFromTicks.j
 import { roundDuelBag } from '../../src/replays/duels/duelStats.js';
 import { roundTagsFor, rowTagged, rowTags } from '../../src/replays/analytics/roundTags.js';
 import { hasRoundLibrary } from '../../src/replays/analytics/roundLibrary.js';
+import { roundDominance, SCAN_STRIDE } from '../../src/replays/similar/roundSimilarity.js';
 import { coreOpeningDuels } from '../../src/replays/shared/coreOpenings.js';
 
 // v19 recomputes per-round damage from the damage events, capped at what the
@@ -92,6 +93,7 @@ export const STATS_FIELD_GROUPS = Object.freeze([
   { id: 'core', label: 'Core openings' },
   { id: 'movement', label: 'Movement' },
   { id: 'awpHold', label: 'AWP hold' },
+  { id: 'dominance', label: 'Dominance' },
   { id: 'roles', label: 'Roles' }
 ]);
 
@@ -385,6 +387,27 @@ function applyTimingFields(row, meta, playerIds) {
   }
 }
 
+/**
+ * How cleanly the round was won, as `row.dom`: the winner's dominance, one number
+ * because the side that lost reads 0. Read off the coarse pass whatever else the
+ * caller has in hand: dominance is defined on that row spacing (a kill traded
+ * inside one row is not a fall), so a finer pass would give a different number
+ * from the one the Demo Manager filter and Similar Rounds show.
+ *
+ * Absent until the admin "Patch selected fields" pass reaches an older demo, and
+ * deliberately not in needsPhaseEnrichment: no page view ever pays for it.
+ */
+async function applyDominanceField(io, user, row, meta) {
+  row.dom = null;
+  if (typeof io.readRoundTicks !== 'function') return;
+  try {
+    const read = roundDominance(meta, await io.readRoundTicks(user, row.f, SCAN_STRIDE));
+    if (read && Number.isFinite(read[read.winner])) row.dom = read[read.winner];
+  } catch {
+    row.dom = null;
+  }
+}
+
 function applyPrwFields(row, meta) {
   const { prw1, prw2, sw, aca1, ack1, aca2, ack2 } = enrichPrwAndSwing(meta);
   row.prw1 = prw1;
@@ -520,6 +543,7 @@ function applyInertPhaseDefaults(row) {
   if (row.am === undefined) row.am = null;
   if (row.ut === undefined) row.ut = null;
   if (row.utt === undefined) row.utt = null;
+  if (row.dom === undefined) row.dom = null;
 }
 
 /** Roles missing or on an older role algorithm. */
@@ -861,6 +885,7 @@ async function enrichPhases(io, user, entry, { roles = true, fields = null } = {
     if (want('phase')) applyPhaseBags(row, meta, playerIds, tickBuffer);
     if (want('prw')) applyPrwFields(row, meta);
     if (want('timing')) applyTimingFields(row, meta, playerIds);
+    if (want('dominance')) await applyDominanceField(io, user, row, meta);
 
     const needNetwork =
       want('aim') ||
@@ -1159,6 +1184,7 @@ async function buildIndex(io, user, record) {
       tickBuffer,
       zoneCache.get(meta.map) || controlNetwork
     );
+    await applyDominanceField(io, user, row, meta);
 
     if (tickBuffer) {
       const network = controlNetwork;

@@ -16,6 +16,8 @@ import {
   buildQuery,
   buildRoundIndex,
   dominanceOf,
+  sidesDominance,
+  withoutTrades,
   econClass,
   gateReason,
   roundDominance,
@@ -38,6 +40,21 @@ import {
   assert.equal(dominanceOf([80, 78, 76, 74, 72, 70, 100]).drop, 10, 'a slow bleed adds up');
   assert.equal(dominanceOf([50, 49.5, 50.4, 49.8, 50.2, 100]).drop, 0, 'sub-point wobble is ignored');
   assert.equal(dominanceOf([]).dominance, 0, 'no series, no claim');
+
+  // A lost eco had nothing to give up: it must not read as a clean round (it read 98).
+  const lostEco = sidesDominance([96, 97, 96, 99, 100]);
+  assert.equal(lostEco.CT.dominance, 0, 'the side that lost reads 0, whatever it had to lose');
+  assert.equal(lostEco.T.dominance, 100, 'the side that won from there gave nothing up');
+  assert.equal(sidesDominance([50, 30, 40, 40, 0]).T.dominance, 0);
+  assert.equal(sidesDominance([50, 30, 40, 40, 0]).CT.dominance, 90, 'CT won and gave up 10');
+
+  // A kill traded at once is a dip one row long, and it only showed when a row landed in it.
+  assert.deepEqual(withoutTrades([88, 64, 89]), [88, 88, 89]);
+  assert.deepEqual(withoutTrades([88, 64, 64, 89]), [88, 64, 64, 89], 'two rows down is a real time down a man');
+  assert.deepEqual(withoutTrades([50, 40, 100]), [50, 50, 100]);
+  assert.equal(sidesDominance([88, 64, 89, 100]).T.dominance, 100, 'traded at once: no fall');
+  assert.equal(sidesDominance([88, 64, 64, 89, 100]).T.dominance, 76, 'held for two rows: a fall');
+  assert.equal(sidesDominance([88, 89, 64, 100]).T.dominance, 100, 'the last row before the result is no different');
 }
 
 // ---- economy and guns -----------------------------------------------------------
