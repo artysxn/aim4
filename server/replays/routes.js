@@ -8,6 +8,8 @@
 //   POST   /api/replays/demos                    upload .dem or an archive of them
 //   GET    /api/replays/uploads/:batchId         unpack + parse progress for one upload
 //   POST   /api/replays/import                   upload a local .aim4replay package
+//   POST   /api/replays/pracc/imports            fetch demos from PRACC's signed links
+//   GET    /api/replays/pracc/imports/:id        download + unpack + parse progress
 //   GET    /api/replays/demos/:id                one demo + parse progress
 //   POST   /api/replays/demos/:id/teams          rename both teams (and matching unnamed lineups)
 //   POST   /api/replays/demos/:id/visibility     public / unlisted / private
@@ -99,7 +101,7 @@ import {
   hotBenchmarks,
   hotTables
 } from './statsHotService.js';
-import { isAcceptedUpload, rarSupport } from './archive.js';
+import { bz2Support, isAcceptedUpload, rarSupport } from './archive.js';
 import {
   allJobs,
   batchStatus,
@@ -143,6 +145,7 @@ import { encodeRoundPacks } from '../../src/replays/shared/roundPackWire.js';
 import { roundZoneEvents } from '../../src/replays/shared/roundZoneEvents.js';
 import { roundDominance } from '../../src/replays/similar/roundSimilarity.js';
 import { importReplayPackage } from './importPackage.js';
+import { praccRequestStatus, queuePraccImports } from './praccImport.js';
 import { readChampion } from '../training/champion.js';
 import { spawnsForMap } from './spawnPoints.js';
 import { PACKAGE_EXT } from '../../src/replays/shared/replayPackage.js';
@@ -919,7 +922,7 @@ export async function handleReplayRequest(req, res, url) {
           error:
             kind === 'import'
               ? `Only ${PACKAGE_EXT} packages can be imported.`
-              : 'Upload a .dem file, or a .zip, .rar, .tar.gz, .gz or .zst containing one.'
+              : 'Upload a .dem file, or a .zip, .rar, .tar.gz, .gz, .zst or .bz2 containing one.'
         }
       };
       return out;
@@ -982,8 +985,9 @@ export async function handleReplayRequest(req, res, url) {
       impersonating: me.impersonating,
       limits: { maxBytes: MAX_BYTES, maxUploadBytes: MAX_UPLOAD_BYTES },
       // .rar needs an external extractor, so whether it works is a property of
-      // the host rather than of the code.
-      rar: rarSupport()
+      // the host rather than of the code. Same for .bz2, which is PRACC's format.
+      rar: rarSupport(),
+      bz2: bz2Support()
     });
     return true;
   }
@@ -1214,6 +1218,55 @@ export async function handleReplayRequest(req, res, url) {
       return true;
     }
     json(res, 200, { batch: batchStatus(batch), usage: await usage(user) });
+    return true;
+  }
+
+  // PRACC demos: the caller hands over the signed links from their DEMOS tab and
+  // this box does the rest. Same gate as an upload, asked once here so a refusal
+  // reaches the button straight away, and once per demo when its turn comes, with
+  // reserve on, because that is when the place in the cap is actually taken.
+  if (req.method === 'POST' && p === '/api/replays/pracc/imports') {
+    const gated = await gateUpload({ kind: 'demo', filename: 'pracc.dem.bz2' });
+    if (gated.refusal) {
+      logRefusal('pracc', 'pracc.dem.bz2', 0, gated.refusal);
+      await refuseUpload(req, res, gated.refusal.status, gated.refusal.body);
+      return true;
+    }
+    let body;
+    try {
+      // Signed links run to about a kilobyte each, and a request carries up to 100.
+      body = await readJson(req, 512 * 1024);
+    } catch (err) {
+      json(res, 400, { error: err.message });
+      return true;
+    }
+    const queued = await queuePraccImports({
+      user,
+      demos: body.demos,
+      owner: {
+        uploaderId: me.id,
+        uploaderName: me.username,
+        // Scrims stay private unless the caller says otherwise, like any upload.
+        visibility: normalizeVisibility(body.visibility || 'private'),
+        account: me
+      },
+      gate: () => gateUpload({ kind: 'demo', filename: 'pracc.dem.bz2', reserve: true })
+    });
+    json(res, queued.status, queued.body);
+    return true;
+  }
+
+  // Readable by id alone, like /uploads/:batchId above, and for a better reason
+  // than symmetry: an import can outlive the one-hour token that started it. The
+  // id is 128 random bits and the answer holds no links.
+  const praccMatch = p.match(/^\/api\/replays\/pracc\/imports\/([A-Za-z0-9]+)$/);
+  if (req.method === 'GET' && praccMatch) {
+    const request = praccRequestStatus(praccMatch[1]);
+    if (!request) {
+      json(res, 404, { error: 'That import is no longer being tracked.' });
+      return true;
+    }
+    json(res, 200, { request });
     return true;
   }
 

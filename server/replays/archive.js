@@ -2,16 +2,16 @@
 // replays/archive.js
 // Turn one upload into the .dem files inside it.
 //
-// Accepts .dem, .zip, .rar, .tar/.tar.gz/.tar.zst, and bare .gz/.zst. An
-// archive may hold as many demos as it likes; .gz and .zst are single-stream
-// compressors and can only ever carry one.
+// Accepts .dem, .zip, .rar, .tar/.tar.gz/.tar.zst, and bare .gz/.zst/.bz2. An
+// archive may hold as many demos as it likes; .gz, .zst and .bz2 are
+// single-stream compressors and can only ever carry one.
 //
-// Everything except .rar is streamed in process: a 450 MB demo inside a zip is
-// inflated straight to its own file and never exists as a Buffer, because the
-// box this runs on has 4 GB and the parser is going to want most of it. That
+// Everything except .rar and .bz2 is streamed in process: a 450 MB demo inside a
+// zip is inflated straight to its own file and never exists as a Buffer, because
+// the box this runs on has 4 GB and the parser is going to want most of it. That
 // rules out unzipper/adm-zip, which is why the zip and tar readers here are
-// hand-rolled on node:zlib rather than dependencies. .rar is the exception and
-// is explained where it is handled.
+// hand-rolled on node:zlib rather than dependencies. .rar and .bz2 are the
+// exceptions and are explained where they are handled.
 //
 // Only .dem entries are extracted, and only real ones: see isDemoEntry. Every
 // other entry is skipped before a byte of it is inflated, so an archive full of
@@ -30,7 +30,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import zlib from 'node:zlib';
-import { execFile, spawnSync } from 'node:child_process';
+import { execFile, spawn, spawnSync } from 'node:child_process';
 import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 
@@ -44,7 +44,8 @@ export const ACCEPTED_EXTS = [
   '.tgz',
   '.tar.zst',
   '.gz',
-  '.zst'
+  '.zst',
+  '.bz2'
 ];
 
 const EOCD_SIG = 0x06054b50;
@@ -73,6 +74,7 @@ export function classifyUpload(filename) {
   if (name.endsWith('.tar.zst') || name.endsWith('.tzst')) return 'tar.zst';
   if (name.endsWith('.gz')) return 'gz';
   if (name.endsWith('.zst')) return 'zst';
+  if (name.endsWith('.bz2')) return 'bz2';
   return null;
 }
 
@@ -83,7 +85,7 @@ export function isAcceptedUpload(filename) {
 /** Strip one compression suffix to guess the demo name inside. */
 function innerName(filename) {
   const base = path.basename(String(filename || 'match.dem'));
-  const stripped = base.replace(/\.(gz|zst)$/i, '');
+  const stripped = base.replace(/\.(gz|zst|bz2)$/i, '');
   return /\.dem$/i.test(stripped) ? stripped : `${stripped}.dem`;
 }
 
@@ -629,6 +631,78 @@ async function extractRar(source, targetFor, allowedBytes, onFile) {
   }
 }
 
+// ---- bz2 --------------------------------------------------------------------
+
+/**
+ * bzip2 is not in node:zlib, so like .rar this shells out, and the same two apt
+ * packages cover it: libarchive-tools ships bsdcat, unar writes to stdout when
+ * told its output directory is "-". The output still runs through writeMetered,
+ * because a bz2 bomb declares its real size no more than a zip bomb does.
+ */
+const BZ2_TOOLS = [
+  { candidates: ['bsdcat', '/usr/bin/bsdcat'], args: (src) => [src] },
+  { candidates: ['bzip2'], args: (src) => ['-dc', src] },
+  { candidates: ['unar', '/usr/bin/unar'], args: (src) => ['-quiet', '-output-directory', '-', src] }
+];
+
+let bz2Tool;
+
+function findBz2Tool() {
+  if (bz2Tool !== undefined) return bz2Tool;
+  bz2Tool = null;
+  for (const tool of BZ2_TOOLS) {
+    for (const bin of tool.candidates) {
+      const probe = spawnSync(bin, ['--version'], { stdio: 'ignore' });
+      if (!(probe.error && probe.error.code === 'ENOENT')) {
+        bz2Tool = { ...tool, bin };
+        return bz2Tool;
+      }
+    }
+  }
+  return bz2Tool;
+}
+
+/** Same question as rarSupport, for .bz2. */
+export function bz2Support() {
+  const tool = findBz2Tool();
+  return { available: Boolean(tool), tool: tool?.bin || null };
+}
+
+async function extractBz2(source, target, allowedBytes) {
+  const tool = findBz2Tool();
+  if (!tool) {
+    throw new Error(
+      'This server cannot open .bz2 files (bsdcat, bzip2 and unar are all missing). ' +
+        'Install apt packages libarchive-tools and unar (Dockerfile and nixpacks.toml both list them), then redeploy.'
+    );
+  }
+  // No shell: the source path is influenced by the upload filename.
+  const child = spawn(tool.bin, tool.args(source), { stdio: ['ignore', 'pipe', 'pipe'] });
+  let stderr = '';
+  child.stderr.on('data', (chunk) => {
+    if (stderr.length < 2000) stderr += chunk;
+  });
+  const exited = new Promise((resolve) => {
+    child.once('error', (err) => resolve({ code: -1, err }));
+    child.once('close', (code) => resolve({ code }));
+  });
+  let written;
+  try {
+    written = await writeMetered(child.stdout, target, allowedBytes);
+  } catch (err) {
+    child.kill('SIGKILL');
+    await exited;
+    throw err;
+  }
+  const { code, err } = await exited;
+  if (code !== 0) {
+    await fsp.rm(target, { force: true }).catch(() => {});
+    const detail = String(stderr || err?.message || `exit code ${code}`).trim().split('\n')[0];
+    throw new Error(`Could not read that .bz2: ${detail}`);
+  }
+  return written;
+}
+
 // ---- entry point ------------------------------------------------------------
 
 /**
@@ -666,6 +740,14 @@ export async function unpackUpload({ source, filename, targetFor, allowedBytes, 
     return [{ name, path: target, sizeBytes }];
   }
 
+  if (kind === 'bz2') {
+    const name = innerName(filename);
+    const target = targetFor(name);
+    const sizeBytes = await extractBz2(source, target, allowedBytes);
+    onFile?.({ name, sizeBytes });
+    return [{ name, path: target, sizeBytes }];
+  }
+
   if (kind === 'zip') {
     return extractZip(source, targetFor, allowedBytes, onFile);
   }
@@ -679,6 +761,6 @@ export async function unpackUpload({ source, filename, targetFor, allowedBytes, 
   }
 
   throw new Error(
-    'Upload a .dem file, or a .zip, .rar, .tar.gz, .gz or .zst containing one.'
+    'Upload a .dem file, or a .zip, .rar, .tar.gz, .gz, .zst or .bz2 containing one.'
   );
 }

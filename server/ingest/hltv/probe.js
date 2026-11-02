@@ -292,6 +292,7 @@ const MAGIC = [
     ext: '.zst',
     test: (b) => b[0] === 0x28 && b[1] === 0xb5 && b[2] === 0x2f && b[3] === 0xfd
   },
+  { kind: 'bz2', ext: '.bz2', test: (b) => b.slice(0, 3).toString('latin1') === 'BZh' },
   { kind: 'dem', ext: '.dem', test: (b) => b.slice(0, 7).toString('latin1') === 'PBDEMS2' },
   { kind: 'dem', ext: '.dem', test: (b) => b.slice(0, 7).toString('latin1') === 'HL2DEMO' }
 ];

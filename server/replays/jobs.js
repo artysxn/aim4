@@ -177,6 +177,11 @@ export function parseQueueBusy() {
   return running.size > 0 || laneQueue.size() > 0;
 }
 
+/** Parses waiting for a slot, not counting the ones already running. */
+export function parseQueueDepth() {
+  return laneQueue.size();
+}
+
 /** Drop an in-memory parse job so a deleted demo cannot reappear as a ghost. */
 export function forgetJob(user, demoId) {
   return jobs.delete(jobKey(user, demoId));
@@ -204,6 +209,7 @@ function failEntry(entry, message, extra = {}) {
   entry.failed = true;
   entry.error = message || 'Parsing failed.';
   if (extra.duplicate) entry.duplicate = true;
+  if (extra.duplicateOf) entry.duplicateOf = extra.duplicateOf;
 }
 
 function sweepBatches() {
@@ -339,6 +345,7 @@ export function batchStatus(batch) {
         phase: f.phase,
         failed: f.failed,
         duplicate: Boolean(f.duplicate),
+        duplicateOf: f.duplicateOf || null,
         round: job?.round ?? f.round,
         total: job?.total ?? f.total,
         error: f.error
@@ -775,7 +782,7 @@ function startJob(job) {
           filename: job.filename || entry?.name
         });
         if (dup) {
-          failEntry(entry, dup.message, { duplicate: true });
+          failEntry(entry, dup.message, { duplicate: true, duplicateOf: dup.existing?.id });
           settleBatch(batch);
           await finish({ state: 'error', stage: 'error', error: dup.message });
           return;

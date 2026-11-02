@@ -183,7 +183,7 @@ export async function sweepStaleUploads(maxAgeMs = 60 * 60 * 1000) {
   let freed = 0;
   const cutoff = Date.now() - maxAgeMs;
   for (const f of await listFiles(ROOT)) {
-    if (!/^\.(upload|import)-[a-f0-9]+\.tmp$/.test(f)) continue;
+    if (!/^\.(upload|import|pracc)-[a-f0-9]+\.tmp$/.test(f)) continue;
     const p = path.join(ROOT, f);
     try {
       const st = await fsp.stat(p);
