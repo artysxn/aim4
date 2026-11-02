@@ -111,6 +111,20 @@ export function openViewer({
   let spentMacro = false;
 
   /**
+   * Take down the mode on screen. A view that fails on its way out has still
+   * stopped its transport, so nothing that follows may depend on it finishing:
+   * skipped, the overlay stays up over a viewer that no longer plays or closes.
+   */
+  function destroyCurrent() {
+    try {
+      current?.destroy();
+    } catch (err) {
+      console.error('viewer: teardown failed', err);
+    }
+    current = null;
+  }
+
+  /**
    * Analyzer is the macro viewer, which is metered: one session a day on Free.
    * Spent on entry rather than per interaction, so a session is a session and
    * not an allowance that drains while someone uses it.
@@ -124,7 +138,7 @@ export function openViewer({
       spentMacro = true;
     }
     activeMode = next;
-    current?.destroy();
+    destroyCurrent();
     bodyEl.innerHTML = '';
     const factory = next === 'analyzer' ? createAnalyzerViewer : createTimelineViewer;
     current = factory({
@@ -167,7 +181,7 @@ export function openViewer({
 
   function close() {
     stopWatching();
-    current?.destroy();
+    destroyCurrent();
     store.clear();
     document.removeEventListener('keydown', onKey);
     overlay.remove();

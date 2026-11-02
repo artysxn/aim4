@@ -25,7 +25,7 @@ import * as THREE from 'three/webgpu';
 import '../../cs3d/cs3d.css';
 import { MapPack, assetBase } from '../../cs3d/mapLoader.js';
 import { MapLighting } from '../../cs3d/sky.js';
-import { patchWebGPUPartialAttributeUpload, patchNodeMaterialTypeLookup, patchSharedBatchShaders, patchFrameSubmits, patchStaticRefresh } from '../../cs3d/threePatches.js';
+import { patchWebGPUPartialAttributeUpload, patchNodeMaterialTypeLookup, patchSharedBatchShaders, patchFrameSubmits, patchStaticRefresh, trackRenderObjects } from '../../cs3d/threePatches.js';
 import { createLook, createMapRenderer, loadPostLut, installMapGrade, setupBloom } from '../../cs3d/look.js';
 import { createBootScreen } from '../../cs3d/bootScreen.js';
 import { sharedPlayerModels } from '../../cs3d/playerModels.js';
@@ -92,6 +92,8 @@ const DEG = Math.PI / 180;
  * that compiles far slower than measured, not a target.
  */
 const WARM_MAX_MS = 20000;
+/** Longest the boot screen waits on the agent and viewmodel packs. A slow pack still gets the map. */
+const PEOPLE_MAX_MS = 8000;
 
 /** Yield to the event loop without the 4 ms clamp (or a hidden tab's 1 s one). */
 function yieldNow() {
@@ -108,6 +110,8 @@ const frameStamp = { sky: 0, world: 0, bloom: 0, vm: 0, bodies: 0, total: 0 };
 const RAD = 180 / Math.PI;
 
 const TEAM_COLOR = { T: 0xd9a24a, CT: 0x5b87e0 };
+/** Stands in for a missing event list, so "the same list as last frame" stays true. */
+const NO_EVENTS = Object.freeze([]);
 
 /** Scratch for the viewmodel's ambient sample; see updateViewModel. */
 const _vmCube = new Float32Array(18);
@@ -136,14 +140,19 @@ const ORBIT_MAX = 500;
  * @param {object} opts
  * @param {number} [opts.pixelRatio]  canvas pixels per CSS pixel; the screen's (up to 2) by default.
  *   An offscreen GIF render fixes it so the picture is the same size on any screen.
+ * @param {(reason: string) => void} [opts.onFailed]  the scene died after start() returned to its
+ *   caller's control, e.g. the GPU device was lost. The host drops the view and can build another.
  */
-export function createView3d({ slug, onModeChange, sampleSlot, tickRange, pixelRatio = null }) {
+export function createView3d({ slug, onModeChange, onFailed = null, sampleSlot, tickRange, pixelRatio = null }) {
   const canvas = document.createElement('canvas');
   canvas.className = 'rv-3d-canvas';
 
+  let disposed = false;
   let renderer = null;
   /** One GPU submit per frame (threePatches.js); null on WebGL. */
   let frameSubmits = null;
+  /** What lets the renderer be collected once it is disposed (threePatches.js). */
+  let renderObjects = null;
   let scene = null;
   let camera = null;
   let pack = null;
@@ -184,6 +193,33 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange, pixelR
   let lastNow = 0;
   /** A GIF is being captured: the live loop is stopped and frames are drawn on the capture's clock. */
   let capturing = false;
+  /** The box the canvas was last fitted to; see resize(). */
+  let sizedW = 0;
+  let sizedH = 0;
+  const faultsSeen = new Set();
+
+  /**
+   * A fault in the scene costs that frame and nothing else. The timeline's clock
+   * calls in here, and the radar and the transport have to outlive whatever goes
+   * wrong on this side. Each distinct fault logs once, not 60 times a second.
+   */
+  function reportFault(where, err) {
+    const key = `${where}: ${err?.message || err}`;
+    if (faultsSeen.has(key)) return;
+    faultsSeen.add(key);
+    console.error(`view3d: ${key}`, err);
+  }
+
+  /** The scene cannot go on. What happens next is the host's call. */
+  function fail(reason) {
+    if (failed || disposed) return;
+    failed = String(reason);
+    ready = false;
+    syncLoop();
+    console.error(`view3d: ${failed}`);
+    onFailed?.(failed);
+  }
+
   let altHeld = false;
   let corpseRound = '';
 
@@ -212,6 +248,9 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange, pixelR
   // (src/cs3d/playerModels.js). Shared with the explorer; one download per
   // page. Until it lands — or without the pack — the placeholder cylinders draw.
   const models = sharedPlayerModels();
+  const probeGridOf = () => pack?.probeGrid || null;
+  /** Whose light the shared models stood in before this view: an offscreen GIF must hand them back. */
+  let probeGridBefore = null;
 
   // The hands and the gun in them (src/cs3d/viewModel.js), over the pack
   // scripts/cs3d-weapons.mjs builds. POV only: in third person, fly or walk
@@ -366,8 +405,13 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange, pixelR
     }
   }
   let nadeRound = null;
+  /** The grenade list applyNades last handed over; see the note there. */
+  let nadeList = null;
   let dropSig = '';
   const dropPosCache = new Map();
+  /** frame.events.items in tick order, kept as long as that array lives: desiredDrops runs every frame. */
+  let dropItemsOf = null;
+  let dropItems = [];
   let doorOpenAt = new Map();
   let doorScanKey = '';
   let ixTick = null;
@@ -481,6 +525,15 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange, pixelR
     bulletAssets.load();
 
     await renderer.init();
+    if (disposed) return;
+    // A driver reset, a sleep and wake, a GPU out of memory. three r169 does not
+    // watch for this, and from then on every frame draws nothing without a word:
+    // a frozen picture over a clock that keeps running. Our own dispose() destroys
+    // the device on purpose, which is the one loss that is not news.
+    renderer.backend?.device?.lost?.then((info) => {
+      if (!disposed) fail(info?.message || 'The GPU device was lost');
+    });
+    renderObjects = trackRenderObjects(renderer);
     patchWebGPUPartialAttributeUpload(renderer);
     const repaired = patchNodeMaterialTypeLookup(renderer, THREE);
     if (repaired) {
@@ -505,6 +558,8 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange, pixelR
     const mapName = cs3dMap(slug)?.name || slug;
     // Held past the download: the shaders are built behind it (see below).
     boot = createBootScreen(container, mapName, slug, { hold: true });
+    // The viewer may already be back on the radar; hide() could not reach this.
+    boot.el.hidden = !visible;
 
     pack = new MapPack({
       slug,
@@ -534,7 +589,9 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange, pixelR
     // look controller with the same knobs applied at the same points, so the
     // picture is the explorer's — same sun, same probe, same grade.
     const manifest = await pack.fetchManifest();
+    if (disposed) return;
     const post = await loadPostLut(pack, manifest);
+    if (disposed) return;
     const knobs = installMapGrade(renderer, new URLSearchParams(), post);
     const look = createLook({ scene, getPack: () => pack, getLighting: () => lighting, slug, knobs });
     look.applyAll(); // the explorer's panel sets its defaults here, before the lighting exists
@@ -560,8 +617,9 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange, pixelR
           xray.render(camera, _xraySubjects);
           drew = true;
         }
-        if (mode === 'pov' && viewModel.ready) {
-          viewModel.visible = true;
+        // updateViewModel has already decided: a player who is dead has no gun
+        // to draw, even while the camera holds on where they stood.
+        if (mode === 'pov' && viewModel.ready && viewModel.visible) {
           viewModel.group.visible = true;
           vmPass.render();
           drew = true;
@@ -611,13 +669,14 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange, pixelR
     for (const b of bodies) (pack.world || scene).add(b.group);
     // The agents stream alongside the tiles, not ahead of them, and stand in
     // the map's own baked light (mapLoader.js ProbeGrid) like its props do.
-    models.getProbeGrid = () => pack?.probeGrid || null;
+    probeGridBefore = models.getProbeGrid;
+    models.getProbeGrid = probeGridOf;
     models.load();
     // `ViewModel.ready` is "has a pair of hands", and the hands are only built
     // by setSide — so without this call the viewmodel would never become ready
     // and updateViewModel would never reach the setSide that would have made it.
-    vmAssets.load().then((ok) => {
-      if (ok === false) return;
+    const handsIn = vmAssets.load().then((ok) => {
+      if (ok === false || disposed) return;
       viewModel.setSide('T');
       viewModel.setWeapon('knife', { draw: false });
       console.log(`cs3d: viewmodel ready (${Object.keys(vmAssets.manifest?.weapons || {}).length} weapons)`);
@@ -630,7 +689,7 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange, pixelR
     // frame, instead of all of them on the first frame after the last byte.
     // The screen lifts on a textured, compiled map rather than on flat
     // stand-in colours followed by seconds of stutter.
-    resize();
+    resize(true);
     const warm = createShaderWarmup({
       batches: () => pack.batches.values(),
       ready: (b) => pack.materials?.final?.get(b.userData?.matId) === b.material,
@@ -650,8 +709,8 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange, pixelR
     );
     let settledAt = 0;
     for (;;) {
+      if (disposed || !renderer || pack.aborted) return;
       if (loadError) throw loadError;
-      if (!renderer || pack.aborted) return;
       const settled = geometryIn && pack.materials?.settled !== false;
       if (settled && !settledAt) settledAt = performance.now();
       const left = warm.step({ all: settled });
@@ -667,10 +726,26 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange, pixelR
       else await new Promise((r) => setTimeout(r, settled ? 4 : 12));
     }
     await loading;
+    if (disposed) return;
+    // The people as well. Nothing has drawn the agents or the gun yet, and they
+    // were the freeze: with the screen lifted, the first frame with them in it
+    // sent the GPU off to compile their pipelines and upload their textures, and
+    // no animation frame fires until that is done. The main thread sat idle for
+    // ~1.7 s of playback standing still (no shader cache) right after the switch.
+    await Promise.race([Promise.all([models.load(), handsIn]), new Promise((r) => setTimeout(r, PEOPLE_MAX_MS))]);
+    if (disposed) return;
+    ready = true;
+    applyFrame();
+    try {
+      updateViewModel(0);
+    } catch (err) {
+      reportFault('viewmodel warm-up', err);
+    }
     // One whole frame behind the screen: the warm-up skipped the composite,
     // the bloom chain and the overlay, and their pipelines (and any tile
     // uploads still pending) belong here rather than in the first frame seen.
-    mapRenderer.render(camera);
+    if (frameSubmits) frameSubmits.run(drawPasses);
+    else drawPasses();
     // The CPU side is done; the GPU may not be. On the first open after an
     // update (the browser's shader cache is cold) it is still compiling and
     // uploading what the warm-up handed it for a second or so, and lifting
@@ -679,6 +754,7 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange, pixelR
     const device = renderer.backend?.device;
     if (device?.queue?.onSubmittedWorkDone) {
       await Promise.race([device.queue.onSubmittedWorkDone(), new Promise((r) => setTimeout(r, 4000))]);
+      if (disposed) return;
     }
     if (DEBUG_3D) {
       // `?c3debug=1`: the scene for the console, and a frame timer that does
@@ -701,15 +777,26 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange, pixelR
     }
     if (pack.sun) nadeEffects.setLight({ ...pack.sun, ambient: lighting.skyAmbient });
     boot.finish();
-    ready = true;
-    resize();
+    resize(true);
   }
 
-  function resize() {
+  /**
+   * Fit the canvas to its box.
+   *
+   * Nothing to do when the box is the same, and that is the usual case: every
+   * switch into 3D comes through here, and reallocating the swap chain and the
+   * whole bloom chain to arrive at the size they already are was a hitch on the
+   * one action that is meant to be instant. `force` is for boot, when passes that
+   * did not exist at the last call need telling.
+   */
+  function resize(force = false) {
     if (!renderer || !canvas.parentElement) return;
     const r = canvas.parentElement.getBoundingClientRect();
     const w = Math.max(1, Math.round(r.width));
     const h = Math.max(1, Math.round(r.height));
+    if (!force && w === sizedW && h === sizedH) return;
+    sizedW = w;
+    sizedH = h;
     renderer.setSize(w, h, false);
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
@@ -1343,6 +1430,14 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange, pixelR
 
   function applyFrame() {
     if (!ready || !frame) return;
+    try {
+      poseFrame();
+    } catch (err) {
+      reportFault('frame update', err);
+    }
+  }
+
+  function poseFrame() {
     const live = liveSlots();
     const follow = mode === 'pov' || mode === 'third';
     const tick = frame.tick;
@@ -1597,14 +1692,13 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange, pixelR
 
   function desiredDrops(tick) {
     const floor = [];
-    const items = frame.events?.items || [];
-    const ordered = items.length
-      ? items
-          .map((e, i) => ({ e, i }))
-          .filter(({ e }) => e.tick <= tick)
-          .sort((a, b) => a.e.tick - b.e.tick || a.i - b.i)
-      : [];
-    for (const { e, i } of ordered) {
+    const items = frame.events?.items || NO_EVENTS;
+    if (items !== dropItemsOf) {
+      dropItemsOf = items;
+      dropItems = items.map((e, i) => ({ e, i })).sort((a, b) => a.e.tick - b.e.tick || a.i - b.i);
+    }
+    for (const { e, i } of dropItems) {
+      if (e.tick > tick) break;
       const name = bareWeapon(e.item) || e.item;
       if (!name || isGrenade(name) || name === 'c4') continue;
       if (e.op === 'remove' && (isGun(name) || name === 'taser')) {
@@ -1659,10 +1753,15 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange, pixelR
   /** The round's utility, drawn with the practice engine rather than placeholders. */
   function applyNades() {
     if (!demoNades || !frame) return;
-    const list = frame.events?.grenades || [];
+    const list = frame.events?.grenades || NO_EVENTS;
     const key = frame.roundKey || '';
-    if (key !== nadeRound) {
+    // The list as well as the round. A round entered before its data has arrived
+    // gets a holding paint first, from the round summary with no events in it, and
+    // keying on the round alone kept that empty list for the whole round: no
+    // smokes, no fires and no flashes until the round was left and come back to.
+    if (key !== nadeRound || list !== nadeList) {
       nadeRound = key;
+      nadeList = list;
       demoNades.setEvents(list, frame.tickRate || 64);
       dropPosCache.clear();
       dropSig = '';
@@ -1719,7 +1818,23 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange, pixelR
 
   function loop(now) {
     raf = requestAnimationFrame(loop);
-    drawFrame(now);
+    try {
+      drawFrame(now);
+    } catch (err) {
+      reportFault('frame draw', err);
+    }
+  }
+
+  /** The render loop runs while there is a finished scene on screen to draw, and only then. */
+  function syncLoop() {
+    const want = ready && visible && !capturing && !failed && !disposed;
+    if (want && !raf) {
+      lastNow = 0;
+      raf = requestAnimationFrame(loop);
+    } else if (!want && raf) {
+      cancelAnimationFrame(raf);
+      raf = 0;
+    }
   }
 
   function drawFrame(now) {
@@ -1832,9 +1947,8 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange, pixelR
     // copies it.
 
     beginCapture() {
-      cancelAnimationFrame(raf);
-      raf = 0;
       capturing = true;
+      syncLoop();
       lastNow = 0;
     },
     /** Draw one frame at `nowMs` on the capture clock. Returns the canvas holding it. */
@@ -1846,7 +1960,7 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange, pixelR
       if (!capturing) return;
       capturing = false;
       lastNow = 0;
-      if (renderer && ready && !failed) loop();
+      syncLoop();
     },
     /** How white a flashbang has the screen, 0 to 1. It is a DOM overlay, so a capture paints it in itself. */
     get flash() {
@@ -1859,7 +1973,7 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange, pixelR
 
     /** Create the scene. Safe to call once; later calls are no-ops. */
     async start(container) {
-      if (renderer || failed) return;
+      if (renderer || failed || disposed) return;
       container.appendChild(canvas);
       flashOverlay = document.createElement('div');
       flashOverlay.className = 'c3-flash';
@@ -1883,10 +1997,14 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange, pixelR
       window.addEventListener('blur', onAltBlur);
       try {
         await bootScene(container);
+        if (disposed) return;
         applyFrame();
-        loop();
+        syncLoop();
       } catch (err) {
+        // Closed during the boot: whatever that broke is not worth reporting.
+        if (disposed) return;
         failed = String(err?.message || err);
+        ready = false;
         console.error('view3d: boot failed', err);
         boot?.finish();
       }
@@ -1911,23 +2029,33 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange, pixelR
       visible = true;
       canvas.hidden = false;
       if (flashOverlay) flashOverlay.hidden = false;
+      if (boot) boot.el.hidden = false;
       setCrosshairVisible(true);
       if (matchHud) matchHud.el.hidden = !hudOn;
-      if (isFree()) controls.setEnabled(true);
+      if (isFree()) controls?.setEnabled(true);
       syncPointerCursor();
       resize();
+      updateKeypresses();
+      syncLoop();
     },
     hide() {
       visible = false;
       canvas.hidden = true;
       if (flashOverlay) flashOverlay.hidden = true;
+      // The load carries on behind the radar, but its screen goes: it covers the
+      // whole stage, transport included, and leaving it up over the radar is what
+      // made a demo that was only still downloading a map look like it would not
+      // play at all.
+      if (boot) boot.el.hidden = true;
       setCrosshairVisible(false);
       if (matchHud) matchHud.el.hidden = true;
       xray?.updateLabels(camera, []);
       controls?.setEnabled(false);
       syncPointerCursor();
+      updateKeypresses();
+      syncLoop();
     },
-    resize,
+    resize: () => resize(),
 
     /**
      * Cycle the selected player. `dir` +1 is left click (next), -1 is right
@@ -1985,6 +2113,7 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange, pixelR
      * @returns {boolean}
      */
     pointerDown(button) {
+      if (!ready) return false;
       if (isFree() && !altHeld && controls && !controls.locked) {
         controls.requestLock();
         return true;
@@ -2016,37 +2145,62 @@ export function createView3d({ slug, onModeChange, sampleSlot, tickRange, pixelR
     },
 
     dispose() {
+      if (disposed) return;
+      disposed = true;
+      visible = false;
+      ready = false;
       cancelDeathFollow();
-      cancelAnimationFrame(raf);
+      syncLoop();
       window.removeEventListener('keydown', onAlt);
       window.removeEventListener('keyup', onAlt);
       window.removeEventListener('blur', onAltBlur);
-      controls?.dispose();
-      crosshair?.remove();
+      const device = renderer?.backend?.device;
+      // One at a time: a subsystem that throws while it is being torn down must
+      // not leave the GPU device alive, or the host's own teardown unfinished.
+      const steps = [
+        () => controls?.setEnabled(false),
+        () => controls?.dispose(),
+        () => crosshairXh?.dispose(),
+        () => crosshair?.remove(),
+        () => flashOverlay?.remove(),
+        () => bodies.forEach((b) => b.model?.dispose()),
+        () => {
+          if (models.getProbeGrid === probeGridOf) models.getProbeGrid = probeGridBefore || (() => null);
+        },
+        () => bodyShadows?.dispose(),
+        () => xray?.dispose(),
+        () => matchHud?.el?.remove(),
+        () => keysEl?.remove(),
+        () => canvas.parentElement?.classList.remove('is-match', 'is-pointer-lock'),
+        () => viewModel.dispose(),
+        () => demoNades?.dispose(),
+        () => nadeEffects?.dispose(),
+        () => dropped?.dispose(),
+        () => interactives?.dispose(),
+        () => shooting?.dispose(),
+        () => worldShots?.dispose(),
+        () => decals?.dispose(),
+        () => tracers?.dispose(),
+        () => pack?.dispose?.(),
+        () => frameSubmits?.dispose(),
+        () => renderObjects?.release(),
+        () => renderer?.dispose?.(),
+        // three's dispose() leaves the device up, and with it every GPU resource
+        // nobody freed by hand: lightmaps, sky, shadow maps, render targets.
+        () => device?.destroy?.(),
+        () => boot?.remove(),
+        () => canvas.remove()
+      ];
+      for (const step of steps) {
+        try {
+          step();
+        } catch (err) {
+          reportFault('dispose', err);
+        }
+      }
       crosshairXh = null;
-      flashOverlay?.remove();
-      for (const b of bodies) b.model?.dispose();
-      bodyShadows?.dispose();
-      xray?.dispose();
-      matchHud?.el?.remove();
-      keysEl?.remove();
       keysEl = null;
-      canvas.parentElement?.classList.remove('is-match');
-      viewModel.dispose();
-      demoNades?.dispose();
-      nadeEffects?.dispose();
-      dropped?.dispose();
-      interactives?.dispose();
-      shooting?.dispose();
-      worldShots?.dispose();
-      decals?.dispose();
-      tracers?.dispose();
-      pack?.dispose?.();
-      renderer?.dispose?.();
-      boot?.remove();
-      canvas.remove();
       renderer = null;
-      ready = false;
     }
   };
 }

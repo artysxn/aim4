@@ -51,7 +51,8 @@ export class Crosshair {
     this._fillParent = !!opts.fillParent;
     this._scaleToResolution = opts.scaleToResolution !== false;
 
-    window.addEventListener('resize', () => this.draw());
+    this._onResize = () => this.draw();
+    window.addEventListener('resize', this._onResize);
     if (this._fillParent && typeof ResizeObserver !== 'undefined') {
       this._ro = new ResizeObserver(() => this.draw());
       this._ro.observe(this.canvas.parentElement || this.canvas);
@@ -62,6 +63,13 @@ export class Crosshair {
     });
     settings.onDraftChange(() => this.drawPreview());
     this.setVisible(false);
+  }
+
+  /** For a crosshair that goes away with its page section (the timeline's 3D view). */
+  dispose() {
+    window.removeEventListener('resize', this._onResize);
+    this._ro?.disconnect();
+    this._ro = null;
   }
 
   setVisible(v) {

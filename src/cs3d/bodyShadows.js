@@ -175,8 +175,10 @@ export class BodyShadows {
   }
 
   dispose() {
+    // The target takes its depth texture with it. Disposing that again has three
+    // destroy a GPU texture it already dropped, and it throws, which is what used
+    // to stop the whole replay viewer from closing once 3D had drawn a frame.
     this.target.dispose();
-    this.depth.dispose();
     this.override.dispose();
   }
 }

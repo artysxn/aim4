@@ -423,6 +423,7 @@ button.rp-side-name:hover {
   border-radius: 4px;
   background: var(--accent);
   color: #fff;
+  text-decoration: none;
   cursor: pointer;
 }
 
@@ -10962,6 +10963,9 @@ table.rp-mine-table td.rp-mine-match {
   right: 16px;
   bottom: calc(var(--rv-chrome-h, 60px) + var(--rv-keys-inset, 10px) - 50px);
   z-index: 6;
+  /* It still lands on the roster in 3D and on shorter windows, and text printed
+     over text reads as neither. A click dismisses it. */
+  background: rgba(12, 12, 12, 0.94);
 }
 
 /* ---- Two-handle range slider (lib/rangeSlider.js) ------------------------ */
@@ -14179,6 +14183,14 @@ a.ua-link:visited {
 .rv-map > .c3-boot {
   z-index: 8;
   pointer-events: auto;
+}
+/* display:flex in cs3d.css outranks the UA [hidden] rule. */
+.rv-map > .c3-boot[hidden] {
+  display: none;
+}
+/* The clock keeps running while a map loads, so what controls it stays reachable. */
+.rv-map.is-3d .rv-transport-anchor {
+  z-index: 9;
 }
 .rv-3d-canvas[hidden] {
   display: none;

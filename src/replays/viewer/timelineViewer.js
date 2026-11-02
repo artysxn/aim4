@@ -54,7 +54,7 @@ import {
   prepareControlField,
   resetZoneVisionCache
 } from '../zones/zoneOverlay.js';
-import { buildMapControlSeries } from '../zones/mapControl.js';
+import { mapControlSeriesSteps } from '../zones/mapControl.js';
 import { RADAR_SIZE, worldToRadar } from './mapCalibration.js';
 import helmetSvg from '../../icons/helmet.svg?url';
 import kevlarSvg from '../../icons/kevlar.svg?url';
@@ -937,14 +937,17 @@ export function createTimelineViewer({
   /** Last /3d payload: dataReady, mapReady, upgradeable, job. */
   let avail3d = null;
   let poll3d = 0;
+  /** The map the live 3D scene was built for. */
+  let view3dSlug = null;
+  /** Why the 3D view last gave up, for the button. Cleared by trying again. */
+  let failed3d = '';
+  /** Settles when the 3D scene being built is up or has given up; null otherwise. */
+  let booting3d = null;
 
   function resolveMapSlug() {
-    return (
-      avail3d?.mapSlug ||
-      map3dSlug ||
-      cs3dMap(activeMeta?.map || rounds[0]?.map || '')?.slug ||
-      null
-    );
+    // The round on screen, not the first one: a selection can span maps.
+    const code = rounds[activeIndex]?.map || activeMeta?.map || rounds[0]?.map || '';
+    return avail3d?.mapSlug || cs3dMap(code)?.slug || (code ? null : map3dSlug);
   }
 
   function cs3dAssetBase() {
@@ -1006,8 +1009,13 @@ export function createTimelineViewer({
     if (ready) {
       // The icon shows where you would GO, not where you are.
       icon3dEl.innerHTML = icon(mode3d ? view2dIcon : view3dIcon);
-      toggle3dBtn.title = mode3d ? 'Switch to 2D radar' : 'Switch to 3D';
-      note3dEl.hidden = true;
+      toggle3dBtn.title = mode3d
+        ? 'Switch to 2D radar'
+        : failed3d
+          ? `3D stopped: ${failed3d.replace(/\.+$/, '')}. Click to try again`
+          : 'Switch to 3D';
+      note3dEl.hidden = !failed3d;
+      if (failed3d) note3dEl.textContent = '3D failed, retry';
     } else {
       icon3dEl.innerHTML = icon(view3dIcon);
       note3dEl.hidden = false;
@@ -1075,63 +1083,120 @@ export function createTimelineViewer({
     if (name) spectatingNameEl.textContent = name;
   }
 
+  /** Let go of the 3D scene and everything it holds on the GPU. */
+  function discardView3d() {
+    const dead = view3d;
+    view3d = null;
+    view3dSlug = null;
+    booting3d = null;
+    dead?.hide();
+    dead?.dispose();
+  }
+
+  /** The scene cannot go on: back to the radar, and the button says why. */
+  function leave3d(reason = '') {
+    mode3d = false;
+    immerse3d = false;
+    failed3d = reason;
+    discardView3d();
+    sync3dButtons();
+    gifCreator?.viewChanged();
+    if (!destroyed) draw();
+  }
+
+  async function build3d(slug) {
+    // Loaded on demand: three.js and the map loader are a large chunk, and
+    // most sessions never leave the radar.
+    toggle3dBtn.classList.add('is-loading');
+    try {
+      const { createView3d } = await import('./view3d.js');
+      if (destroyed || !mode3d) return;
+      const created = createView3d({
+        slug,
+        sampleSlot: (slot, atTick, out) => {
+          const tr = store.track(files[activeIndex]);
+          if (!tr) return null;
+          return tr.sample(slot, atTick, out || {});
+        },
+        tickRange: () => {
+          const tr = store.track(files[activeIndex]);
+          if (!tr) return null;
+          return { first: tr.firstTick, last: tr.lastTick, stride: tr.stride };
+        },
+        onModeChange: () => {
+          sync3dButtons();
+          syncPovHighlight();
+        },
+        onFailed: (reason) => {
+          if (view3d === created) leave3d(reason);
+        }
+      });
+      view3d = created;
+      view3dSlug = slug;
+      const starting = created.start(mapEl);
+      created.setKeypresses(mechanicsOn);
+      created.show();
+      sync3dButtons();
+      // Paused, nothing else would hand it the moment on screen before it lifts its
+      // boot screen, and it draws the players once behind that to get them compiled.
+      draw();
+      await starting;
+      // Only if it is still the view in use: it may have been replaced or closed
+      // while it loaded, and that one's failure is nobody's business now.
+      if (created.failed && view3d === created) leave3d(created.failed);
+    } finally {
+      toggle3dBtn.classList.remove('is-loading');
+    }
+  }
+
   async function setMode3d(on) {
     if (on === mode3d) return;
+    // A GIF being captured owns the view until it ends (Escape cancels one).
+    if (gifCapturing) return;
     const slug = resolveMapSlug();
     if (on && !slug) return;
     map3dSlug = slug || map3dSlug;
     mode3d = on;
     if (on) {
-      if (!view3d) {
-        // Loaded on demand: three.js and the map loader are a large chunk, and
-        // most sessions never leave the radar.
-        toggle3dBtn.classList.add('is-loading');
-        try {
-          const { createView3d } = await import('./view3d.js');
-          view3d = createView3d({
-            slug: map3dSlug,
-            sampleSlot: (slot, atTick, out) => {
-              const tr = store.track(files[activeIndex]);
-              if (!tr) return null;
-              return tr.sample(slot, atTick, out || {});
-            },
-            tickRange: () => {
-              const tr = store.track(files[activeIndex]);
-              if (!tr) return null;
-              return { first: tr.firstTick, last: tr.lastTick, stride: tr.stride };
-            },
-            onModeChange: () => {
-              sync3dButtons();
-              syncPovHighlight();
-            }
-          });
-          const starting = view3d.start(mapEl);
-          view3d.setKeypresses(mechanicsOn);
-          view3d.show();
-          sync3dButtons();
-          await starting;
-        } finally {
-          toggle3dBtn.classList.remove('is-loading');
-        }
-        if (view3d.failed) {
-          mode3d = false;
-          view3d.hide();
-          view3d.dispose();
-          view3d = null;
-          sync3dButtons();
-          if (!destroyed) draw();
-          return;
-        }
-      } else {
+      failed3d = '';
+      if (view3d && view3dSlug !== slug) discardView3d();
+      if (view3d) {
         view3d.show();
+      } else {
+        const building = build3d(slug);
+        booting3d = building;
+        await building;
+        if (booting3d === building) booting3d = null;
+        // It failed and leave3d has already put everything back.
+        if (destroyed || !mode3d) return;
       }
     } else {
       immerse3d = false;
       view3d?.hide();
     }
+    if (destroyed) return;
     sync3dButtons();
     gifCreator?.viewChanged();
-    if (!destroyed) draw();
+    draw();
+  }
+
+  /**
+   * A selection can span maps, and the 3D scene is one map's pack: without this
+   * the next round's players walked around on the first round's map. Rebuilt for
+   * the new map if 3D is showing, dropped until asked for if it is not. Nothing
+   * to do for a whole match, whose rounds all share one.
+   */
+  function sync3dMap() {
+    const slug = resolveMapSlug();
+    if (!view3d || view3dSlug === slug) return;
+    if (!mode3d) {
+      discardView3d();
+    } else if (!slug) {
+      leave3d();
+    } else {
+      leave3d();
+      void setMode3d(true);
+    }
   }
 
   toggle3dBtn.addEventListener('click', (e) => {
@@ -1174,6 +1239,7 @@ export function createTimelineViewer({
   });
 
   const playback = new Playback((pos) => onPosition(pos));
+  playback.onStateChange = () => syncPlayButton();
   const pausePlayback = playback.pause.bind(playback);
   playback.pause = () => {
     pausePlayback();
@@ -1639,6 +1705,7 @@ export function createTimelineViewer({
     // is not. Coach still waits for the full pair — analysing earlier caches a
     // series built from the previous round's meta against this round's track.
     activeMeta = resident || fallbackMeta(rounds[index]);
+    sync3dMap();
     if (resident) adoptRoundMeta(index, resident);
     else markActiveRound();
     realignPovToFollowSide();
@@ -1883,6 +1950,9 @@ export function createTimelineViewer({
     return best ? { aSlot: best.aSlot, bSlot: best.bSlot } : null;
   }
 
+  /** The zone network on its way, so every caller shares the one request. */
+  let zoneLoading = null;
+
   /** Load map positions (shared zone network) when the overlay is on. */
   async function ensureZoneNetwork() {
     const map = activeMeta?.map || rounds[activeIndex]?.map || '';
@@ -1897,7 +1967,21 @@ export function createTimelineViewer({
       if (coachSmokesMap !== map) await ensureCoachSmokes(map);
       return zoneNetwork;
     }
+    // The win chart asks every frame until this lands. Without this each ask was
+    // another request, and each new request threw away the answer to the one
+    // before: ~100 a second that kept going for as long as the demo played,
+    // holding up everything else on the connection, the 3D map pack included.
+    if (zoneLoading?.map === map) return zoneLoading.promise;
     const load = ++zoneLoadId;
+    const loading = { map, promise: null };
+    zoneLoading = loading;
+    loading.promise = fetchZoneNetwork(map, load).finally(() => {
+      if (zoneLoading === loading) zoneLoading = null;
+    });
+    return loading.promise;
+  }
+
+  async function fetchZoneNetwork(map, load) {
     try {
       const [net] = await Promise.all([fetchZones(map), ensureCoachSmokes(map)]);
       if (destroyed || load !== zoneLoadId) return zoneNetwork;
@@ -1905,6 +1989,7 @@ export function createTimelineViewer({
       zoneNetworkMap = map;
       zonePresenceCache.clear();
       mapControlCache.clear();
+      mapControlJob = null;
       // Win% series may have been built without map-control; rebuild with it.
       coachCache.clear();
       return zoneNetwork;
@@ -2658,10 +2743,10 @@ export function createTimelineViewer({
   mapEl.addEventListener('pointerdown', (e) => {
     // Everything docked on top of the map — the clock, the rosters, the
     // transport, the drawing palette — is a control, not somewhere to start a
-    // pan or a stroke from.
+    // pan or a stroke from. The 3D boot screen is not somewhere to click at all.
     if (
       e.target.closest?.(
-        '.rv-clock-row, .rv-loading, .rv-team-col, .rv-transport, .rv-tools, .rv-viewmode, .rv-feed-stack'
+        '.rv-clock-row, .rv-loading, .rv-team-col, .rv-transport, .rv-tools, .rv-viewmode, .rv-feed-stack, .c3-boot'
       )
     ) {
       return;
@@ -4034,6 +4119,8 @@ export function createTimelineViewer({
       is3d: () => mode3d && Boolean(view3d),
       async set3d(on) {
         await setMode3d(on);
+        // Already switched and still loading: setMode3d had nothing to wait for.
+        if (on) await booting3d;
         return on ? Boolean(mode3d && view3d?.ready) : !mode3d;
       },
       view3d: () => (mode3d ? view3d : null),
@@ -4893,10 +4980,50 @@ export function createTimelineViewer({
     syncMapControlChart(at);
   }
 
+  /**
+   * The series being built, at most one, for the round on screen. Done in one go
+   * this froze playback for up to a second on the first visit to every round;
+   * in slices between frames, the chart simply fills in when it is ready.
+   */
+  let mapControlJob = null;
+  const MAP_CONTROL_SLICE_MS = 5;
+  /** The chart is waiting on the zone network. */
+  let mapControlWaiting = false;
+
+  function buildMapControlInSlices(file, args) {
+    const job = { file, steps: mapControlSeriesSteps(args) };
+    mapControlJob = job;
+    const slice = () => {
+      if (destroyed || mapControlJob !== job) return;
+      if (!chartOn) {
+        mapControlJob = null;
+        return;
+      }
+      const until = performance.now() + MAP_CONTROL_SLICE_MS;
+      let at;
+      try {
+        do at = job.steps.next();
+        while (!at.done && performance.now() < until);
+      } catch {
+        mapControlJob = null;
+        return;
+      }
+      if (!at.done) {
+        requestAnimationFrame(slice);
+        return;
+      }
+      mapControlJob = null;
+      mapControlCache.set(file, at.value);
+      if (files[activeIndex] === file) syncMapControlChart(sequence.locate(playback.position).tick);
+    };
+    requestAnimationFrame(slice);
+  }
+
   function mapControlFor(index) {
     const file = files[index];
     if (!file) return null;
     if (mapControlCache.has(file)) return mapControlCache.get(file);
+    if (mapControlJob?.file === file) return null;
     // Same trust rule as coachFor: the resolved meta only. Cone-casting the
     // whole track is the most expensive thing a round switch can trigger, so
     // it runs once, from the real meta, and the cache survives revisits.
@@ -4910,9 +5037,8 @@ export function createTimelineViewer({
     if (!renderer.image || !mapCode) return null;
     prepareZones(net, mapCode);
     if (!hasControlField(net)) return null;
-    let series;
     try {
-      series = buildMapControlSeries({
+      buildMapControlInSlices(file, {
         meta: roundMeta,
         track,
         geom: net._fieldGeom,
@@ -4924,10 +5050,9 @@ export function createTimelineViewer({
         })
       });
     } catch {
-      return null;
+      /* no chart for this round */
     }
-    if (series?.length) mapControlCache.set(file, series);
-    return series;
+    return null;
   }
 
   function mapSampleAt(series, tick) {
@@ -5070,10 +5195,22 @@ export function createTimelineViewer({
     if (mapCtLabel) mapCtLabel.textContent = '-';
     if (mapTLabel) mapTLabel.textContent = '-';
     if (mapNeuLabel) mapNeuLabel.textContent = '-';
-    // Chart works without the positions overlay — load the zone network on demand.
+    // Not the last round's picture while this one's is on its way.
+    if (lastMapSeries) {
+      mapCanvas.getContext('2d').clearRect(0, 0, mapCanvas.width, mapCanvas.height);
+      lastMapSeries = null;
+      lastMapDraw = '';
+    }
     const file = files[activeIndex];
+    // Under way: its last slice paints it.
+    if (mapControlJob?.file === file) return;
+    // Chart works without the positions overlay — load the zone network on demand.
+    // Once: this runs every frame, and one answer is all it needs.
+    if (mapControlWaiting) return;
+    mapControlWaiting = true;
     const wantTick = tick;
     ensureZoneNetwork().then(() => {
+      mapControlWaiting = false;
       if (destroyed || !chartOn || files[activeIndex] !== file) return;
       mapControlCache.delete(file);
       const built = mapControlFor(activeIndex);
@@ -5900,14 +6037,23 @@ export function createTimelineViewer({
 
   // ---- transport ----------------------------------------------------------
 
-  playBtn.addEventListener('click', () => {
-    const live = liveOffsetOf(activeIndex);
-    if (!playback.playing && freezeSkip && playback.position < live) {
-      playback.seek(live, { emit: false });
+  /** Play or pause: the button and the Space bar are one action. */
+  function togglePlayback() {
+    if (!playback.playing && !playback.rewinding) {
+      const live = liveOffsetOf(activeIndex);
+      // Stopped at the very end of the selection, where play would have nothing
+      // to do and stop again on its first frame: watch that round again instead.
+      if (playback.position >= playback.duration) {
+        playback.seek(live, { emit: false });
+      } else if (freezeSkip && playback.position < live) {
+        playback.seek(live, { emit: false });
+      }
     }
     playback.toggle();
     syncPlayButton();
-  });
+  }
+
+  playBtn.addEventListener('click', togglePlayback);
 
   function syncPlayButton() {
     playBtn.classList.toggle('playing', playback.playing);
@@ -6011,15 +6157,17 @@ export function createTimelineViewer({
   }
 
   function onKey(e) {
-    if (e.target.matches('input, textarea, select')) return;
+    if (e.target.matches?.('input, textarea, select')) return;
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
 
     if (e.code === 'Space' || key === ' ') {
       if (mode3d && view3d?.isFree && document.pointerLockElement) return;
       e.preventDefault();
-      playback.toggle();
-      syncPlayButton();
+      // A press held a moment too long repeats, and flipped play and pause at the
+      // keyboard's repeat rate: it landed on whichever one the release caught.
+      if (e.repeat) return;
+      togglePlayback();
       return;
     }
     if (key === 'f') {
@@ -6236,6 +6384,8 @@ export function createTimelineViewer({
     el,
     /** Escape ends a GIF area pick or a capture before it closes the viewer. */
     handleEscape() {
+      // With the mouse captured in free roam, Escape is how it comes back.
+      if (document.pointerLockElement) return true;
       return Boolean(gifCreator?.handleEscape());
     },
     /** Jump to a tick of one round of the list, paused there. */
@@ -6274,6 +6424,15 @@ export function createTimelineViewer({
       offStore();
       chromeObserver?.disconnect();
       mapObserver?.disconnect();
+      chartObserver?.disconnect();
+      // The document holds a media query with a listener for as long as the page
+      // lives, and through this one it held the whole closed viewer: every round's
+      // meta, the radar, the DOM.
+      if (typeof stackedQuery.removeEventListener === 'function') {
+        stackedQuery.removeEventListener('change', onStackedChange);
+      } else {
+        stackedQuery.removeListener?.(onStackedChange);
+      }
       clearTimeout(poll3d);
       // Releases the WebGPU device and the map pack; nothing else will.
       view3d?.dispose();

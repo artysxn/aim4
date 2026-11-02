@@ -67,6 +67,8 @@ export class Playback {
    */
   constructor(onFrame) {
     this.onFrame = onFrame;
+    /** Told whenever `playing` or `rewinding` changes, whoever changed it. */
+    this.onStateChange = null;
     this.position = 0;
     this.duration = 0;
     this.speed = 1;
@@ -95,6 +97,7 @@ export class Playback {
     this.playing = true;
     this._last = performance.now();
     this._raf = requestAnimationFrame(this._tick);
+    this.onStateChange?.();
   }
 
   pause() {
@@ -102,9 +105,11 @@ export class Playback {
       this._resume = false;
       return;
     }
+    const was = this.playing;
     this.playing = false;
     if (this._raf) cancelAnimationFrame(this._raf);
     this._raf = 0;
+    if (was) this.onStateChange?.();
   }
 
   toggle() {
@@ -128,12 +133,14 @@ export class Playback {
       this.rewinding = true;
       this._last = performance.now();
       this._raf = requestAnimationFrame(this._tick);
+      this.onStateChange?.();
       return;
     }
     this.rewinding = false;
     if (this._raf) cancelAnimationFrame(this._raf);
     this._raf = 0;
     if (this._resume) this.play();
+    else this.onStateChange?.();
   }
 
   setSpeed(speed) {
@@ -151,8 +158,14 @@ export class Playback {
 
   _tick(now) {
     if (!this.playing && !this.rewinding) return;
-    // A tab that was backgrounded should not fast-forward on return.
-    const dt = Math.min(0.25, (now - this._last) / 1000);
+    // Booked before anything is drawn, because a draw can throw. Booked after,
+    // one bad frame left `playing` true with nothing scheduled: the button said
+    // pause, the picture stood still, and play() returned early because as far
+    // as it knew the transport was running.
+    this._raf = requestAnimationFrame(this._tick);
+    // A tab that was backgrounded should not fast-forward on return. The floor
+    // is for the first tick: a frame's timestamp can predate the play() call.
+    const dt = Math.max(0, Math.min(0.25, (now - this._last) / 1000));
     this._last = now;
     if (this.rewinding) {
       const back = Math.max(0, this.position - dt);
@@ -160,7 +173,6 @@ export class Playback {
         this.position = back;
         this.onFrame(back, -dt);
       }
-      this._raf = requestAnimationFrame(this._tick);
       return;
     }
     let next = this.position + dt * this.speed;
@@ -170,14 +182,16 @@ export class Playback {
       } else {
         next = this.duration;
         this.position = next;
-        this.onFrame(next, dt);
-        this.pause();
+        try {
+          this.onFrame(next, dt);
+        } finally {
+          this.pause();
+        }
         return;
       }
     }
     this.position = next;
     this.onFrame(next, dt);
-    this._raf = requestAnimationFrame(this._tick);
   }
 
   destroy() {

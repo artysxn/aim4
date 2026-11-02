@@ -356,4 +356,22 @@ const smoke = (throwTick, detTick, player = 'p1') => ({
   assert.equal(fx.live[0].side, 'CT');
 }
 
+// The light can change with a smoke standing. The cards are lit by the scene and
+// have no setLight, and asking one for it used to fail the whole 3D boot.
+{
+  const { NadeEffects } = await import('./nadeEffects.js');
+  const { SmokeCards } = await import('./smokeCards.js');
+  const lit = [];
+  const host = {
+    live: [
+      { kind: 'smoke', smoke: Object.create(SmokeCards.prototype), layers: [] },
+      { kind: 'fire', layers: [{ setLight: (l) => lit.push(l) }] }
+    ]
+  };
+  const light = { ambient: 1 };
+  NadeEffects.prototype.setLight.call(host, light);
+  assert.deepEqual(lit, [light]);
+  assert.equal(host._light, light);
+}
+
 console.log('demoNades.test.js OK');

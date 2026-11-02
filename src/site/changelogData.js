@@ -14,6 +14,20 @@
 
 export const CHANGELOG = Object.freeze([
   {
+    date: '2026-10-31',
+    title: '3D viewer: playback keeps playing, the viewer closes again',
+    tag: 'fixed',
+    points: [
+      'Going back to 2D while a map was still loading left the loading screen over the radar and the play button, so the demo looked like it would not play. The screen now goes with the 3D view, the map keeps loading behind the radar, and play stays reachable the whole time.',
+      'Pressing Esc or Back after using 3D could leave the viewer stuck on screen, frozen, with play doing nothing. It now closes every time, and frees the map from memory and from the graphics card, so watching several demos in a row no longer slows down.',
+      'Opening 3D no longer freezes playback for a couple of seconds just after the map appears: the players are made ready behind the loading screen.',
+      'Rounds no longer freeze for up to a second the first time you enter them, in 2D or 3D. The map control chart fills in a moment later instead.',
+      'A playing demo no longer asks the server for the same map data about a hundred times a second until it arrives, which held up everything else loading at the time.',
+      'Smokes, fires and flashes no longer go missing in 3D when you enter a round before its data has loaded. A selection of rounds from different maps now shows each round on its own 3D map.',
+      'If the graphics card resets, the viewer goes back to 2D and says so, and the 3D button rebuilds the view. A press of Space held a moment too long no longer flips between play and pause, and the keypress overlay no longer stays on screen after you go back to 2D.'
+    ]
+  },
+  {
     date: '2026-10-30',
     title: 'Database: average round dominance',
     tag: 'new',

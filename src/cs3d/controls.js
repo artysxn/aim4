@@ -29,6 +29,7 @@ export class Controls {
     this._onMouseMove = this._onMouseMove.bind(this);
     this._onKey = this._onKey.bind(this);
     this._onLockChange = this._onLockChange.bind(this);
+    this._onBlur = () => this._releaseAll();
     this._onCanvasClick = () => {
       if (this.enabled && !this.locked) this.requestLock();
     };
@@ -61,7 +62,7 @@ export class Controls {
     document.addEventListener('mousemove', this._onMouseMove);
     window.addEventListener('keydown', this._onKey);
     window.addEventListener('keyup', this._onKey);
-    window.addEventListener('blur', () => this._releaseAll());
+    window.addEventListener('blur', this._onBlur);
   }
 
   /** Unified sensitivity the HUD shows and the trainer stores. */
@@ -277,5 +278,6 @@ export class Controls {
     document.removeEventListener('mousemove', this._onMouseMove);
     window.removeEventListener('keydown', this._onKey);
     window.removeEventListener('keyup', this._onKey);
+    window.removeEventListener('blur', this._onBlur);
   }
 }

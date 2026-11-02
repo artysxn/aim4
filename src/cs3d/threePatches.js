@@ -514,10 +514,67 @@ export function patchFrameSubmits(renderer) {
       } finally {
         api.end();
       }
+    },
+    /**
+     * The renderer is going away. The flusher set below is module-wide, so
+     * without this it holds the device (and everything alive on it) for good.
+     */
+    dispose() {
+      flush();
+      _frameSubmitFlushers.delete(flushIfWaiting);
+      staging?.destroy();
+      staging = null;
+      stagingSize = 0;
     }
   };
   backend._cs3dFrameSubmits = api;
   return api;
+}
+
+/**
+ * Let a renderer that is going away actually go.
+ *
+ * Every RenderObject listens for its material's `dispose` event, and that listener
+ * holds the object, its scene, camera and renderer. Nothing removes it when the
+ * renderer is disposed, so any material that outlives one renderer pins it for good
+ * along with every geometry it drew: three's private shadow override is one (a
+ * module-level material every shadow draw uses), the shared agents' materials are
+ * more. Measured at ~240 MB of map geometry per viewer opened and closed.
+ *
+ * Call this right after `renderer.init()`, then `release()` before
+ * `renderer.dispose()`. Returns null without the internals it needs.
+ */
+export function trackRenderObjects(renderer) {
+  const objects = renderer?._objects;
+  if (typeof objects?.createRenderObject !== 'function') return null;
+  const live = new Set();
+  const create = objects.createRenderObject.bind(objects);
+  objects.createRenderObject = (...args) => {
+    const ro = create(...args);
+    live.add(ro);
+    const onDispose = ro.onDispose;
+    ro.onDispose = () => {
+      live.delete(ro);
+      onDispose();
+    };
+    return ro;
+  };
+  return {
+    get count() {
+      return live.size;
+    },
+    release() {
+      for (const ro of [...live]) {
+        try {
+          ro.dispose();
+        } catch {
+          // Its bookkeeping may be half gone. Its listener is off by now, and that
+          // is the only part of this anyone needs.
+        }
+      }
+      live.clear();
+    }
+  };
 }
 
 /** One per patched renderer; each flushes its held work if it has any. */
@@ -867,6 +924,11 @@ export function patchStaticRefresh(renderer) {
         st.sig = _sig.slice();
         s.dirty = true;
       }
+      // Scratch, so nothing stays in it. This closure lives as long as the
+      // renderer, three's own module state keeps a disposed renderer around (its
+      // PMREM generator holds the first, its tone-mapping node the last), and one
+      // entry here reached the whole map from there: ~220 MB per renderer.
+      _sig.length = 0;
     }
   }
 

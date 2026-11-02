@@ -354,7 +354,6 @@ export class NadeEffects {
     this._light = light || null;
     for (const fx of this.live) {
       for (const l of fx.layers || []) l.setLight(light);
-      fx.smoke?.setLight(light, light?.ambient);
     }
   }
 

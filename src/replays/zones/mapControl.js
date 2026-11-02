@@ -237,12 +237,14 @@ export function controlShares(field, active = null) {
 }
 
 /**
- * Possession over a whole round for the stacked control chart.
- * Walks forward once, so the sim never re-seeks.
+ * Possession over a whole round for the stacked control chart, one stride per
+ * step. Walks forward once, so the sim never re-seeks. A round is most of a second
+ * of cone-casting, so anything with a frame to protect runs this in slices.
  *
+ * @yields {void} after each stride
  * @returns {Array<{ tick: number, t: number, ct: number, neu: number }>}
  */
-export function buildMapControlSeries({ meta, track, geom, castCone }) {
+export function* mapControlSeriesSteps({ meta, track, geom, castCone }) {
   if (!meta || !track || !geom || !castCone) return [];
   const sim = createControlSimulator({ meta, track, geom, castCone });
   const masks = createActiveMasks(geom);
@@ -255,8 +257,17 @@ export function buildMapControlSeries({ meta, track, geom, castCone }) {
     activeMasksFromStates(meta, scratch, geom, masks);
     const shares = controlShares(field, masks);
     series.push({ tick, t: shares.t, ct: shares.ct, neu: shares.neu });
+    yield;
   }
   return series;
+}
+
+/** The same series in one go. */
+export function buildMapControlSeries(args) {
+  const steps = mapControlSeriesSteps(args);
+  let at = steps.next();
+  while (!at.done) at = steps.next();
+  return at.value;
 }
 
 export { SIDE_CT, SIDE_NONE, SIDE_T };

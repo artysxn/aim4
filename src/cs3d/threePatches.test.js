@@ -17,7 +17,7 @@ globalThis.window ??= globalThis;
 
 const assert = (await import('node:assert/strict')).default;
 const THREE = await import('three/webgpu');
-const { patchNodeMaterialTypeLookup, patchFrameSubmits } = await import('./threePatches.js');
+const { patchNodeMaterialTypeLookup, patchFrameSubmits, trackRenderObjects } = await import('./threePatches.js');
 
 /** three's own lookup, so the test asserts on the code path the renderer takes. */
 const lookup = (renderer, material) => renderer.nodes.library.getMaterialNodeClass(material.type) || null;
@@ -175,6 +175,76 @@ assert.equal(patchNodeMaterialTypeLookup(fakeRenderer([]), null), 0);
   // Not WebGPU: nothing to patch.
   assert.equal(patchFrameSubmits(null), null);
   assert.equal(patchFrameSubmits({ backend: { isWebGPUBackend: false } }), null);
+
+  // Going away: nothing held is lost, and the staging buffer goes with it.
+  const leaving = makeDevice();
+  let destroyed = 0;
+  const createBuffer = leaving.device.createBuffer;
+  leaving.device.createBuffer = (d) => {
+    const b = createBuffer(d);
+    b.destroy = () => destroyed++;
+    return b;
+  };
+  const leavingFrames = patchFrameSubmits({ backend: { isWebGPUBackend: true, device: leaving.device } });
+  const lu = leaving.device.createBuffer({ size: 64, usage: COPY_DST });
+  leavingFrames.begin();
+  frame(leaving, lu, leaving.device.createBuffer({ size: 64, usage: COPY_DST }));
+  const held = leaving.device.queue.submits;
+  leavingFrames.dispose();
+  assert.equal(leaving.device.queue.submits, held + 1, 'what was held is handed over');
+  assert.equal(destroyed, 1, 'the staging buffer is destroyed');
+}
+
+// ---- a disposed renderer must not stay pinned by a material that outlives it ----
+{
+  /** The shape three's RenderObjects has: objects that listen on their material until disposed. */
+  const material = new Set();
+  const bookkeeping = [];
+  const objects = {
+    createRenderObject(name) {
+      const ro = {
+        name,
+        onDispose: () => bookkeeping.push(name),
+        dispose() {
+          material.delete(ro);
+          ro.onDispose();
+        }
+      };
+      material.add(ro);
+      return ro;
+    }
+  };
+  const tracker = trackRenderObjects({ _objects: objects });
+  const a = objects.createRenderObject('a');
+  const b = objects.createRenderObject('b');
+  objects.createRenderObject('c');
+  assert.equal(tracker.count, 3);
+  assert.equal(a.name, 'a', 'creation is passed through');
+
+  // One that three disposed itself is forgotten, and its own cleanup still runs.
+  b.dispose();
+  assert.equal(tracker.count, 2);
+  assert.deepEqual(bookkeeping, ['b']);
+
+  tracker.release();
+  assert.equal(material.size, 0, 'no listener left on the shared material');
+  assert.deepEqual(bookkeeping.sort(), ['a', 'b', 'c']);
+  assert.equal(tracker.count, 0);
+
+  // A failure in one does not stop the sweep.
+  const stubborn = { ...objects };
+  const t2 = trackRenderObjects({ _objects: stubborn });
+  const bad = stubborn.createRenderObject('bad');
+  bad.dispose = () => {
+    material.delete(bad);
+    throw new Error('half gone');
+  };
+  stubborn.createRenderObject('good');
+  t2.release();
+  assert.equal(material.size, 0);
+
+  assert.equal(trackRenderObjects(null), null);
+  assert.equal(trackRenderObjects({}), null);
 }
 
 console.log('threePatches.test.js OK');

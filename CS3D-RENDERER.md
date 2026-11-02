@@ -1,5 +1,63 @@
 # CS3D renderer notes
 
+## Seventh pass (2026-10-31): the replay viewer's 2D/3D switch and lifecycle
+
+"Randomly refuses to play when switching to 3D or 2D" was several bugs that all
+look the same from the outside. None of them threw at the moment of the switch.
+
+- **Boot screen over the radar.** `.c3-boot` covers all of `.rv-map`, transport
+  included, and `hide()` did not touch it, so leaving 3D during a map load left the
+  screen up over 2D with play unreachable. It now hides and shows with the view,
+  and the transport sits above it either way.
+- **Teardown threw, once 3D had drawn a frame** (since 2026-10-08).
+  `BodyShadows.dispose()` freed its depth texture after the render target already
+  had, and three throws on the second free. `destroy()` stops the transport first,
+  so Esc or Back left a viewer on screen with a dead transport that would not close
+  either. `view3d.dispose()` runs each step on its own now and `viewerApp` finishes
+  closing whatever a view's `destroy()` does.
+- **`Playback._tick` booked its next frame after drawing.** One throw left `playing`
+  true with nothing scheduled, and `play()` returned early. It books first now, and
+  a fault in the 3D scene stops at `reportFault`, logged once.
+- **A request storm.** `syncMapControlChart` called `ensureZoneNetwork()` every frame
+  until the network landed, each call was a new fetch, and each new fetch made the
+  answer to the last one stale: 1,569 GETs of a 379 KB file in 15 s of 2D playback,
+  starving itself and queueing everything else on the origin behind it (6 connections),
+  3D pack included. One shared in-flight request now.
+- **Freezes that read as stopping.** Round entry: `buildMapControlSeries` ran in one
+  go on the main thread, 750-1100 ms on every first visit; `mapControlSeriesSteps` now
+  runs in 5 ms slices. After boot: 1.6 of 1.76 s of the worst frame was main thread
+  IDLE, because no rAF fires while the GPU process compiles and uploads the agents and
+  the gun that first appear there. They draw once behind the boot screen now, inside
+  the existing `onSubmittedWorkDone` wait. Measured worst frames: round entry
+  1100/742 -> 256/195 ms; after boot 1764 -> ~400 ms, and the boot is ~2 s longer with
+  a cold shader cache. **A long rAF gap with an idle main thread is the GPU process;
+  a JS profile alone will not show it.**
+
+What a closed viewer used to keep, measured open -> 3D -> close in one page:
+
+| | before | after |
+|---|---|---|
+| GPU | no `device.destroy()` anywhere; a module-level Set held every device | back to baseline each close (~2.3 GB per Dust 2 view) |
+| JS heap | ~270 MB per cycle | ~6 MB per cycle (88 MB after 6) |
+
+The JS holders, all found with heap-snapshot retaining paths: a `matchMedia` listener
+in `timelineViewer`, every RenderObject's `dispose` listener on any material that
+outlives the renderer (three's private shadow override, the shared agents;
+`trackRenderObjects` sweeps them), and `_sig` in `patchStaticRefresh`. three itself
+keeps one disposed renderer each in `PMREMNode._generator` (first) and the
+`toneMappingExposure` node (last): bounded, and harmless once `_sig` is empty.
+
+Also fixed: `applyNades` cached the holding paint's empty grenade list for a whole
+round entered before its data arrived; the keypress overlay stayed on over 2D;
+`NadeEffects.setLight` called a method `SmokeCards` lost in August, fatal with a smoke
+standing; a dead POV's gun kept drawing; a mixed-map selection kept the first map;
+the GPU device being lost is now handled (`onFailed` -> radar, button rebuilds).
+
+**How to test this:** scripted headless Edge with real clicks, a frame counter and
+`?c3debug=1`, reading the DOM (is the scrubber moving, what does `elementFromPoint`
+over play return). Do not hold Playwright element handles across a close
+(`waitForSelector` returns one): the handle pins the closed viewer and reads as a leak.
+
 ## Status after the sixth pass (2026-10-25): frame rate
 
 Dust 2 at 1080p on an RTX 4090 / 7950X ran ~100 fps uncapped, and on a 360 Hz
