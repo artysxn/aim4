@@ -57,6 +57,7 @@ WORKDIR /app
 # and Xvfb for headed Chromium in the container.
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
+    ffmpeg \
     unar \
     libarchive-tools \
     xvfb \

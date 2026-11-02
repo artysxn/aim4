@@ -43,6 +43,7 @@ AIM4_HOST = "0.0.0.0"
 [phases.setup]
 aptPkgs = [
   "...",
+  "ffmpeg",
   "xvfb",
   "xauth",
   "unar",

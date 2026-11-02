@@ -309,14 +309,14 @@ export const DOC_GROUPS = [
         html: `
           <p>The <strong>Create GIF</strong> button in the viewer turns any part of a round into a GIF.</p>
           <ol>
-            <li>Choose <strong>2D</strong> or <strong>3D</strong>. In 2D, <strong>Select area</strong> and drag a box over the part of the radar you want, or keep the whole map. In 3D, follow a player in first or third person, or keep the camera where it is.</li>
+            <li>Choose <strong>2D</strong> or <strong>3D</strong>. In 2D, <strong>Select area</strong> and drag a box over the part of the radar you want, or keep the whole map. In 3D, pick a player to follow in first or third person: that clip is made in the background, so you can stay in 2D and keep watching, and the camera stays on that player for the whole clip, even past their death. <strong>Camera where it is</strong> records the 3D view on screen instead, so it opens that view.</li>
             <li>Pick the part of the round on the slider. It is tied to the round's own timeline: drag either end and the round shows that moment; move the round's timeline and the part moves with it, keeping its length. The white line on the slider is where the round is now.</li>
             <li>Choose the <strong>quality</strong> (1 to 3) and the <strong>FPS</strong>. 2D defaults to 18 FPS and 3D to 24.</li>
             <li>Give it a title and a description. Anything between &lt; and &gt; in the description becomes a link that copies itself, so &lt;setpos 123 456 78; setang 0 90 0&gt; copies that setpos with one click.</li>
             <li>In 3D, tick <strong>Automatically append setpos</strong> (next to Round clock) to add a line for every grenade thrown in the part, such as <code>01:43 dex Flash &lt;setpos ...; setang ... 0&gt;</code>. The position and aim are read the tick before the grenade leaves the thrower's hand, so the setpos stands you on the lineup. The line under the settings counts the grenades it will add.</li>
             <li>Press <strong>Create GIF</strong>.</li>
           </ol>
-          <p>The GIF downloads straight away and is saved to <a href="/bookmarks?tab=gifs">Bookmarks → Saved GIFs</a> with what it shows: the map, the round, both teams with their side and buy, and who won. Bookmarks keep GIFs up to 40 MB; a bigger one still downloads in full, and a smaller copy is made and saved for Bookmarks automatically. The round clock is stamped in the corner unless you switch it off.</p>
+          <p>It is saved to <a href="/bookmarks?tab=gifs">Bookmarks → Saved GIFs</a> with what it shows: the map, the round, both teams with their side and buy, and who won. It is kept as a video, so it stays sharp and small, and the GIF is made when you download it or use its image link, which can take a moment the first time. A long or large clip's GIF is made smaller than the video so it stays about 40 MB. Sign in to save it; without that, Download gives you the video. The round clock is stamped in the corner unless you switch it off.</p>
           <p>Every saved GIF has two links:</p>
           <ul>
             <li><strong>Page link</strong> (<code>aim4.io/g/...</code>) opens a page with the GIF, its title and its description, where every setpos in the description is a link that copies itself. Use it when the words matter: a lineup, a call, a note for your team.</li>
@@ -325,7 +325,7 @@ export const DOC_GROUPS = [
           <p>Both are there after you create a GIF, on every GIF in Bookmarks, and on GIFs aim4 eye makes in the chat.</p>
           ${best([
             '2D GIFs are small and sharp; use them for setups, rotations and utility. Use 3D for a peek, a flash or a clutch.',
-            'Keep 3D GIFs short. A few seconds at quality 2 is usually clearer than a long one at quality 3, and it stays under the Bookmarks limit.',
+            'Keep GIFs you paste into chats short: the GIF of a long clip is made smaller to stay about 40 MB, and the share page always plays the full video.',
             'Select an area in 2D to cut out the half of the map nothing happens on: the GIF gets bigger where it matters.',
             'Put the setpos of the key spot in the description so your teammates can practise it straight from the GIF. For a GIF of an execute, Automatically append setpos does it for every grenade at once.',
             'A jump throw\'s setpos is in the air, because that is where the thrower was the tick before release. Paste it, then jump-throw from there as usual.'
@@ -356,6 +356,7 @@ export const DOC_GROUPS = [
             <li>With aim4 eye running, the eye writes the notes from what the round actually shows.</li>
             <li>It runs in the background with a small badge in the corner and tells you when the strategy is saved. The strategy keeps a link to the round it came from.</li>
             <li><strong>Setpos in notes</strong> writes each grenade as its setpos and setang instead of a link, for teams that keep their book in a sheet.</li>
+            <li><strong>Utility previews</strong> makes a clip of each player's grenades from their own eyes and links it from their note, on the words of the grenade. A clip runs from 5 seconds before their first throw to 3 seconds after their last, and throws close enough to overlap share one clip. Every player is included: untick anyone you do not want, or use the gear beside a name, in the form or on the roster, to drop a clip or move its part of the round. The clips also go to Bookmarks and the strategy is saved once they are done.</li>
           </ul>
           ${best([
             'Pick the side, the call type and the economy the strategy is for before you save; they decide where it is filed in the stratbook.',

@@ -9,6 +9,10 @@
 // in an offscreen box at a fixed size, follows a player in first or third
 // person, and captures it on the clip's own clock. Either way the result is
 // saved to Bookmarks > Saved GIFs with the round's metadata.
+//
+// Nothing here touches the viewer on screen, so a 3D clip can be made while the
+// person stays in 2D. Several clips of one round can share a scene
+// (openRoundScene), since booting the map is most of the wait.
 // ---------------------------------------------------------------------------
 
 import { fetchRoundMeta, fetchRoundTicks } from '../api.js';
@@ -17,14 +21,14 @@ import { RadarRenderer } from '../viewer/radarRenderer.js';
 import { RADAR_SIZE, worldToRadar } from '../viewer/mapCalibration.js';
 import { ROUND_SECONDS, clockAt, timingFor } from '../viewer/roundClock.js';
 import { cs3dMap } from '../../../shared/cs3d/maps.js';
-import { MAX_SECONDS, clampFps, frameTicks, outputSize } from './gifCore.js';
+import { DEFAULT_QUALITY, MAX_SECONDS, clampFps, frameTicks, outputSize } from './gifCore.js';
 import { gifMetaFromRound, mapNameOf } from './gifMeta.js';
-import { captureGif, saveGifFitting } from './gifCapture.js';
+import { captureClip, saveGifFitting } from './gifCapture.js';
 
 /** The radar's own pixel size: an offscreen 2D GIF's full resolution. */
 const RADAR_PX = 1024;
 /** The offscreen 3D view, in canvas pixels (pixel ratio 1): a 3D GIF's full resolution. */
-const VIEW_3D = { width: 1280, height: 720 };
+export const VIEW_3D = { width: 1920, height: 1080 };
 const DEFAULT_SECONDS = 8;
 
 /** Full-detail rounds, a few kept: a document's highlights often come from one match. */
@@ -127,6 +131,9 @@ function defaultPlayer(meta, fromTick, toTick) {
  * @param {'2d'|'3d'} [opts.kind]
  * @param {number} [opts.fromTick]    or `from` as a round clock ("1:20")
  * @param {number} [opts.toTick]      or `to`
+ * @param {{ meta: object, track: object }} [opts.round]  the round already loaded, every tick of it
+ * @param {object} [opts.scene]       from openRoundScene: this round's 3D scene, left open afterwards
+ * @param {boolean} [opts.clock]      false: no round clock on the picture
  * @param {string} [opts.from]
  * @param {string} [opts.to]
  * @param {number} [opts.fps]
@@ -144,7 +151,7 @@ export async function makeRoundGif(opts) {
   const file = String(opts.file || '').trim();
   if (!file) throw new Error('Name the round.');
   const kind = opts.kind === '3d' ? '3d' : '2d';
-  const { meta, track } = await loadFullRound(file);
+  const { meta, track } = opts.round || (await loadFullRound(file));
   const timing = timingFor(meta);
   const clamp = (t) => Math.max(timing.startTick, Math.min(timing.officialEndTick, t));
   let fromTick = Number.isFinite(opts.fromTick) ? opts.fromTick : tickAtClock(meta, opts.from);
@@ -156,7 +163,7 @@ export async function makeRoundGif(opts) {
   if (toTick < fromTick) [fromTick, toTick] = [toTick, fromTick];
   if (toTick - fromTick < timing.tickRate / 2) toTick = clamp(fromTick + DEFAULT_SECONDS * timing.tickRate);
   const fps = clampFps(kind, opts.fps);
-  const quality = Math.max(1, Math.min(3, Math.round(Number(opts.quality) || 1)));
+  const quality = Math.max(1, Math.min(3, Math.round(Number(opts.quality) || DEFAULT_QUALITY)));
   const ticks = frameTicks({ fromTick, toTick, tickRate: timing.tickRate, fps, kind });
   const label = (t) => clockAt(timing, t).label;
   const progress = (done, total, phase) =>
@@ -175,11 +182,12 @@ export async function makeRoundGif(opts) {
     if (opts.view !== 'map') frameOnClip(renderer, track, ticks, meta.map, RADAR_PX);
     size = outputSize('2d', quality, RADAR_PX, RADAR_PX);
     const states = [];
-    blob = await captureGif({
+    blob = await captureClip({
       count: ticks.length,
       fps,
       palette: 'global',
       size,
+      stampClock: opts.clock,
       signal: opts.signal,
       onProgress: progress,
       drawFrame: async (i) => {
@@ -204,8 +212,16 @@ export async function makeRoundGif(opts) {
     const slug = cs3dMap(meta.map)?.slug;
     if (!slug) throw new Error(`${mapNameOf(meta.map)} has no 3D map.`);
     follow = playerOf(meta, opts.camera?.player) || defaultPlayer(meta, fromTick, toTick);
-    opts.onProgress?.('Loading the 3D map');
-    const shot = await capture3d({ meta, track, timing, ticks, fps, quality, slug, follow, camMode: opts.camera?.mode, label, progress, signal: opts.signal });
+    if (follow && !track.sample(follow.slot, ticks[0], {})?.alive) {
+      throw new Error(`${follow.name || 'That player'} is already dead at ${label(ticks[0])}.`);
+    }
+    const scene = opts.scene || (opts.onProgress?.('Loading the 3D map'), await openRoundScene({ meta, track }));
+    let shot;
+    try {
+      shot = await capture3d({ scene, ticks, fps, quality, follow, camMode: opts.camera?.mode, label, progress, clock: opts.clock, signal: opts.signal });
+    } finally {
+      if (!opts.scene) scene.close();
+    }
     blob = shot.blob;
     size = shot.size;
   }
@@ -241,8 +257,16 @@ export async function makeRoundGif(opts) {
   return { blob, meta: gifMeta, gif, saveError, frames: ticks.length, size, seconds: (ticks[ticks.length - 1] - ticks[0]) / timing.tickRate, capped: toTick - fromTick > MAX_SECONDS[kind] * timing.tickRate };
 }
 
-/** The 3D scene in an offscreen box, one frame per tick on the clip's own clock. */
-async function capture3d({ meta, track, timing, ticks, fps, quality, slug, follow, camMode, label, progress, signal }) {
+/**
+ * A round's 3D scene in an offscreen box, for one clip or several.
+ *
+ * @param {{ meta: object, track: object }} round
+ * @returns {Promise<{ v3: object, frameAt: (tick: number) => object, close: () => void }>}
+ */
+export async function openRoundScene({ meta, track }) {
+  const slug = cs3dMap(meta.map)?.slug;
+  if (!slug) throw new Error(`${mapNameOf(meta.map)} has no 3D map.`);
+  const timing = timingFor(meta);
   const host = document.createElement('div');
   host.style.cssText = `position:fixed;left:-${VIEW_3D.width * 4}px;top:0;width:${VIEW_3D.width}px;height:${VIEW_3D.height}px;pointer-events:none;overflow:hidden;`;
   host.setAttribute('aria-hidden', 'true');
@@ -254,6 +278,11 @@ async function capture3d({ meta, track, timing, ticks, fps, quality, slug, follo
     sampleSlot: (slot, at, out) => track.sample(slot, at, out || {}),
     tickRange: () => ({ first: track.firstTick, last: track.lastTick, stride: track.stride })
   });
+  const close = () => {
+    v3.endCapture?.();
+    v3.dispose();
+    host.remove();
+  };
   const states = [];
   const frameAt = (tick) => {
     track.sampleAll(tick, states);
@@ -277,19 +306,28 @@ async function capture3d({ meta, track, timing, ticks, fps, quality, slug, follo
     v3.show();
     await starting;
     if (v3.failed || !v3.ready) throw new Error(`The 3D view could not start${v3.failed ? `: ${v3.failed}` : ''}.`);
-    v3.setFrame(frameAt(ticks[0]));
-    if (follow) {
-      v3.spectateSlot(follow.slot);
-      v3.setMode(camMode === 'third' ? 'third' : 'pov');
-    }
-    v3.beginCapture();
+    return { v3, frameAt, close };
+  } catch (err) {
+    close();
+    throw err;
+  }
+}
+
+/** One clip from a scene: one frame per tick, on the clip's own clock, through one player's eyes when there is one. */
+async function capture3d({ scene, ticks, fps, quality, follow, camMode, label, progress, clock: stampClock, signal }) {
+  const { v3, frameAt } = scene;
+  v3.setFrame(frameAt(ticks[0]));
+  if (follow) v3.setMode(camMode === 'third' ? 'third' : 'pov');
+  v3.beginCapture({ pov: follow ? follow.slot : null });
+  try {
     const size = outputSize('3d', quality, v3.canvas.width || VIEW_3D.width, v3.canvas.height || VIEW_3D.height);
     let clock = 1000;
-    const blob = await captureGif({
+    const blob = await captureClip({
       count: ticks.length,
       fps,
       palette: 'local',
       size,
+      stampClock,
       signal,
       onProgress: progress,
       drawFrame: async (i) => {
@@ -301,8 +339,6 @@ async function capture3d({ meta, track, timing, ticks, fps, quality, slug, follo
     });
     return { blob, size };
   } finally {
-    v3.endCapture?.();
-    v3.dispose();
-    host.remove();
+    v3.endCapture();
   }
 }

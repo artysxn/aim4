@@ -1020,7 +1020,7 @@ export class RadarRenderer {
   }
 
   /**
-   * Grenade SVG on the droplet's top-right: larger, +15° clockwise, team-colored
+   * Grenade SVG leaning against the droplet's right side, 25° clockwise, team-colored
    * with a 1px black drop-shadow duplicate (no circle chrome).
    */
   drawHeldGrenadeBadge(ctx, x, y, r, weaponName, colors) {
@@ -1030,9 +1030,9 @@ export class RadarRenderer {
     const scale = Math.min(size / img.naturalWidth, size / img.naturalHeight) * 1.15;
     const iw = img.naturalWidth * scale;
     const ih = img.naturalHeight * scale;
-    const cx = x + r * 0.95;
-    const cy = y - r * 1.05;
-    const rot = (15 * Math.PI) / 180;
+    const cx = x + r * 1.25;
+    const cy = y - r * 0.3;
+    const rot = (25 * Math.PI) / 180;
     const tint = colors?.base || '#5b9fd4';
     const px = this.dpr;
 

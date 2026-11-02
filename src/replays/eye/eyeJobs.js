@@ -37,7 +37,7 @@ function noticeDocument() {
 /** What is queued and running, for the pill and for anyone listening. */
 export function eyeJobsState() {
   return {
-    running: running ? { id: running.id, label: running.label, status: running.status } : null,
+    running: running ? { id: running.id, label: running.label, status: running.status, name: running.name } : null,
     waiting: queue.map((j) => ({ id: j.id, label: j.label }))
   };
 }
@@ -71,12 +71,12 @@ function renderPill(state) {
     pill = document.createElement('div');
     pill.className = 'eye-jobs-pill';
     pill.setAttribute('role', 'status');
-    pill.title = 'Queued aim4 eye jobs run while this page stays open';
+    pill.title = 'Queued jobs run while this page stays open';
     document.body.appendChild(pill);
   }
   const now = state.running ? `${state.running.label}: ${state.running.status || 'working…'}` : '';
   const more = state.waiting.length ? `${state.waiting.length} queued` : '';
-  pill.textContent = ['aim4 eye', now, more].filter(Boolean).join(' · ');
+  pill.textContent = [state.running?.name || 'aim4 eye', now, more].filter(Boolean).join(' · ');
 }
 
 /**
@@ -84,11 +84,12 @@ function renderPill(state) {
  * what it resolves to is the notice: `{ title, body }`. A thrown error becomes
  * a "failed" notice with its message.
  *
- * @param {{ label: string, run: (job: { setStatus: (text: string) => void }) => Promise<{ title: string, body?: string }> }} spec
+ * @param {{ label: string, name?: string, run: (job: { setStatus: (text: string) => void }) => Promise<{ title: string, body?: string }> }} spec
+ *   `name`: what the pill calls this work, when it is not the eye's (a clip made in the background)
  * @returns {{ id: string, position: number }} position 0 means it starts now
  */
-export function enqueueEyeJob({ label, run }) {
-  const job = { id: `eyejob${++seq}`, label: String(label || 'aim4 eye job'), run, status: 'queued' };
+export function enqueueEyeJob({ label, name = '', run }) {
+  const job = { id: `eyejob${++seq}`, label: String(label || 'aim4 eye job'), name, run, status: 'queued' };
   job.setStatus = (text) => {
     job.status = String(text || '');
     if (running === job) changed();

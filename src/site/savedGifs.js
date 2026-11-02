@@ -22,7 +22,7 @@
 // more columns, so dense placement packs the rest around it.
 // ---------------------------------------------------------------------------
 
-import { deleteGif, fetchGifs, gifImageUrl, updateGif } from '../replays/api.js';
+import { deleteGif, fetchGifs, gifPosterUrl, gifVideoUrl, updateGif } from '../replays/api.js';
 import {
   GIF_DESCRIPTION_MAX,
   GIF_TITLE_MAX,
@@ -31,7 +31,7 @@ import {
   gifDisplayTitle,
   gifFilterOptions
 } from '../replays/gif/gifMeta.js';
-import { downloadBlob, gifFileName, gifPageUrl, gifShareUrl } from '../replays/gif/gifCapture.js';
+import { downloadSavedGif, gifPageUrl, gifShareUrl, warmGif } from '../replays/gif/gifCapture.js';
 import { spinnerHtml } from '../lib/spinner.js';
 
 /** Narrowest column, gap between pins, the grid's row unit and the one line under each pin. */
@@ -192,7 +192,7 @@ export function createSavedGifs({ host, escapeHtml, openRound }) {
     return `
       <article class="bm-pin${g.id === openId ? ' is-open' : ''}" data-id="${escapeHtml(g.id)}" data-ratio="${ratioOf(g)}">
         <button type="button" class="bm-pin-img" data-act="open" aria-label="Open ${escapeHtml(gifDisplayTitle(g))}">
-          <img src="${escapeHtml(gifImageUrl(g.id))}" alt=""${size} loading="lazy" decoding="async" />
+          <video data-src="${escapeHtml(gifVideoUrl(g.id))}" poster="${escapeHtml(gifPosterUrl(g.id))}"${size} loop muted playsinline preload="none"></video>
         </button>
         <div class="bm-pin-line">
           <span class="bm-pin-title">${escapeHtml(gifDisplayTitle(g))}</span>
@@ -238,7 +238,7 @@ export function createSavedGifs({ host, escapeHtml, openRound }) {
       <section class="bm-detail" data-detail="${escapeHtml(g.id)}" aria-label="${escapeHtml(gifDisplayTitle(g))}">
         <div class="bm-detail-card">
           <div class="bm-detail-media">
-            <img src="${escapeHtml(gifImageUrl(g.id))}" alt="${escapeHtml(gifDisplayTitle(g))}"${g.width ? ` width="${g.width}" height="${g.height}"` : ''} />
+            <video src="${escapeHtml(gifVideoUrl(g.id))}" poster="${escapeHtml(gifPosterUrl(g.id))}" aria-label="${escapeHtml(gifDisplayTitle(g))}"${g.width ? ` width="${g.width}" height="${g.height}"` : ''} autoplay loop muted playsinline></video>
             <button type="button" class="bm-round-btn bm-detail-back" data-act="close" aria-label="Close" title="Close">${ICON.back}</button>
           </div>
           <div class="bm-detail-side">
@@ -261,6 +261,30 @@ export function createSavedGifs({ host, escapeHtml, openRound }) {
 
   // ---- the wall ------------------------------------------------------------------------
 
+  /**
+   * A wall of videos plays only what is on screen, and loads nothing until then: each is its poster until it
+   * scrolls into view.
+   */
+  let pinWatch = null;
+  function watchPins() {
+    pinWatch?.disconnect();
+    if (typeof IntersectionObserver === 'undefined') return;
+    pinWatch = new IntersectionObserver(
+      (entries) => {
+        for (const { target: video, isIntersecting } of entries) {
+          if (!isIntersecting) {
+            video.pause();
+            continue;
+          }
+          if (video.dataset.src && !video.src) video.src = video.dataset.src;
+          video.play().catch(() => {});
+        }
+      },
+      { rootMargin: '120px' }
+    );
+    for (const video of grid.querySelectorAll('video[data-src]')) pinWatch.observe(video);
+  }
+
   function render() {
     syncSegs();
     closeMenu();
@@ -277,6 +301,7 @@ export function createSavedGifs({ host, escapeHtml, openRound }) {
     grid.innerHTML = (open ? detailHtml(open) : '') + (pins || (open ? '' : '<p class="view-empty bm-wall-empty">No saved GIF fits these filters.</p>'));
     observeDetail();
     layout();
+    watchPins();
   }
 
   /** Columns from the wall's width, then every pin's row span from its height. */
@@ -381,9 +406,7 @@ export function createSavedGifs({ host, escapeHtml, openRound }) {
 
   async function download(g) {
     try {
-      const res = await fetch(gifImageUrl(g.id));
-      if (!res.ok) throw new Error(`Download failed (${res.status})`);
-      downloadBlob(await res.blob(), gifFileName(g));
+      await downloadSavedGif(g.id, g);
     } catch (err) {
       say(err.message || 'Download failed.', true);
     }
@@ -467,6 +490,7 @@ export function createSavedGifs({ host, escapeHtml, openRound }) {
   function run(act, g, btn) {
     if (act === 'copy-page' || act === 'copy-image') {
       const page = act === 'copy-page';
+      if (!page) warmGif(g.id);
       copyText(page ? gifPageUrl(g.id) : gifShareUrl(g.id), () => {
         const msg = page ? 'Page link copied.' : 'Image link copied.';
         if (openId === g.id) say(msg);

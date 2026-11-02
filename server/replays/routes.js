@@ -75,8 +75,8 @@ import {
   writeRecord,
   writeRoundNotes
 } from './demoStore.js';
-import { MAX_GIF_BYTES, addGif, listGifs, readGifFile, removeGif, updateGif } from './gifStore.js';
-import { sendGifBytes } from './gifShare.js';
+import { MAX_GIF_BYTES, addGif, listGifs, removeGif, updateGif } from './gifStore.js';
+import { sendGifMedia } from './gifShare.js';
 import { applyTeamRename } from './teamRescan.js';
 import { cpuProbe, memorySnapshot } from './hostMemory.js';
 import { forgetDemoIndex, loadStoredEntry, refreshLibraryStats, scheduleStatsIndex, STATS_LIBRARY_PAGE, statsPayload } from './statsIndex.js';
@@ -2667,12 +2667,9 @@ export async function handleReplayRequest(req, res, url) {
   // The GIF creator's output (gifStore.js). The picture answers anyone with
   // its id, which is the share link anyway; listing and every change are the
   // owner's.
-  const gifImageMatch = p.match(/^\/api\/replays\/gifs\/([a-f0-9]{16})\.gif$/);
+  const gifImageMatch = p.match(/^\/api\/replays\/gifs\/([a-f0-9]{16})\.(gif|mp4|jpg)$/);
   if (gifImageMatch && (req.method === 'GET' || req.method === 'HEAD')) {
-    const buf = await readGifFile(user, gifImageMatch[1]);
-    if (!buf) json(res, 404, { error: 'GIF not found.' });
-    else sendGifBytes(req, res, buf);
-    return true;
+    return sendGifMedia(req, res, user, gifImageMatch[1], gifImageMatch[2]);
   }
 
   if (p === '/api/replays/gifs') {

@@ -25,7 +25,7 @@ import { loadRadar } from '../replays/viewer/radarRenderer.js';
 import { RADAR_SIZE, worldToRadar } from '../replays/viewer/mapCalibration.js';
 import { NADE_COLORS, paintPanel } from '../replays/analytics/heatImage.js';
 import { createRangeSlider } from '../lib/rangeSlider.js';
-import { gifImageUrl } from '../replays/api.js';
+import { gifPosterUrl, gifVideoUrl } from '../replays/api.js';
 import { publicOrigin } from './publicOrigin.js';
 
 const NADE_WORD = {
@@ -369,15 +369,19 @@ function mountGif(node, data) {
   if (!/^[a-f0-9]{16}$/.test(id)) throw new Error('not a saved GIF id');
   const fig = document.createElement('figure');
   fig.className = 'doc-embed-gif';
-  const img = document.createElement('img');
-  img.src = gifImageUrl(id);
-  img.alt = String(data.caption || 'GIF');
-  img.loading = 'lazy';
+  const video = document.createElement('video');
+  video.muted = true;
+  video.loop = true;
+  video.autoplay = true;
+  video.playsInline = true;
+  video.poster = gifPosterUrl(id);
+  video.src = gifVideoUrl(id);
+  video.setAttribute('aria-label', String(data.caption || 'GIF'));
   if (data.width > 0 && data.height > 0) {
-    img.width = Math.round(data.width);
-    img.height = Math.round(data.height);
+    video.width = Math.round(data.width);
+    video.height = Math.round(data.height);
   }
-  fig.appendChild(img);
+  fig.appendChild(video);
   const cap = document.createElement('figcaption');
   if (data.caption) cap.appendChild(document.createTextNode(`${data.caption} `));
   const link = document.createElement('a');

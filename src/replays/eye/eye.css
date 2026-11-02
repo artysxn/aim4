@@ -726,7 +726,7 @@
   margin: 0;
   max-width: min(100%, 560px);
 }
-.eye-gif img {
+.eye-gif video {
   display: block;
   width: 100%;
   height: auto;

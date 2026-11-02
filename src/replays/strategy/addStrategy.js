@@ -14,10 +14,13 @@
 //      With a writer (aim4 eye, eye/eyeStrategyNotes.js) the rules' notes and the
 //      facts behind them go to it, and whatever it cannot write well stays as
 //      the rules wrote it
-//   4. save the strategy
+//   4. with utility previews on, make a clip of each player's grenades and link
+//      it from their note (gif/utilityPreviews.js). A clip that fails costs its
+//      link, and the strategy is still saved
+//   5. save the strategy
 //
 // A failure at step 1 stops the whole thing: half-written archives are worse
-// than no strategy. A failure at step 4 leaves the archive richer than it was,
+// than no strategy. A failure at step 5 leaves the archive richer than it was,
 // which is harmless — the utility is real either way.
 // ---------------------------------------------------------------------------
 
@@ -38,6 +41,7 @@ import {
   seatPlayers
 } from './roundRoles.js';
 import { ROUND_SECONDS, timingFor } from '../viewer/roundClock.js';
+import { linkPreviews } from '../gif/utilityPreviews.js';
 
 /** The viewer opens half a second before release, so the throw is watchable. */
 const LEAD_SECONDS = 0.5;
@@ -141,10 +145,13 @@ export async function resolveSeats({
  * @param {number} [args.windowTo]
  * @param {(text: string) => void} [args.onStatus]
  * @param {boolean} [args.setposInNotes]  write each grenade as its setpos/setang instead of a link
+ * @param {null | ((input: { onStatus: (text: string) => void }) => Promise<{ byPlayer: Map<string, Array<{ url: string, label: string, throwTicks: number[] }>>, made: number, failed: number, firstError: string }>)} [args.makePreviews]
+ *   utility previews: makes the clips, to be linked from each player's note
  * @param {null | ((input: object) => Promise<{ notes: Map<string, string>, description?: string, fromEye: number, fellBack: Array }>)} [args.writer]
  *   words the notes itself (writeNotesWithEye); gets the rules' notes and their facts
- * @returns {Promise<{ strategy: object, utilityAdded: number, utilityDropped: number, written: null | object }>}
- *   `written` is the writer's report, or `{ error }` when it failed and the rules' notes were saved
+ * @returns {Promise<{ strategy: object, utilityAdded: number, utilityDropped: number, written: null | object, previews: null | object }>}
+ *   `written` is the writer's report, or `{ error }` when it failed and the rules' notes were saved.
+ *   `previews` is { made, failed, firstError, unlinked }
  */
 export async function saveStrategyFromRound({
   teamId,
@@ -164,7 +171,8 @@ export async function saveStrategyFromRound({
   windowTo = ROUND_SECONDS,
   onStatus = () => {},
   writer = null,
-  setposInNotes = false
+  setposInNotes = false,
+  makePreviews = null
 }) {
   const timing = timingFor(meta);
   const rate = timing.tickRate || 64;
@@ -261,6 +269,29 @@ export async function saveStrategyFromRound({
     roleNotes = roleNotes.map((n) => notesWithSetpos(n, throwsById));
   }
 
+  // Last, after the words are settled: the eye writes around the throw tags, and setpos notes have none left.
+  let previews = null;
+  if (makePreviews) {
+    try {
+      const made = await makePreviews({ onStatus });
+      previews = { made: made.made, failed: made.failed, firstError: made.firstError, unlinked: 0 };
+      roleNotes = seats.map((id, i) => {
+        const clips = id ? made.byPlayer.get(id) : null;
+        if (!clips) return roleNotes[i];
+        const withIds = clips.map((c) => ({
+          url: c.url,
+          label: c.label,
+          throwIds: links.filter((l) => l.player === String(id) && l.throwId && c.throwTicks.includes(Number(l.grenade?.throwTick))).map((l) => l.throwId)
+        }));
+        const { text, left } = linkPreviews(roleNotes[i], withIds);
+        previews.unlinked += left;
+        return text;
+      });
+    } catch (err) {
+      previews = { made: 0, failed: 0, firstError: err?.message || 'They could not be made.', unlinked: 0 };
+    }
+  }
+
   onStatus('Saving strategy…');
   const body = await saveTeamStrategy(teamId, {
     map: mapCode,
@@ -285,7 +316,8 @@ export async function saveStrategyFromRound({
     // The archive is capped per map. Anything it had no room for is said out
     // loud rather than quietly missing from the notes.
     utilityDropped: folded.dropped || 0,
-    written
+    written,
+    previews
   };
 }
 

@@ -23,6 +23,7 @@ import { FootballServer } from './football.js';
 import { tryServeStatic, distExists } from './static.js';
 import { handleReplayRequest } from './replays/routes.js';
 import { handleGifShare } from './replays/gifShare.js';
+import { convertSavedGifs } from './replays/gifStore.js';
 import { handleRecorderRequest } from './recorder/routes.js';
 import { handleEyeRequest } from './eye/routes.js';
 import { handleSimilarRequest } from './similar/routes.js';
@@ -466,6 +467,17 @@ if (!LOCAL) {
   // warm, exactly as before. The delay only moves the prefetch out of the
   // window where real requests are fighting for the box.
   setTimeout(() => warmCloakBrowserCache(loadIngestConfig()).catch(() => {}), 90 * 1000);
+}
+// GIFs saved before clips were kept as videos. After the boot's own rush, one at a time.
+if (!process.env.AIM4_UPSTREAM) {
+  setTimeout(async () => {
+    const { SHARED_LIBRARY } = await import('./replays/auth.js');
+    convertSavedGifs(SHARED_LIBRARY)
+      .then(({ converted, failed }) => {
+        if (converted || failed) console.log(`[gifs] saved GIFs to video: ${converted} converted, ${failed} failed`);
+      })
+      .catch((err) => console.warn(`[gifs] conversion stopped: ${err.message}`));
+  }, 120 * 1000);
 }
 // Load the aggregate-store SNAPSHOT shortly after boot — a load, never a
 // build (see the essay below before touching this). With the file present the

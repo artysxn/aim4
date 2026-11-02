@@ -193,6 +193,8 @@ export function createView3d({ slug, onModeChange, onFailed = null, sampleSlot, 
   let lastNow = 0;
   /** A GIF is being captured: the live loop is stopped and frames are drawn on the capture's clock. */
   let capturing = false;
+  /** The capture is of this one player: the camera stays with them through their death, on no one else. */
+  let capturePinned = false;
   /** The box the canvas was last fitted to; see resize(). */
   let sizedW = 0;
   let sizedH = 0;
@@ -1447,7 +1449,7 @@ export function createView3d({ slug, onModeChange, onFailed = null, sampleSlot, 
     // time, then follows the killer (or that same next-live fallback).
     // Seeks, round jumps, and the first sample still snap, so scrubbing
     // cannot land late.
-    if (follow && live.length && !live.includes(povSlot)) {
+    if (follow && live.length && !live.includes(povSlot) && !capturePinned) {
       if (deathFollowShouldSnap(lastTick, tick, rate)) {
         cancelDeathFollow();
         followAfterDeath(povSlot, live, tick);
@@ -1460,7 +1462,7 @@ export function createView3d({ slug, onModeChange, onFailed = null, sampleSlot, 
     } else {
       cancelDeathFollow();
     }
-    const holdingDeath = follow && deathFollowUntilTick != null && !live.includes(povSlot);
+    const holdingDeath = follow && (capturePinned || deathFollowUntilTick != null) && !live.includes(povSlot);
     // Demo seconds since the last drawn frame, signed: a rewind (hold R) or a
     // slow scrub back runs the bodies' clips backwards. A jump of more than a
     // quarter second either way is a seek, not motion.
@@ -1946,8 +1948,17 @@ export function createView3d({ slug, onModeChange, onFailed = null, sampleSlot, 
     // canvas holds that frame until the task ends, which is when the caller
     // copies it.
 
-    beginCapture() {
+    /**
+     * @param {{ pov?: number|null }} [opts]  the slot whose eyes the whole clip is seen through. Taken as
+     *   given, alive or not: the viewer may have played on past this player's death and be on their killer.
+     */
+    beginCapture({ pov = null } = {}) {
       capturing = true;
+      if (Number.isInteger(pov) && pov >= 0) {
+        povSlot = pov;
+        capturePinned = true;
+        cancelDeathFollow();
+      }
       syncLoop();
       lastNow = 0;
     },
@@ -1959,6 +1970,7 @@ export function createView3d({ slug, onModeChange, onFailed = null, sampleSlot, 
     endCapture() {
       if (!capturing) return;
       capturing = false;
+      capturePinned = false;
       lastNow = 0;
       syncLoop();
     },

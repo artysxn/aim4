@@ -7,7 +7,7 @@
 
 import * as THREE from 'three/webgpu';
 import { packFetch } from './packFetch.js';
-import { bloom, screenUV, texture } from 'three/webgpu';
+import { bloom, renderOutput, screenUV, texture } from 'three/webgpu';
 import { installGrade, makeLut } from './grade.js';
 import { mapBloomParams } from './lookBloom.js';
 import { markStaticUniformsDirty, patchBloomClears } from './threePatches.js';
@@ -154,6 +154,40 @@ export function createLook({ scene, getPack, getLighting, slug, knobs = null }) 
 const FX_BLOOM = { strength: 0.85, radius: 0.8, threshold: 3 };
 
 /**
+ * three's PostProcessing with a material and a quad of its own. three keeps one of each at module level, shared
+ * by every renderer on the page, so a second 3D view (a clip being made off screen) overwrote the first one's
+ * final shader, and the first went black on a pipeline built from the other's nodes.
+ */
+class OwnPostProcessing {
+  constructor(renderer, outputNode) {
+    this.renderer = renderer;
+    this.outputNode = outputNode;
+    this.needsUpdate = true;
+    this.material = new THREE.NodeMaterial();
+    this.material.name = 'PostProcessing';
+    this.quad = new THREE.QuadMesh(this.material);
+  }
+
+  update() {
+    if (!this.needsUpdate) return;
+    this.material.fragmentNode = renderOutput(this.outputNode, this.renderer.toneMapping, this.renderer.outputColorSpace);
+    this.material.needsUpdate = true;
+    this.needsUpdate = false;
+  }
+
+  render() {
+    this.update();
+    const { renderer } = this;
+    const { toneMapping, outputColorSpace } = renderer;
+    renderer.toneMapping = THREE.NoToneMapping;
+    renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
+    this.quad.render(renderer);
+    renderer.toneMapping = toneMapping;
+    renderer.outputColorSpace = outputColorSpace;
+  }
+}
+
+/**
  * The map's bloom, without giving up the two-pass depth clear.
  * Same contract as the explorer: HDR target, then composite.
  * Strength/threshold mapping lives in lookBloom.js (CS2 LDR add vs compute).
@@ -209,7 +243,7 @@ export function setupBloom(renderer, manifest, params = new URLSearchParams()) {
       if (mapStrength > 0) bloomOut = bloomOut.add(bloom(src, mapStrength, radius, threshold));
       if (fxStrength > 0) bloomOut = bloomOut.add(bloom(src, fxStrength, FX_BLOOM.radius, FX_BLOOM.threshold));
     }
-    composite = new THREE.PostProcessing(renderer, bloomOff ? copyOut : bloomOut);
+    composite = new OwnPostProcessing(renderer, bloomOff ? copyOut : bloomOut);
     composite.update();
     renderer.toneMapping = THREE.NoToneMapping;
   } catch (e) {

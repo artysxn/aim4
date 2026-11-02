@@ -37,7 +37,7 @@ import {
 import { RadarRenderer, SIDE_COLORS } from './radarRenderer.js';
 import { Playback, RoundSequence } from './playback.js';
 import { canSpectateSlot, specKeyForSeat } from './view3dFollow.js';
-import { clockAt, formatClock, timingFor, ROUND_SECONDS } from './roundClock.js';
+import { clockAt, formatClock, timingFor, totalSeconds, ROUND_SECONDS } from './roundClock.js';
 import { economyLabel, winningSide } from '../shared/roundId.js';
 import { iconImgHtml, inventoryAt } from './equipmentIcons.js';
 import { DRAW_COLORS, DrawingLayer } from './drawing.js';
@@ -74,6 +74,8 @@ import commsIcon from '../../icons/sideicons/sideicon_comms.svg?raw';
 import similarIcon from '../../icons/demos_similar.svg?raw';
 import gifIcon from '../../icons/photo_library_24dp_E3E3E3_FILL0_wght200_GRAD-25_opsz24.svg?raw';
 import { createGifCreator } from '../gif/gifCreator.js';
+import { grenadeWords } from '../gif/gifSetpos.js';
+import { makeUtilityPreviews, utilityWindows } from '../gif/utilityPreviews.js';
 import { commsSidebarHtml, commsSidebarKey, createCommsController } from './commsOverlay.js';
 import { createSimilarRounds } from './similarRounds.js';
 import { desktopApp } from '../../site/desktopApp.js';
@@ -120,6 +122,7 @@ const COACH_FOCUS_MS = 300;
 /** Same lists as the team stratbook. */
 const STRAT_ECONOMY = ['Pistol', 'Full buy', 'Full buy + AWP', 'Antiforce', 'Force', 'Eco'];
 const STRAT_SETPOS_KEY = 'aim4.strat.setposInNotes';
+const STRAT_PREVIEWS_KEY = 'aim4.strat.utilityPreviews';
 const STRAT_CATEGORY_T = [
   'Pistol',
   'Set call',
@@ -348,6 +351,11 @@ export function createTimelineViewer({
               <input type="checkbox" id="rv-strat-setpos" />
               <span>Setpos in notes</span>
             </label>
+            <label class="rv-strat-check" title="Make a clip of each player's grenades and link it from their note">
+              <input type="checkbox" id="rv-strat-previews" />
+              <span>Utility previews</span>
+            </label>
+            <div class="rv-strat-previews" id="rv-strat-preview-list" hidden></div>
             <button type="button" class="rv-playlist-strategy rv-strat-confirm" id="rv-strat-confirm">
               ${icon(addTacticIcon)}
               <span>CONFIRM</span>
@@ -596,6 +604,13 @@ export function createTimelineViewer({
   const stratFormEl = el.querySelector('#rv-strat-form');
   /** Setpos in notes: remembered, because a team that keeps its book in a sheet always wants it. */
   const stratSetposEl = el.querySelector('#rv-strat-setpos');
+  const stratPreviewsEl = el.querySelector('#rv-strat-previews');
+  const stratPreviewListEl = el.querySelector('#rv-strat-preview-list');
+  try {
+    if (stratPreviewsEl) stratPreviewsEl.checked = localStorage.getItem(STRAT_PREVIEWS_KEY) === '1';
+  } catch {
+    /* storage blocked: off */
+  }
   try {
     if (stratSetposEl) stratSetposEl.checked = localStorage.getItem(STRAT_SETPOS_KEY) === '1';
   } catch {
@@ -2297,6 +2312,7 @@ export function createTimelineViewer({
               <span class="rv-player-hp" data-slot="${p.slot}"></span>
               <span class="rv-player-name"><span class="rv-player-num">${spec}. </span>${escapeHtml(p.name || p.id)}</span>
             </div>
+            <button type="button" class="rv-player-gear" title="Utility preview" aria-label="Utility preview of ${escapeHtml(p.name || p.id)}">${icon(settingsIcon)}</button>
             <span class="rv-player-money">$${st.money ?? 0}</span>
           </div>
           <div class="rv-player-inv" data-slot="${p.slot}"></div>
@@ -3767,13 +3783,172 @@ export function createTimelineViewer({
         to: ROUND_SECONDS,
         step: 1,
         label: 'Part of the round',
-        onChange: paintStratRangeRead
+        onChange: () => {
+          paintStratRangeRead();
+          renderStratPreviews();
+        }
       });
       slot.replaceChildren(stratRange.el);
     }
     stratRange.setMarks(stratNadeMarks());
     paintStratRangeRead();
+    renderStratPreviews();
   }
+
+  // ---- utility previews ---------------------------------------------------------
+  //
+  // With the switch on, the strategy makes a clip of every grenade its players
+  // throw in the part of the round chosen above: all of them unless some are
+  // ticked off, and each clip's part of the round can be moved by hand. The gear
+  // beside a player's name, in the form or on the roster, opens theirs.
+
+  /** What was changed by hand, for the round on screen. */
+  const stratPreviewPicks = { file: '', off: new Set(), clips: new Map(), openId: '' };
+
+  const stratPreviewsShown = () => Boolean(stratPreviewsEl?.checked && stratFormEl && !stratFormEl.hidden && stratSide && activeMeta);
+
+  /** One player's clips, as the rules make them with what was changed by hand on top. */
+  function stratPreviewClips(id) {
+    const timing = timingFor(activeMeta);
+    const rate = timing.tickRate || 64;
+    const part = stratRange?.get() || { from: 0, to: ROUND_SECONDS };
+    return utilityWindows(activeMeta, id, {
+      fromTick: timing.freezeEndTick + part.from * rate,
+      toTick: timing.freezeEndTick + part.to * rate
+    }).map((w) => {
+      const key = `${id}:${w.grenades[0].throwTick}`;
+      const pick = stratPreviewPicks.clips.get(key);
+      return { ...w, key, on: pick?.on !== false, fromTick: pick?.fromTick ?? w.fromTick, toTick: pick?.toTick ?? w.toTick };
+    });
+  }
+
+  /** What confirming makes: the players left in, with their clips left in. */
+  function stratPreviewPlan() {
+    if (!stratPreviewsShown()) return [];
+    const roster = new Map((activeMeta.players || []).map((p) => [p.id, p]));
+    return sidePlayers(activeMeta, stratSide)
+      .filter((id) => !stratPreviewPicks.off.has(id))
+      .map((id) => {
+        const p = roster.get(id);
+        return { id, slot: p?.slot, name: p?.name || id, windows: stratPreviewClips(id).filter((c) => c.on) };
+      })
+      .filter((p) => Number.isInteger(p.slot) && p.windows.length);
+  }
+
+  function renderStratPreviews() {
+    const shown = stratPreviewsShown();
+    el.classList.toggle('strat-previews-T', shown && stratSide === 'T');
+    el.classList.toggle('strat-previews-CT', shown && stratSide === 'CT');
+    if (!stratPreviewListEl) return;
+    stratPreviewListEl.hidden = !shown;
+    if (!shown) {
+      stratPreviewListEl.replaceChildren();
+      return;
+    }
+    const file = files[activeIndex] || '';
+    if (file !== stratPreviewPicks.file) {
+      stratPreviewPicks.file = file;
+      stratPreviewPicks.off.clear();
+      stratPreviewPicks.clips.clear();
+      stratPreviewPicks.openId = '';
+    }
+    const timing = timingFor(activeMeta);
+    const rate = timing.tickRate || 64;
+    const secs = (tick) => (tick - timing.startTick) / rate;
+    const roster = new Map((activeMeta.players || []).map((p) => [p.id, p]));
+    stratPreviewListEl.innerHTML = sidePlayers(activeMeta, stratSide)
+      .map((id) => {
+        const name = roster.get(id)?.name || id;
+        const clips = stratPreviewClips(id).length;
+        const opened = clips > 0 && stratPreviewPicks.openId === id;
+        return `
+          <div class="rv-strat-pv" data-pv="${escapeHtml(id)}">
+            <div class="rv-strat-pv-row">
+              <label class="rv-strat-check">
+                <input type="checkbox" data-pv-player${clips && !stratPreviewPicks.off.has(id) ? ' checked' : ''}${clips ? '' : ' disabled'} />
+                <span>${escapeHtml(name)}</span>
+              </label>
+              <span class="rv-strat-pv-count">${clips || 'No grenades'}</span>
+              <button type="button" class="rv-playlist-gear" data-pv-gear${clips ? '' : ' hidden'} aria-expanded="${opened}"
+                title="Clips of ${escapeHtml(name)}" aria-label="Clips of ${escapeHtml(name)}">${icon(settingsIcon)}</button>
+            </div>
+            ${opened ? '<div class="rv-strat-pv-clips" data-pv-clips></div>' : ''}
+          </div>`;
+      })
+      .join('');
+    const openId = stratPreviewPicks.openId;
+    const clipsEl = openId ? stratPreviewListEl.querySelector(`[data-pv="${CSS.escape(openId)}"] [data-pv-clips]`) : null;
+    if (!clipsEl) return;
+    for (const clip of stratPreviewClips(openId)) {
+      const row = document.createElement('div');
+      row.className = 'rv-strat-pv-clip';
+      row.dataset.pvClip = clip.key;
+      row.innerHTML = `
+        <label class="rv-strat-check">
+          <input type="checkbox" data-pv-clip-on${clip.on ? ' checked' : ''} />
+          <span>${escapeHtml(grenadeWords(clip.grenades))}</span>
+        </label>
+        <div class="rv-strat-range"></div>
+        <div class="rv-strat-range-read"></div>`;
+      const read = row.querySelector('.rv-strat-range-read');
+      const paintRead = (from, to) => {
+        read.textContent = `${clockAt(timing, timing.startTick + from * rate).label} to ${clockAt(timing, timing.startTick + to * rate).label}`;
+      };
+      const slider = createRangeSlider({
+        min: 0,
+        max: totalSeconds(timing),
+        from: secs(clip.fromTick),
+        to: secs(clip.toTick),
+        step: 0.5,
+        label: 'Part of the round in this clip',
+        onChange: (from, to, moved) => {
+          const pick = stratPreviewPicks.clips.get(clip.key) || {};
+          stratPreviewPicks.clips.set(clip.key, { ...pick, fromTick: timing.startTick + from * rate, toTick: timing.startTick + to * rate });
+          paintRead(from, to);
+          seekRoundLocal(moved === 'from' ? from : to);
+        }
+      });
+      slider.setMarks(clip.grenades.map((g) => ({ at: secs(Number(g.throwTick)), color: nadeMarkColor(g.type) || '#e9e9ea' })));
+      row.querySelector('.rv-strat-range').replaceChildren(slider.el);
+      paintRead(secs(clip.fromTick), secs(clip.toTick));
+      clipsEl.appendChild(row);
+    }
+  }
+
+  /** The gear on the roster: this player's clips, in the form. */
+  function openStratPreview(id) {
+    if (!id || !stratPreviewsShown()) return;
+    stratPreviewPicks.openId = id;
+    renderStratPreviews();
+    stratPreviewListEl?.querySelector(`[data-pv="${CSS.escape(id)}"]`)?.scrollIntoView({ block: 'nearest' });
+  }
+
+  stratPreviewsEl?.addEventListener('change', () => {
+    try {
+      localStorage.setItem(STRAT_PREVIEWS_KEY, stratPreviewsEl.checked ? '1' : '0');
+    } catch {
+      /* storage blocked: this session only */
+    }
+    renderStratPreviews();
+  });
+  stratPreviewListEl?.addEventListener('click', (e) => {
+    const gear = e.target.closest('[data-pv-gear]');
+    if (!gear) return;
+    const id = gear.closest('[data-pv]').dataset.pv;
+    stratPreviewPicks.openId = stratPreviewPicks.openId === id ? '' : id;
+    renderStratPreviews();
+  });
+  stratPreviewListEl?.addEventListener('change', (e) => {
+    const id = e.target.closest('[data-pv]')?.dataset.pv;
+    if (!id) return;
+    if (e.target.matches('[data-pv-player]')) {
+      if (e.target.checked) stratPreviewPicks.off.delete(id);
+      else stratPreviewPicks.off.add(id);
+    } else if (e.target.matches('[data-pv-clip-on]')) {
+      const key = e.target.closest('[data-pv-clip]').dataset.pvClip;
+      stratPreviewPicks.clips.set(key, { ...stratPreviewPicks.clips.get(key), on: e.target.checked });
+    }
+  });
 
   function fillStratSelect(select, options, placeholder, keep) {
     if (!select) return;
@@ -3812,10 +3987,13 @@ export function createTimelineViewer({
       closePlaylistScopeMenu();
       if (stratNameEl) stratNameEl.value = '';
       fillStratSelect(stratEconEl, STRAT_ECONOMY, 'Select economy type', '');
+      stratPreviewPicks.file = '';
       setStratSide('', '');
       stratRange?.set(0, ROUND_SECONDS);
       syncStratRange();
       stratNameEl?.focus();
+    } else {
+      renderStratPreviews();
     }
   }
 
@@ -4024,6 +4202,7 @@ export function createTimelineViewer({
       // With the user's own model running (the desktop app), aim4 eye words the
       // notes from what the rules measured; the rules' notes stay as the fallback.
       const eye = await eyeReady();
+      const previewPlan = stratPreviewPlan();
       // Everything the job needs is taken now: the job runs in the background,
       // after this form has closed and while the viewer moves on (or closes).
       const job = {
@@ -4047,7 +4226,10 @@ export function createTimelineViewer({
         windowFrom: stratRange?.get().from ?? 0,
         windowTo: stratRange?.get().to ?? ROUND_SECONDS,
         writer: eye.usable ? (input) => writeNotesWithEye(input) : null,
-        setposInNotes: Boolean(stratSetposEl?.checked)
+        setposInNotes: Boolean(stratSetposEl?.checked),
+        makePreviews: previewPlan.length
+          ? ({ onStatus }) => makeUtilityPreviews({ file, meta, track, plan: previewPlan, strategyName: name, onStatus })
+          : null
       };
       const teamName = team.name;
       const queued = enqueueEyeJob({
@@ -4063,6 +4245,9 @@ export function createTimelineViewer({
           }
           if (res.utilityAdded) bits.push(`${res.utilityAdded} grenade${res.utilityAdded === 1 ? '' : 's'} archived.`);
           if (res.utilityDropped) bits.push(`${res.utilityDropped} left out: the archive for this map is full.`);
+          const pv = res.previews;
+          if (pv?.made) bits.push(`${pv.made} preview${pv.made === 1 ? '' : 's'} linked${pv.unlinked ? `, ${pv.unlinked} did not fit in the notes` : ''}.`);
+          if (pv?.failed || (pv && !pv.made && pv.firstError)) bits.push(`${pv.failed || 'The'} preview${pv.failed === 1 ? '' : 's'} failed: ${pv.firstError}`);
           return { title: `Strategy saved: ${name}`, body: bits.join(' ') };
         }
       });
@@ -4100,6 +4285,21 @@ export function createTimelineViewer({
     }
     syncKeysVisibility();
   });
+
+  /** A part of the round was dragged: stop and show the round there. */
+  function seekRoundLocal(seconds) {
+    const item = sequence.at(activeIndex);
+    if (!item || !Number.isFinite(seconds)) return;
+    if (playback.playing) {
+      playback.pause();
+      syncPlayButton();
+    }
+    const local = Math.max(0, Math.min(roundLocalMax(item), seconds));
+    // A part that starts in the buy is a deliberate choice, same as dragging there.
+    const timing = item.timing;
+    if (local < Math.max(0, (timing.freezeEndTick - timing.startTick) / timing.tickRate)) freezeSkip = false;
+    playback.seek(sequence.offsetOf(activeIndex) + local);
+  }
 
   // ---- GIF creator ----------------------------------------------------------
   //
@@ -4146,19 +4346,7 @@ export function createTimelineViewer({
         draw();
       },
       /** An end of the GIF's part was dragged: stop and show the round there. */
-      seekLocal(seconds) {
-        const item = sequence.at(activeIndex);
-        if (!item || !Number.isFinite(seconds)) return;
-        if (playback.playing) {
-          playback.pause();
-          syncPlayButton();
-        }
-        const local = Math.max(0, Math.min(roundLocalMax(item), seconds));
-        // A part that starts in the buy is a deliberate choice, same as dragging there.
-        const timing = item.timing;
-        if (local < Math.max(0, (timing.freezeEndTick - timing.startTick) / timing.tickRate)) freezeSkip = false;
-        playback.seek(sequence.offsetOf(activeIndex) + local);
-      }
+      seekLocal: seekRoundLocal
     }
   });
 
@@ -6116,6 +6304,13 @@ export function createTimelineViewer({
   });
 
   function onSpecClick(e) {
+    const gear = e.target.closest('.rv-player-gear');
+    if (gear) {
+      e.preventDefault();
+      e.stopPropagation();
+      openStratPreview(gear.closest('.rv-player')?.dataset.id || '');
+      return;
+    }
     if (!mode3d) return;
     const row = e.target.closest('.rv-player[data-spec]');
     if (!row) return;

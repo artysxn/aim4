@@ -1,6 +1,7 @@
 // node src/replays/gif/gifCore.test.js
 import assert from 'node:assert/strict';
 import {
+  ditherToPalette,
   clampFps,
   clipSeconds,
   createGifWriter,
@@ -241,5 +242,23 @@ function radarFrame(i) {
 }
 
 assert.throws(() => createGifWriter({ width: 4, height: 4, fps: 18 }).addFrame(new Uint8Array(8)), /needs 64 bytes/);
+
+// ---- dithering ----
+{
+  // A dark ramp between two near colours: dithered, a patch averages out to the colour it should be.
+  const pal = [[20, 20, 20], [36, 36, 36], [240, 240, 240]];
+  const W = 64;
+  const H = 64;
+  const rgba = new Uint8Array(W * H * 4);
+  for (let p = 0; p < W * H; p++) rgba.set([28, 28, 28, 255], p * 4);
+  const idx = ditherToPalette(rgba, W, H, pal);
+  const mean = idx.reduce((sum, i) => sum + pal[i][0], 0) / idx.length;
+  assert.ok(Math.abs(mean - 28) < 2, `the middle of two colours reads as the middle, got ${mean}`);
+  assert.ok(new Set(idx).size === 2, 'no far colour comes in');
+  assert.deepEqual([...ditherToPalette(rgba, W, H, pal)], [...idx], 'the same picture gives the same pattern, so a still frame does not crawl');
+  // A colour the palette has stays that colour.
+  rgba.fill(240);
+  assert.ok(ditherToPalette(rgba, W, H, pal).every((i) => i === 2));
+}
 
 console.log('gifCore.test.js ok');

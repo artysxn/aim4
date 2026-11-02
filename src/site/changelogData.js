@@ -14,6 +14,18 @@
 
 export const CHANGELOG = Object.freeze([
   {
+    date: '2026-11-02',
+    title: 'Sharper GIFs, made in the background, and utility previews in strategies',
+    tag: 'new',
+    points: [
+      'Saved GIFs are now kept as video: a fraction of the size and none of the banding. The GIF is made when you download it or copy its image URL, which can take a moment the first time. Old links keep working.',
+      'The share page plays the clip much larger. Its links are now Share and Copy image URL, and the round details show while you hold Alt.',
+      'Pick a player for a 3D GIF and it is made in the background: you can stay in 2D and keep watching. The camera stays on that player for the whole clip, even past their death, where it used to jump to their killer.',
+      'Add strategy can now make Utility previews: a clip of each player\'s grenades from their own eyes, linked from their note on the words of the grenade. Everyone is included by default; untick a player, or use the gear beside their name to drop a clip or move its part of the round.',
+      'The radar now shows the grenade a player is holding beside them for every grenade. Smokes, HEs, incendiaries and decoys never showed before.'
+    ]
+  },
+  {
     date: '2026-10-31',
     title: '3D viewer: playback keeps playing, the viewer closes again',
     tag: 'fixed',

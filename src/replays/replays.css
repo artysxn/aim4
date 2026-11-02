@@ -2281,6 +2281,88 @@ body.rv-open:has(.side-collapsed) .rv-side-show {
   accent-color: var(--accent, #e8b04b);
 }
 
+.rv-strat-previews {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 40vh;
+  overflow-y: auto;
+}
+
+.rv-strat-previews[hidden],
+.rv-strat-pv-row [hidden] {
+  display: none;
+}
+
+.rv-strat-pv-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+}
+
+.rv-strat-pv-row .rv-strat-check {
+  flex: 1;
+  min-width: 0;
+}
+
+.rv-strat-pv-row .rv-strat-check span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rv-strat-pv-count {
+  flex: none;
+  color: #5c5c62;
+  font-size: 12px;
+}
+
+.rv-strat-pv-clips {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 4px 0 10px;
+}
+
+.rv-strat-pv-clip {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* The roster's gear: there only while a strategy with previews is being set up, for its side. */
+.rv-player-gear {
+  appearance: none;
+  display: none;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.55);
+  color: var(--muted, #9c9ca2);
+  cursor: pointer;
+}
+
+.rv-player-gear:hover {
+  color: var(--text, #f2f2f2);
+}
+
+.rv-player-gear svg {
+  display: block;
+  width: 14px;
+  height: 14px;
+}
+
+.strat-previews-T .rv-player[data-side='T'] .rv-player-gear,
+.strat-previews-CT .rv-player[data-side='CT'] .rv-player-gear {
+  display: inline-flex;
+}
+
 .rv-strat-range .rs {
   height: 18px;
 }
@@ -2525,7 +2607,8 @@ body.rv-open:has(.side-collapsed) .rv-side-show {
   white-space: normal;
 }
 
-.rv-gif-result img {
+.rv-gif-result img,
+.rv-gif-result video {
   display: block;
   width: 100%;
   height: auto;
@@ -2694,14 +2777,14 @@ body.rv-open:has(.side-collapsed) .rv-side-show {
   cursor: zoom-in;
 }
 
-.bm-pin-img img {
+.bm-pin-img video {
   display: block;
   width: 100%;
   height: auto;
   transition: filter 0.15s;
 }
 
-.bm-pin-img:hover img {
+.bm-pin-img:hover video {
   filter: brightness(0.82);
 }
 
@@ -2776,7 +2859,7 @@ body.rv-open:has(.side-collapsed) .rv-side-show {
   background: #101012;
 }
 
-.bm-detail-media img {
+.bm-detail-media video {
   display: block;
   width: 100%;
   height: auto;
@@ -11159,7 +11242,7 @@ table.rp-mine-table td.rp-mine-match {
   margin: 0;
 }
 
-.doc-embed-gif img {
+.doc-embed-gif video {
   display: block;
   max-width: min(100%, 640px);
   height: auto;

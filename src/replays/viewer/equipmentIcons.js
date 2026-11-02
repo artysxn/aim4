@@ -366,6 +366,11 @@ export function bareWeapon(name) {
 
 /** Resolve to an on-disk SVG stem, or '' if we have no art. */
 export function iconKey(name) {
+  // Display names first: "Smoke Grenade" has no file, and bareWeapon only makes it smoke_grenade.
+  if (isGrenade(name)) {
+    const nade = normalizeGrenadeType(name);
+    if (ICON_FILES.has(nade)) return nade;
+  }
   const bare = bareWeapon(name);
   if (!bare || bare === 'none') return '';
   if (ICON_FILES.has(bare)) return bare;

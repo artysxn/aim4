@@ -1,13 +1,18 @@
 // ---------------------------------------------------------------------------
 // replays/gif/gifCapture.js
-// Turning drawn frames into a GIF: draw frame i, copy the chosen part of the
-// canvas down to the GIF's size, stamp the round clock on it, hand it to the
+// Turning drawn frames into a clip: draw frame i, copy the chosen part of the
+// canvas down to the clip's size, stamp the round clock on it, hand it to the
 // encoder. The caller decides what "draw frame i" means (the viewer's radar,
 // the viewer's 3D scene, an offscreen radar for aim4 eye); this file only
 // knows canvases and pixels.
+//
+// A clip is made as an MP4 from the frames themselves (captureClip). The server
+// keeps that and makes a GIF from it when someone asks. Made as a GIF first, it
+// would keep a GIF's 256 colours for good. A browser without H.264 encoding
+// makes a GIF, and the server turns that into the MP4.
 // ---------------------------------------------------------------------------
 
-import { saveGif } from '../api.js';
+import { gifImageUrl, saveGif } from '../api.js';
 import { MAX_GIF_BYTES } from './gifCore.js';
 import { createGifEncoder } from './gifEncoder.js';
 import { publicOrigin } from '../../site/publicOrigin.js';
@@ -42,8 +47,144 @@ export function stampClock(ctx, text, width) {
   ctx.restore();
 }
 
+/** Paint one frame into the scratch canvas: the picture, what lies over it, the flash, the clock. */
+function paintFrame(ctx, f, width, height, stamp) {
+  ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = '#050505';
+  ctx.fillRect(0, 0, width, height);
+  ctx.drawImage(f.source, f.sx, f.sy, f.sw, f.sh, 0, 0, width, height);
+  for (const o of f.overlays || []) {
+    if (o) ctx.drawImage(o, 0, 0, width, height);
+  }
+  if (f.flash > 0.002) {
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, f.flash);
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, width, height);
+    ctx.restore();
+  }
+  if (stamp) stampClock(ctx, f.clock, width);
+}
+
+/** Frames waiting in the video encoder before the capture loop waits for it. */
+const MAX_ENCODE_QUEUE = 6;
+/** High, Main, then Baseline, at a level that takes any size the creator makes. */
+const AVC_CODECS = ['avc1.640033', 'avc1.4D0033', 'avc1.420033'];
 /**
- * Capture a clip.
+ * Bits per pixel per frame. Generous: people read lineups off these. At 1235 x 683 and 24 FPS it is 10 Mbit/s,
+ * about an eighth of what the same clip takes as a GIF.
+ */
+const VIDEO_BITS_PER_PIXEL = 0.5;
+
+/** A configuration this browser can encode, or null. */
+async function videoConfig(width, height, fps) {
+  if (typeof VideoEncoder === 'undefined' || typeof VideoFrame === 'undefined') return null;
+  // At most 12 Mbit/s, which 1080p does not need more of. At 20 an 8 second clip was 25 MB (encoders overshoot),
+  // and 30 seconds came close to what Bookmarks keep.
+  const bitrate = Math.round(Math.min(12e6, Math.max(2e6, width * height * fps * VIDEO_BITS_PER_PIXEL)));
+  for (const codec of AVC_CODECS) {
+    const config = { codec, width, height, framerate: fps, bitrate, bitrateMode: 'variable', latencyMode: 'quality', avc: { format: 'avc' } };
+    try {
+      if ((await VideoEncoder.isConfigSupported(config)).supported) return config;
+    } catch {
+      /* the next one */
+    }
+  }
+  return null;
+}
+
+/**
+ * Capture a clip as an MP4, or as a GIF where the browser cannot encode H.264 or the encoder gives out.
+ * Takes what captureGif takes.
+ *
+ * @returns {Promise<Blob>} video/mp4 or image/gif
+ */
+export async function captureClip(opts) {
+  // H.264 takes even sizes only.
+  const width = Math.max(2, Math.round(opts.size.width) & ~1);
+  const height = Math.max(2, Math.round(opts.size.height) & ~1);
+  const config = await videoConfig(width, height, opts.fps);
+  if (!config) return captureGif(opts);
+  try {
+    return await captureVideo(opts, config);
+  } catch (err) {
+    if (err?.name === 'AbortError') throw err;
+    console.warn('[gif] The video encoder failed, making a GIF instead:', err);
+    return captureGif(opts);
+  }
+}
+
+async function captureVideo(opts, config) {
+  const { count, fps, drawFrame, onProgress, signal } = opts;
+  const { width, height } = config;
+  const { BufferTarget, EncodedPacket, EncodedVideoPacketSource, Mp4OutputFormat, Output } = await import('mediabunny');
+  const canvas = scratchCanvas(width, height);
+  const ctx = canvas.getContext('2d', { alpha: false });
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+
+  const target = new BufferTarget();
+  // The index up front: a video that starts before it has all arrived.
+  const output = new Output({ format: new Mp4OutputFormat({ fastStart: 'in-memory' }), target });
+  const source = new EncodedVideoPacketSource('avc');
+  output.addVideoTrack(source, { frameRate: fps });
+  await output.start();
+
+  let failed = null;
+  let encoded = 0;
+  let wake = null;
+  /** Packets go into the file in order, one finished before the next starts. */
+  let writing = Promise.resolve();
+  const encoder = new VideoEncoder({
+    output: (chunk, meta) => {
+      const packet = EncodedPacket.fromEncodedChunk(chunk);
+      writing = writing.then(() => source.add(packet, meta));
+      writing.catch((err) => {
+        failed ||= err;
+      });
+      onProgress?.(++encoded, count, 'encode');
+    },
+    error: (err) => {
+      failed ||= err;
+      wake?.();
+    }
+  });
+  encoder.addEventListener('dequeue', () => wake?.());
+  encoder.configure(config);
+  const frameMicros = 1e6 / fps;
+
+  try {
+    for (let i = 0; i < count; i++) {
+      if (signal?.aborted) throw new DOMException('Cancelled', 'AbortError');
+      if (failed) throw failed;
+      const f = await drawFrame(i);
+      paintFrame(ctx, f, width, height, opts.stampClock !== false);
+      const frame = new VideoFrame(canvas, { timestamp: Math.round(i * frameMicros), duration: Math.round(frameMicros) });
+      // A key frame each second, so the video can be jumped around in.
+      encoder.encode(frame, { keyFrame: i % Math.max(1, Math.round(fps)) === 0 });
+      frame.close();
+      onProgress?.(i + 1, count, 'draw');
+      while (!failed && encoder.encodeQueueSize > MAX_ENCODE_QUEUE) {
+        await new Promise((resolve) => {
+          wake = resolve;
+        });
+      }
+    }
+    await encoder.flush();
+    await writing;
+    if (failed) throw failed;
+    await output.finalize();
+    return new Blob([target.buffer], { type: 'video/mp4' });
+  } catch (err) {
+    await output.cancel().catch(() => {});
+    throw err;
+  } finally {
+    if (encoder.state !== 'closed') encoder.close();
+  }
+}
+
+/**
+ * Capture a clip as a GIF.
  *
  * @param {object} opts
  * @param {number} opts.count           how many frames
@@ -88,22 +229,7 @@ export async function captureGif(opts) {
 
   /** Draw frame i into the scratch canvas and read it back. */
   const frameAt = async (i) => {
-    const f = await drawFrame(i);
-    ctx.clearRect(0, 0, width, height);
-    ctx.fillStyle = '#050505';
-    ctx.fillRect(0, 0, width, height);
-    ctx.drawImage(f.source, f.sx, f.sy, f.sw, f.sh, 0, 0, width, height);
-    for (const o of f.overlays || []) {
-      if (o) ctx.drawImage(o, 0, 0, width, height);
-    }
-    if (f.flash > 0.002) {
-      ctx.save();
-      ctx.globalAlpha = Math.min(1, f.flash);
-      ctx.fillStyle = '#fff';
-      ctx.fillRect(0, 0, width, height);
-      ctx.restore();
-    }
-    if (opts.stampClock !== false) stampClock(ctx, f.clock, width);
+    paintFrame(ctx, await drawFrame(i), width, height, opts.stampClock !== false);
     return ctx.getImageData(0, 0, width, height).data;
   };
 
@@ -241,6 +367,9 @@ export async function shrinkGif(blob, { fps, palette = 'local', maxBytes = MAX_G
  */
 export async function saveGifFitting(blob, meta, { fps, palette, maxBytes = MAX_GIF_BYTES, onShrink, onProgress, signal } = {}) {
   if (blob.size <= maxBytes) return { gif: await saveGif(blob, meta), copy: null };
+  if (blob.type === 'video/mp4') {
+    throw Object.assign(new Error(`it is ${mb(blob.size)} MB and Bookmarks keep up to ${mb(maxBytes)} MB. Lower the quality or the FPS, or shorten the part of the round.`), { code: 'too-big' });
+  }
   onShrink?.();
   const small = await shrinkGif(blob, { fps, palette, maxBytes, onProgress, signal });
   if (!small) {
@@ -255,15 +384,15 @@ export async function saveGifFitting(blob, meta, { fps, palette, maxBytes = MAX_
   return { gif, copy: { width: small.width, height: small.height, fps: Math.round(small.fps * 10) / 10, bytes: small.blob.size } };
 }
 
-/** A file name that says what the GIF is: aim4-mirage-r14-1m30.gif */
-export function gifFileName(meta) {
+/** A file name that says what the clip is: aim4-mirage-r14-1m30.gif, or .mp4 with that extension. */
+export function gifFileName(meta, ext = 'gif') {
   const part = (s) =>
     String(s || '')
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-|-$/g, '');
   const bits = ['aim4', part(meta?.mapName || meta?.map), meta?.round ? `r${meta.round}` : '', part(String(meta?.clockFrom || '').replace(':', 'm'))];
-  return `${bits.filter(Boolean).join('-') || 'aim4'}.gif`;
+  return `${bits.filter(Boolean).join('-') || 'aim4'}.${ext}`;
 }
 
 /** Hand a Blob to the browser's downloads. */
@@ -282,6 +411,23 @@ export function downloadBlob(blob, name) {
 /** The share link: the GIF itself, on aim4's own address, so it embeds wherever it is pasted. */
 export function gifShareUrl(id) {
   return `${publicOrigin()}/g/${id}.gif`;
+}
+
+/**
+ * Ask for a saved clip's GIF without waiting for it. Done when its image URL is copied: the server makes the
+ * GIF on the first request, so it is ready before whoever gets the link opens it, or a chat app looks at it.
+ */
+export function warmGif(id) {
+  fetch(gifShareUrl(id), { method: 'HEAD', mode: 'no-cors' }).catch(() => {});
+}
+
+/**
+ * Download a saved clip as a GIF. The server makes it now if nobody has asked before, so it can take a while.
+ */
+export async function downloadSavedGif(id, meta) {
+  const res = await fetch(gifImageUrl(id));
+  if (!res.ok) throw new Error(`Download failed (${res.status})`);
+  downloadBlob(await res.blob(), gifFileName(meta));
 }
 
 /** The share page: the GIF with its title and description. */

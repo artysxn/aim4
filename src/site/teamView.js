@@ -2183,7 +2183,7 @@ export function initTeamView({ auth, escapeHtml }) {
               s.id
             )}" data-sb-idx="${i}"><textarea class="sb-input sb-role-note" data-sb-field="roleNotes" data-sb-idx="${i}" data-sb-id="${escapeHtml(
               s.id
-            )}" rows="1" maxlength="800" placeholder="Role" draggable="false">${escapeHtml(note)}</textarea></div></td>`;
+            )}" rows="1" maxlength="1600" placeholder="Role" draggable="false">${escapeHtml(note)}</textarea></div></td>`;
           })
           .join('');
 

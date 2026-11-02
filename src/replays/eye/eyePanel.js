@@ -10,8 +10,8 @@
 // to the account in one click, since it is signed in already.
 // ---------------------------------------------------------------------------
 
-import { accessToken, gifImageUrl } from '../api.js';
-import { gifPageUrl, gifShareUrl } from '../gif/gifCapture.js';
+import { accessToken, gifPosterUrl, gifVideoUrl } from '../api.js';
+import { gifPageUrl, gifShareUrl, warmGif } from '../gif/gifCapture.js';
 import { desktopApp } from '../../site/desktopApp.js';
 import { SYSTEM_PROMPT, gradeLessonsNote, runAgentTurn, summarizeChat, systemWith } from './eyeAgent.js';
 import { HISTORY_BUDGET } from './eyeContext.js';
@@ -807,7 +807,7 @@ export function createEyePanel({ escapeHtml }) {
     const node = document.createElement('figure');
     node.className = 'eye-msg eye-gif';
     const size = gif.width && gif.height ? ` width="${Number(gif.width) | 0}" height="${Number(gif.height) | 0}"` : '';
-    node.innerHTML = `<img src="${escapeHtml(gifImageUrl(id))}" alt="${escapeHtml(gif.title || 'GIF')}"${size} />
+    node.innerHTML = `<video src="${escapeHtml(gifVideoUrl(id))}" poster="${escapeHtml(gifPosterUrl(id))}" aria-label="${escapeHtml(gif.title || 'GIF')}"${size} autoplay loop muted playsinline></video>
       <figcaption>
         <span>${escapeHtml(gif.title || 'GIF')}</span>
         <button type="button" class="eye-gif-copy" data-copy="page" title="A page with the GIF, its title and its description">Page link</button>
@@ -817,6 +817,7 @@ export function createEyePanel({ escapeHtml }) {
     for (const btn of node.querySelectorAll('.eye-gif-copy')) {
       btn.addEventListener('click', async () => {
         const link = btn.dataset.copy === 'page' ? gifPageUrl(id) : gifShareUrl(id);
+        if (btn.dataset.copy !== 'page') warmGif(id);
         try {
           await navigator.clipboard.writeText(link);
           btn.textContent = 'Copied';

@@ -69,7 +69,7 @@ function teamNameOf(meta, team) {
  * @param {string} [opts.player]     the followed player's name, in 3D
  * @param {string} [opts.title]
  * @param {string} [opts.description]
- * @param {string} [opts.source]     'viewer' | 'eye' | 'antistrat'
+ * @param {string} [opts.source]     'viewer' | 'eye' | 'antistrat' | 'strategy'
  */
 export function gifMetaFromRound(meta, opts = {}) {
   const winner = winningSide(meta);
@@ -133,7 +133,7 @@ export function cleanGifMeta(input = {}) {
     teams,
     winnerSide: side(m.winnerSide),
     winnerTeam: text(m.winnerTeam, 60),
-    source: ['viewer', 'eye', 'antistrat'].includes(m.source) ? m.source : 'viewer'
+    source: ['viewer', 'eye', 'antistrat', 'strategy'].includes(m.source) ? m.source : 'viewer'
   };
 }
 

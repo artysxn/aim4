@@ -1575,7 +1575,7 @@ function metaHeader(meta) {
 /**
  * Save a GIF to Bookmarks.
  *
- * @param {Blob} blob  image/gif
+ * @param {Blob} blob  video/mp4, or image/gif from a browser that cannot encode video
  * @param {object} meta  gifMetaFromRound(...)
  * @returns {Promise<object>} the stored record, with its id
  */
@@ -1583,7 +1583,7 @@ export async function saveGif(blob, meta) {
   const body = await gifJson(
     await safeFetch(`${API_BASE}/api/replays/gifs`, {
       method: 'POST',
-      headers: await headers({ 'Content-Type': 'image/gif', 'X-Aim4-Gif-Meta': metaHeader(meta) }),
+      headers: await headers({ 'Content-Type': blob.type || 'application/octet-stream', 'X-Aim4-Gif-Meta': metaHeader(meta) }),
       body: blob
     })
   );
@@ -1612,9 +1612,22 @@ export async function deleteGif(id) {
   return body.gifs || [];
 }
 
-/** Where this page loads a saved GIF's picture from (through the app's own server in the desktop app). */
+/**
+ * Where this page gets a saved clip as a GIF (through the app's own server in the desktop app). The server
+ * makes it on the first request, so this is for downloads; to show a clip, use gifVideoUrl.
+ */
 export function gifImageUrl(id) {
   return `${API_BASE}/api/replays/gifs/${encodeURIComponent(id)}.gif`;
+}
+
+/** A saved clip's video, which is what is kept and what pages show. */
+export function gifVideoUrl(id) {
+  return `${API_BASE}/api/replays/gifs/${encodeURIComponent(id)}.mp4`;
+}
+
+/** A saved clip's first frame. */
+export function gifPosterUrl(id) {
+  return `${API_BASE}/api/replays/gifs/${encodeURIComponent(id)}.jpg`;
 }
 
 /**

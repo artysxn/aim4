@@ -1189,7 +1189,7 @@ TOOLS.push(
           view: { type: 'string', enum: ['2d', '3d'] },
           player: { type: 'string', description: '3d: who to follow.' },
           camera: { type: 'string', enum: ['first_person', 'third_person'] },
-          quality: { type: 'number', description: '1 (default) to 3.' },
+          quality: { type: 'number', description: '1 to 3 (default).' },
           title: { type: 'string' },
           description: { type: 'string' }
         },

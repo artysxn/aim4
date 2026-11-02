@@ -645,7 +645,8 @@ function normalizeLinks(s) {
 
 function normalizeRoleNotes(raw) {
   const src = Array.isArray(raw) ? raw : [];
-  return [0, 1, 2, 3, 4].map((i) => String(src[i] ?? '').slice(0, 800));
+  // Written notes are capped at 800 (roundNarrative.js); the rest is room for clip links (gif/utilityPreviews.js).
+  return [0, 1, 2, 3, 4].map((i) => String(src[i] ?? '').slice(0, 1600));
 }
 
 function normalizeVisibleTo(raw, team) {

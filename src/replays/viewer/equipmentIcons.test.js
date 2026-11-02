@@ -8,7 +8,7 @@
 // matched by luck, which is what made the symptom look like "only shows the
 // grenades a player has held".
 
-import { inventoryAt, normalizeLoadout, hudLoadout, viewModelWeaponName } from './equipmentIcons.js';
+import { iconKey, inventoryAt, normalizeLoadout, hudLoadout, viewModelWeaponName } from './equipmentIcons.js';
 
 function assert(cond, msg) {
   if (!cond) throw new Error(msg || 'assert failed');
@@ -168,6 +168,20 @@ const FULL_T_BUY = [
   assert(viewModelWeaponName('AK-47') === 'ak47', 'guns keep the bareWeapon path');
   assert(viewModelWeaponName('M4A1-S') === 'm4a1_silencer', 'silenced M4 keeps its pack key');
   assert(viewModelWeaponName('Zeus x27') === 'taser', 'zeus resolves to taser');
+}
+
+// A held grenade's badge asks by display name, and most of them are two words.
+for (const [name, want] of [
+  ['Smoke Grenade', 'smokegrenade'],
+  ['High Explosive Grenade', 'hegrenade'],
+  ['HE Grenade', 'hegrenade'],
+  ['Incendiary Grenade', 'incgrenade'],
+  ['Decoy Grenade', 'decoy'],
+  ['Flashbang', 'flashbang'],
+  ['Molotov', 'molotov'],
+  ['weapon_smokegrenade', 'smokegrenade']
+]) {
+  assert(iconKey(name) === want, `${name} draws ${want}, got "${iconKey(name)}"`);
 }
 
 console.log('equipmentIcons: all assertions passed');

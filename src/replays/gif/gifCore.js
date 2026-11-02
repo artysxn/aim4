@@ -14,6 +14,8 @@
 //           frame costs almost nothing.
 //   local   3D. Every frame gets its own palette: a moving camera changes
 //           every pixel, and one palette for a whole clip of a 3D scene bands.
+//           Its colours are matched finely and dithered (ditherToPalette): 256
+//           colours leave steps in a dark wall otherwise.
 // ---------------------------------------------------------------------------
 
 // gifenc ships CommonJS as its main: a default import reads the same in Node and in esbuild's bundle.
@@ -21,21 +23,77 @@ import gifenc from 'gifenc';
 
 const { GIFEncoder, applyPalette, quantize } = gifenc;
 
+/** An 8x8 threshold map, -0.5 to 0.5. Fixed to the screen, so a still part of the picture does not crawl between frames. */
+const BAYER_8 = [
+  0, 32, 8, 40, 2, 34, 10, 42, 48, 16, 56, 24, 50, 18, 58, 26, 12, 44, 4, 36, 14, 46, 6, 38, 60, 28, 52, 20, 62, 30, 54, 22, 3, 35, 11, 43, 1, 33, 9, 41, 51, 19, 59, 27, 49, 17, 57, 25, 15,
+  47, 7, 39, 13, 45, 5, 37, 63, 31, 55, 23, 61, 29, 53, 21
+].map((v) => (v + 0.5) / 64 - 0.5);
+/** How far the map moves a colour, in 8-bit levels. Measured on a real clip: about 11% more bytes. */
+const DITHER_SPREAD = 8;
+const clampByte = (v) => (v < 0 ? 0 : v > 255 ? 255 : v | 0);
+
+/**
+ * Each pixel's palette index, dithered. gifenc's own lookup rounds to rgb565, steps of 8 levels of red and
+ * blue, which is what a dark scene shows as bands; this one matches at 6 bits a channel, weighted the way
+ * the eye sees colour, and remembers each answer so a frame costs one search per colour in it.
+ *
+ * @param {Uint8Array} rgba
+ * @param {number} width
+ * @param {number} height
+ * @param {number[][]} palette
+ * @returns {Uint8Array}
+ */
+export function ditherToPalette(rgba, width, height, palette) {
+  const out = new Uint8Array(width * height);
+  const seen = new Int16Array(1 << 18).fill(-1);
+  for (let y = 0, p = 0; y < height; y++) {
+    const row = (y & 7) * 8;
+    for (let x = 0; x < width; x++, p++) {
+      const a = BAYER_8[row + (x & 7)] * DITHER_SPREAD;
+      const r = clampByte(rgba[p * 4] + a);
+      const g = clampByte(rgba[p * 4 + 1] + a);
+      const b = clampByte(rgba[p * 4 + 2] + a);
+      const key = ((r >> 2) << 12) | ((g >> 2) << 6) | (b >> 2);
+      let hit = seen[key];
+      if (hit < 0) {
+        let best = Infinity;
+        for (let i = 0; i < palette.length; i++) {
+          const dr = ((r & 0xfc) | 2) - palette[i][0];
+          const dg = ((g & 0xfc) | 2) - palette[i][1];
+          const db = ((b & 0xfc) | 2) - palette[i][2];
+          const d = 2 * dr * dr + 4 * dg * dg + 3 * db * db;
+          if (d < best) {
+            best = d;
+            hit = i;
+          }
+        }
+        seen[key] = hit;
+      }
+      out[p] = hit;
+    }
+  }
+  return out;
+}
+
 export const DEFAULT_FPS = { '2d': 18, '3d': 24 };
 export const MIN_FPS = 5;
 export const MAX_FPS = 30;
 
 /**
- * Share of the native resolution at quality 1, 2 and 3. Level 1 is the floor:
- * half the radar's pixels, three quarters of the 3D view's.
+ * Share of the native resolution at quality 1, 2 and 3. A clip starts at 3: people read
+ * lineups off these, so a smaller one is only made when someone asks for it.
  */
 export const QUALITY_SCALE = { '2d': [0.5, 0.75, 1], '3d': [0.75, 0.875, 1] };
+export const DEFAULT_QUALITY = 3;
 
 /** The longest clip each view takes, in seconds. A 3D frame is a full picture; a radar frame is mostly unchanged map. */
 export const MAX_SECONDS = { '2d': 120, '3d': 30 };
 
-/** What the server keeps. A bigger GIF still downloads; it just is not saved to Bookmarks. */
-export const MAX_GIF_BYTES = 40 * 1024 * 1024;
+/**
+ * What the server keeps. A bigger GIF still downloads; it just is not saved to Bookmarks. A 3D clip at
+ * full size is about 10 MB a second (1235 x 683, measured), so 40 MB cut a six second lineup down.
+ */
+export const MAX_GIF_BYTES = 100 * 1024 * 1024;
 
 /** Two 100ths of a second is the shortest delay browsers honour; below it they show the frame for 10. */
 const MIN_DELAY_CS = 2;
@@ -177,8 +235,7 @@ export function createGifWriter({ width, height, fps, palette = 'global', repeat
       const delay = delayCs(index) * 10;
       if (mode === 'local') {
         const pal = quantize(bytes, 256, { format: 'rgb565' });
-        const idx = applyPalette(bytes, pal, 'rgb565');
-        gif.writeFrame(idx, w, h, { palette: pal, delay, repeat, dispose: 1 });
+        gif.writeFrame(ditherToPalette(bytes, w, h, pal), w, h, { palette: pal, delay, repeat, dispose: 1 });
       } else {
         if (!shared) setSharedPalette(bytes);
         const idx = applyPalette(bytes, shared, 'rgb565');
