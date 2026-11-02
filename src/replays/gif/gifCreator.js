@@ -51,6 +51,7 @@ const START_FPS = 24;
  *   can3d(): boolean
  *   is3d(): boolean
  *   view3d(): object | null
+ *   openCamera(): Promise<boolean>  into 3D and flying, false if this round has no 3D
  *   drawAt(tick): void            draws the radar at a tick
  *   beginCapture(): object        pauses playback, returns what endCapture restores
  *   endCapture(state): void
@@ -172,7 +173,12 @@ export function createGifCreator({ panel, mapEl, canvas, photoIcon = '', escapeH
   const picker = createPerspectivePicker({
     host: $('[data-gif-picker]'),
     escapeHtml,
-    cameraPose: () => viewer.view3d()?.cameraPose?.() || null,
+    camera: {
+      available: () => Boolean(viewer.can3d?.()),
+      open: () => viewer.openCamera(),
+      pose: () => viewer.view3d()?.cameraPose?.() || null,
+      screenshot: () => viewer.view3d()?.screenshot?.() || null
+    },
     onChange: () => {
       if (!picker.wantsMap) {
         picking = false;
@@ -849,6 +855,10 @@ export function createGifCreator({ panel, mapEl, canvas, photoIcon = '', escapeH
     roundChanged() {
       if (!open || busy) return;
       resetRange();
+    },
+    /** The T key: a shot for the Camera perspective, when that is what is being picked. */
+    takeShot() {
+      return open && !busy && picker.takeShot();
     },
     /** The viewer went in or out of 3D: the free camera comes and goes with it. */
     viewChanged() {

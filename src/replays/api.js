@@ -166,6 +166,10 @@ export async function fetchStatus() {
   return asJson(await safeFetch(`${API_BASE}/api/replays/status`, { headers: await headers() }));
 }
 
+export async function fetchStorage() {
+  return asJson(await safeFetch(`${API_BASE}/api/replays/storage`, { headers: await headers() }));
+}
+
 async function fetchSampleDemos() {
   try {
     const res = await fetch('/api/sampledemos', { credentials: 'include' });

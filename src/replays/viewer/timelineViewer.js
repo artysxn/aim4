@@ -515,6 +515,7 @@ export function createTimelineViewer({
       <span class="rv-keys-key">V</span><span class="rv-keys-action">View</span>
       <span class="rv-keys-key">F</span><span class="rv-keys-action">3D POV / third</span>
       <span class="rv-keys-key">G</span><span class="rv-keys-action">3D fly / walk</span>
+      <span class="rv-keys-key">T</span><span class="rv-keys-action">Camera shot</span>
       <span class="rv-keys-key">Click</span><span class="rv-keys-action">3D next player</span>
       <span class="rv-keys-key">Right click</span><span class="rv-keys-action">3D previous player</span>
     </button>`;
@@ -4321,6 +4322,13 @@ export function createTimelineViewer({
       can3d: () => Boolean(resolveMapSlug()),
       is3d: () => mode3d && Boolean(view3d),
       view3d: () => (mode3d ? view3d : null),
+      async openCamera() {
+        await setMode3d(true);
+        if (destroyed || !mode3d || !view3d) return false;
+        view3d.setMode('fly');
+        sync3dButtons();
+        return true;
+      },
       /** Every tick of the round on screen, for the setpos of each grenade. Never the coarse track. */
       fullTrack: () => (files[activeIndex] ? store.get(files[activeIndex])?.full || store.loadFull(files[activeIndex]) : null),
       drawAt(tick) {
@@ -6537,6 +6545,11 @@ export function createTimelineViewer({
       e.preventDefault();
       view3d.toggleFree();
       sync3dButtons();
+      return;
+    }
+    if (key === 't') {
+      if (e.repeat || !gifCreator?.takeShot()) return;
+      e.preventDefault();
       return;
     }
     {

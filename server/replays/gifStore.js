@@ -22,7 +22,7 @@
 import crypto from 'node:crypto';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { userDir } from './demoStore.js';
+import { invalidateGifBytes, userDir } from './demoStore.js';
 import { GIF_DESCRIPTION_MAX, GIF_ID, GIF_TITLE_MAX, MAX_PERSPECTIVES, cleanGifMeta, cleanPerspective } from '../../src/replays/gif/gifMeta.js';
 import { gifToMp4, mp4ToGif, posterOf, probeVideo } from './gifVideo.js';
 
@@ -139,6 +139,7 @@ async function storeMedia(user, id, bytes) {
     // What every browser plays. The creator only makes this, so anything else did not come from it.
     if (video.codec !== 'h264') throw fail(400, 'That video is not H.264.');
     await intoPlace(filePath(user, id, 'jpg'), (tmp) => posterOf(mp4, tmp));
+    invalidateGifBytes(user);
     return { ...video, bytes: (await fsp.stat(mp4)).size };
   } catch (err) {
     await removeMedia(user, id);
@@ -148,7 +149,10 @@ async function storeMedia(user, id, bytes) {
   }
 }
 
-const removeMedia = (user, id) => Promise.all(['mp4', 'jpg', 'gif'].map((ext) => fsp.rm(filePath(user, id, ext), { force: true })));
+async function removeMedia(user, id) {
+  await Promise.all(['mp4', 'jpg', 'gif'].map((ext) => fsp.rm(filePath(user, id, ext), { force: true })));
+  invalidateGifBytes(user);
+}
 
 /**
  * Store an uploaded clip: an MP4 from the creator, or a GIF from a browser that cannot make one.
@@ -193,6 +197,12 @@ export async function addGif(user, bytes, meta, actor) {
 }
 
 /** Records this account may see: its own, or every one for a site admin. */
+/** How many notes this account has, against how many it can keep. */
+export async function noteCount(user, actor) {
+  const list = await readGifs(user);
+  return { count: actor?.id ? list.filter((g) => g.ownerId === actor.id).length : 0, max: MAX_GIFS };
+}
+
 export async function listGifs(user, actor) {
   const list = await readGifs(user);
   if (actor?.admin) return list;
@@ -356,6 +366,7 @@ export async function gifFile(user, id) {
   await buildOnce(gif, async () => {
     await intoPlace(gif, (tmp) => mp4ToGif(mp4, tmp));
     await trimGifCache(user);
+    invalidateGifBytes(user);
   });
   return gif;
 }

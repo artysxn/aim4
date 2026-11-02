@@ -549,12 +549,14 @@ export function invalidateDemoList(user = undefined) {
   if (user === undefined) {
     recordListCache.clear();
     usageCache.clear();
+    gifBytesCache.clear();
     roundNamesCache.clear();
     return;
   }
   const key = userKey(user);
   recordListCache.delete(key);
   usageCache.delete(key);
+  gifBytesCache.delete(key);
   roundNamesCache.delete(key);
 }
 
@@ -690,7 +692,51 @@ const USAGE_TTL_MS = 10 * 60 * 1000;
  */
 const usageInflight = new Map();
 
-export async function usage(user, { fresh = false } = {}) {
+/**
+ * Visual notes' folder, totalled apart from the rest: it changes with every clip saved, where clearing the
+ * cache above would walk the rounds directory again, and it is a small folder to total.
+ *
+ * @type {Map<string, {value: number, expires: number}>}
+ */
+const gifBytesCache = new Map();
+
+async function gifBytes(user) {
+  const key = userKey(user);
+  const hit = gifBytesCache.get(key);
+  if (hit && hit.expires > Date.now()) return hit.value;
+  const value = await dirBytes(path.join(userDir(user), 'gifs'));
+  gifBytesCache.set(key, { value, expires: Date.now() + USAGE_TTL_MS });
+  return value;
+}
+
+/** A clip was added or removed (gifStore.js). */
+export function invalidateGifBytes(user) {
+  gifBytesCache.delete(userKey(user));
+}
+
+export async function usage(user, opts = {}) {
+  const [library, gifs] = await Promise.all([libraryUsage(user, opts), gifBytes(user)]);
+  const bytes = library.bytes + gifs;
+  return { ...library, bytes, gifBytes: gifs, bytesLeft: Math.max(0, MAX_BYTES - bytes) };
+}
+
+/**
+ * Usage, with what is really left: MAX_BYTES is a setting, and the disk under it can run out first.
+ * The disk holds more than the library, so the two are not a sum.
+ */
+export async function storage(user) {
+  const u = await usage(user);
+  let diskFreeBytes = null;
+  try {
+    const s = await fsp.statfs(ROOT);
+    diskFreeBytes = Number(s.bavail) * Number(s.bsize);
+  } catch {
+    /* no reading on this filesystem: the cap is all there is to go on */
+  }
+  return { ...u, diskFreeBytes, bytesLeft: diskFreeBytes === null ? u.bytesLeft : Math.min(u.bytesLeft, diskFreeBytes) };
+}
+
+async function libraryUsage(user, { fresh = false } = {}) {
   const key = userKey(user);
   if (!fresh) {
     const hit = usageCache.get(key);

@@ -4,6 +4,7 @@
 //
 //   GET    /api/replays/diag                     public crash / memory diagnostic
 //   GET    /api/replays/status                   parser + quota
+//   GET    /api/replays/storage                  what the library holds and what is left
 //   GET    /api/replays/demos                    library listing (?limit=&offset=)
 //   POST   /api/replays/demos                    upload .dem or an archive of them
 //   GET    /api/replays/uploads/:batchId         unpack + parse progress for one upload
@@ -72,12 +73,13 @@ import {
   setDemoTags,
   setDemoVisibility,
   upsertPlaylist,
+  storage,
   usage,
   userDir,
   writeRecord,
   writeRoundNotes
 } from './demoStore.js';
-import { MAX_GIF_BYTES, addGif, addPerspective, listGifs, removeGif, removePerspective, updateGif } from './gifStore.js';
+import { MAX_GIF_BYTES, addGif, addPerspective, listGifs, noteCount, removeGif, removePerspective, updateGif } from './gifStore.js';
 import { sendGifMedia } from './gifShare.js';
 import { applyTeamRename } from './teamRescan.js';
 import { cpuProbe, memorySnapshot } from './hostMemory.js';
@@ -2752,6 +2754,13 @@ export async function handleReplayRequest(req, res, url) {
     }
     return { bytes: Buffer.concat(chunks), meta };
   };
+
+  // Apart from the list: a cold total walks the rounds directory, and the notes should not wait on that.
+  if (req.method === 'GET' && p === '/api/replays/storage') {
+    const [space, notes] = await Promise.all([storage(user), noteCount(user, me.signedIn ? { id: me.id } : null)]);
+    json(res, 200, { ...space, notes });
+    return true;
+  }
 
   if (p === '/api/replays/gifs') {
     const actor = { id: me.id, username: me.username, admin: me.admin };

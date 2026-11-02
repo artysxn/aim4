@@ -34,6 +34,7 @@ export const KEYS = [
   ['Tab (hold)', 'Stats board'],
   ['F', '3D: follow the spectated player'],
   ['G', '3D: free camera'],
+  ['T', 'Visual note: take a Camera shot'],
   ['X', '3D: x-ray through walls'],
   ['Q (hold)', '3D: radar overview'],
   ['Scroll', '3D: cycle cameras'],
@@ -309,7 +310,7 @@ export const DOC_GROUPS = [
         html: `
           <p>A visual note is a part of a round seen from as many perspectives as you want: one player's eyes, three players and the 2D map, or a grenade from the hand that threw it and from where it lands. The <strong>Create visual note</strong> button in the viewer makes one.</p>
           <ol>
-            <li>Pick the perspectives. Click a player for first person, again for third person, again to take them off. Under the players: <strong>2D map</strong>, <strong>Overview</strong> (a 3D camera above the action, players shown through walls), <strong>Free camera</strong> (where the 3D view on screen is now, when it is open), and <strong>Landing 3D</strong> and <strong>Landing 2D</strong>, which make one clip per grenade thrown in the part, by the players you picked if you picked any.</li>
+            <li>Pick the perspectives. Open <strong>Players</strong> and click a name for first person, or <strong>1st</strong> or <strong>3rd</strong> beside it to choose the view. Click the same thing again to take them off. Under the dropdown: <strong>2D map</strong>, <strong>Overview</strong> (a 3D camera above the action, players shown through walls), <strong>Camera</strong> (opens 3D and flies: click the view to steer, go where you want to film from and press <strong>T</strong> or <strong>Take shot</strong>. Each shot is one more clip from that spot, with a screenshot to tell them apart), and <strong>Landing 3D</strong> and <strong>Landing 2D</strong>, which make one clip per grenade thrown in the part, by the players you picked if you picked any.</li>
             <li>Pick the part of the round on the slider. It is tied to the round's own timeline: drag either end and the round shows that moment; move the round's timeline and the part moves with it, keeping its length. The white line on the slider is where the round is now.</li>
             <li>Choose the <strong>quality</strong> (1 to 3) and the <strong>FPS</strong>.</li>
             <li>Give it a title and a description. Anything between &lt; and &gt; in the description becomes a link that copies itself, so &lt;setpos 123 456 78; setang 0 90 0&gt; copies that setpos with one click.</li>

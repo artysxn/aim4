@@ -71,6 +71,8 @@ near(lookPose({ x: 0, y: 0, z: 0 }, { x: 10, y: 0, z: 10 }).pitch, -45, 'up');
   assert.equal(describePerspective({ type: 'player', slot: 0, mode: 'pov' }, meta).label, 'dev1ce, first person');
   assert.equal(describePerspective({ type: 'player', slot: 0, mode: 'third' }, meta).view, 'third');
   assert.equal(describePerspective({ type: 'map' }, meta).label, '2D map');
+  assert.equal(describePerspective({ type: 'camera', pose: {} }, meta).label, 'Camera');
+  assert.equal(describePerspective({ type: 'camera', pose: {}, shot: 2 }, meta).label, 'Camera 2');
   assert.equal(describePerspective({ type: 'landing', kind: '3d', grenade: { player: 'a', type: 'smokegrenade' } }, meta).label, 'Smoke landing, dev1ce');
   assert.equal(describePerspective({ type: 'landing', kind: '2d', grenade: { player: 'a', type: 'flashbang' } }, meta).label, 'Flash landing, dev1ce (2D)');
 }

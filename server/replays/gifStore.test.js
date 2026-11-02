@@ -240,6 +240,22 @@ const mp4Bytes = fs.readFileSync(await videoFile(LIB, g.id));
 const clip = await addGif(LIB, mp4Bytes, { kind: '3d', map: 'de_nuke' }, alice);
 assert.deepEqual(fs.readdirSync(gifDir).filter((n) => n.startsWith(clip.id)).map((n) => n.split('.').pop()).sort(), ['jpg', 'mp4']);
 assert.deepEqual([clip.width, clip.height, clip.frames], [8, 6, 3]);
+
+// What a note takes counts as storage straight away, and stops counting when it goes.
+{
+  const { storage, usage } = await import('./demoStore.js');
+  const before = await usage(LIB);
+  const extra = await addGif(LIB, mp4Bytes, { kind: '3d', map: 'de_nuke' }, alice);
+  const during = await usage(LIB);
+  assert.ok(during.gifBytes >= before.gifBytes + mp4Bytes.length, 'a new clip counts');
+  assert.equal(during.bytes - during.gifBytes, before.bytes - before.gifBytes, 'and nothing else moved');
+  assert.ok(await removeGif(LIB, extra.id, alice));
+  assert.equal((await usage(LIB)).gifBytes, before.gifBytes);
+  const space = await storage(LIB);
+  assert.ok(space.bytesLeft <= space.maxBytes - space.bytes, 'never more than the cap leaves');
+  if (space.diskFreeBytes !== null) assert.ok(space.bytesLeft <= space.diskFreeBytes, 'or than the disk has');
+}
+
 {
   const both = await Promise.all([fetch(`${base}/g/${clip.id}.gif`, { method: 'HEAD' }), fetch(`${base}/g/${clip.id}.gif`)]);
   assert.deepEqual(both.map((r) => r.status), [200, 200], 'two askers share one build');

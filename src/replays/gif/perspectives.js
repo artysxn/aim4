@@ -6,7 +6,7 @@
 //   { type: 'player', slot, mode: 'pov' | 'third' }   that player's eyes, or behind them
 //   { type: 'map' }                                   the 2D map
 //   { type: 'overview' }                              a 3D camera above the action
-//   { type: 'camera', pose }                          a 3D camera held at a chosen place
+//   { type: 'camera', pose, shot? }                   a 3D camera held at a chosen place; shot numbers several
 //   { type: 'landing', kind: '3d' | '2d', grenade }   where one grenade comes down
 //
 // DOM-free.
@@ -114,7 +114,7 @@ export function describePerspective(spec, meta) {
     case 'overview':
       return { view: 'free', label: 'Overview' };
     case 'camera':
-      return { view: 'free', label: 'Free camera' };
+      return { view: 'free', label: spec.shot ? `Camera ${spec.shot}` : 'Camera' };
     case 'landing': {
       const who = (meta?.players || []).find((p) => String(p.id) === String(spec.grenade?.player))?.name;
       const what = `${nadeWord(spec.grenade)} landing${who ? `, ${who}` : ''}`;

@@ -18,10 +18,11 @@ export const CHANGELOG = Object.freeze([
     title: 'Visual notes: one moment from as many perspectives as you want',
     tag: 'new',
     points: [
-      'Saved GIFs are now Visual Notes. A note can hold several perspectives of the same part of a round: any players in first or third person, the 2D map, an overview, a free camera, and where each grenade lands, in 3D or 2D.',
+      'Saved GIFs are now Visual Notes. A note can hold several perspectives of the same part of a round: any players in first or third person, the 2D map, an overview, a camera you fly to any spot, and where each grenade lands, in 3D or 2D.',
       'Pick as many as you want when you create a note, or add more to an existing one from Bookmarks. Each has a tab, and All plays them side by side. The share page has the same tabs.',
       'In the 2D view, hover a player and press Q to mark the start, Q to mark the end, and Q to confirm. It is made in the background and opens in a new tab when it is done.',
       'The timeline now shows what happened as icons: a skull in the colour of the side that lost a player, the grenade thrown in the thrower\'s colour, and the bomb when it is planted. The selected round glows in the colour of whoever won it.',
+      'Bookmarks has a Storage tab: how much room is left, and what is using it.',
       'F1 brings the keyboard shortcuts back after you hide them.',
       'What is being made now shows at the top right with your other notifications.',
       'Fixed clips made in the background: the hands and guns were frozen, in the wrong pose, or showed two guns at once.',

@@ -1969,6 +1969,19 @@ export function createView3d({ slug, onModeChange, onFailed = null, sampleSlot, 
       applyFrame();
     },
 
+    /** What the camera sees now as a small JPEG data URL, or null before there is a picture. */
+    screenshot({ width = 160 } = {}) {
+      if (!ready || !visible || !canvas.width) return null;
+      renderer?._nodes?.nodeFrame?.update();
+      drawFrame(performance.now());
+      // The canvas holds that frame until this task ends.
+      const out = document.createElement('canvas');
+      out.width = width;
+      out.height = Math.max(1, Math.round((width * canvas.height) / canvas.width));
+      out.getContext('2d').drawImage(canvas, 0, 0, out.width, out.height);
+      return out.toDataURL('image/jpeg', 0.7);
+    },
+
     /** The keypress overlay over the followed player. */
     setKeypresses(on) {
       keysOn = !!on;

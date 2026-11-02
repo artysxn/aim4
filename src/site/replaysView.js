@@ -105,6 +105,8 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
 
   const plPanelEl = document.getElementById('rp-pl-panel');
   const gifsPanelEl = document.getElementById('rp-gifs-panel');
+  const storagePanelEl = document.getElementById('rp-storage-panel');
+  let bookmarksStorage = null;
 
   const PAGE_PATHS = {
     library: '/demos',
@@ -4233,8 +4235,15 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
   /** The Saved GIFs library, built on first visit. */
   let savedGifs = null;
 
+  const BOOKMARKS_TABS = [
+    ['playlists', 'Playlists'],
+    ['gifs', 'Visual Notes'],
+    ['storage', 'Storage']
+  ];
+  const bookmarksTabOf = (tab) => (BOOKMARKS_TABS.some(([id]) => id === tab) ? tab : 'playlists');
+
   function tabFromUrl() {
-    return new URLSearchParams(window.location.search).get('tab') === 'gifs' ? 'gifs' : 'playlists';
+    return bookmarksTabOf(new URLSearchParams(window.location.search).get('tab'));
   }
 
   function mountBookmarksHead() {
@@ -4257,10 +4266,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     const nav = document.createElement('nav');
     nav.className = 'an-chapters';
     nav.setAttribute('aria-label', 'Bookmarks');
-    for (const [id, label] of [
-      ['playlists', 'Playlists'],
-      ['gifs', 'Visual Notes']
-    ]) {
+    for (const [id, label] of BOOKMARKS_TABS) {
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = `an-chapter-btn${id === bookmarksTab ? ' active' : ''}`;
@@ -4273,24 +4279,32 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
   }
 
   async function setBookmarksTab(tab, { push = false } = {}) {
-    bookmarksTab = tab === 'gifs' ? 'gifs' : 'playlists';
+    bookmarksTab = bookmarksTabOf(tab);
     if (push) {
       const url = new URL(window.location.href);
-      if (bookmarksTab === 'gifs') url.searchParams.set('tab', 'gifs');
-      else {
-        url.searchParams.delete('tab');
-        url.searchParams.delete('gif');
-      }
+      if (bookmarksTab === 'playlists') url.searchParams.delete('tab');
+      else url.searchParams.set('tab', bookmarksTab);
+      if (bookmarksTab !== 'gifs') url.searchParams.delete('gif');
       if (url.pathname + url.search !== window.location.pathname + window.location.search) {
         window.history.pushState(window.history.state, '', url.pathname + url.search);
       }
     }
     if (plPanelEl) plPanelEl.hidden = bookmarksTab !== 'playlists';
     if (gifsPanelEl) gifsPanelEl.hidden = bookmarksTab !== 'gifs';
+    if (storagePanelEl) storagePanelEl.hidden = bookmarksTab !== 'storage';
     mountBookmarksHead();
     if (bookmarksTab === 'playlists') {
       savedGifs?.hide();
       loadPlaylistsPage();
+      return;
+    }
+    if (bookmarksTab === 'storage') {
+      savedGifs?.hide();
+      if (!bookmarksStorage && storagePanelEl) {
+        const { createBookmarksStorage } = await import('./bookmarksStorage.js');
+        bookmarksStorage ||= createBookmarksStorage({ host: storagePanelEl, escapeHtml });
+      }
+      if (bookmarksTab === 'storage') void bookmarksStorage?.show();
       return;
     }
     if (!savedGifs && gifsPanelEl) {
