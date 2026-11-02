@@ -266,6 +266,12 @@ export function mountTabs() {
     return tab;
   }
 
+  // The desktop app turns a new-window request (a context-menu "open in new window") into a tab.
+  window.__aim4OpenTab = (url) => {
+    const target = siteUrl(url);
+    if (target) open(target);
+  };
+
   bar.querySelector('.tabs-new').addEventListener('click', () => open(HOME));
   bar.addEventListener('click', (e) => {
     const nav = e.target.closest('[data-nav]')?.dataset.nav;

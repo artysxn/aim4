@@ -26,8 +26,10 @@ enum UserEvent {
     Ipc(String),
     /// Something changed that the page should hear about.
     Push,
-    /// A link that wants a new window: same site, so load it here.
+    /// A sign-in landing the window has to finish on its own host.
     Navigate(String),
+    /// A link that wants a new window: same site, so it opens as a tab of the site's own strip.
+    NewTab(String),
 }
 
 pub fn base_url() -> String {
@@ -122,7 +124,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         })
         .with_new_window_req_handler(move |url: String, _features| {
             if same_site(&url, &nav_base) {
-                let _ = nav_proxy.lock().unwrap().send_event(UserEvent::Navigate(url));
+                let _ = nav_proxy.lock().unwrap().send_event(UserEvent::NewTab(url));
             } else {
                 open_external(&url);
             }
@@ -181,6 +183,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
             Event::UserEvent(UserEvent::Navigate(url)) => {
                 let _ = webview.load_url(&url);
+            }
+            Event::UserEvent(UserEvent::NewTab(url)) => {
+                // The tab strip (tabs.js) owns tabs; without it the window just goes there.
+                let url = serde_json::to_string(&url).unwrap_or_default();
+                let _ = webview.evaluate_script(&format!("window.__aim4OpenTab ? window.__aim4OpenTab({url}) : window.location.assign({url})"));
             }
             Event::UserEvent(UserEvent::Ipc(body)) => {
                 if cfg!(debug_assertions) {

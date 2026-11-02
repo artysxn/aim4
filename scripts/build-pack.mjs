@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const STAGE = path.join(ROOT, 'build', '.pack');
 const OUT = path.join(ROOT, 'recorder', 'app', 'pack', 'aim4-pack.zip');
-const SKIP_MODULES = new Set(['@esbuild', 'esbuild', '.cache']);
+const SKIP_MODULES = new Set(['@esbuild', 'esbuild', '.cache', 'ffmpeg-static']);
 
 fs.rmSync(STAGE, { recursive: true, force: true });
 fs.mkdirSync(STAGE, { recursive: true });

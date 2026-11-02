@@ -561,6 +561,16 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     return `<svg viewBox="0 -960 960 960" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M640-160v-280h120v280H640Zm-220 0v-640h120v640H420Zm-220 0v-440h120v440H200Z"/></svg>`;
   }
 
+  /** The play control is a real link, so Ctrl/middle-click or "open in new tab" gives the match its own tab. */
+  function demoHref(escapedId) {
+    return `/demos?demo=${escapedId}`;
+  }
+
+  /** A click on a play link that the browser (or the desktop app) should open in a new tab instead. */
+  function opensNewTab(e) {
+    return Boolean(e.target.closest('a[data-open]')) && (e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey);
+  }
+
   function playIconHtml() {
     return `<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7L8 5z"/></svg>`;
   }
@@ -1058,7 +1068,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
         }
         ${
           status === 'ready'
-            ? `<button type="button" class="rp-btn-play" data-open="${id}" title="Replay">${playIconHtml()}</button>`
+            ? `<a class="rp-btn-play" data-open="${id}" href="${demoHref(id)}" title="Replay">${playIconHtml()}</a>`
             : ''
         }
       </div>`;
@@ -1590,7 +1600,9 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       if (id && visibility) void applyMineVisibility([id], visibility);
       return;
     }
+    if (opensNewTab(e)) return;
     if (e.target.closest('[data-rename], [data-delete], [data-retry], [data-open], [data-demo-stats]')) {
+      if (e.target.closest('a[data-open]')) e.preventDefault();
       await handleDemoAction(e.target);
       return;
     }
@@ -3665,7 +3677,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
           </button>`
               : ''
           }
-          <button type="button" class="rp-btn-play" data-open="${id}" title="Replay">${playIconHtml()}</button>
+          <a class="rp-btn-play" data-open="${id}" href="${demoHref(id)}" title="Replay">${playIconHtml()}</a>
         </div>
       </div>`;
   }
@@ -3952,6 +3964,8 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
   }
 
   resultEl?.addEventListener('click', async (e) => {
+    if (opensNewTab(e)) return;
+    if (e.target.closest('a[data-open]')) e.preventDefault();
     if (await handleDemoAction(e.target)) return;
 
     const filterTeam = e.target.closest('[data-filter-team]');
