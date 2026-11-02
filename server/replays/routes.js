@@ -74,7 +74,6 @@ import {
   setDemoVisibility,
   upsertPlaylist,
   storage,
-  usage,
   userDir,
   writeRecord,
   writeRoundNotes
@@ -964,7 +963,7 @@ export async function handleReplayRequest(req, res, url) {
     json(res, 200, {
       parser: parserStatus(),
       auth: authStatus(),
-      usage: await usage(user),
+      usage: await storage(user),
       account: {
         signedIn: me.signedIn,
         id: me.id,
@@ -1092,7 +1091,7 @@ export async function handleReplayRequest(req, res, url) {
       // manage the whole library from that page, so their count is the whole
       // readable set, matching what `mine=1` returns them.
       owned: me.signedIn ? (me.admin ? allowed.length : allowed.filter(ownedBy).length) : 0,
-      usage: await usage(user)
+      usage: await storage(user)
     }, req);
     return true;
   }
@@ -1120,7 +1119,7 @@ export async function handleReplayRequest(req, res, url) {
       json(res, gated.refusal.status, gated.refusal.body);
       return true;
     }
-    json(res, 200, { ok: true, usage: await usage(user) });
+    json(res, 200, { ok: true, usage: await storage(user) });
     return true;
   }
 
@@ -1178,10 +1177,11 @@ export async function handleReplayRequest(req, res, url) {
       // archive takes long enough that holding the response open for it is
       // exactly how an upload dies behind a proxy that is done waiting.
       //
-      // What comes OUT of an archive is bounded by the library quota rather
-      // than the per-upload cap: 5 GB of demos can legitimately expand well
-      // past 5 GB, and the quota is the limit that actually protects the disk.
-      // The archive's own size is subtracted because it is still on disk here.
+      // What comes OUT of an archive is bounded by what is left rather than
+      // the per-upload cap: 5 GB of demos can legitimately expand well past
+      // 5 GB. bytesLeft is the library quota or the room on the disk, whichever
+      // runs out first, and it was read before the archive landed, so the
+      // archive's own size is subtracted because it is still on disk here.
       const batch = startIngest({
         user,
         filename,
@@ -1202,7 +1202,7 @@ export async function handleReplayRequest(req, res, url) {
       // once the records it wrote can count themselves.
       reserved = 0;
       releaseQuota = null;
-      json(res, 202, { batch: batchStatus(batch), usage: await usage(user) });
+      json(res, 202, { batch: batchStatus(batch), usage: await storage(user) });
       return true;
     } finally {
       // Every path that answered without starting an ingest gives its place
@@ -1219,7 +1219,7 @@ export async function handleReplayRequest(req, res, url) {
       json(res, 404, { error: 'That upload is no longer being tracked.' });
       return true;
     }
-    json(res, 200, { batch: batchStatus(batch), usage: await usage(user) });
+    json(res, 200, { batch: batchStatus(batch), usage: await storage(user) });
     return true;
   }
 
@@ -1322,7 +1322,7 @@ export async function handleReplayRequest(req, res, url) {
         scheduleStatsIndex(statsIo, user, record);
         json(res, 201, {
           demo: { ...withJob(user, record), owner: ownerOf(record) },
-          usage: await usage(user)
+          usage: await storage(user)
         });
       } catch (err) {
         const status = err.status || 400;
@@ -1372,7 +1372,7 @@ export async function handleReplayRequest(req, res, url) {
         json(res, 404, { error: 'Replay not found.' });
         return true;
       }
-      json(res, 200, { ok: true, usage: await usage(user) });
+      json(res, 200, { ok: true, usage: await storage(user) });
       return true;
     }
   }
@@ -1410,7 +1410,7 @@ export async function handleReplayRequest(req, res, url) {
     }
     json(res, 200, {
       demo: withJob(user, record),
-      usage: await usage(user),
+      usage: await storage(user),
       alsoRenamed,
       capped,
       others
@@ -1452,7 +1452,7 @@ export async function handleReplayRequest(req, res, url) {
     }
     json(res, 200, {
       demo: { ...withJob(user, record), owner: ownerOf(record) },
-      usage: await usage(user)
+      usage: await storage(user)
     });
     return true;
   }
@@ -1594,7 +1594,7 @@ export async function handleReplayRequest(req, res, url) {
 
     if (req.method === 'DELETE') {
       await deleteComms(user, id);
-      json(res, 200, { ok: true, comms: null, usage: await usage(user) });
+      json(res, 200, { ok: true, comms: null, usage: await storage(user) });
       return true;
     }
 
@@ -1673,7 +1673,7 @@ export async function handleReplayRequest(req, res, url) {
         json(res, 400, { error: err?.message || 'That is not a comms file.' });
         return true;
       }
-      json(res, 200, { comms: meta, identities: await readIdentities(user), usage: await usage(user) });
+      json(res, 200, { comms: meta, identities: await readIdentities(user), usage: await storage(user) });
       return true;
     }
   }

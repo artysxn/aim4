@@ -73,6 +73,19 @@ export const MAX_UPLOAD_BYTES = Number(
 ); // 5 GB
 
 /**
+ * Free space on the replay volume that uploads may not take.
+ *
+ * Not everything that writes to that volume comes through the quota gate: rounds
+ * parsed from demos already admitted, the databases and logs beside the library,
+ * and two archives expanding at once, whose budgets were each worked out without
+ * the other's. A full disk fails all of those at the same moment, so this keeps
+ * one largest upload's worth out of reach.
+ */
+export const DISK_MARGIN_BYTES = Number(
+  process.env.AIM4_REPLAY_DISK_MARGIN_BYTES || 5 * 1024 ** 3
+); // 5 GB
+
+/**
  * Sanitize a library folder name under ROOT. The public library uses a fixed
  * key from auth.js (default "local"); this just keeps paths safe.
  */
@@ -722,7 +735,8 @@ export async function usage(user, opts = {}) {
 
 /**
  * Usage, with what is really left: MAX_BYTES is a setting, and the disk under it can run out first.
- * The disk holds more than the library, so the two are not a sum.
+ * The disk holds more than the library, so the two are not a sum. bytesLeft keeps DISK_MARGIN_BYTES back,
+ * so it never promises room that checkQuota would refuse.
  */
 export async function storage(user) {
   const u = await usage(user);
@@ -733,7 +747,11 @@ export async function storage(user) {
   } catch {
     /* no reading on this filesystem: the cap is all there is to go on */
   }
-  return { ...u, diskFreeBytes, bytesLeft: diskFreeBytes === null ? u.bytesLeft : Math.min(u.bytesLeft, diskFreeBytes) };
+  return {
+    ...u,
+    diskFreeBytes,
+    bytesLeft: diskFreeBytes === null ? u.bytesLeft : Math.min(u.bytesLeft, Math.max(0, diskFreeBytes - DISK_MARGIN_BYTES))
+  };
 }
 
 async function libraryUsage(user, { fresh = false } = {}) {
@@ -814,14 +832,27 @@ function quotaBytesReserved(user) {
   return reservedUploadBytes.get(userKey(user)) || 0;
 }
 
+/** Every library's reservations: they are per library, but all of them land on one disk. */
+function quotaBytesReservedOnDisk() {
+  let total = 0;
+  for (const n of reservedUploadBytes.values()) total += n;
+  return total;
+}
+
 /**
- * Check an upload against the per-upload cap and the library quota before a
- * byte is written. `incoming` is the declared Content-Length; the writer
- * enforces both again while streaming, so a lying or absent header cannot
- * overrun either limit.
+ * Check an upload against the per-upload cap, the library quota and the room on
+ * the disk before a byte is written. `incoming` is the declared Content-Length;
+ * the writer enforces all three again while streaming, so a lying or absent
+ * header cannot overrun any of them.
  *
- * `allowed` is what the caller must cap the stream at: the smaller of what is
- * left in the library and what one upload may be.
+ * `allowed` is what the caller must cap the stream at: the smallest of what is
+ * left in the library, what the disk can take and what one upload may be.
+ * `usage.bytesLeft` is limited by the disk too, so the budget an archive expands
+ * into stops at the disk as well: the archive lands whole first, and peak use is
+ * that plus everything that comes out of it.
+ *
+ * The disk reading is one statfs, live and O(1), so it adds nothing like the
+ * walk described below. A filesystem that gives no reading leaves the cap alone.
  *
  * Reads the cached usage plus live reservations, NOT a fresh walk. The cache
  * is at most 15 s stale and every write path invalidates it, so the exposure
@@ -831,10 +862,15 @@ function quotaBytesReserved(user) {
  * grow. `reserve: true` holds the declared size until released.
  */
 export async function checkQuota(user, incoming = 0, { reserve = false } = {}) {
-  const u = await usage(user);
+  const u = await storage(user);
   const reserved = quotaBytesReserved(user);
   const held = u.bytes + reserved;
   const bytesLeft = Math.max(0, MAX_BYTES - held);
+  // statfs only sees what has landed, so what has been admitted comes off it as
+  // well. An upload part way in counts twice, which only ever refuses early.
+  const diskLeft = u.diskFreeBytes === null
+    ? Infinity
+    : Math.max(0, u.diskFreeBytes - DISK_MARGIN_BYTES - quotaBytesReservedOnDisk());
   const gb = (n) => (n / 1024 ** 3).toFixed(n >= 1024 ** 3 ? 0 : 1);
 
   if (incoming > MAX_UPLOAD_BYTES) {
@@ -851,10 +887,19 @@ export async function checkQuota(user, incoming = 0, { reserve = false } = {}) {
       usage: u
     };
   }
+  if (incoming > diskLeft) {
+    // One decimal always: whole gigabytes could read "1 GB, room for 1 GB".
+    const gb1 = (n) => (n / 1024 ** 3).toFixed(1);
+    return {
+      ok: false,
+      error: `Not enough disk space on the server. That upload is ${gb1(incoming)} GB and there is room for ${gb1(diskLeft)} GB.`,
+      usage: u
+    };
+  }
   return {
     ok: true,
     usage: u,
-    allowed: Math.min(bytesLeft, MAX_UPLOAD_BYTES),
+    allowed: Math.min(bytesLeft, diskLeft, MAX_UPLOAD_BYTES),
     // Declared-size reservation only: a stream with no Content-Length is still
     // capped by `allowed` while it writes, it just cannot pre-claim headroom.
     release: reserve ? reserveQuotaBytes(user, incoming) : null

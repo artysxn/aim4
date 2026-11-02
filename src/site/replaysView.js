@@ -365,7 +365,9 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     const demoCount = mineOwnedCount ?? myDemos().length;
     const demoCap = uploadDemoCap();
     const pctDemos = demoCap > 0 ? (demoCount / demoCap) * 100 : 0;
-    const pctBytes = usage.maxBytes ? (usage.bytes / usage.maxBytes) * 100 : 0;
+    // What the library could reach, as in Bookmarks' Storage tab: the disk can run out before maxBytes.
+    const roomBytes = usage.bytes + usage.bytesLeft;
+    const pctBytes = roomBytes ? (usage.bytes / roomBytes) * 100 : 0;
     const demosLine = demoCap
       ? `${demoCount} / ${demoCap} demos`
       : `${demoCount} demos`;
@@ -377,7 +379,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       <div class="rp-meter"><span style="width:${Math.min(100, pctDemos)}%"></span></div>
       <div class="rp-quota-row">
         <span class="rp-quota-label">Storage</span>
-        <span class="rp-quota-value">${formatBytes(usage.bytes)} / ${formatBytes(usage.maxBytes)}</span>
+        <span class="rp-quota-value">${formatBytes(usage.bytes)} / ${formatBytes(roomBytes)}</span>
       </div>
       <div class="rp-meter"><span style="width:${Math.min(100, pctBytes)}%"></span></div>`;
   }

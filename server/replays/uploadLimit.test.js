@@ -10,6 +10,7 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { Readable } from 'node:stream';
+import zlib from 'node:zlib';
 
 function assert(cond, msg) {
   if (!cond) throw new Error(msg || 'assert failed');
@@ -272,6 +273,127 @@ function precheck(body, token = TOKEN) {
   assert(left.length === 1 && left[0].includes('aaaa'), 'an in-flight upload is not swept');
   await fsp.rm(fresh, { force: true });
   console.log('  stale temp files swept, in-flight ones left alone');
+}
+
+// ---- the disk can run out before the cap ------------------------------------
+//
+// Measured on the Hetzner box 2026-11-02: a 100 GB cap over a 75 GB disk with
+// 49 GB free. Nothing here goes near MAX_BYTES, so every refusal below can only
+// have come from the disk. statfs is the one thing faked: the real file system
+// has hundreds of gigabytes free and filling it is not a test.
+
+{
+  const { DISK_MARGIN_BYTES, checkQuota, storage } = await import('./demoStore.js');
+  const realStatfs = fsp.statfs;
+  const MB = 1024 * 1024;
+  const ROOM = 2 * MB;
+  let statfsCalls = 0;
+  /** A disk with `room` bytes free above the margin. Negative is inside the margin. */
+  const disk = (room) => {
+    fsp.statfs = async () => {
+      statfsCalls++;
+      return { bsize: 1, bavail: DISK_MARGIN_BYTES + room };
+    };
+  };
+  const uploadTemps = async () => (await fsp.readdir(ROOT)).filter((f) => f.startsWith('.upload-'));
+
+  try {
+    disk(ROOM);
+
+    const over = await precheck({ filename: 'ok.zip', sizeBytes: 3 * MB });
+    assert(over.status === 413, `precheck over the disk should be 413, got ${over.status}`);
+    assert(/disk space/i.test(over.text), `and name the disk: ${over.text}`);
+    assert(/That upload is \d+\.\d GB and there is room for \d+\.\d GB/.test(over.text), `and the sizes: ${over.text}`);
+    assert(!over.text.includes('—'), 'no em dashes in UI copy');
+
+    const declared = await post(Buffer.alloc(3 * MB, 3), { filename: 'ok.zip' });
+    assert(declared.status === 413, `declared over the disk should be 413, got ${declared.status}`);
+    assert(/disk space/i.test(declared.text), `and name the disk: ${declared.text}`);
+    assert((await uploadTemps()).length === 0, 'nothing was written for a refused upload');
+
+    const fits = await precheck({ filename: 'ok.zip', sizeBytes: ROOM });
+    assert(fits.status === 200, `what fits exactly is taken, got ${fits.status} ${fits.text}`);
+    console.log(`  declared upload over the disk refused, margin ${DISK_MARGIN_BYTES} bytes held back`);
+
+    // No Content-Length to refuse: the stream is what gets held to the disk.
+    const stream = await post(chunked(3 * MB));
+    assert(stream.status !== 202, `an undeclared stream over the disk must not be accepted, got ${stream.status}`);
+    await new Promise((r) => setTimeout(r, 200));
+    assert((await uploadTemps()).length === 0, 'partial upload removed');
+    console.log('  undeclared stream over the disk cut off, partial file removed');
+
+    // The archive fits and what comes out of it does not. Peak use is both.
+    const bomb = await post(zlib.gzipSync(Buffer.alloc(3 * MB, 7)), { filename: 'big.dem.gz' });
+    assert(bomb.status === 202, `the archive itself fits, got ${bomb.status} ${bomb.text}`);
+    const { batch } = JSON.parse(bomb.text);
+    let settled = null;
+    for (let i = 0; i < 100; i++) {
+      settled = (await (await fetch(`${base}/api/replays/uploads/${batch.id}`)).json()).batch;
+      if (settled.stage === 'error' || settled.stage === 'done') break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    assert(settled.stage === 'error', `expanding past the disk should fail, got ${settled.stage}`);
+    assert(/expands to more/i.test(settled.error), `and say why: ${settled.error}`);
+    assert((await uploadTemps()).length === 0, 'temp file removed');
+    console.log('  an archive that expands past the disk stops at the disk');
+
+    // Two uploads together cannot both be admitted against the same room, and
+    // reservations are per library while the disk is not.
+    const first = await checkQuota('quota-a', 1.5 * MB, { reserve: true });
+    assert(first.ok && first.allowed === ROOM, `first is admitted up to the disk, got ${first.allowed}`);
+    const second = await checkQuota('quota-a', 1.5 * MB);
+    assert(!second.ok && /disk space/i.test(second.error), `second in the same library: ${second.error}`);
+    const other = await checkQuota('quota-b', 1.5 * MB);
+    assert(!other.ok && /disk space/i.test(other.error), `second in another library: ${other.error}`);
+    first.release();
+    assert((await checkQuota('quota-b', 1.5 * MB)).ok, 'released room is room again');
+    console.log('  reservations count against the disk across libraries');
+
+    // Inside the margin the disk has room and uploads still may not take it.
+    disk(-1024);
+    const full = await checkQuota('quota-a', 1024);
+    assert(!full.ok && /disk space/i.test(full.error), `inside the margin refuses: ${full.error}`);
+    const nothing = await checkQuota('quota-a', 0);
+    assert(nothing.ok && nothing.allowed === 0, `no declared size gets no room, got ${nothing.allowed}`);
+    assert(nothing.usage.bytesLeft === 0, `and never a negative figure, got ${nothing.usage.bytesLeft}`);
+    console.log('  the margin stays out of reach');
+
+    // The meter, the Storage tab and the gate all read the same figure.
+    disk(ROOM);
+    const status = await (await fetch(`${base}/api/replays/status`)).json();
+    assert(status.usage.bytesLeft === ROOM, `status reports the disk, got ${status.usage.bytesLeft}`);
+    const tab = await (await fetch(`${base}/api/replays/storage`)).json();
+    assert(tab.bytesLeft === ROOM, `the Storage route too, got ${tab.bytesLeft}`);
+    assert((await checkQuota('quota-a', 0)).usage.bytesLeft === ROOM, 'and the gate');
+    console.log('  /status, /storage and the gate agree on what is left');
+
+    // Per upload request: one statfs and no walk. The cached total not moving
+    // when a file appears behind its back is what says nothing walked.
+    await checkQuota('quota-a', 0);
+    const walkedBefore = (await storage('quota-a')).bytes;
+    await fsp.mkdir(path.join(ROOT, 'quota-a', 'rounds'), { recursive: true });
+    await fsp.writeFile(path.join(ROOT, 'quota-a', 'rounds', 'behind-its-back.bin'), Buffer.alloc(4096, 1));
+    statfsCalls = 0;
+    const cheap = await checkQuota('quota-a', 1024);
+    assert(statfsCalls === 1, `one statfs per check, got ${statfsCalls}`);
+    assert(cheap.usage.bytes === walkedBefore, 'cached usage, not a walk of the rounds directory');
+    console.log('  the check is one statfs and no walk');
+
+    // No reading: exactly what happened before the disk was looked at.
+    fsp.statfs = async () => {
+      throw Object.assign(new Error('not supported'), { code: 'ENOSYS' });
+    };
+    const blind = await checkQuota('quota-a', 3 * MB);
+    assert(blind.ok, `a failed statfs must not refuse: ${blind.error}`);
+    assert(blind.allowed === MAX_UPLOAD_BYTES, `the caps are all that is left, got ${blind.allowed}`);
+    assert(blind.usage.diskFreeBytes === null, 'and the reading is reported missing');
+    assert(blind.usage.bytesLeft > 3 * MB, `bytesLeft is the cap's again, got ${blind.usage.bytesLeft}`);
+    const blindRoute = await precheck({ filename: 'ok.zip', sizeBytes: 3 * MB });
+    assert(blindRoute.status === 200, `precheck falls back too, got ${blindRoute.status}`);
+    console.log('  a failed statfs falls back to the cap');
+  } finally {
+    fsp.statfs = realStatfs;
+  }
 }
 
 // ---- just under the cap is accepted -----------------------------------------
