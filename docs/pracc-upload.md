@@ -1,9 +1,9 @@
 # Upload PRACC demos to aim4
 
-An **Upload** button at the bottom right of the Demos tab on
-[pracc.com/team/server](https://pracc.com/team/server). One click sends every demo the tab lists to aim4.
-The aim4 server downloads each one, unpacks it, parses it, deletes the archive and the raw demo,
-and keeps the parsed rounds in the library.
+An **Upload** button beside each demo's DEMO button on the Demos tab of
+[pracc.com/team/server](https://pracc.com/team/server). A click sends that demo to aim4. The aim4 server
+downloads it, unpacks it, parses it, deletes the archive and the raw demo, and keeps the parsed rounds
+in the library.
 
 ## Install
 
@@ -23,12 +23,13 @@ To try it before a deploy, open Tampermonkey's dashboard, choose **+** to create
 
 ## Use
 
-Open the Demos tab and click **Upload**. The line next to the button shows progress, then the result:
+Open the Demos tab and click **Upload** on the demos you want. Each button shows its own progress
+(`Queued`, `64%`, `Unpacking`, `Round 7/24`), then `In aim4` or `Failed`. A failure's reason is on the
+button's tooltip and under the list.
 
-    12 added, 3 already in aim4, 1 failed: Unsupported map "de_vertigo"
-
-You can close the tab once the first request has gone out: the server keeps going. Clicking again is
-always safe, because anything already in the library is skipped without being downloaded.
+You can close the tab once a button shows progress: the server keeps going. Clicking again is always
+safe, because a demo already in the library is not downloaded twice. That includes `In aim4`, which
+checks again, so a demo you deleted from aim4 can be sent back that way.
 
 If your aim4 session has expired, a background aim4 tab opens for a moment to renew it and closes itself.
 If you are signed out of aim4, that tab stays open: sign in there and click Upload again.
@@ -43,9 +44,7 @@ the signature. So:
 - The browser reads the list and follows each redirect using your PRACC session, on pracc.com, asking
   for one byte and hanging up at the headers. It sends aim4 **only the signed links** it ended up on.
   Your PRACC session never reaches aim4.
-- The browser remembers which rows aim4 has confirmed, so a later click does not ask PRACC for those
-  links again. Those rows count as already in aim4, so a demo you delete from aim4 will not come back
-  from here until that entry ages out after two months, or you clear the script's storage.
+- The browser remembers which rows aim4 has confirmed, so they say `In aim4` when the page loads.
 - The aim4 token travels only in an `Authorization` header. It is the one-hour access token, copied
   from your aim4.io session into Tampermonkey's storage. The refresh token is never copied.
 - Status polling needs no token, because an import can outlast the one that started it. The status
@@ -53,9 +52,10 @@ the signature. So:
 
 ### Which demos
 
-All the tab lists: the rows under a month old that have a link, which is what the page itself shows.
-The page offers one button per row and one list, so one Upload means the whole list, and skipping
-known demos makes that cheap.
+The one you click. Row ids are not in the page's DOM, so a button is matched to its row by position in
+the list, with the same filter the page applies, and checked against the team names shown. If a new demo
+has landed since the page loaded the buttons step aside and the page asks to be reloaded, rather than
+risk sending the wrong demo.
 
 ### On the server (`server/replays/praccImport.js`)
 

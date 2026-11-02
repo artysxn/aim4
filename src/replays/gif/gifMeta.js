@@ -1,15 +1,22 @@
 // ---------------------------------------------------------------------------
 // replays/gif/gifMeta.js
-// What a saved GIF says about itself: the round it came from (map, both
-// teams with their side and buy, who won), the part of the round, 2D or 3D,
-// and the title and description someone gave it. Built in the page from the
-// round's meta, cleaned again on the server before it is stored, and read by
-// the Saved GIFs filters. Plain data both ways, so the server imports this file
-// as it is.
+// What a visual note says about itself: the round it came from (map, both
+// teams with their side and buy, who won), the part of the round, its
+// perspectives, and the title and description someone gave it. Built in the page
+// from the round's meta, cleaned again on the server before it is stored, and
+// read by the Visual Notes filters. Plain data both ways, so the server imports
+// this file as it is.
+//
+// A note's record describes its first clip, and that clip's id is the note's id
+// (and its share link). Any more of them are in `perspectives`, each a clip of
+// its own with its own id: a player's eyes, the 2D map, a free camera, where a
+// grenade lands. notePerspectives gives all of them as one list.
 // ---------------------------------------------------------------------------
 
 import { MAPS, economyLabel, winningSide } from '../shared/roundId.js';
 
+/** One note's clips at most. The picker makes one clip per choice, and each is a full render. */
+export const MAX_PERSPECTIVES = 12;
 export const GIF_TITLE_MAX = 80;
 /** Room for the description someone writes plus a setpos line per grenade (gifSetpos.js). */
 export const GIF_DESCRIPTION_MAX = 4000;
@@ -24,6 +31,7 @@ export const GIF_ID = /^[a-f0-9]{16}$/;
 
 const SIDES = new Set(['T', 'CT']);
 const KINDS = new Set(['2d', '3d']);
+const VIEWS = new Set(['pov', 'third', 'free', 'landing', 'map']);
 
 const text = (v, max) => String(v ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
 const multiline = (v, max) =>
@@ -67,6 +75,8 @@ function teamNameOf(meta, team) {
  * @param {string} [opts.clockTo]    round clock at the last frame
  * @param {string} [opts.side]       whose view it is (the followed player's side in 3D)
  * @param {string} [opts.player]     the followed player's name, in 3D
+ * @param {string} [opts.view]       'pov' | 'third' | 'free' | 'landing' | 'map'
+ * @param {string} [opts.label]      what this perspective is called on its tab
  * @param {string} [opts.title]
  * @param {string} [opts.description]
  * @param {string} [opts.source]     'viewer' | 'eye' | 'antistrat' | 'strategy'
@@ -96,6 +106,8 @@ export function gifMetaFromRound(meta, opts = {}) {
     clockTo: opts.clockTo,
     side: opts.side,
     player: opts.player,
+    view: opts.view,
+    label: opts.label,
     teams,
     winnerSide: winner,
     winnerTeam,
@@ -130,11 +142,59 @@ export function cleanGifMeta(input = {}) {
     clockTo: text(m.clockTo, 8),
     side: side(m.side),
     player: text(m.player, 60),
+    view: VIEWS.has(m.view) ? m.view : '',
+    label: text(m.label, 60),
     teams,
     winnerSide: side(m.winnerSide),
     winnerTeam: text(m.winnerTeam, 60),
     source: ['viewer', 'eye', 'antistrat', 'strategy'].includes(m.source) ? m.source : 'viewer'
   };
+}
+
+/** The part of a clip's metadata that differs from the note it belongs to. */
+export function cleanPerspective(input = {}) {
+  const m = cleanGifMeta(input);
+  return {
+    kind: m.kind,
+    view: m.view,
+    label: m.label,
+    player: m.player,
+    side: m.side,
+    fromTick: m.fromTick,
+    toTick: m.toTick,
+    clockFrom: m.clockFrom,
+    clockTo: m.clockTo
+  };
+}
+
+/** What a clip is called on its tab, whether it was named when it was made or predates having a name. */
+export function perspectiveLabel(p) {
+  if (p?.label) return p.label;
+  if (p?.kind !== '3d') return '2D map';
+  if (!p?.player) return '3D camera';
+  return p.view === 'third' ? `${p.player}, third person` : `${p.player}, first person`;
+}
+
+/** Every clip of a note, the note's own first. */
+export function notePerspectives(g) {
+  if (!g) return [];
+  const first = {
+    id: g.id,
+    kind: g.kind,
+    view: g.view || '',
+    label: g.label || '',
+    player: g.player || '',
+    side: g.side || '',
+    fromTick: g.fromTick,
+    toTick: g.toTick,
+    clockFrom: g.clockFrom,
+    clockTo: g.clockTo,
+    width: g.width,
+    height: g.height,
+    frames: g.frames,
+    bytes: g.bytes
+  };
+  return [first, ...(Array.isArray(g.perspectives) ? g.perspectives : [])];
 }
 
 /**
@@ -169,13 +229,14 @@ export function gifDisplayTitle(g) {
   if (g?.title) return g.title;
   const [a, b] = g?.teams || [];
   const vs = a?.name && b?.name ? `${a.name} vs ${b.name}` : '';
-  return [g?.mapName || g?.map, g?.round ? `round ${g.round}` : '', vs].filter(Boolean).join(', ') || 'GIF';
+  return [g?.mapName || g?.map, g?.round ? `round ${g.round}` : '', vs].filter(Boolean).join(', ') || 'Visual note';
 }
 
 /**
- * The Saved GIFs filters. `q` matches the title, description, map, team and
- * player names. `side` matches the side a GIF was seen from, and for a 2D GIF
- * (seen from neither) any GIF where that side's team is named. `buy` matches
+ * The Visual Notes filters. `q` matches the title, description, map, team and
+ * player names, of any perspective. `kind` matches when any perspective is that
+ * kind. `side` matches the side a note was seen from, and for a 2D one
+ * (seen from neither) any note where that side's team is named. `buy` matches
  * either team's buy, `team` either team's name.
  *
  * @param {object[]} list
@@ -186,7 +247,8 @@ export function filterGifs(list, f = {}) {
   const words = q ? q.split(/\s+/) : [];
   const team = String(f.team || '').trim().toLowerCase();
   return (Array.isArray(list) ? list : []).filter((g) => {
-    if (f.kind && g.kind !== f.kind) return false;
+    const clips = notePerspectives(g);
+    if (f.kind && !clips.some((p) => p.kind === f.kind)) return false;
     if (f.map && g.map !== f.map) return false;
     if (f.winner && g.winnerSide !== f.winner) return false;
     if (f.buy && !(g.teams || []).some((t) => t.buy === f.buy)) return false;
@@ -197,7 +259,7 @@ export function filterGifs(list, f = {}) {
       } else if (!(g.teams || []).some((t) => t.side === f.side && t.name)) return false;
     }
     if (words.length) {
-      const hay = [g.title, g.description, g.mapName, g.map, g.player, ...(g.teams || []).map((t) => t.name)]
+      const hay = [g.title, g.description, g.mapName, g.map, ...clips.map((p) => p.player), ...(g.teams || []).map((t) => t.name)]
         .join(' ')
         .toLowerCase();
       if (!words.every((w) => hay.includes(w))) return false;

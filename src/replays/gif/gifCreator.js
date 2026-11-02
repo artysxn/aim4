@@ -1,37 +1,42 @@
 // ---------------------------------------------------------------------------
 // replays/gif/gifCreator.js
-// The GIF creator in the round viewer's side panel.
+// The visual note creator in the round viewer's side panel.
 //
-// 2D: drag a rectangle over the radar (or keep the whole map), pick the part
-// of the round, and every frame is the viewer's own radar drawn at that tick,
-// so zones, POV, duels and drawings come out exactly as they are on screen.
-// 3D: pick a player to follow (first or third person) and it is made in the
-// background from a 3D scene of its own (roundGif.js), while the viewer stays
-// in 2D or goes on playing. Or keep the camera where it is, which is the 3D view
-// on screen, so that one opens it and every frame is that view on the clip's
-// own clock.
+// A note is seen from any number of perspectives (perspectivePicker.js), each its
+// own render: players in first or third person, the 2D map, a camera over the
+// action or held where the 3D view is, where each grenade lands. Those render in
+// the background from a scene of their own (visualNote.js), one note at a time in
+// a queue, while the viewer stays where it is or goes on playing. A note of only
+// the 2D map, or one with an area of it picked, is the one thing drawn here instead:
+// every frame is the viewer's own radar, so zones, POV, duels and drawings come
+// out exactly as they are on screen.
 //
-// The finished clip goes to Bookmarks > Saved GIFs with what it shows (map,
+// The finished note goes to Bookmarks > Visual Notes with what it shows (map,
 // both teams' sides and buys, who won) and the title and description given
-// here, ready to share by link. In 3D,
-// "Automatically append setpos" adds a line per grenade thrown in the part,
-// with the thrower's setpos as a copy link (gifSetpos.js).
+// here, ready to share by link. "Automatically append setpos" adds a line per
+// grenade thrown in the part, by the players picked when any are, with the
+// thrower's setpos as a copy link (gifSetpos.js).
 // ---------------------------------------------------------------------------
 
 import { createRangeSlider } from '../../lib/rangeSlider.js';
 import { clockAt, timingFor, totalSeconds } from '../viewer/roundClock.js';
-import { DEFAULT_FPS, DEFAULT_QUALITY, MAX_FPS, MAX_SECONDS, MIN_FPS, clampFps, frameTicks, outputSize, qualityScale } from './gifCore.js';
+import { DEFAULT_QUALITY, MAX_FPS, MAX_SECONDS, MIN_FPS, clampFps, frameTicks, outputSize, qualityScale } from './gifCore.js';
 import { GIF_CREATOR_DESCRIPTION_MAX, GIF_DESCRIPTION_MAX, GIF_TITLE_MAX, gifMetaFromRound } from './gifMeta.js';
 import { captureClip, downloadBlob, downloadSavedGif, gifFileName, gifPageUrl, gifShareUrl, saveGifFitting, warmGif } from './gifCapture.js';
 import { appendSetposLines, utilitySetposLines } from './gifSetpos.js';
-import { VIEW_3D, makeRoundGif } from './roundGif.js';
+import { VIEW_3D } from './roundGif.js';
+import { createPerspectivePicker } from './perspectivePicker.js';
+import { renderOptions } from './perspectives.js';
+import { failuresText, noteHref, openNoteTab, renderPerspectives } from './visualNote.js';
 import { enqueueEyeJob } from '../eye/eyeJobs.js';
 import { updateGif } from '../api.js';
 
-/** Smallest area worth a GIF, in screen pixels. */
+/** Smallest area worth a clip, in screen pixels. */
 const MIN_AREA_PX = 40;
 /** "Automatically append setpos": remembered, because whoever wants it once wants it every time. */
 const SETPOS_KEY = 'aim4.gif.appendSetpos';
+/** What the field starts at. One value for every perspective: a 2D clip clamps it to its own range. */
+const START_FPS = 24;
 
 /**
  * @param {object} opts
@@ -45,9 +50,8 @@ const SETPOS_KEY = 'aim4.gif.appendSetpos';
  *   playheadTick(): number
  *   can3d(): boolean
  *   is3d(): boolean
- *   set3d(on): Promise<boolean>   resolves true once the 3D scene is up
  *   view3d(): object | null
- *   drawAt(tick): void            draws the radar (and feeds the 3D scene) at a tick
+ *   drawAt(tick): void            draws the radar at a tick
  *   beginCapture(): object        pauses playback, returns what endCapture restores
  *   endCapture(state): void
  *   seekLocal(seconds): void      pauses and shows the round at seconds from its start
@@ -61,25 +65,13 @@ const SETPOS_KEY = 'aim4.gif.appendSetpos';
  */
 export function createGifCreator({ panel, mapEl, canvas, photoIcon = '', escapeHtml, viewer, onSaved }) {
   panel.innerHTML = `
-    <p class="rv-playlist-label">Create GIF</p>
+    <p class="rv-playlist-label">Create visual note</p>
     <div class="rv-gif-form">
-      <div class="rp-seg rv-gif-kind" role="group" aria-label="View">
-        <button type="button" class="rp-seg-btn active" data-gif-kind="2d" aria-pressed="true">2D</button>
-        <button type="button" class="rp-seg-btn" data-gif-kind="3d" aria-pressed="false">3D</button>
-      </div>
-      <div class="rv-gif-row" data-gif-only="2d">
+      <div data-gif-picker></div>
+      <div class="rv-gif-row" data-gif-area-row hidden>
         <button type="button" class="btn btn-sm" data-gif-area>Select area</button>
         <span class="rv-gif-read" data-gif-area-read>Whole map</span>
         <button type="button" class="rv-gif-link" data-gif-area-reset hidden>Reset</button>
-      </div>
-      <div class="rv-gif-row" data-gif-only="3d" hidden>
-        <select class="site-select rv-gif-camera" data-gif-camera aria-label="Camera"></select>
-      </div>
-      <div class="rv-gif-row" data-gif-only="3d-player" hidden>
-        <div class="rp-seg" role="group" aria-label="Camera mode">
-          <button type="button" class="rp-seg-btn active" data-gif-cam-mode="pov" aria-pressed="true">First person</button>
-          <button type="button" class="rp-seg-btn" data-gif-cam-mode="third" aria-pressed="false">Third person</button>
-        </div>
       </div>
       <div class="rv-strat-window">
         <div class="rv-strat-range" data-gif-range></div>
@@ -93,7 +85,7 @@ export function createGifCreator({ panel, mapEl, canvas, photoIcon = '', escapeH
           <button type="button" class="rp-seg-btn active" data-gif-quality="3" aria-pressed="true">3</button>
         </div>
         <label class="rv-gif-fps"><span>FPS</span>
-          <input type="number" class="site-input" data-gif-fps min="${MIN_FPS}" max="${MAX_FPS}" step="1" value="${DEFAULT_FPS['2d']}" />
+          <input type="number" class="site-input" data-gif-fps min="${MIN_FPS}" max="${MAX_FPS}" step="1" value="${START_FPS}" />
         </label>
       </div>
       <input type="text" class="site-input" data-gif-title maxlength="${GIF_TITLE_MAX}" placeholder="Title" aria-label="Title" />
@@ -103,36 +95,44 @@ export function createGifCreator({ panel, mapEl, canvas, photoIcon = '', escapeH
           <input type="checkbox" data-gif-clock checked />
           <span>Round clock</span>
         </label>
-        <label class="rv-strat-check" data-gif-only="3d" hidden>
+        <label class="rv-strat-check">
           <input type="checkbox" data-gif-setpos />
           <span>Automatically append setpos</span>
         </label>
       </div>
       <p class="rv-gif-est" data-gif-est></p>
-      <button type="button" class="rv-playlist-strategy rv-gif-go" data-gif-go>${photoIcon}<span>CREATE GIF</span></button>
+      <button type="button" class="rv-playlist-strategy rv-gif-go" data-gif-go>${photoIcon}<span>CREATE NOTE</span></button>
       <div class="rv-gif-progress" data-gif-progress hidden><span></span></div>
       <span class="rv-popover-msg" data-gif-msg></span>
       <button type="button" class="rv-gif-link" data-gif-bg-cancel hidden>Cancel it</button>
       <div class="rv-gif-result" data-gif-result hidden>
-        <video data-gif-preview-video autoplay loop muted playsinline hidden></video>
-        <img alt="" data-gif-preview hidden />
-        <div class="rv-gif-actions">
-          <button type="button" class="btn btn-sm" data-gif-copy="page" hidden title="A page with the GIF, its title and its description">Page link</button>
-          <button type="button" class="btn btn-sm" data-gif-copy="image" hidden title="The GIF file itself, which plays wherever it is pasted">Image link</button>
-          <button type="button" class="btn btn-sm" data-gif-download>Download</button>
-          <a class="btn btn-sm" href="/bookmarks?tab=gifs" data-gif-bookmarks hidden>Saved GIFs</a>
+        <div class="rv-gif-result-head">
+          <a class="rv-gif-result-title" href="/bookmarks?tab=gifs" data-gif-bookmarks hidden>Saved to Visual Notes</a>
+          <span class="rv-gif-result-title" data-gif-unsaved hidden>Not saved</span>
+          <span class="rv-gif-result-facts" data-gif-facts></span>
+          <span class="rv-gif-result-facts" data-gif-note hidden></span>
         </div>
+        <button type="button" class="rv-gif-action" data-gif-copy="page" hidden>
+          <span class="rv-gif-action-name">Copy page link</span>
+          <span class="rv-gif-action-detail" data-detail="Page with every perspective, title, description and setpos links">Page with every perspective, title, description and setpos links</span>
+        </button>
+        <button type="button" class="rv-gif-action" data-gif-copy="image" hidden>
+          <span class="rv-gif-action-name">Copy image link</span>
+          <span class="rv-gif-action-detail" data-detail="The first perspective as a GIF. Plays when pasted in Discord">The first perspective as a GIF. Plays when pasted in Discord</span>
+        </button>
+        <button type="button" class="rv-gif-action" data-gif-download>
+          <span class="rv-gif-action-name">Download</span>
+          <span class="rv-gif-action-detail" data-gif-download-detail></span>
+        </button>
       </div>
     </div>`;
 
   const $ = (sel) => panel.querySelector(sel);
-  const kindBtns = [...panel.querySelectorAll('[data-gif-kind]')];
   const qualityBtns = [...panel.querySelectorAll('[data-gif-quality]')];
-  const camModeBtns = [...panel.querySelectorAll('[data-gif-cam-mode]')];
+  const areaRow = $('[data-gif-area-row]');
   const areaBtn = $('[data-gif-area]');
   const areaRead = $('[data-gif-area-read]');
   const areaReset = $('[data-gif-area-reset]');
-  const cameraSel = $('[data-gif-camera]');
   const rangeSlot = $('[data-gif-range]');
   const rangeRead = $('[data-gif-range-read]');
   const fpsInput = $('[data-gif-fps]');
@@ -148,15 +148,15 @@ export function createGifCreator({ panel, mapEl, canvas, photoIcon = '', escapeH
   const msgEl = $('[data-gif-msg]');
   const bgCancelBtn = $('[data-gif-bg-cancel]');
   const resultEl = $('[data-gif-result]');
-  const previewImg = $('[data-gif-preview]');
-  const previewVideo = $('[data-gif-preview-video]');
+  const factsEl = $('[data-gif-facts]');
+  const noteEl = $('[data-gif-note]');
+  const unsavedEl = $('[data-gif-unsaved]');
   const copyBtns = [...panel.querySelectorAll('[data-gif-copy]')];
   const downloadBtn = $('[data-gif-download]');
+  const downloadDetail = $('[data-gif-download-detail]');
   const bookmarksLink = $('[data-gif-bookmarks]');
 
-  let kind = '2d';
   let quality = DEFAULT_QUALITY;
-  let camMode = 'pov';
   /** Fractions of the radar canvas; null is the whole map. */
   let area = null;
   let open = false;
@@ -165,12 +165,23 @@ export function createGifCreator({ panel, mapEl, canvas, photoIcon = '', escapeH
   let lastBlob = null;
   let lastName = '';
   let lastMeta = null;
-  let lastUrl = '';
   let savedId = '';
-  /** The latest clip being made in the background, until it is done. */
+  /** The latest note being made in the background, until it is done. */
   let backgroundJob = null;
-  /** fps the user typed for each view, so flipping 2D/3D keeps both. */
-  const fpsFor = { '2d': DEFAULT_FPS['2d'], '3d': DEFAULT_FPS['3d'] };
+
+  const picker = createPerspectivePicker({
+    host: $('[data-gif-picker]'),
+    escapeHtml,
+    cameraPose: () => viewer.view3d()?.cameraPose?.() || null,
+    onChange: () => {
+      if (!picker.wantsMap) {
+        picking = false;
+        area = null;
+      }
+      syncLayer();
+      paintEstimate();
+    }
+  });
 
   try {
     setposInput.checked = localStorage.getItem(SETPOS_KEY) === '1';
@@ -186,15 +197,13 @@ export function createGifCreator({ panel, mapEl, canvas, photoIcon = '', escapeH
     paintEstimate();
   });
 
-  /** Setpos lines go in when the toggle is on and the GIF is 3D. */
-  const wantSetpos = () => kind === '3d' && setposInput.checked;
-
   /** Grenades thrown between two ticks: what "Automatically append setpos" would write a line for. */
   function throwsBetween(fromTick, toTick) {
     const r = viewer.round();
+    const only = new Set(picker.pickedIds());
     return (r?.meta?.events?.grenades || []).filter((g) => {
       const t = Number(g.throwTick);
-      return Number.isFinite(t) && t >= fromTick && t <= toTick;
+      return Number.isFinite(t) && t >= fromTick && t <= toTick && (!only.size || only.has(String(g.player)));
     }).length;
   }
 
@@ -249,7 +258,8 @@ export function createGifCreator({ panel, mapEl, canvas, photoIcon = '', escapeH
   }
 
   function syncLayer() {
-    layer.hidden = !open || kind !== '2d' || (!picking && !area);
+    areaRow.hidden = !picker.wantsMap || viewer.is3d();
+    layer.hidden = !open || !picker.wantsMap || viewer.is3d() || (!picking && !area);
     layer.classList.toggle('is-picking', picking);
     paintBox(picking ? drag?.frac || null : area);
     areaBtn.classList.toggle('active', picking);
@@ -356,10 +366,11 @@ export function createGifCreator({ panel, mapEl, canvas, photoIcon = '', escapeH
     const t = timing();
     if (!r || !t) return;
     roundKey = r.file;
+    picker.setRound(r.meta);
     const total = totalSeconds(t);
     const at = Math.max(0, Math.min(total, (viewer.playheadTick() - t.startTick) / t.tickRate));
     const from = Math.max(0, at - 2);
-    const to = Math.min(total, from + Math.min(8, MAX_SECONDS[kind]));
+    const to = Math.min(total, from + Math.min(8, MAX_SECONDS['3d']));
     range = makeRange(total);
     range.set(from, to);
     const kills = (r.meta.events?.kills || [])
@@ -376,14 +387,15 @@ export function createGifCreator({ panel, mapEl, canvas, photoIcon = '', escapeH
     paintEstimate();
   }
 
-  function frameSize() {
-    if (pickedSlot() !== null) return outputSize('3d', quality, VIEW_3D.width, VIEW_3D.height);
-    if (kind === '3d') {
-      const c = viewer.view3d()?.canvas;
-      return outputSize('3d', quality, c?.width || 1280, c?.height || 720);
-    }
-    const px = areaPixels();
-    return outputSize('2d', quality, px.sw, px.sh);
+  /** The part as ticks. */
+  function part() {
+    const { from, to } = range.get();
+    return { fromTick: tickOf(from), toTick: tickOf(to) };
+  }
+
+  /** The map drawn here rather than off screen: when it is the only choice, or an area of it was picked. */
+  function mapOnScreen(specs) {
+    return picker.wantsMap && !viewer.is3d() && (specs.length === 1 || Boolean(area));
   }
 
   function paintEstimate() {
@@ -392,18 +404,30 @@ export function createGifCreator({ panel, mapEl, canvas, photoIcon = '', escapeH
       estEl.textContent = '';
       return;
     }
-    const { from, to } = range.get();
-    const fps = clampFps(kind, fpsInput.value);
-    const ticks = frameTicks({ fromTick: tickOf(from), toTick: tickOf(to), tickRate: t.tickRate, fps, kind });
-    const size = frameSize();
-    const capped = to - from > MAX_SECONDS[kind] + 1e-6;
-    const throws = wantSetpos() && ticks.length ? throwsBetween(ticks[0], ticks[ticks.length - 1]) : 0;
-    estEl.textContent = `${ticks.length} frames at ${fps} FPS, ${size.width} x ${size.height} (${Math.round(qualityScale(kind, quality) * 100)}%)${
-      capped ? `. ${kind.toUpperCase()} GIFs stop at ${MAX_SECONDS[kind]} s` : ''
-    }${wantSetpos() ? `. Setpos for ${throws} ${throws === 1 ? 'grenade' : 'grenades'}` : ''}`;
+    const p = part();
+    const { specs, over } = picker.specs(p);
+    const fps = clampFps('3d', fpsInput.value);
+    if (!specs.length) {
+      estEl.textContent = 'Pick at least one perspective';
+      return;
+    }
+    const ticks = frameTicks({ ...p, tickRate: t.tickRate, fps, kind: '3d' });
+    const has3d = specs.some((s) => renderOptions(s).kind === '3d');
+    const capped = has3d && p.toTick - p.fromTick > MAX_SECONDS['3d'] * t.tickRate;
+    const seen = `${specs.length} ${specs.length === 1 ? 'perspective' : 'perspectives'}`;
+    const lines = setposInput.checked ? throwsBetween(ticks[0], ticks[ticks.length - 1]) : -1;
+    estEl.textContent = [
+      `${seen}, ${ticks.length} frames at ${fps} FPS`,
+      has3d ? `${outputSize('3d', quality, VIEW_3D.width, VIEW_3D.height).width} x ${outputSize('3d', quality, VIEW_3D.width, VIEW_3D.height).height} (${Math.round(qualityScale('3d', quality) * 100)}%)` : '',
+      capped ? `3D stops at ${MAX_SECONDS['3d']} s` : '',
+      over ? `${over} more did not fit in one note` : '',
+      lines >= 0 ? `Setpos for ${lines} ${lines === 1 ? 'grenade' : 'grenades'}` : ''
+    ]
+      .filter(Boolean)
+      .join('. ');
   }
 
-  // ---- 2D / 3D, camera, quality -----------------------------------------------
+  // ---- quality -----------------------------------------------------------------
 
   function setSeg(btns, attr, value) {
     for (const b of btns) {
@@ -413,95 +437,6 @@ export function createGifCreator({ panel, mapEl, canvas, photoIcon = '', escapeH
     }
   }
 
-  function syncKindRows() {
-    panel.querySelectorAll('[data-gif-only]').forEach((row) => {
-      const only = row.dataset.gifOnly;
-      row.hidden = only === '3d-player' ? kind !== '3d' || cameraSel.value === 'view' : only !== kind;
-    });
-    const can3d = viewer.can3d();
-    const btn3d = kindBtns.find((b) => b.dataset.gifKind === '3d');
-    btn3d.disabled = !can3d;
-    btn3d.title = can3d ? '' : 'This round has no 3D view';
-  }
-
-  async function setKind(next) {
-    if (busy) return;
-    if (next === '3d' && !viewer.can3d()) return;
-    fpsFor[kind] = clampFps(kind, fpsInput.value);
-    kind = next;
-    setSeg(kindBtns, 'gifKind', kind);
-    fpsInput.value = String(fpsFor[kind]);
-    picking = false;
-    syncKindRows();
-    syncLayer();
-    if (kind === '3d') {
-      fillCameras();
-      applyCamera();
-    } else if (viewer.is3d()) {
-      await viewer.set3d(false);
-    }
-    paintEstimate();
-  }
-
-  function fillCameras() {
-    const r = viewer.round();
-    const keep = cameraSel.value || (viewer.is3d() ? 'view' : '');
-    const players = (r?.meta?.players || []).map((p) => ({
-      slot: p.slot,
-      name: p.name || `Player ${p.slot}`,
-      side: (p.team === 1 ? r.meta.team1Side : r.meta.team2Side) || ''
-    }));
-    const group = (side) =>
-      players
-        .filter((p) => p.side === side)
-        .map((p) => `<option value="slot:${p.slot}">${escapeHtml(p.name)}</option>`)
-        .join('');
-    cameraSel.innerHTML =
-      '<option value="view">Camera where it is</option>' +
-      ['T', 'CT']
-        .map((s) => {
-          const opts = group(s);
-          return opts ? `<optgroup label="${s}">${opts}</optgroup>` : '';
-        })
-        .join('');
-    cameraSel.value = [...cameraSel.options].some((o) => o.value === keep) ? keep : 'view';
-    // Out of the 3D view a player is the camera there is, and it needs nothing opened.
-    if (cameraSel.value === 'view' && !viewer.is3d()) selectFirstPlayer();
-    syncKindRows();
-  }
-
-  function selectFirstPlayer() {
-    const first = [...cameraSel.options].find((o) => o.value !== 'view');
-    if (first) cameraSel.value = first.value;
-  }
-
-  /** The player a 3D clip is made of, when one is picked: such a clip is made in the background. */
-  function pickedSlot() {
-    const m = kind === '3d' ? /^slot:(\d+)$/.exec(cameraSel.value) : null;
-    return m ? Number(m[1]) : null;
-  }
-
-  /** Show the chosen camera now, so what is on screen is what gets captured. */
-  function applyCamera() {
-    const v3 = viewer.view3d();
-    if (!v3 || kind !== '3d') return;
-    const m = /^slot:(\d+)$/.exec(cameraSel.value);
-    if (!m) return;
-    v3.spectateSlot(Number(m[1]));
-    v3.setMode(camMode);
-  }
-
-  /** Whose side the 3D GIF is seen from, and whose eyes, for its metadata. */
-  function perspective() {
-    const r = viewer.round();
-    const v3 = viewer.view3d();
-    if (kind !== '3d' || !r?.meta || !v3 || v3.isFree) return { side: '', player: '' };
-    const p = (r.meta.players || []).find((x) => x.slot === v3.povSlot);
-    if (!p) return { side: '', player: '' };
-    return { side: (p.team === 1 ? r.meta.team1Side : r.meta.team2Side) || '', player: p.name || '' };
-  }
-
-  kindBtns.forEach((b) => b.addEventListener('click', () => void setKind(b.dataset.gifKind)));
   qualityBtns.forEach((b) =>
     b.addEventListener('click', () => {
       quality = Number(b.dataset.gifQuality) || 1;
@@ -509,32 +444,13 @@ export function createGifCreator({ panel, mapEl, canvas, photoIcon = '', escapeH
       paintEstimate();
     })
   );
-  camModeBtns.forEach((b) =>
-    b.addEventListener('click', () => {
-      camMode = b.dataset.gifCamMode === 'third' ? 'third' : 'pov';
-      setSeg(camModeBtns, 'gifCamMode', camMode);
-      applyCamera();
-    })
-  );
-  cameraSel.addEventListener('change', async () => {
-    // "Camera where it is" is the 3D view on screen, so that one has to be open.
-    if (cameraSel.value === 'view' && !viewer.is3d()) {
-      setMsg('Opening 3D…');
-      const ok = await viewer.set3d(true);
-      setMsg(ok ? '' : 'The 3D view could not open here.', !ok);
-      if (!ok) selectFirstPlayer();
-    }
-    syncKindRows();
-    applyCamera();
-    paintEstimate();
-  });
   bgCancelBtn.addEventListener('click', () => {
     backgroundJob?.abort();
     setMsg('Cancelled.');
   });
   fpsInput.addEventListener('input', paintEstimate);
   fpsInput.addEventListener('change', () => {
-    fpsInput.value = String(clampFps(kind, fpsInput.value));
+    fpsInput.value = String(clampFps('3d', fpsInput.value));
     paintEstimate();
   });
 
@@ -546,115 +462,152 @@ export function createGifCreator({ panel, mapEl, canvas, photoIcon = '', escapeH
   }
 
   function setBusy(on) {
-    goLabel.textContent = on ? 'CANCEL' : 'CREATE GIF';
+    goLabel.textContent = on ? 'CANCEL' : 'CREATE NOTE';
     goBtn.classList.toggle('is-busy', on);
     progressEl.hidden = !on;
-    panel.querySelectorAll('input, textarea, select, .rp-seg-btn, [data-gif-area], [data-gif-area-reset]').forEach((n) => {
-      n.disabled = on || (n.dataset.gifKind === '3d' && !viewer.can3d());
+    panel.querySelectorAll('input, textarea, select, .rp-seg-btn, .rv-pp-chip, [data-gif-area], [data-gif-area-reset]').forEach((n) => {
+      n.disabled = on;
     });
   }
 
-  function showResult(blob, name) {
-    if (lastUrl) URL.revokeObjectURL(lastUrl);
+  function setNote(text) {
+    noteEl.textContent = text || '';
+    noteEl.hidden = !text;
+  }
+
+  /**
+   * The finished note, as what can be done with it. Not a preview of it: whoever made it just watched that part of
+   * the round. The links wait for the save.
+   *
+   * @param {Blob} blob   the first clip
+   * @param {string} name
+   * @param {string} facts
+   */
+  function showResult(blob, name, facts) {
     lastBlob = blob;
     lastName = name;
-    lastUrl = URL.createObjectURL(blob);
-    const isVideo = blob.type === 'video/mp4';
-    previewVideo.hidden = !isVideo;
-    previewImg.hidden = isVideo;
-    if (isVideo) previewVideo.src = lastUrl;
-    else previewImg.src = lastUrl;
+    factsEl.textContent = facts;
+    setNote('');
+    setSaved(false);
     resultEl.hidden = false;
   }
 
-  /** The description with its setpos lines, as a separate edit, and the message that says how it went. */
-  async function addSetposLines(gif, description, lines, saved) {
+  /** Links exist once it is saved; until then, or if that fails, Download is the only copy. */
+  function setSaved(saved) {
+    for (const b of copyBtns) b.hidden = !saved;
+    bookmarksLink.hidden = !saved;
+    unsavedEl.hidden = saved;
+    paintDownloadDetail();
+  }
+
+  const paintDownloadDetail = () => {
+    downloadDetail.textContent = savedId ? 'The first perspective as a GIF. Made on the first download' : `This copy, as ${lastBlob?.type === 'video/mp4' ? 'a video' : 'a GIF'}`;
+  };
+
+  /** Says so on the button pressed, then goes back to saying what the button does. */
+  function flashDetail(btn, text) {
+    const el = btn.querySelector('.rv-gif-action-detail');
+    el.textContent = text;
+    el.classList.add('is-done');
+    clearTimeout(btn.flashTimer);
+    btn.flashTimer = setTimeout(() => {
+      el.textContent = el.dataset.detail;
+      el.classList.remove('is-done');
+    }, 2000);
+  }
+
+  /** The description with its setpos lines, as a separate edit. Says how it went on the result. */
+  async function addSetposLines(gif, description, lines) {
     const { text, added, left } = appendSetposLines(description, lines, GIF_DESCRIPTION_MAX);
     try {
       const kept = await updateGif(gif.id, { description: text });
-      setMsg(
-        `${saved} Setpos for ${added} ${added === 1 ? 'grenade' : 'grenades'} added to its description${
-          left ? `; ${left} more did not fit in ${GIF_DESCRIPTION_MAX} characters` : ''
-        }.`
+      setNote(
+        `Setpos for ${added} ${added === 1 ? 'grenade' : 'grenades'} in its description${
+          left ? `, ${left} more did not fit` : ''
+        }`
       );
       return kept;
     } catch (err) {
-      setMsg(`${saved} The setpos lines could not be added: ${err?.message || 'the edit failed'}`, true);
+      setMsg(`The setpos lines could not be added: ${err?.message || 'the edit failed'}`, true);
       return gif;
     }
   }
 
   /**
-   * A player's 3D clip, made off screen: nothing here stops, moves or opens the viewer. The camera is on that
-   * player from the first frame to the last, whatever the viewer on screen is following by then.
+   * Queue the perspectives. `open` takes the note to a new tab when it is done.
+   *
+   * @param {object} job
+   * @param {object} job.round     { file, meta }
+   * @param {object} job.part      { fromTick, toTick }
+   * @param {object[]} job.specs
+   * @param {string} [job.noteId]  add these to a note that already exists
+   * @param {string[]} [job.setposOf]  whose grenades get setpos lines, null for none, [] for everyone's
+   * @param {string} job.label     what the notifications call it
+   * @param {boolean} [job.openWhenDone]
    */
-  async function runInBackground(r, t) {
-    const slot = pickedSlot();
-    const player = (r.meta.players || []).find((p) => p.slot === slot);
-    const { from, to } = range.get();
-    const fromTick = tickOf(from);
-    const toTick = tickOf(to);
+  async function queueNote({ round, part: span, specs, noteId = '', setposOf = null, title = '', description = '', fps, quality: level, clock = true, label, openWhenDone = false }) {
     const track = await viewer.fullTrack?.();
-    if (!track) {
-      setMsg("The round's positions are still loading. Try again in a moment.", true);
-      return;
-    }
-    if (!track.sample(slot, fromTick, {})?.alive) {
-      setMsg(`${player?.name || 'That player'} is already dead at ${clockLabel(fromTick)}. Pick an earlier part of the round.`, true);
-      return;
-    }
-    const lines = wantSetpos() ? utilitySetposLines(r.meta, track, { fromTick, toTick, timing: t }) : [];
-    const description = descInput.value;
-    const job = {
-      file: r.file,
-      round: { meta: r.meta, track },
-      kind: '3d',
-      fromTick,
-      toTick,
-      fps: clampFps('3d', fpsInput.value),
-      quality,
-      camera: { player: slot, mode: camMode },
-      clock: clockInput.checked,
-      title: titleInput.value,
-      description,
-      source: 'viewer'
-    };
+    if (!track) throw new Error("The round's positions are still loading. Try again in a moment.");
+    const t = timingFor(round.meta);
+    const lines = setposOf ? utilitySetposLines(round.meta, track, { ...span, timing: t, player: setposOf }) : [];
     const controller = new AbortController();
     backgroundJob = controller;
     bgCancelBtn.hidden = false;
-    const name = player?.name || 'Player';
     const finished = () => {
       if (backgroundJob !== controller) return;
       backgroundJob = null;
       bgCancelBtn.hidden = true;
     };
     const queued = enqueueEyeJob({
-      label: `${name} ${clockLabel(fromTick)}`,
-      name: 'GIF',
+      label,
+      name: 'Visual note',
       run: async (task) => {
-        const cancelled = { title: `GIF of ${name} cancelled` };
+        const cancelled = { title: `Visual note cancelled: ${label}` };
         if (controller.signal.aborted) {
           finished();
           return cancelled;
         }
         try {
-          const res = await makeRoundGif({ ...job, signal: controller.signal, onProgress: (text) => task.setStatus(text) });
-          lastMeta = res.meta;
-          showResult(res.blob, gifFileName(res.meta, res.blob.type === 'video/mp4' ? 'mp4' : 'gif'));
-          const mb = (res.blob.size / 1024 / 1024).toFixed(1);
-          if (!res.gif) {
-            const why = res.saveError?.status === 401 ? 'Sign in to keep GIFs in Bookmarks.' : `Not saved to Bookmarks: ${res.saveError?.message || 'the upload failed'}.`;
-            setMsg(`Made it (${mb} MB). ${why} Download gives you this copy.`, true);
-            return { title: `GIF of ${name} not saved`, body: why };
+          const res = await renderPerspectives({
+            file: round.file,
+            round: { meta: round.meta, track },
+            ...span,
+            specs,
+            noteId,
+            fps,
+            quality: level,
+            clock,
+            title,
+            description,
+            source: 'viewer',
+            signal: controller.signal,
+            onProgress: (text) => task.setStatus(text)
+          });
+          const problem = failuresText(res.failed);
+          if (res.first && !noteId) {
+            lastMeta = res.first.meta;
+            savedId = '';
+            const seconds = res.first.seconds.toFixed(1);
+            showResult(res.first.blob, gifFileName(res.first.meta, res.first.blob.type === 'video/mp4' ? 'mp4' : 'gif'), `${res.made} ${res.made === 1 ? 'perspective' : 'perspectives'}, ${seconds} s, ${(res.first.blob.size / 1024 / 1024).toFixed(1)} MB for the first`);
           }
-          savedId = res.gif.id;
-          for (const b of copyBtns) b.hidden = false;
-          bookmarksLink.hidden = false;
-          const saved = `Saved to Bookmarks (${mb} MB).`;
-          setMsg(saved);
-          const kept = lines.length ? await addSetposLines(res.gif, description, lines, saved) : res.gif;
+          if (!res.note?.id) {
+            const unsigned = res.failed.some((f) => f.status === 401);
+            const why = unsigned ? 'Sign in to keep visual notes in Bookmarks.' : problem || 'Nothing could be made.';
+            setMsg(why, true);
+            return { title: `Visual note not saved: ${label}`, body: why };
+          }
+          savedId = res.note.id;
+          setSaved(true);
+          setMsg(problem, Boolean(problem));
+          const kept = lines.length && !noteId ? await addSetposLines(res.note, description, lines) : res.note;
+          if (setposOf && !lines.length && !noteId) setNote('No grenades were thrown in this part, so no setpos was added');
           onSaved?.(kept);
-          return { title: `GIF of ${name} saved`, body: 'It is in Bookmarks > Saved GIFs.' };
+          const opened = openWhenDone && openNoteTab(res.note.id);
+          return {
+            title: `Visual note saved: ${label}`,
+            body: problem || (opened ? '' : 'Open it in Visual Notes.'),
+            href: noteHref(res.note.id)
+          };
         } catch (err) {
           if (err?.name === 'AbortError') return cancelled;
           throw err;
@@ -663,64 +616,29 @@ export function createGifCreator({ panel, mapEl, canvas, photoIcon = '', escapeH
         }
       }
     });
-    setMsg(
-      queued.position
-        ? `Queued behind ${queued.position} other${queued.position === 1 ? '' : 's'}. You get a notice when it is saved.`
-        : 'Making it in the background. You get a notice when it is saved.'
-    );
+    return queued;
   }
 
-  async function run() {
-    const r = viewer.round();
-    const t = timing();
-    if (!r?.meta || !t) {
-      setMsg('Open a round first.', true);
-      return;
-    }
-    if (pickedSlot() !== null) {
-      await runInBackground(r, t);
-      return;
-    }
-    const { from, to } = range.get();
-    const fps = clampFps(kind, fpsInput.value);
-    const ticks = frameTicks({ fromTick: tickOf(from), toTick: tickOf(to), tickRate: t.tickRate, fps, kind });
-    const v3 = kind === '3d' ? viewer.view3d() : null;
-    if (kind === '3d' && !v3?.ready) {
-      setMsg('The 3D view is still loading.', true);
-      return;
-    }
-    const size = frameSize();
+  /** The 2D map drawn from the viewer's own radar, as it is on screen. Resolves the saved note, or null. */
+  async function runOnScreen(r, t, description) {
+    const fps = clampFps('2d', fpsInput.value);
+    const p = part();
+    const ticks = frameTicks({ ...p, tickRate: t.tickRate, fps, kind: '2d' });
     const px = areaPixels();
-    const look = perspective();
-    // Read before capturing: the part is fixed now, and a track that cannot
-    // load should say so before a minute of drawing, not after.
-    let setposLines = [];
-    if (wantSetpos() && ticks.length) {
-      const track = await viewer.fullTrack?.();
-      if (!track) {
-        setMsg('The round\'s positions are still loading, so the setpos cannot be read yet. Try again in a moment.', true);
-        return;
-      }
-      setposLines = utilitySetposLines(r.meta, track, { fromTick: ticks[0], toTick: ticks[ticks.length - 1], timing: t });
-    }
+    const size = outputSize('2d', quality, px.sw, px.sh);
     const controller = new AbortController();
     busy = controller;
     savedId = '';
-    for (const b of copyBtns) b.hidden = true;
-    bookmarksLink.hidden = true;
+    resultEl.hidden = true;
     setBusy(true);
     setMsg('');
     const state = viewer.beginCapture();
-    let clock = 1000;
-    let blankChecked = false;
-    // The clip stays with whoever is being followed as it starts, through their death too.
-    v3?.beginCapture({ pov: v3.isFree ? null : v3.povSlot });
     let blob = null;
     try {
       blob = await captureClip({
         count: ticks.length,
         fps,
-        palette: kind === '3d' ? 'local' : 'global',
+        palette: 'global',
         size,
         stampClock: clockInput.checked,
         signal: controller.signal,
@@ -731,95 +649,118 @@ export function createGifCreator({ panel, mapEl, canvas, photoIcon = '', escapeH
         },
         drawFrame: async (i) => {
           viewer.drawAt(ticks[i]);
-          const label = clockLabel(ticks[i]);
-          if (!v3) return { source: canvas, ...px, clock: label };
-          const src = v3.captureFrame(clock);
-          clock += 1000 / fps;
-          if (!blankChecked) {
-            blankChecked = true;
-            if (canvasIsBlank(src)) throw new Error('This browser does not let the 3D view be captured. Try 2D, or another browser.');
-          }
-          return { source: src, sx: 0, sy: 0, sw: src.width, sh: src.height, clock: label, flash: v3.flash, overlays: [v3.crosshairCanvas] };
+          return { source: canvas, ...px, clock: clockLabel(ticks[i]) };
         }
       });
     } catch (err) {
-      if (err?.name !== 'AbortError') setMsg(err?.message || 'The GIF could not be made.', true);
+      if (err?.name !== 'AbortError') setMsg(err?.message || 'The clip could not be made.', true);
       else setMsg('Cancelled.');
     } finally {
-      v3?.endCapture();
       viewer.endCapture(state);
       busy = null;
       setBusy(false);
       progressBar.style.width = '0%';
     }
-    if (!blob) return;
+    if (!blob) return null;
 
     const meta = gifMetaFromRound(r.meta, {
-      kind,
+      kind: '2d',
       file: r.file,
       fromTick: ticks[0],
       toTick: ticks[ticks.length - 1],
       clockFrom: clockLabel(ticks[0]),
       clockTo: clockLabel(ticks[ticks.length - 1]),
-      side: look.side,
-      player: look.player,
+      view: 'map',
+      label: '2D map',
       title: titleInput.value,
-      description: descInput.value,
+      description,
       source: 'viewer'
     });
     const name = gifFileName(meta, blob.type === 'video/mp4' ? 'mp4' : 'gif');
     lastMeta = meta;
-    showResult(blob, name);
+    const seconds = (ticks[ticks.length - 1] - ticks[0]) / t.tickRate;
     const mb = (blob.size / 1024 / 1024).toFixed(1);
-    setMsg(`Made it (${mb} MB). Saving to Bookmarks…`);
+    showResult(blob, name, `1 perspective, ${seconds.toFixed(1)} s, ${size.width} x ${size.height}, ${mb} MB`);
+    unsavedEl.textContent = 'Saving to Visual Notes…';
     try {
       const { gif, copy } = await saveGifFitting(blob, meta, {
         fps,
-        palette: kind === '3d' ? 'local' : 'global',
-        onShrink: () => setMsg(`Made it (${mb} MB). That is more than Bookmarks keep, so a smaller copy is being made for them…`),
-        onProgress: (done, total) => setMsg(`Made it (${mb} MB). Making a smaller copy for Bookmarks: frame ${done} of ${total}`)
+        palette: 'global',
+        onShrink: () => setMsg('That is more than Bookmarks keep, so a smaller copy is being made for them…'),
+        onProgress: (done, total) => setMsg(`Making a smaller copy for Bookmarks: frame ${done} of ${total}`)
       });
       savedId = gif.id;
-      for (const b of copyBtns) b.hidden = false;
-      bookmarksLink.hidden = false;
-      const saved = copy
-        ? `Saved a smaller copy to Bookmarks: ${(copy.bytes / 1024 / 1024).toFixed(1)} MB, ${copy.width} x ${copy.height}, ${copy.fps} FPS.`
-        : `Saved to Bookmarks (${mb} MB).`;
-      setMsg(saved);
-      let kept = gif;
-      if (setposLines.length) {
-        // A separate edit, not the save itself: the save carries its metadata in
-        // a request header, which proxies cap long before a setpos per grenade.
-        kept = await addSetposLines(gif, descInput.value, setposLines, saved);
-      } else if (wantSetpos()) {
-        setMsg(`${saved} No grenades were thrown in this part, so there was no setpos to add.`);
-      }
-      onSaved?.(kept);
+      setSaved(true);
+      setMsg('');
+      if (copy) factsEl.textContent = `1 perspective, ${seconds.toFixed(1)} s, ${copy.width} x ${copy.height}, ${copy.fps} FPS, ${(copy.bytes / 1024 / 1024).toFixed(1)} MB`;
+      onSaved?.(gif);
+      return gif;
     } catch (err) {
-      setMsg(
-        err?.status === 401
-          ? `Made it (${mb} MB). Sign in to keep GIFs in Bookmarks. Download gives you this copy as a ${blob.type === 'video/mp4' ? 'video' : 'GIF'}.`
-          : `Made it (${mb} MB). Not saved to Bookmarks: ${err?.message || 'the upload failed'}. Download gives you this copy as a ${blob.type === 'video/mp4' ? 'video' : 'GIF'}.`,
-        true
-      );
+      setMsg(err?.status === 401 ? 'Sign in to keep visual notes in Bookmarks.' : `Not saved to Bookmarks: ${err?.message || 'the upload failed'}.`, true);
+      return null;
+    } finally {
+      unsavedEl.textContent = 'Not saved';
     }
   }
 
-  /** A WebGPU or WebGL canvas that would not give its picture up reads as all zeros. */
-  function canvasIsBlank(src) {
+  async function run() {
+    const r = viewer.round();
+    const t = timing();
+    if (!r?.meta || !t) {
+      setMsg('Open a round first.', true);
+      return;
+    }
+    const p = part();
+    const { specs } = picker.specs(p);
+    if (!specs.length) {
+      setMsg('Pick at least one perspective.', true);
+      return;
+    }
+    const description = descInput.value;
+    const setposOf = setposInput.checked ? picker.pickedIds() : null;
+    const onScreen = mapOnScreen(specs);
+    const rest = onScreen ? specs.filter((s) => s.type !== 'map') : specs;
+    resultEl.hidden = true;
+    let note = null;
+    if (onScreen) {
+      note = await runOnScreen(r, t, description);
+      if (!note && rest.length) return;
+    }
+    const fps = clampFps('3d', fpsInput.value);
+    if (!rest.length) {
+      if (note && setposOf) {
+        const track = await viewer.fullTrack?.();
+        const lines = track ? utilitySetposLines(r.meta, track, { ...p, timing: t, player: setposOf }) : [];
+        if (lines.length) onSaved?.(await addSetposLines(note, description, lines));
+        else setNote('No grenades were thrown in this part, so no setpos was added');
+      }
+      return;
+    }
     try {
-      const probe = document.createElement('canvas');
-      probe.width = 32;
-      probe.height = 18;
-      const ctx = probe.getContext('2d', { willReadFrequently: true });
-      ctx.drawImage(src, 0, 0, 32, 18);
-      const d = ctx.getImageData(0, 0, 32, 18).data;
-      for (let i = 0; i < d.length; i += 4) if (d[i] || d[i + 1] || d[i + 2]) return false;
-      return true;
-    } catch {
-      return false;
+      const queued = await queueNote({
+        round: r,
+        part: p,
+        specs: rest,
+        noteId: note?.id || '',
+        setposOf: note ? null : setposOf,
+        title: titleInput.value,
+        description,
+        fps,
+        quality: level(),
+        clock: clockInput.checked,
+        label: `${rest.length} ${rest.length === 1 ? 'perspective' : 'perspectives'} from ${clockLabel(p.fromTick)}`
+      });
+      setMsg(
+        queued.position
+          ? `Queued behind ${queued.position} other${queued.position === 1 ? '' : 's'}. A notice says when it is saved.`
+          : 'Making it in the background. A notice says when it is saved.'
+      );
+    } catch (err) {
+      setMsg(err?.message || 'It could not be queued.', true);
     }
   }
+
+  const level = () => quality;
 
   goBtn.addEventListener('click', () => {
     if (busy) busy.abort();
@@ -832,11 +773,12 @@ export function createGifCreator({ panel, mapEl, canvas, photoIcon = '', escapeH
       return;
     }
     downloadBtn.disabled = true;
-    setMsg('Making the GIF…');
+    downloadDetail.textContent = 'Making the GIF…';
     try {
       await downloadSavedGif(savedId, lastMeta);
-      setMsg('Downloaded.');
+      paintDownloadDetail();
     } catch (err) {
+      paintDownloadDetail();
       setMsg(err?.message || 'The download failed.', true);
     } finally {
       downloadBtn.disabled = false;
@@ -850,7 +792,7 @@ export function createGifCreator({ panel, mapEl, canvas, photoIcon = '', escapeH
       if (!page) warmGif(savedId);
       try {
         await navigator.clipboard.writeText(link);
-        setMsg(page ? 'Page link copied.' : 'Image link copied.');
+        flashDetail(btn, 'Copied');
       } catch {
         window.prompt('Copy the link:', link);
       }
@@ -870,16 +812,11 @@ export function createGifCreator({ panel, mapEl, canvas, photoIcon = '', escapeH
       open = true;
       panel.hidden = false;
       const r = viewer.round();
-      // Opened in 3D, it makes a 3D GIF; the 2D/3D switch takes it from there.
-      if (viewer.is3d() && kind !== '3d') {
-        kind = '3d';
-        setSeg(kindBtns, 'gifKind', kind);
-        fpsInput.value = String(fpsFor['3d']);
-      }
-      if (kind === '3d') fillCameras();
-      syncKindRows();
       if (r?.file !== roundKey) resetRange();
-      else paintRange();
+      else {
+        picker.repaint();
+        paintRange();
+      }
       const t = timing();
       if (t) range.setCursor((viewer.playheadTick() - t.startTick) / t.tickRate);
       syncLayer();
@@ -912,27 +849,43 @@ export function createGifCreator({ panel, mapEl, canvas, photoIcon = '', escapeH
     roundChanged() {
       if (!open || busy) return;
       resetRange();
-      if (kind === '3d') fillCameras();
     },
-    /** The viewer left 3D on its own (the 3D button): follow it. */
+    /** The viewer went in or out of 3D: the free camera comes and goes with it. */
     viewChanged() {
       if (busy || !open) return;
-      // Leaving the 3D view does not end a player's clip: those are made without it.
-      const next = viewer.is3d() || pickedSlot() !== null ? '3d' : '2d';
-      if (next !== kind) {
-        fpsFor[kind] = clampFps(kind, fpsInput.value);
-        kind = next;
-        setSeg(kindBtns, 'gifKind', kind);
-        fpsInput.value = String(fpsFor[kind]);
-        if (kind === '3d') fillCameras();
-        syncKindRows();
-        syncLayer();
-        paintEstimate();
-      }
+      picker.repaint();
+      syncLayer();
+      paintEstimate();
     },
     /** Resize: keep the picked area's outline over the same part of the map. */
     relayout() {
       if (open) syncLayer();
+    },
+    /**
+     * A note of one player made in one go: the Q shortcut. Quality 3 at 20 FPS, first person, in the queue, and in
+     * a new tab when it is done. The panel does not have to be open.
+     *
+     * @param {{ slot: number, fromTick: number, toTick: number }} what
+     * @returns {Promise<{ position: number }>}
+     */
+    queueQuick({ slot, fromTick, toTick }) {
+      const r = viewer.round();
+      if (!r?.meta) return Promise.reject(new Error('Open a round first.'));
+      const who = (r.meta.players || []).find((p) => p.slot === slot);
+      const from = clockLabel(fromTick);
+      const to = clockLabel(toTick);
+      const name = who?.name || `Player ${slot}`;
+      return queueNote({
+        round: r,
+        part: { fromTick, toTick },
+        specs: [{ type: 'player', slot, mode: 'pov' }],
+        title: `${name} ${from} to ${to}`,
+        fps: 20,
+        quality: 3,
+        clock: true,
+        label: `${name} ${from} to ${to}`,
+        openWhenDone: true
+      });
     },
     /** Escape ends an area pick before it closes anything else. */
     handleEscape() {
@@ -950,7 +903,6 @@ export function createGifCreator({ panel, mapEl, canvas, photoIcon = '', escapeH
     },
     destroy() {
       busy?.abort();
-      if (lastUrl) URL.revokeObjectURL(lastUrl);
       layer.remove();
     }
   };

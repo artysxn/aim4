@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         aim4: upload PRACC demos
 // @namespace    https://aim4.io/
-// @version      1.1.0
-// @description  Adds an Upload button to the Demos tab on pracc.com/team/server. aim4's server fetches the demos itself.
+// @version      1.2.0
+// @description  Adds an Upload button to each demo on pracc.com/team/server. aim4's server fetches the demo itself.
 // @match        https://pracc.com/*
 // @match        https://aim4.io/*
 // @connect      aim4.io
@@ -25,8 +25,8 @@
 //   on aim4.io     copies the signed-in session's access token into that storage.
 //                  Only the access token, which lasts an hour. Never the refresh
 //                  token, which is what could outlive a sign-out.
-//   on pracc.com   puts the button on the Demos tab. A click reads the list the
-//                  way the page itself does, and hands aim4 the signed links.
+//   on pracc.com   puts an Upload button on each row of the Demos tab. A click
+//                  hands aim4 that demo's signed link.
 //
 // What crosses between the two sites is signed storage links and nothing else.
 // A row's DownloadUrl is a pracc.com address that only answers to the PRACC cookie
@@ -41,13 +41,12 @@
 
   const AIM4 = 'https://aim4.io';
   const TOKEN_KEY = 'aim4Token';
-  const REQUEST_KEY = 'aim4PraccRequest';
+  const REQUESTS_KEY = 'aim4PraccRequests';
   const KNOWN_KEY = 'aim4PraccKnown';
   /** Inside this the site renews on load, so a token this short is worth replacing. */
   const TOKEN_MARGIN_MS = 60 * 1000;
   const LINK_WAIT_MS = 25 * 1000;
   const POLL_MS = 3000;
-  /** The page only lists a month's worth; the API returns more than that. */
   const MONTH_MS = 31 * 24 * 60 * 60 * 1000;
   /** Links last an hour. If a queue outlasts that, the expired ones are re-sent. */
   const MAX_RESENDS = 3;
@@ -184,10 +183,11 @@
     if (res.status === 401) throw new Error('Sign in to PRACC first.');
     if (res.status !== 200) throw new Error(`PRACC answered ${res.status} for the demo list.`);
     const rows = JSON.parse(res.text);
-    const cutoff = Date.now() - MONTH_MS;
-    return (Array.isArray(rows) ? rows : []).filter(
-      (row) => row && row.DownloadUrl && new Date(row.CreatedAt).getTime() > cutoff
-    );
+    // The page's own filter to the letter, rows without a link included: buttons are
+    // matched to rows by position.
+    const cutoff = new Date();
+    cutoff.setMonth(cutoff.getMonth() - 1);
+    return (Array.isArray(rows) ? rows : []).filter((row) => row && new Date(row.CreatedAt) > cutoff);
   }
 
   function rowLabel(row) {
@@ -237,33 +237,8 @@
   }
 
   /**
-   * The rows as aim4 wants them, three at a time. A row whose link cannot be had
-   * goes into `results` as failed, and the others carry on.
-   */
-  async function toSend(rows, results) {
-    const out = new Array(rows.length).fill(null);
-    let next = 0;
-    let finished = 0;
-    const worker = async () => {
-      while (next < rows.length) {
-        const at = next++;
-        const row = rows[at];
-        try {
-          out[at] = { uid: row.Uid, url: await resolveLink(row.DownloadUrl), label: rowLabel(row) };
-        } catch (err) {
-          results.set(row.Uid, { uid: row.Uid, state: 'failed', reason: 'no_link', error: err.message });
-        }
-        say(`Getting links from PRACC, ${++finished} of ${rows.length}...`);
-      }
-    };
-    await Promise.all([worker(), worker(), worker()]);
-    return out.filter(Boolean);
-  }
-
-  /**
-   * Demos aim4 has confirmed, by PRACC's row id. A click only asks PRACC for the
-   * links it still needs, because nothing says those requests are free on PRACC's
-   * side. The list only spans a month, so entries older than that can go.
+   * Demos aim4 has confirmed, by PRACC's row id, so a row can say so on load
+   * without asking anybody. The list only spans a month, so old entries can go.
    */
   function knownDemos() {
     const known = GM_getValue(KNOWN_KEY, {});
@@ -274,159 +249,153 @@
     return known;
   }
 
-  function rememberDemos(demos) {
+  function rememberDemo(uid) {
     const known = knownDemos();
-    for (const demo of demos) {
-      if (demo.uid && (demo.state === 'done' || demo.state === 'duplicate')) known[demo.uid] = Date.now();
-    }
+    known[uid] = Date.now();
     GM_setValue(KNOWN_KEY, known);
   }
 
-  // ---- the import ---------------------------------------------------------
+  // ---- one demo's import --------------------------------------------------
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-  const ui = { host: null, button: null, status: null, text: '', busy: false };
+  /** uid -> what its button says. Lives here because React can rebuild the row at any time. */
+  const rowState = new Map();
+  /** uid -> its button, reused when a row comes back. */
+  const rowButtons = new Map();
+  const ui = { host: null, message: '' };
 
   function say(text) {
-    ui.text = text;
-    if (ui.status) ui.status.textContent = text;
+    ui.message = text;
+    if (ui.host) ui.host.textContent = text;
   }
 
-  function setBusy(busy) {
-    ui.busy = busy;
-    if (ui.button) ui.button.disabled = busy;
+  function setRow(uid, text, { busy = false, title = '' } = {}) {
+    rowState.set(uid, { text, busy, title });
+    const button = rowButtons.get(uid);
+    if (button) paintButton(button, uid);
   }
 
   const inProgress = (d) => !['done', 'duplicate', 'failed', 'refused'].includes(d.state);
 
-  function progressLine(request) {
-    const demos = request.demos;
-    const total = demos.length;
-    const stored = demos.filter((d) => d.state === 'done' || d.state === 'duplicate').length;
-    const downloading = demos.find((d) => d.state === 'downloading');
-    const parsing = demos.find((d) => d.state === 'parsing' || d.state === 'unpacking');
-    if (downloading) {
-      const pct = downloading.total ? ` ${Math.round((downloading.received / downloading.total) * 100)}%` : '';
-      return `${stored} of ${total} in aim4. Downloading${pct}`;
+  function progressText(demo) {
+    if (demo.state === 'downloading') {
+      return demo.total ? `${Math.round((demo.received / demo.total) * 100)}%` : 'Downloading';
     }
-    if (parsing && parsing.rounds) return `${stored} of ${total} in aim4. Parsing round ${parsing.round} of ${parsing.rounds}`;
-    if (parsing) return `${stored} of ${total} in aim4. Unpacking`;
-    return `${stored} of ${total} in aim4. Waiting`;
+    if (demo.state === 'parsing' && demo.rounds) return `Round ${demo.round}/${demo.rounds}`;
+    if (demo.state === 'parsing') return 'Parsing';
+    if (demo.state === 'unpacking') return 'Unpacking';
+    return 'Queued';
   }
 
-  function finalLine(demos) {
-    const added = demos.filter((d) => d.state === 'done').length;
-    const known = demos.filter((d) => d.state === 'duplicate').length;
-    const failed = demos.filter((d) => d.state === 'failed' || d.state === 'refused');
-    const parts = [];
-    if (added) parts.push(`${added} added`);
-    if (known) parts.push(`${known} already in aim4`);
-    if (failed.length) parts.push(`${failed.length} failed: ${failed[0].error || failed[0].reason}`);
-    return parts.join(', ') || 'Nothing to upload';
+  function savedRequests() {
+    return GM_getValue(REQUESTS_KEY, {});
+  }
+
+  function saveRequest(uid, id) {
+    const requests = savedRequests();
+    if (id) requests[uid] = id;
+    else delete requests[uid];
+    GM_setValue(REQUESTS_KEY, requests);
   }
 
   /** Follow one request to its end. The id is enough, so the token can expire meanwhile. */
-  async function follow(requestId) {
+  async function follow(uid, requestId) {
     for (;;) {
       let polled;
       try {
         polled = await aim4Request('GET', `/api/replays/pracc/imports/${requestId}`);
       } catch (_err) {
-        // A blip while the server carries on. Say so and keep asking.
-        say('Lost touch with aim4, still trying...');
+        // A blip while the server carries on. Keep asking.
         await sleep(POLL_MS * 2);
         continue;
       }
       if (polled.status === 404) {
-        GM_deleteValue(REQUEST_KEY);
-        throw new Error('aim4 restarted and lost track of this. Click Upload again, nothing is lost.');
+        saveRequest(uid, null);
+        throw new Error('aim4 restarted and lost track of this demo. Click Upload again, nothing is lost.');
       }
-      const request = polled.json && polled.json.request;
-      if (!request) {
+      const demo = polled.json && polled.json.request && polled.json.request.demos[0];
+      if (!demo) {
         await sleep(POLL_MS);
         continue;
       }
-      if (!request.demos.some(inProgress)) {
-        GM_deleteValue(REQUEST_KEY);
-        return request;
+      if (!inProgress(demo)) {
+        saveRequest(uid, null);
+        return demo;
       }
-      say(progressLine(request));
+      setRow(uid, progressText(demo), { busy: true });
       await sleep(POLL_MS);
     }
   }
 
-  async function sendAndFollow(demos) {
-    // Asked for each send: a re-send can come an hour after the first one.
-    const token = await ensureToken();
-    const sent = await aim4Request('POST', '/api/replays/pracc/imports', { token, body: { demos } });
-    const request = sent.json && sent.json.request;
-    if (!request) {
-      if (sent.status === 401) GM_deleteValue(TOKEN_KEY);
-      const why = sent.json && (sent.json.message || sent.json.error);
-      throw new Error(why || `aim4 answered ${sent.status}.`);
+  function finish(uid, demo) {
+    if (demo.state === 'done' || demo.state === 'duplicate') {
+      rememberDemo(uid);
+      setRow(uid, 'In aim4', { title: 'Already in aim4. Click to check again.' });
+      return;
     }
-    if (!request.demos.some(inProgress)) return request;
-    GM_setValue(REQUEST_KEY, request.id);
-    return follow(request.id);
+    const why = demo.error || demo.reason || 'aim4 would not take this demo.';
+    setRow(uid, 'Failed', { title: why });
+    say(why);
   }
 
-  async function runUpload() {
-    if (ui.busy) return;
-    setBusy(true);
+  async function uploadRow(row) {
+    const uid = row.Uid;
+    if (rowState.get(uid)?.busy) return;
+    say('');
+    setRow(uid, 'Starting', { busy: true });
     try {
-      await ensureToken();
-      say('Reading the demo list...');
-      let rows = await fetchPraccDemos();
-      if (!rows.length) {
-        say('No demos to upload');
-        return;
-      }
-      const results = new Map();
-      const known = knownDemos();
-      for (const row of rows) {
-        if (known[row.Uid]) results.set(row.Uid, { uid: row.Uid, state: 'duplicate' });
-      }
-      let pending = await toSend(rows.filter((row) => !known[row.Uid]), results);
-
-      for (let attempt = 0; pending.length && attempt <= MAX_RESENDS; attempt++) {
-        say(`Sending ${pending.length} to aim4...`);
-        const request = await sendAndFollow(pending);
-        for (const demo of request.demos) results.set(demo.uid, demo);
-        rememberDemos(request.demos);
-        const expired = request.demos.filter((d) => d.reason === 'link_expired').map((d) => d.uid);
-        if (!expired.length || attempt === MAX_RESENDS) break;
+      let current = row;
+      for (let attempt = 0; ; attempt++) {
+        // Asked for each send: a re-send can come an hour after the first one.
+        const token = await ensureToken();
+        const url = await resolveLink(current.DownloadUrl);
+        const sent = await aim4Request('POST', '/api/replays/pracc/imports', {
+          token,
+          body: { demos: [{ uid, url, label: rowLabel(current) }] }
+        });
+        const request = sent.json && sent.json.request;
+        if (!request) {
+          if (sent.status === 401) GM_deleteValue(TOKEN_KEY);
+          const why = sent.json && (sent.json.message || sent.json.error);
+          throw new Error(why || `aim4 answered ${sent.status}.`);
+        }
+        let demo = request.demos[0];
+        if (inProgress(demo)) {
+          saveRequest(uid, request.id);
+          demo = await follow(uid, request.id);
+        }
+        if (demo.reason !== 'link_expired' || attempt >= MAX_RESENDS) {
+          finish(uid, demo);
+          return;
+        }
         // A signature only lasts an hour, and PRACC signs a fresh one each time it is asked.
-        say(`${expired.length} links expired, getting new ones...`);
-        rows = await fetchPraccDemos();
-        const again = new Set(expired);
-        pending = await toSend(rows.filter((row) => again.has(row.Uid)), results);
+        const fresh = (await fetchPraccDemos()).find((r) => r.Uid === uid);
+        if (!fresh || !fresh.DownloadUrl) throw new Error('PRACC no longer lists this demo.');
+        current = fresh;
       }
-      say(finalLine([...results.values()]));
     } catch (err) {
-      say(err.message || String(err));
-    } finally {
-      setBusy(false);
+      const why = err.message || String(err);
+      setRow(uid, 'Failed', { title: why });
+      say(why);
     }
   }
 
-  /** A reload in the middle of an import picks the same one back up. */
-  async function resume() {
-    const id = GM_getValue(REQUEST_KEY, null);
-    if (!id || ui.busy) return;
-    setBusy(true);
-    try {
-      const request = await follow(id);
-      rememberDemos(request.demos);
-      say(finalLine(request.demos));
-    } catch (err) {
-      say(err.message || String(err));
-    } finally {
-      setBusy(false);
+  /** A reload in the middle of an import picks the same ones back up. */
+  function resume() {
+    for (const [uid, id] of Object.entries(savedRequests())) {
+      setRow(uid, 'Queued', { busy: true });
+      follow(uid, id).then(
+        (demo) => finish(uid, demo),
+        (err) => {
+          setRow(uid, 'Upload');
+          say(err.message || String(err));
+        }
+      );
     }
   }
 
-  // ---- the button ---------------------------------------------------------
+  // ---- the buttons --------------------------------------------------------
 
   /** The Alert on the Demos tab links to 7-Zip. The 2D Replay tab's does not. */
   function demosTabPanel() {
@@ -435,72 +404,131 @@
     return alert ? alert.parentElement : null;
   }
 
-  function buildHost() {
-    const host = document.createElement('div');
-    host.id = HOST_ID;
-    host.style.cssText = 'display:flex;align-items:center;justify-content:flex-end;gap:12px;margin-top:12px;';
+  const isDemoButton = (b) => !b.dataset.aim4Upload && /^\s*demo\s*$/i.test(b.textContent);
 
-    const status = document.createElement('span');
-    status.style.cssText = 'font-size:12px;opacity:.75;text-align:right;';
-    status.setAttribute('aria-live', 'polite');
-    status.textContent = ui.text;
+  function paintButton(button, uid) {
+    const state = rowState.get(uid) || { text: 'Upload', busy: false, title: '' };
+    button.textContent = state.text;
+    button.disabled = state.busy;
+    button.title = state.title || 'Send this demo to aim4';
+    // Disabled MUI buttons go grey through a class; the progress has to stay readable.
+    button.style.opacity = state.busy ? '.75' : '';
+    button.style.cursor = state.busy ? 'default' : '';
+    button.style.pointerEvents = 'auto';
+    button.style.whiteSpace = 'nowrap';
+    button.style.color = '#fff';
+  }
 
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.textContent = 'Upload';
-    button.title = 'Send these demos to aim4';
-    button.disabled = ui.busy;
+  function buttonFor(row, twin) {
+    let button = rowButtons.get(row.Uid);
+    if (!button) {
+      button = document.createElement('button');
+      button.type = 'button';
+      button.dataset.aim4Upload = '1';
+      button.addEventListener('click', () => uploadRow(button.aim4Row));
+      rowButtons.set(row.Uid, button);
+    }
+    button.aim4Row = row;
     // Dressed as the row's own DEMO button, so it reads as part of the page and
     // follows the theme rather than guessing at its colours.
-    const twin = [...document.querySelectorAll('table .MuiButton-contained')].find((b) => /demo/i.test(b.textContent));
-    if (twin) button.className = twin.className.replace(/\bMui-disabled\b/g, '');
-    else button.style.cssText = 'background:#2979ff;color:#fff;border:0;border-radius:4px;padding:4px 14px;font-weight:700;cursor:pointer;text-transform:uppercase;';
-    button.addEventListener('click', runUpload);
+    button.className = twin.className.replace(/\bMui-disabled\b/g, '');
+    paintButton(button, row.Uid);
+    return button;
+  }
 
-    host.append(status, button);
-    ui.host = host;
-    ui.button = button;
-    ui.status = status;
-    return host;
+  // Row ids are not in the DOM, so a row is matched to the list by position. That
+  // only holds if the list is the one the page rendered, and the row's name is the
+  // check on it: a demo that landed since the page loaded shifts everything by one.
+  const list = { rows: null, loading: false, at: 0 };
+
+  async function loadList() {
+    if (list.loading || Date.now() - list.at < 15 * 1000) return;
+    list.loading = true;
+    list.at = Date.now();
+    try {
+      list.rows = await fetchPraccDemos();
+      schedulePlace();
+    } catch (err) {
+      say(err.message || String(err));
+    } finally {
+      list.loading = false;
+    }
+  }
+
+  function rowMatches(tr, row) {
+    const names = [row.Team && row.Team.Name, row.OtherTeam && row.OtherTeam.Name].filter(Boolean);
+    const text = tr.cells[0] ? tr.cells[0].textContent : '';
+    return names.length < 2 ? true : names.some((name) => text.includes(name));
+  }
+
+  function placeRowButtons(panel) {
+    const trs = [...panel.querySelectorAll('table tr')].filter((tr) => [...tr.querySelectorAll('button')].some(isDemoButton));
+    if (!trs.length) return;
+    if (!list.rows) {
+      void loadList();
+      return;
+    }
+    const lined = list.rows.length === trs.length && trs.every((tr, i) => rowMatches(tr, list.rows[i]));
+    if (!lined) {
+      // A fresh read fixes it if ours is the stale one. If the page's is, only a reload will.
+      void loadList();
+      for (const button of rowButtons.values()) button.remove();
+      say('The demo list changed. Reload the page to upload.');
+      return;
+    }
+    if (ui.message === 'The demo list changed. Reload the page to upload.') say('');
+
+    const known = knownDemos();
+    trs.forEach((tr, i) => {
+      const row = list.rows[i];
+      const twin = [...tr.querySelectorAll('button')].find(isDemoButton);
+      if (!row.DownloadUrl || twin.disabled) return;
+      if (known[row.Uid] && !rowState.has(row.Uid)) {
+        rowState.set(row.Uid, { text: 'In aim4', busy: false, title: 'Already in aim4. Click to check again.' });
+      }
+      const button = buttonFor(row, twin);
+      if (button.nextElementSibling !== twin) twin.parentElement.insertBefore(button, twin);
+    });
   }
 
   /**
-   * React owns this panel and will rebuild it whenever it likes, which is why the
-   * button is re-placed from what is on the page each time rather than from a
-   * remembered position, and why it always goes last: below whatever just rendered.
+   * React owns this panel and will rebuild it whenever it likes, which is why
+   * everything is re-placed from what is on the page each time rather than from a
+   * remembered position.
    */
   function place() {
     const panel = demosTabPanel();
-    const present = document.getElementById(HOST_ID);
+    let host = document.getElementById(HOST_ID);
     if (!panel) {
-      if (present) present.remove();
+      if (host) host.remove();
       return;
     }
-    const host = present || ui.host || buildHost();
-    // The row's button only exists once the table has loaded.
-    if (ui.button && !ui.button.className) {
-      const twin = [...document.querySelectorAll('table .MuiButton-contained')].find((b) => /demo/i.test(b.textContent));
-      if (twin) {
-        ui.button.style.cssText = '';
-        ui.button.className = twin.className.replace(/\bMui-disabled\b/g, '');
-      }
+    if (!host) {
+      host = ui.host || document.createElement('div');
+      host.id = HOST_ID;
+      host.style.cssText = 'font-size:12px;opacity:.75;text-align:right;margin-top:12px;min-height:1px;';
+      host.setAttribute('aria-live', 'polite');
+      host.textContent = ui.message;
+      ui.host = host;
     }
     if (host.parentElement !== panel || panel.lastElementChild !== host) panel.appendChild(host);
+    placeRowButtons(panel);
+  }
+
+  let placeQueued = false;
+  function schedulePlace() {
+    if (placeQueued) return;
+    placeQueued = true;
+    requestAnimationFrame(() => {
+      placeQueued = false;
+      place();
+    });
   }
 
   function runOnPracc() {
-    let queued = false;
-    const schedule = () => {
-      if (queued) return;
-      queued = true;
-      requestAnimationFrame(() => {
-        queued = false;
-        place();
-      });
-    };
-    new MutationObserver(schedule).observe(document.body, { childList: true, subtree: true });
+    new MutationObserver(schedulePlace).observe(document.body, { childList: true, subtree: true });
     place();
-    void resume();
+    resume();
   }
 
   if (location.hostname === 'aim4.io') runOnAim4();

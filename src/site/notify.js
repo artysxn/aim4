@@ -17,7 +17,8 @@ const POLL_MS = 90 * 1000;
 /** More than this many cards is a wall, not news. */
 const MAX_VISIBLE = 3;
 
-function stack(doc = document) {
+/** The top-right column every notice lives in. */
+export function toastStack(doc = document) {
   let host = doc.getElementById('site-toast-stack');
   if (!host) {
     host = doc.createElement('div');
@@ -79,7 +80,7 @@ export function showToast({ id, title, body = '', href = '', onDismiss, onOpen, 
   });
 
   toast.append(main, close);
-  stack(doc).appendChild(toast);
+  toastStack(doc).appendChild(toast);
   return toast;
 }
 

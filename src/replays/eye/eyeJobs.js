@@ -6,16 +6,16 @@
 //
 // The user's model serves one request at a time anyway (the app's
 // llama-server runs one slot), so running jobs in turn costs nothing and keeps
-// a burst of five strategies from timing out behind each other. A small pill
-// in the corner shows what is running and how many wait; a toast says when one
-// finishes or fails. In the desktop app the toast goes to the top window, so a
-// job finishing behind another tab is still seen.
+// a burst of five strategies from timing out behind each other. A card at the
+// top of the notifications shows what is running and how many wait; a toast
+// says when one finishes or fails. In the desktop app both go to the top
+// window, so a job running behind another tab is still seen.
 //
 // Jobs live in this page. Closing the page (or the app) drops what is still
-// queued, and the pill says so while anything is.
+// queued, and the card says so while anything is.
 // ---------------------------------------------------------------------------
 
-import { showToast } from '../../site/notify.js';
+import { showToast, toastStack } from '../../site/notify.js';
 
 /** @type {Array<{ id: string, label: string, run: (job: object) => Promise<object>, status: string }>} */
 const queue = [];
@@ -67,16 +67,20 @@ function renderPill(state) {
     pill = null;
     return;
   }
+  const doc = noticeDocument();
   if (!pill) {
-    pill = document.createElement('div');
-    pill.className = 'eye-jobs-pill';
+    pill = doc.createElement('div');
+    pill.className = 'site-toast eye-jobs-pill';
     pill.setAttribute('role', 'status');
     pill.title = 'Queued jobs run while this page stays open';
-    document.body.appendChild(pill);
+    pill.innerHTML = '<div class="site-toast-main"><div class="site-toast-title"></div><div class="site-toast-body"></div></div>';
   }
-  const now = state.running ? `${state.running.label}: ${state.running.status || 'working…'}` : '';
-  const more = state.waiting.length ? `${state.waiting.length} queued` : '';
-  pill.textContent = [state.running?.name || 'aim4 eye', now, more].filter(Boolean).join(' · ');
+  // First in the column, above whatever has already finished.
+  const column = toastStack(doc);
+  if (column.firstChild !== pill) column.prepend(pill);
+  const more = state.waiting.length ? `, ${state.waiting.length} queued` : '';
+  pill.querySelector('.site-toast-title').textContent = `${state.running?.name || 'aim4 eye'}${state.running ? `: ${state.running.label}` : ''}${more}`;
+  pill.querySelector('.site-toast-body').textContent = state.running ? state.running.status || 'working…' : '';
 }
 
 /**
@@ -118,7 +122,7 @@ async function pump() {
     notice = { title: `${job.label}: failed`, body: err?.message || 'Something went wrong.', failed: true };
   }
   running = null;
-  showToast({ id: job.id, title: notice.title, body: notice.body || '', doc: noticeDocument() });
+  showToast({ id: job.id, title: notice.title, body: notice.body || '', href: notice.href || '', doc: noticeDocument() });
   changed();
   void pump();
 }

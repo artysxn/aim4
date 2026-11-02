@@ -44,18 +44,19 @@ export function setposText(s) {
  * @param {object} meta   the round's meta (events.grenades, players)
  * @param {{ sample: (slot: number, tick: number, out?: object) => object }} track
  *   the round's full tick track (every tick, not the coarse one)
- * @param {{ fromTick: number, toTick: number, timing: object, player?: string }} opts
- *   `player`: only this player's grenades
+ * @param {{ fromTick: number, toTick: number, timing: object, player?: string|string[] }} opts
+ *   `player`: only this player's grenades, or these players'
  * @returns {string[]}
  */
 export function utilitySetposLines(meta, track, { fromTick, toTick, timing, player = '' }) {
   if (!meta || !track) return [];
   const players = new Map((meta.players || []).map((p) => [String(p.id), p]));
   const lines = [];
+  const only = new Set((Array.isArray(player) ? player : player ? [player] : []).map(String));
   const grenades = (meta.events?.grenades || [])
     .filter((g) => {
       const t = Number(g.throwTick);
-      return Number.isFinite(t) && t >= fromTick && t <= toTick && (!player || String(g.player) === String(player));
+      return Number.isFinite(t) && t >= fromTick && t <= toTick && (!only.size || only.has(String(g.player)));
     })
     .sort((a, b) => Number(a.throwTick) - Number(b.throwTick));
   for (const g of grenades) {

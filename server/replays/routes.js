@@ -77,7 +77,7 @@ import {
   writeRecord,
   writeRoundNotes
 } from './demoStore.js';
-import { MAX_GIF_BYTES, addGif, listGifs, removeGif, updateGif } from './gifStore.js';
+import { MAX_GIF_BYTES, addGif, addPerspective, listGifs, removeGif, removePerspective, updateGif } from './gifStore.js';
 import { sendGifMedia } from './gifShare.js';
 import { applyTeamRename } from './teamRescan.js';
 import { cpuProbe, memorySnapshot } from './hostMemory.js';
@@ -2725,6 +2725,34 @@ export async function handleReplayRequest(req, res, url) {
     return sendGifMedia(req, res, user, gifImageMatch[1], gifImageMatch[2]);
   }
 
+  /** An uploaded clip and its metadata header, or null when it has already been refused. */
+  const readGifUpload = async () => {
+    const tooBig = { error: `That clip is over ${MAX_GIF_BYTES / 1024 / 1024} MB, too large to keep in Bookmarks.` };
+    if (Number(req.headers['content-length'] || 0) > MAX_GIF_BYTES) {
+      await refuseUpload(req, res, 413, tooBig);
+      return null;
+    }
+    let meta = {};
+    try {
+      meta = JSON.parse(Buffer.from(String(req.headers['x-aim4-gif-meta'] || ''), 'base64').toString('utf8') || '{}');
+    } catch {
+      meta = {};
+    }
+    // Read to the end even past the cap (keeping nothing), so the refusal
+    // reaches a client that did not declare its length.
+    const chunks = [];
+    let size = 0;
+    for await (const chunk of req) {
+      size += chunk.length;
+      if (size <= MAX_GIF_BYTES) chunks.push(chunk);
+    }
+    if (size > MAX_GIF_BYTES) {
+      json(res, 413, tooBig);
+      return null;
+    }
+    return { bytes: Buffer.concat(chunks), meta };
+  };
+
   if (p === '/api/replays/gifs') {
     const actor = { id: me.id, username: me.username, admin: me.admin };
     if (req.method === 'GET') {
@@ -2736,37 +2764,38 @@ export async function handleReplayRequest(req, res, url) {
         await refuseUpload(req, res, 401, { error: 'Sign in to save GIFs.' });
         return true;
       }
-      const tooBig = { error: `That GIF is over ${MAX_GIF_BYTES / 1024 / 1024} MB, too large to keep in Bookmarks.` };
-      if (Number(req.headers['content-length'] || 0) > MAX_GIF_BYTES) {
-        await refuseUpload(req, res, 413, tooBig);
-        return true;
-      }
-      let meta = {};
+      const upload = await readGifUpload();
+      if (!upload) return true;
       try {
-        meta = JSON.parse(Buffer.from(String(req.headers['x-aim4-gif-meta'] || ''), 'base64').toString('utf8') || '{}');
-      } catch {
-        meta = {};
-      }
-      // Read to the end even past the cap (keeping nothing), so the refusal
-      // reaches a client that did not declare its length.
-      const chunks = [];
-      let size = 0;
-      for await (const chunk of req) {
-        size += chunk.length;
-        if (size <= MAX_GIF_BYTES) chunks.push(chunk);
-      }
-      if (size > MAX_GIF_BYTES) {
-        json(res, 413, tooBig);
-        return true;
-      }
-      try {
-        const gif = await addGif(user, Buffer.concat(chunks), meta, actor);
+        const gif = await addGif(user, upload.bytes, upload.meta, actor);
         json(res, 200, { gif });
       } catch (err) {
         json(res, err.status || 400, { error: err.message || 'Could not save the GIF.' });
       }
       return true;
     }
+  }
+
+  // One more clip on a note, or one taken off it.
+  const perspectiveMatch = p.match(/^\/api\/replays\/gifs\/([a-f0-9]{16})\/perspectives(?:\/([a-f0-9]{16}))?$/);
+  if (perspectiveMatch && ((req.method === 'POST' && !perspectiveMatch[2]) || (req.method === 'DELETE' && perspectiveMatch[2]))) {
+    const actor = { id: me.id, username: me.username, admin: me.admin };
+    if (!me.signedIn) {
+      await refuseUpload(req, res, 401, { error: 'Sign in to change visual notes.' });
+      return true;
+    }
+    try {
+      if (req.method === 'DELETE') {
+        json(res, 200, { gif: await removePerspective(user, perspectiveMatch[1], perspectiveMatch[2], actor) });
+        return true;
+      }
+      const upload = await readGifUpload();
+      if (!upload) return true;
+      json(res, 200, { gif: await addPerspective(user, perspectiveMatch[1], upload.bytes, upload.meta, actor) });
+    } catch (err) {
+      json(res, err.status || 400, { error: err.message || 'Could not change that visual note.' });
+    }
+    return true;
   }
 
   const gifMatch = p.match(/^\/api\/replays\/gifs\/([a-f0-9]{16})$/);

@@ -1549,7 +1549,7 @@ async function gifJson(res) {
     if (err?.status === 404 && /^not found\.?$/i.test(String(err.message || '').trim())) {
       throw Object.assign(
         new Error(
-          'The aim4 server this page talks to does not have Saved GIFs yet: it runs an older version than the page. Restart it (close the desktop app and open it again), or update aim4 on the server.'
+          'The aim4 server this page talks to does not have Visual Notes yet: it runs an older version than the page. Restart it (close the desktop app and open it again), or update aim4 on the server.'
         ),
         { status: 404, code: 'no-gif-routes' }
       );
@@ -1597,6 +1597,36 @@ export async function updateGif(id, patch) {
       method: 'POST',
       headers: await headers({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(patch || {})
+    })
+  );
+  return body.gif;
+}
+
+/**
+ * Add a clip to a visual note.
+ *
+ * @param {string} id  the note
+ * @param {Blob} blob
+ * @param {object} meta  what this clip shows
+ * @returns {Promise<object>} the note, with the clip on it
+ */
+export async function addGifPerspective(id, blob, meta) {
+  const body = await gifJson(
+    await safeFetch(`${API_BASE}/api/replays/gifs/${encodeURIComponent(id)}/perspectives`, {
+      method: 'POST',
+      headers: await headers({ 'Content-Type': blob.type || 'application/octet-stream', 'X-Aim4-Gif-Meta': metaHeader(meta) }),
+      body: blob
+    })
+  );
+  return body.gif;
+}
+
+/** Take an added clip off a visual note. @returns {Promise<object>} the note */
+export async function removeGifPerspective(id, perspectiveId) {
+  const body = await gifJson(
+    await safeFetch(`${API_BASE}/api/replays/gifs/${encodeURIComponent(id)}/perspectives/${encodeURIComponent(perspectiveId)}`, {
+      method: 'DELETE',
+      headers: await headers()
     })
   );
   return body.gif;

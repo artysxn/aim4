@@ -184,4 +184,66 @@ for (const [name, want] of [
   assert(iconKey(name) === want, `${name} draws ${want}, got "${iconKey(name)}"`);
 }
 
+{
+  // Demos log pickups and never drops. These are the events of a real round where
+  // one player passed flashes around and the viewer showed 18 grenades.
+  const flashes = [214796, 214842, 214938, 214946, 215004, 215100, 215121, 215155, 215186, 215221, 215273, 215445, 215523];
+  const itemEvents = [
+    { tick: 213704, player: 'p', item: 'hegrenade', op: 'pickup' },
+    { tick: 214304, player: 'p', item: 'smokegrenade', op: 'pickup' },
+    { tick: 214670, player: 'p', item: 'hegrenade', op: 'pickup' },
+    ...flashes.map((tick) => ({ tick, player: 'p', item: 'flashbang', op: 'pickup' }))
+  ];
+  const grenades = [
+    { player: 'p', type: 'hegrenade', throwTick: 213473 },
+    { player: 'p', type: 'hegrenade', throwTick: 213793 },
+    { player: 'p', type: 'flashbang', throwTick: 218078 }
+  ];
+  const at = (tick, more = {}) =>
+    inventoryAt({
+      loadout: ['AWP', 'Flashbang', 'Flashbang', 'Smoke Grenade', 'High Explosive Grenade'],
+      grenades,
+      itemEvents,
+      playerId: 'p',
+      tick,
+      state: { armor: 100, flags: 0 },
+      activeWeapon: 'weapon_awp',
+      ...more
+    }).util;
+  const count = (util, name) => util.filter((u) => u === name).length;
+
+  const peak = at(215523);
+  assert(peak.length <= 4, `never more than the four a player can carry, got ${peak.length}`);
+  assert(count(peak, 'flashbang') === 2, 'two flashes, however many pickups');
+  assert(count(peak, 'smokegrenade') === 1, 'one smoke');
+  // Thrown, then picked up again: in order, so the pickup counts.
+  assert(count(at(214000), 'hegrenade') === 0, 'both HEs thrown');
+  assert(count(at(215000), 'hegrenade') === 1, 'the HE picked up after them is held');
+  assert(count(at(218100), 'flashbang') === 1, 'a throw still spends one');
+
+  // A molotov and an incendiary share a slot.
+  const fire = inventoryAt({
+    loadout: ['Molotov'],
+    grenades: [],
+    itemEvents: [{ tick: 5, player: 'p', item: 'incgrenade', op: 'pickup' }],
+    playerId: 'p',
+    tick: 10,
+    state: {},
+    activeWeapon: ''
+  }).util;
+  assert(fire.length === 1, 'one fire grenade');
+
+  // Guns are not grenades: a pickup still adds one.
+  const gun = inventoryAt({
+    loadout: ['Glock-18'],
+    grenades: [],
+    itemEvents: [{ tick: 5, player: 'p', item: 'ak47', op: 'pickup' }],
+    playerId: 'p',
+    tick: 10,
+    state: {},
+    activeWeapon: ''
+  });
+  assert(gun.primary === 'ak47', 'a picked up rifle is the primary');
+}
+
 console.log('equipmentIcons: all assertions passed');

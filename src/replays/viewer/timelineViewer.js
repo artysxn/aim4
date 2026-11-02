@@ -39,7 +39,7 @@ import { Playback, RoundSequence } from './playback.js';
 import { canSpectateSlot, specKeyForSeat } from './view3dFollow.js';
 import { clockAt, formatClock, timingFor, totalSeconds, ROUND_SECONDS } from './roundClock.js';
 import { economyLabel, winningSide } from '../shared/roundId.js';
-import { iconImgHtml, inventoryAt } from './equipmentIcons.js';
+import { iconImgHtml, iconSrc, inventoryAt } from './equipmentIcons.js';
 import { DRAW_COLORS, DrawingLayer } from './drawing.js';
 import { analyseRound, coachSampleStride, flagToNote } from '../coach/coach.js';
 import { loadCoachSmokes } from '../coach/coachSmokes.js';
@@ -107,6 +107,7 @@ import menuIcon from '../../icons/icon_menu.svg?raw';
 import addTacticIcon from '../../icons/demo_addtactic.svg?raw';
 import settingsIcon from '../../icons/icon_settings.svg?raw';
 import swapIcon from '../../icons/timeline_swap.svg?raw';
+import skullIcon from '../../icons/death-skull.svg?raw';
 import headshotIcon from '../../icons/headshot.png';
 
 const SPEEDS = [0.25, 0.5, 1, 2, 4];
@@ -372,7 +373,7 @@ export function createTimelineViewer({
           statsDemoId ? '' : 'hidden'
         }>${icon(coachIcon)}</button>
         <button type="button" class="rv-tool" id="rv-bookmark" title="Save to a playlist">${icon(bookmarkAddIcon)}</button>
-        <button type="button" class="rv-tool" id="rv-gif" title="Create GIF">${icon(gifIcon)}</button>
+        <button type="button" class="rv-tool" id="rv-gif" title="Create visual note">${icon(gifIcon)}</button>
         <button type="button" class="rv-tool" id="rv-note" title="Notes">${icon(commentsIcon)}</button>
         <!-- Always in the bar. It is one of the nine tools, and a tool that
              comes and goes leaves a hole where the user learned a button was;
@@ -493,7 +494,9 @@ export function createTimelineViewer({
     </div>
     <button type="button" class="rv-keys" id="rv-keys" title="Click to hide" aria-label="Keyboard shortcuts. Click to hide">
       <span class="rv-keys-key">Space</span><span class="rv-keys-action">Pause / Unpause</span>
+      <span class="rv-keys-key">F1</span><span class="rv-keys-action">Show / hide this list</span>
       <span class="rv-keys-key">Hold Q</span><span class="rv-keys-action">3D radar overview</span>
+      <span class="rv-keys-key">Hover + Q</span><span class="rv-keys-action">2D visual note</span>
       <span class="rv-keys-key">X</span><span class="rv-keys-action">3D X-ray</span>
       <span class="rv-keys-key">Hold Tab</span><span class="rv-keys-action">Match stats</span>
       <span class="rv-keys-key">Hover + S</span><span class="rv-keys-action">Copy setpos</span>
@@ -1482,33 +1485,33 @@ export function createTimelineViewer({
     }
     phasesEl.innerHTML = phaseParts.join('');
 
+    /** An equipment icon in one colour: the files are white, so the icon is a mask over the colour. */
+    const iconMark = (cls, tick, name, color, title = '') => {
+      const src = iconSrc(name);
+      const mask = src ? `-webkit-mask-image:url(${src});mask-image:url(${src});` : '';
+      return `<span class="rv-mark ${cls}" style="left:${at(tick) * 100}%;background:${color};${mask}"${title ? ` title="${title}"` : ''}></span>`;
+    };
     const parts = [];
-    if (plantTick != null) {
-      parts.push(
-        `<span class="rv-mark plant" style="left:${at(plantTick) * 100}%" title="Bomb planted"></span>`
-      );
-    }
+    if (plantTick != null) parts.push(iconMark('plant', plantTick, 'c4', SIDE_COLORS.T.base, 'Bomb planted'));
     if (defuseTick != null) {
       parts.push(
         `<span class="rv-mark defuse" style="left:${at(defuseTick) * 100}%" title="Bomb defused"></span>`
       );
     }
+    for (const g of events.grenades || []) {
+      const tick = Number(g.throwTick);
+      if (!nadeMarkColor(g.type) || !Number.isFinite(tick)) continue;
+      const side = sideOfPlayer(g.player);
+      parts.push(iconMark('nade', tick, g.type, SIDE_COLORS[side]?.base || nadeMarkColor(g.type)));
+    }
+    // After the grenades, so a skull is never under one. In the colour of who died, whoever did it: a teamkill reads
+    // the same as any other death on that side.
     for (const k of events.kills || []) {
       if (k.tick == null) continue;
-      const side = sideOfPlayer(k.attacker);
+      const side = sideOfPlayer(k.victim);
       if (side !== 'T' && side !== 'CT') continue;
-      const color = SIDE_COLORS[side].base;
       parts.push(
-        `<span class="rv-mark kill" style="left:${at(k.tick) * 100}%;background:${color}" title="Kill"></span>`
-      );
-    }
-    for (const g of events.grenades || []) {
-      const color = nadeMarkColor(g.type);
-      if (!color) continue;
-      const tick = Number(g.throwTick);
-      if (!Number.isFinite(tick)) continue;
-      parts.push(
-        `<span class="rv-mark nade" style="left:${at(tick) * 100}%;background:${color}"></span>`
+        `<span class="rv-mark kill" style="left:${at(k.tick) * 100}%;color:${SIDE_COLORS[side].base}" title="Kill">${skullIcon}</span>`
       );
     }
     const noteList = roundNotes.length ? roundNotes : notesFromMeta(activeMeta);
@@ -4317,12 +4320,6 @@ export function createTimelineViewer({
       playheadTick: () => sequence.locate(playback.position).tick,
       can3d: () => Boolean(resolveMapSlug()),
       is3d: () => mode3d && Boolean(view3d),
-      async set3d(on) {
-        await setMode3d(on);
-        // Already switched and still loading: setMode3d had nothing to wait for.
-        if (on) await booting3d;
-        return on ? Boolean(mode3d && view3d?.ready) : !mode3d;
-      },
       view3d: () => (mode3d ? view3d : null),
       /** Every tick of the round on screen, for the setpos of each grenade. Never the coarse track. */
       fullTrack: () => (files[activeIndex] ? store.get(files[activeIndex])?.full || store.loadFull(files[activeIndex]) : null),
@@ -4580,11 +4577,166 @@ export function createTimelineViewer({
 
   let qHoldingRadar = false;
 
+  // ---- Q in 2D: a visual note from three presses ------------------------------
+  //
+  // Over a player, on the radar or on his row: the first press marks where the clip starts, the second where it ends,
+  // and the third, within a few seconds of seeing that part on the timeline, queues it. Letting the time run out, or
+  // Escape, drops it. The round keeps playing through all of it, which is how the two ends get to be different.
+
+  const QUICK_CONFIRM_MS = 5000;
+  /** How far from the droplet's centre, in screen pixels, still counts as over it. */
+  const QUICK_HIT_PX = 18;
+  /** @type {null | { slot: number, name: string, index: number, fromTick: number, toTick: number, confirming: boolean, deadline: number }} */
+  let quickNote = null;
+  let quickTimer = 0;
+  let quickFadeTimer = 0;
+  /** Where the pointer is over the map, or null when it is not. */
+  let mapPointer = null;
+  const quickRangeEl = document.createElement('div');
+  quickRangeEl.className = 'rv-qnote-range';
+  quickRangeEl.hidden = true;
+  scrubEl.appendChild(quickRangeEl);
+  const quickBannerEl = document.createElement('div');
+  quickBannerEl.className = 'rv-qnote';
+  quickBannerEl.setAttribute('role', 'status');
+  quickBannerEl.hidden = true;
+  mapEl.appendChild(quickBannerEl);
+  mapEl.addEventListener('pointermove', (e) => {
+    mapPointer = { x: e.clientX, y: e.clientY };
+  });
+  mapEl.addEventListener('pointerleave', () => {
+    mapPointer = null;
+  });
+
+  /** The living player under the pointer: a row in the side panels, or a droplet on the radar. */
+  function quickSlotUnderPointer() {
+    if (hoverSlot >= 0) return hoverSlot;
+    if (!mapPointer || !activeMeta) return -1;
+    const at = renderer.radarFromClient(mapPointer.x, mapPointer.y);
+    let best = -1;
+    let bestDist = QUICK_HIT_PX;
+    const pt = {};
+    for (const p of activeMeta.players || []) {
+      const s = states[p.slot];
+      if (!s?.alive) continue;
+      worldToRadar(renderer.mapCode, s.x, s.y, pt);
+      const d = Math.hypot(pt.x - at.x, pt.y - at.y) * at.scale;
+      if (d < bestDist) {
+        bestDist = d;
+        best = p.slot;
+      }
+    }
+    return best;
+  }
+
+  function quickSay(text, { fade = false } = {}) {
+    clearTimeout(quickFadeTimer);
+    quickBannerEl.textContent = text;
+    quickBannerEl.hidden = !text;
+    if (fade) quickFadeTimer = setTimeout(() => (quickBannerEl.hidden = true), 3000);
+  }
+
+  function endQuickNote(text = '') {
+    quickNote = null;
+    clearInterval(quickTimer);
+    quickTimer = 0;
+    quickRangeEl.hidden = true;
+    quickSay(text, { fade: Boolean(text) });
+  }
+
+  /** The part on the timeline, and what the next press does. Runs while there is one, so the part grows with the round. */
+  function paintQuickNote() {
+    const n = quickNote;
+    if (!n) return;
+    const at = sequence.locate(playback.position);
+    const item = sequence.at(n.index);
+    if (at.index !== n.index || !item) {
+      endQuickNote('The end has to be in the same round.');
+      return;
+    }
+    const to = n.confirming ? n.toTick : at.tick;
+    const a = Math.min(n.fromTick, to);
+    const b = Math.max(n.fromTick, to);
+    const span = Math.max(1, item.timing.officialEndTick - item.timing.startTick);
+    quickRangeEl.style.left = `${((a - item.timing.startTick) / span) * 100}%`;
+    quickRangeEl.style.width = `${(Math.max(0, b - a) / span) * 100}%`;
+    quickRangeEl.hidden = false;
+    const clock = (tick) => clockAt(item.timing, tick).label;
+    if (!n.confirming) {
+      quickSay(`${n.name} from ${clock(n.fromTick)}. Q sets the end, Esc cancels.`);
+      return;
+    }
+    const left = n.deadline - performance.now();
+    if (left <= 0) {
+      endQuickNote('Cancelled.');
+      return;
+    }
+    quickSay(`${n.name} ${clock(a)} to ${clock(b)}. Q to queue it (${Math.ceil(left / 1000)}), Esc cancels.`);
+  }
+
+  /** One press of Q in 2D. @returns {boolean} whether it was taken */
+  function onQuickNoteKey() {
+    const here = sequence.locate(playback.position);
+    if (!quickNote) {
+      const slot = quickSlotUnderPointer();
+      if (slot < 0) return false;
+      const who = (activeMeta?.players || []).find((p) => p.slot === slot);
+      if (!who) return false;
+      if (!states[slot]?.alive) {
+        quickSay(`${who.name} is dead here.`, { fade: true });
+        return true;
+      }
+      if (!gifCreator) return false;
+      quickNote = { slot, name: who.name || `Player ${slot}`, index: here.index, fromTick: here.tick, toTick: here.tick, confirming: false, deadline: 0 };
+      clearInterval(quickTimer);
+      quickTimer = setInterval(paintQuickNote, 100);
+      paintQuickNote();
+      return true;
+    }
+    if (!quickNote.confirming) {
+      if (here.index !== quickNote.index) {
+        endQuickNote('The end has to be in the same round.');
+        return true;
+      }
+      const rate = sequence.at(here.index)?.timing?.tickRate || 64;
+      if (Math.abs(here.tick - quickNote.fromTick) < rate / 2) {
+        quickSay('Let the round move on first, then press Q again.');
+        return true;
+      }
+      quickNote.toTick = here.tick;
+      quickNote.confirming = true;
+      quickNote.deadline = performance.now() + QUICK_CONFIRM_MS;
+      paintQuickNote();
+      return true;
+    }
+    const n = quickNote;
+    const fromTick = Math.min(n.fromTick, n.toTick);
+    const toTick = Math.max(n.fromTick, n.toTick);
+    endQuickNote();
+    gifCreator.queueQuick({ slot: n.slot, fromTick, toTick }).then(
+      (queued) => quickSay(queued.position ? `Queued behind ${queued.position} other${queued.position === 1 ? '' : 's'}.` : 'Queued.', { fade: true }),
+      (err) => quickSay(err?.message || 'It could not be queued.', { fade: true })
+    );
+    return true;
+  }
+
+  function onQuickNoteEscape(e) {
+    if (e.key !== 'Escape' || !quickNote) return;
+    e.preventDefault();
+    e.stopPropagation();
+    endQuickNote('Cancelled.');
+  }
+  window.addEventListener('keydown', onQuickNoteEscape, true);
+
   function onQDown(e) {
     if (e.code !== 'KeyQ') return;
     if (e.target.matches?.('input, textarea, select')) return;
     if (e.ctrlKey || e.metaKey || e.altKey) return;
-    if (!mode3d) return;
+    if (!mode3d) {
+      if (e.repeat) return;
+      if (onQuickNoteKey()) e.preventDefault();
+      return;
+    }
     e.preventDefault();
     if (e.repeat) return;
     qHoldingRadar = true;
@@ -6352,6 +6504,14 @@ export function createTimelineViewer({
   }
 
   function onKey(e) {
+    // Ahead of the check for a field: the browser's own help opens from any of them otherwise.
+    if (e.key === 'F1') {
+      e.preventDefault();
+      if (e.repeat) return;
+      keysSessionActive = !keysSessionActive;
+      syncKeysVisibility();
+      return;
+    }
     if (e.target.matches?.('input, textarea, select')) return;
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
@@ -6636,6 +6796,8 @@ export function createTimelineViewer({
       window.removeEventListener('keydown', onTabDown, true);
       window.removeEventListener('keyup', onTabUp, true);
       window.removeEventListener('blur', onTabCancel);
+      endQuickNote();
+      window.removeEventListener('keydown', onQuickNoteEscape, true);
       window.removeEventListener('keydown', onQDown, true);
       window.removeEventListener('keyup', onQUp, true);
       window.removeEventListener('blur', onQCancel);

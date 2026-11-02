@@ -812,7 +812,7 @@ export function createEyePanel({ escapeHtml }) {
         <span>${escapeHtml(gif.title || 'GIF')}</span>
         <button type="button" class="eye-gif-copy" data-copy="page" title="A page with the GIF, its title and its description">Page link</button>
         <button type="button" class="eye-gif-copy" data-copy="image" title="The GIF file itself, which plays wherever it is pasted">Image link</button>
-        <a href="/bookmarks?tab=gifs" target="_blank" rel="noopener">Saved GIFs</a>
+        <a href="/bookmarks?tab=gifs" target="_blank" rel="noopener">Visual Notes</a>
       </figcaption>`;
     for (const btn of node.querySelectorAll('.eye-gif-copy')) {
       btn.addEventListener('click', async () => {

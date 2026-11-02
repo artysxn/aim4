@@ -2607,26 +2607,170 @@ body.rv-open:has(.side-collapsed) .rv-side-show {
   white-space: normal;
 }
 
-.rv-gif-result img,
-.rv-gif-result video {
-  display: block;
-  width: 100%;
-  height: auto;
-  border-radius: var(--radius-sm);
-  background: #050505;
+/* Choosing perspectives (gif/perspectivePicker.js): the note creator and the note editor. */
+.rv-pp {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
-.rv-gif-actions {
+.rv-pp-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 6px;
+  gap: 4px;
 }
 
-.rv-gif-actions .btn {
-  flex: 1;
-  justify-content: center;
+.rv-pp-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.rv-pp-chip:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+}
+
+.rv-pp-chip.active {
+  background: rgba(255, 255, 255, 0.1);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+  color: var(--text);
+}
+
+.rv-pp-chip.side-t.active {
+  box-shadow: inset 0 0 0 1px #e0a53c;
+}
+
+.rv-pp-chip.side-ct.active {
+  box-shadow: inset 0 0 0 1px #5b9bd5;
+}
+
+.rv-pp-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rv-pp-tag {
+  flex: none;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
+}
+
+/* Hover + Q in 2D: where it has got to, and the part it will be. */
+.rv-qnote {
+  position: absolute;
+  top: 56px;
+  left: 50%;
+  z-index: 6;
+  transform: translateX(-50%);
+  max-width: min(520px, calc(100% - 32px));
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  pointer-events: none;
+}
+
+.rv-qnote[hidden],
+.rv-qnote-range[hidden] {
+  display: none;
+}
+
+.rv-qnote-range {
+  position: absolute;
+  top: 50%;
+  height: 7px;
+  transform: translateY(-50%);
+  border-radius: 2px;
+  background: rgba(224, 69, 60, 0.75);
+  pointer-events: none;
+}
+
+.rv-gif-result {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.rv-gif-result-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 2px;
+}
+
+.rv-gif-result-title {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
   text-decoration: none;
+}
+
+a.rv-gif-result-title:hover {
+  text-decoration: underline;
+}
+
+.rv-gif-result-facts {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.rv-gif-action {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.rv-gif-action[hidden] {
+  display: none;
+}
+
+.rv-gif-action:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.rv-gif-action:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.rv-gif-action-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.rv-gif-action-detail {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.rv-gif-action-detail.is-done {
+  color: var(--text);
 }
 
 /* The area picker over the radar: crosshair while picking, the chosen box
@@ -2788,6 +2932,130 @@ body.rv-open:has(.side-collapsed) .rv-side-show {
   filter: brightness(0.82);
 }
 
+.bm-pin-img {
+  position: relative;
+}
+
+/* How many perspectives a note holds, on its tile. */
+.bm-pin-count {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  min-width: 22px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: rgba(5, 5, 5, 0.78);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  text-align: center;
+}
+
+/* A note's perspectives: a tab each, under the picture. */
+.bm-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.bm-tab {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.bm-tab.active {
+  background: rgba(255, 255, 255, 0.1);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+
+.bm-tab-btn,
+.bm-tab-x {
+  padding: 4px 8px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.bm-tab-x {
+  padding: 4px 6px 4px 0;
+}
+
+.bm-tab.active .bm-tab-btn,
+.bm-tab-btn:hover,
+.bm-tab-x:hover {
+  color: var(--text);
+}
+
+/* All of them together, started at the same moment. */
+.bm-grid-media {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.bm-grid-media[data-count='2'] {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.bm-grid-media[data-count='5'],
+.bm-grid-media[data-count='6'],
+.bm-grid-media[data-count='7'],
+.bm-grid-media[data-count='8'],
+.bm-grid-media[data-count='9'],
+.bm-grid-media[data-count='10'],
+.bm-grid-media[data-count='11'],
+.bm-grid-media[data-count='12'] {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.bm-grid-media figure {
+  position: relative;
+  margin: 0;
+  min-width: 0;
+}
+
+/* One shape for all of them, so a square map does not throw the rows out. */
+.bm-detail-media .bm-grid-media video {
+  aspect-ratio: 16 / 9;
+  height: auto;
+  border-radius: 8px;
+  background: #050505;
+  object-fit: contain;
+}
+
+.bm-grid-media figcaption {
+  position: absolute;
+  left: 4px;
+  bottom: 4px;
+  max-width: calc(100% - 8px);
+  padding: 2px 6px;
+  overflow: hidden;
+  border-radius: 4px;
+  background: rgba(5, 5, 5, 0.72);
+  color: var(--text);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bm-add {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.bm-add-btn {
+  align-self: flex-start;
+}
+
 .bm-pin-line {
   display: flex;
   align-items: center;
@@ -2853,10 +3121,16 @@ body.rv-open:has(.side-collapsed) .rv-side-show {
 .bm-detail-media {
   position: relative;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
   padding: 12px;
   background: #101012;
+}
+
+.bm-detail-media > [data-media],
+.bm-detail-media > [data-tabs] {
+  width: 100%;
 }
 
 .bm-detail-media video {
@@ -3915,6 +4189,15 @@ body.rv-open:has(.side-collapsed) .rv-side-show {
   background: #ffffff;
 }
 
+/* And who won it, rising from the bottom edge in that side's colour. */
+.rv-round.active.wt {
+  background: linear-gradient(to top, color-mix(in srgb, var(--rv-t) 72%, var(--rv-stage)), var(--rv-stage));
+}
+
+.rv-round.active.wct {
+  background: linear-gradient(to top, color-mix(in srgb, var(--rv-ct) 72%, var(--rv-stage)), var(--rv-stage));
+}
+
 /* Green diamond under the number — round has at least one coach note. */
 .rv-round.has-coach::after {
   content: '';
@@ -4193,30 +4476,42 @@ body.rv-open:has(.side-collapsed) .rv-side-show {
   transform: translate(-50%, -50%);
 }
 
-/* The plant is a state change, not an instant like a kill, so it reads as a
-   block rather than another tick on the bar. */
-.rv-mark.plant {
-  width: 8px;
-  height: 8px;
-  border-radius: 1px;
-  background: #e0453c;
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45);
-}
-
 .rv-mark.defuse {
   background: #5ad17a;
 }
 
-.rv-mark.kill {
-  width: 2px;
-  height: 12px;
+/* What happened, as its own icon in the side's colour. The bomb and the grenades
+   are white files used as masks over that colour; the skull takes it as text
+   colour. A shadow keeps each one apart from the track and its neighbours. */
+.rv-mark.plant,
+.rv-mark.nade {
+  height: 14px;
+  mask-position: center;
+  mask-repeat: no-repeat;
+  mask-size: contain;
+  -webkit-mask-position: center;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-size: contain;
+}
+
+.rv-mark.plant {
+  width: 14px;
 }
 
 .rv-mark.nade {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45);
+  width: 10px;
+}
+
+.rv-mark.kill {
+  width: 13px;
+  height: 13px;
+  filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.9));
+}
+
+.rv-mark.kill svg {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 
 .rv-mark.note {

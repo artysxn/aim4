@@ -397,6 +397,19 @@ export class ViewModelAssets {
     return job;
   }
 
+  /** A weapon's model and clips when both are already here, so holding it takes no waiting. Else null. */
+  loadedWeapon(name) {
+    const key = String(name || '').replace(/^weapon_/, '');
+    if (!this.models.has(key)) return null;
+    if (this.manifest?.viewmodel?.weaponAnims?.[key]?.file && !this.weaponSets.has(key)) return null;
+    return { model: this.models.get(key), own: this.weaponSets.get(key) || null };
+  }
+
+  /** Fetch these weapons ahead of being held. A clip made flat out has no frames to wait in. */
+  preload(names) {
+    return Promise.all([...new Set(names)].flatMap((n) => [this.model(n), this.weaponClips(n)]));
+  }
+
   /**
    * Drop clip channels aimed at bones nothing in the scene carries. Left in,
    * each is one PropertyBinding warning per track per action, thousands of
@@ -503,6 +516,8 @@ export class ViewModel {
     this.side = 'T';
     this.weapon = null; // the table row
     this.weaponName = '';
+    /** Counts setWeapon calls: only the latest may mount what it fetched. */
+    this._weaponRequest = 0;
     this.arms = null;
     this.mixer = null;
     this.actions = new Map();
@@ -740,10 +755,19 @@ export class ViewModel {
     // cached against the rig would still be pointing at the LAST gun's bone of
     // that name — an object no longer in the scene.
     this.mixer?.uncacheRoot(this.rig);
+    // Only the newest request may finish. Comparing names let an older fetch of the same weapon through (A, B,
+    // back to A): both mounted a gun, and the first stayed in the hands for good, under whatever came next.
+    const request = ++this._weaponRequest;
     // The weapon's own clips ride along with its model — one round touches a
-    // handful of weapons, and CS2 animates each of them differently.
-    const [model, own] = await Promise.all([this.assets.model(bare), this.assets.weaponClips(bare)]);
-    if (this.weaponName !== bare) return; // switched again while fetching
+    // handful of weapons, and CS2 animates each of them differently. Without a wait when they are here: an await
+    // costs the frame being drawn, which then shows empty hands in their rest pose.
+    let loaded = this.assets.loadedWeapon(bare);
+    if (!loaded) {
+      const [fetched, clips] = await Promise.all([this.assets.model(bare), this.assets.weaponClips(bare)]);
+      if (request !== this._weaponRequest) return;
+      loaded = { model: fetched, own: clips };
+    }
+    const { model, own } = loaded;
     this.weaponSet = own || null;
     this.applyWeaponTune(); // this weapon's own placement, not the last one's
     if (model) {

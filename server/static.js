@@ -147,7 +147,9 @@ export function tryServeStatic(req, res, url) {
   res.writeHead(200, {
     'Content-Type': type,
     'Content-Length': stat.size,
-    'Cache-Control': ext === '.html' ? 'no-cache' : 'public, max-age=86400'
+    // A userscript's name never changes and its update check reads this same URL,
+    // so a day's cache would hide a new version behind the old one for a day.
+    'Cache-Control': ext === '.html' || target.endsWith('.user.js') ? 'no-cache' : 'public, max-age=86400'
   });
   if (req.method === 'HEAD') {
     res.end();

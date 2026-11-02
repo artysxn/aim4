@@ -305,41 +305,43 @@ export const DOC_GROUPS = [
       },
       {
         id: 'gifs',
-        title: 'GIFs',
+        title: 'Visual notes',
         html: `
-          <p>The <strong>Create GIF</strong> button in the viewer turns any part of a round into a GIF.</p>
+          <p>A visual note is a part of a round seen from as many perspectives as you want: one player's eyes, three players and the 2D map, or a grenade from the hand that threw it and from where it lands. The <strong>Create visual note</strong> button in the viewer makes one.</p>
           <ol>
-            <li>Choose <strong>2D</strong> or <strong>3D</strong>. In 2D, <strong>Select area</strong> and drag a box over the part of the radar you want, or keep the whole map. In 3D, pick a player to follow in first or third person: that clip is made in the background, so you can stay in 2D and keep watching, and the camera stays on that player for the whole clip, even past their death. <strong>Camera where it is</strong> records the 3D view on screen instead, so it opens that view.</li>
+            <li>Pick the perspectives. Click a player for first person, again for third person, again to take them off. Under the players: <strong>2D map</strong>, <strong>Overview</strong> (a 3D camera above the action, players shown through walls), <strong>Free camera</strong> (where the 3D view on screen is now, when it is open), and <strong>Landing 3D</strong> and <strong>Landing 2D</strong>, which make one clip per grenade thrown in the part, by the players you picked if you picked any.</li>
             <li>Pick the part of the round on the slider. It is tied to the round's own timeline: drag either end and the round shows that moment; move the round's timeline and the part moves with it, keeping its length. The white line on the slider is where the round is now.</li>
-            <li>Choose the <strong>quality</strong> (1 to 3) and the <strong>FPS</strong>. 2D defaults to 18 FPS and 3D to 24.</li>
+            <li>Choose the <strong>quality</strong> (1 to 3) and the <strong>FPS</strong>.</li>
             <li>Give it a title and a description. Anything between &lt; and &gt; in the description becomes a link that copies itself, so &lt;setpos 123 456 78; setang 0 90 0&gt; copies that setpos with one click.</li>
-            <li>In 3D, tick <strong>Automatically append setpos</strong> (next to Round clock) to add a line for every grenade thrown in the part, such as <code>01:43 dex Flash &lt;setpos ...; setang ... 0&gt;</code>. The position and aim are read the tick before the grenade leaves the thrower's hand, so the setpos stands you on the lineup. The line under the settings counts the grenades it will add.</li>
-            <li>Press <strong>Create GIF</strong>.</li>
+            <li>Tick <strong>Automatically append setpos</strong> (next to Round clock) to add a line for every grenade thrown in the part (with players picked, only their grenades), such as <code>01:43 dex Flash &lt;setpos ...; setang ... 0&gt;</code>. The position and aim are read the tick before the grenade leaves the thrower's hand, so the setpos stands you on the lineup. The line under the settings counts the grenades it will add.</li>
+            <li>Press <strong>Create note</strong>. Each perspective renders in turn, in the background, so you can keep watching. What it is doing shows at the top right with your other notifications.</li>
           </ol>
-          <p>It is saved to <a href="/bookmarks?tab=gifs">Bookmarks → Saved GIFs</a> with what it shows: the map, the round, both teams with their side and buy, and who won. It is kept as a video, so it stays sharp and small, and the GIF is made when you download it or use its image link, which can take a moment the first time. A long or large clip's GIF is made smaller than the video so it stays about 40 MB. Sign in to save it; without that, Download gives you the video. The round clock is stamped in the corner unless you switch it off.</p>
-          <p>Every saved GIF has two links:</p>
+          <h3>From the 2D view, in three presses</h3>
+          <p>Hover a player, on the radar or on their row, and press <strong>Q</strong> to mark the start. Let the round run and press <strong>Q</strong> to mark the end: that part lights up on the timeline. Press <strong>Q</strong> once more within 5 seconds to queue it, in first person at quality 3 and 20 FPS, or let the time run out to cancel. It opens in a new tab when it is done.</p>
+          <p>A note is saved to <a href="/bookmarks?tab=gifs">Bookmarks → Visual Notes</a> with what it shows: the map, the round, both teams with their side and buy, and who won. Each clip is kept as a video, so it stays sharp and small, and a GIF is made when you download it or use its image link, which can take a moment the first time. A long or large clip's GIF is made smaller than the video so it stays about 40 MB. Sign in to save it; without that, Download gives you the video. The round clock is stamped in the corner unless you switch it off.</p>
+          <p>Every note has two links:</p>
           <ul>
-            <li><strong>Page link</strong> (<code>aim4.io/g/...</code>) opens a page with the GIF, its title and its description, where every setpos in the description is a link that copies itself. Use it when the words matter: a lineup, a call, a note for your team.</li>
-            <li><strong>Image link</strong> (<code>aim4.io/g/....gif</code>) is the GIF file itself, so it plays wherever you paste it (Discord, Slack, a forum). Use it when only the picture matters.</li>
+            <li><strong>Page link</strong> (<code>aim4.io/g/...</code>) opens a page with every perspective, the title and the description, where every setpos in the description is a link that copies itself. Use it when the words matter: a lineup, a call, a note for your team.</li>
+            <li><strong>Image link</strong> (<code>aim4.io/g/....gif</code>) is one perspective as a GIF file, so it plays wherever you paste it (Discord, Slack, a forum). Use it when only the picture matters.</li>
           </ul>
-          <p>Both are there after you create a GIF, on every GIF in Bookmarks, and on GIFs aim4 eye makes in the chat.</p>
+          <p>Both are there after you create a note, on every note in Bookmarks, and on notes aim4 eye makes in the chat.</p>
           ${best([
-            '2D GIFs are small and sharp; use them for setups, rotations and utility. Use 3D for a peek, a flash or a clutch.',
-            'Keep GIFs you paste into chats short: the GIF of a long clip is made smaller to stay about 40 MB, and the share page always plays the full video.',
-            'Select an area in 2D to cut out the half of the map nothing happens on: the GIF gets bigger where it matters.',
-            'Put the setpos of the key spot in the description so your teammates can practise it straight from the GIF. For a GIF of an execute, Automatically append setpos does it for every grenade at once.',
+            'A 2D map clip is small and sharp; use it for setups, rotations and utility. Add a player or two in 3D for the peek, the flash or the clutch.',
+            'Keep clips you paste into chats short: the GIF of a long clip is made smaller to stay about 40 MB, and the share page always plays the full video.',
+            'With only the 2D map picked, or with an area of it selected, the clip is the radar exactly as you see it, zones and drawings included. Select an area to cut out the half of the map nothing happens on.',
+            'Put the setpos of the key spot in the description so your teammates can practise it straight from the note. For an execute, Automatically append setpos does it for every grenade at once.',
             'A jump throw\'s setpos is in the air, because that is where the thrower was the tick before release. Paste it, then jump-throw from there as usual.'
           ])}`
       },
       {
         id: 'bookmarks',
-        title: 'Bookmarks: playlists and saved GIFs',
+        title: 'Bookmarks: playlists and visual notes',
         html: `
           <p><a href="/bookmarks">Bookmarks</a> has two tabs, top right.</p>
           <h3>Playlists</h3>
           <p>A playlist is a list of rounds from any matches, in the order you want. In the viewer, the bookmark button saves the round on screen to a playlist or creates a new one. A playlist is <strong>Private</strong> or shared with your <strong>Team</strong>, and can be searched by name.</p>
-          <h3>Saved GIFs</h3>
-          <p>Every GIF you made is here as an image wall. Search it and filter by 2D or 3D, map, team, side, buy and the side that won. Click a GIF to open it next to the rest of the wall: the GIF on the left, and on the right <strong>Page link</strong> and <strong>Image link</strong> (see <a href="#gifs">GIFs</a>), the title, the description and everything it was saved with. You can edit the title and description or delete it.</p>
+          <h3>Visual Notes</h3>
+          <p>Every note you made is here as an image wall. Search it and filter by 2D or 3D, map, team, side, buy and the side that won. Click a note to open it next to the rest of the wall: the picture on the left with a tab per perspective and <strong>All</strong> to play them side by side, and on the right <strong>Page link</strong> and <strong>Image link</strong> (see <a href="#gifs">Visual notes</a>), the title, the description and everything it was saved with. <strong>Add perspective</strong> renders more of the same part of the round and adds them to the note. You can edit the title and description, take an added perspective off with its ×, or delete the note. The first perspective stays for as long as the note does, because it is what the note's link shows.</p>
           ${best([
             'Build one playlist per idea ("NAVI B executes, Mirage") rather than one per match. A playlist that answers one question is one you will open again.',
             'Share prep playlists with your team so everyone watches the same rounds before a match.',

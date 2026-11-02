@@ -1,7 +1,9 @@
 // ---------------------------------------------------------------------------
 // server/replays/gifStore.js
-// Saved GIFs: the GIF creator's output, kept for Bookmarks and served at a
+// Visual notes: the note creator's output, kept for Bookmarks and served at a
 // share link. A clip is kept as a video; a GIF is made from it when asked for.
+// A note is one record and one or more clips: its first has the note's id, and
+// the rest are listed on the record under `perspectives` with ids of their own.
 //
 // Layout, beside the playlists in the shared library folder:
 //   gifs/<id>.mp4     the clip, what is kept
@@ -21,7 +23,7 @@ import crypto from 'node:crypto';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { userDir } from './demoStore.js';
-import { GIF_DESCRIPTION_MAX, GIF_ID, GIF_TITLE_MAX, cleanGifMeta } from '../../src/replays/gif/gifMeta.js';
+import { GIF_DESCRIPTION_MAX, GIF_ID, GIF_TITLE_MAX, MAX_PERSPECTIVES, cleanGifMeta, cleanPerspective } from '../../src/replays/gif/gifMeta.js';
 import { gifToMp4, mp4ToGif, posterOf, probeVideo } from './gifVideo.js';
 
 export const MAX_GIF_BYTES = 100 * 1024 * 1024;
@@ -214,7 +216,74 @@ export async function updateGif(user, id, patch, actor) {
   });
 }
 
-/** Delete a GIF and its file. Resolves false when there was nothing to delete. */
+/**
+ * Add a clip to a note. Its media sits beside the note's own under its own id, so its files answer on the same
+ * routes, and only the note's record knows it belongs here.
+ *
+ * @param {string} id  the note
+ * @param {Buffer} bytes
+ * @param {object} meta  what this clip shows
+ * @returns {Promise<object>} the note, with the clip on it
+ */
+export async function addPerspective(user, id, bytes, meta, actor) {
+  if (!actor?.id) throw fail(401, 'Sign in to change visual notes.');
+  if (!GIF_ID.test(String(id))) throw fail(404, 'Visual note not found.');
+  if (!bytes?.length) throw fail(400, 'The clip is empty.');
+  if (bytes.length > MAX_GIF_BYTES) throw fail(413, `That clip is over ${MAX_GIF_BYTES / 1024 / 1024} MB, too large to keep.`);
+  if (!gifDimensions(bytes) && !looksLikeMp4(bytes)) throw fail(400, 'That is not a GIF or an MP4.');
+  const check = (g) => {
+    if (!g) throw fail(404, 'Visual note not found.');
+    if (!actor.admin && g.ownerId !== actor.id) throw fail(403, 'That visual note belongs to someone else.');
+    if ((g.perspectives?.length || 0) + 1 >= MAX_PERSPECTIVES) throw fail(409, `A visual note holds up to ${MAX_PERSPECTIVES} perspectives.`);
+  };
+  // Refused before the conversion when it can be, and checked again in the queue where it counts.
+  check((await readGifs(user)).find((x) => x.id === id));
+  const pid = crypto.randomBytes(8).toString('hex');
+  const media = await storeMedia(user, pid, bytes);
+  try {
+    return await serial(async () => {
+      const list = await readGifs(user);
+      const g = list.find((x) => x.id === id);
+      check(g);
+      g.perspectives = [
+        ...(g.perspectives || []),
+        { ...cleanPerspective(meta), id: pid, bytes: media.bytes, width: media.width, height: media.height, frames: media.frames, createdAt: Date.now() }
+      ];
+      g.updatedAt = Date.now();
+      await writeGifs(user, list);
+      return g;
+    });
+  } catch (err) {
+    await removeMedia(user, pid);
+    throw err;
+  }
+}
+
+/**
+ * Take one added clip off a note. The note's own stays for as long as the note does: its id is the share link,
+ * and that link is cached as immutable, so it cannot start showing a different clip.
+ *
+ * @returns {Promise<object>} the note
+ */
+export async function removePerspective(user, id, pid, actor) {
+  if (!GIF_ID.test(String(id)) || !GIF_ID.test(String(pid))) throw fail(404, 'Perspective not found.');
+  return serial(async () => {
+    const list = await readGifs(user);
+    const g = list.find((x) => x.id === id);
+    if (!g) throw fail(404, 'Visual note not found.');
+    if (!actor?.admin && g.ownerId !== actor?.id) throw fail(403, 'That visual note belongs to someone else.');
+    if (!(g.perspectives || []).some((p) => p.id === pid)) {
+      throw fail(pid === id ? 409 : 404, pid === id ? 'The first perspective stays with the note. Delete the note to remove it.' : 'Perspective not found.');
+    }
+    g.perspectives = g.perspectives.filter((p) => p.id !== pid);
+    g.updatedAt = Date.now();
+    await writeGifs(user, list);
+    await removeMedia(user, pid);
+    return g;
+  });
+}
+
+/** Delete a note and all its clips. Resolves false when there was nothing to delete. */
 export async function removeGif(user, id, actor) {
   if (!GIF_ID.test(String(id))) return false;
   return serial(async () => {
@@ -224,6 +293,7 @@ export async function removeGif(user, id, actor) {
     if (!actor?.admin && g.ownerId !== actor?.id) throw fail(403, 'That GIF belongs to someone else.');
     await writeGifs(user, list.filter((x) => x.id !== id));
     await removeMedia(user, id);
+    for (const p of g.perspectives || []) await removeMedia(user, p.id);
     return true;
   });
 }
@@ -252,7 +322,7 @@ export async function videoFile(user, id) {
     const { size } = await fsp.stat(mp4);
     await serial(async () => {
       const list = await readGifs(user);
-      const g = list.find((x) => x.id === id);
+      const g = list.find((x) => x.id === id) || list.flatMap((x) => x.perspectives || []).find((x) => x.id === id);
       if (!g) return;
       g.bytes = size;
       await writeGifs(user, list);

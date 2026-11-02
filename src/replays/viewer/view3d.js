@@ -50,7 +50,7 @@ import { createShaderWarmup } from '../../cs3d/shaderWarmup.js';
 import { SettingsManager, VIEWMODEL_FOV_MIN, VIEWMODEL_FOV_MAX } from '../../core/SettingsManager.js';
 import { bulletDirection } from '../../../shared/sim3d/inaccuracy.js';
 import { cs3dMap } from '../../../shared/cs3d/maps.js';
-import { cameraYawFromSource } from '../../../shared/sim3d/units.js';
+import { cameraYawFromSource, sourceYawFromCamera } from '../../../shared/sim3d/units.js';
 import { sourceVFovFromHFov } from '../../utils/MathUtils.js';
 import {
   HULL_STAND,
@@ -193,6 +193,8 @@ export function createView3d({ slug, onModeChange, onFailed = null, sampleSlot, 
   let lastNow = 0;
   /** A GIF is being captured: the live loop is stopped and frames are drawn on the capture's clock. */
   let capturing = false;
+  /** Seconds on the clip's clock, starting from wall time so a trigger timed before the capture still lines up. */
+  let captureVmNow = 0;
   /** The capture is of this one player: the camera stays with them through their death, on no one else. */
   let capturePinned = false;
   /** The box the canvas was last fitted to; see resize(). */
@@ -1126,6 +1128,9 @@ export function createView3d({ slug, onModeChange, onFailed = null, sampleSlot, 
   }
 
   function updateViewModel(dt) {
+    // Wall time while live. While a clip is made it runs faster or slower than the demo, and the trigger's
+    // cycle and the gun's sway both read this.
+    const vmNow = capturing ? captureVmNow : performance.now() / 1000;
     if (vmAssets.ready && !viewModel.ready) viewModel.setSide('T');
     if (!viewModel.ready) return;
     let pov = mode === 'pov' ? povState : null;
@@ -1153,10 +1158,11 @@ export function createView3d({ slug, onModeChange, onFailed = null, sampleSlot, 
     if (pov.side === 'T' || pov.side === 'CT') viewModel.setSide(pov.side);
     viewModel.setWeapon(heldWeapon(pov.weapon), { draw: false });
     if (dt > 0) {
-      for (let i = 0; i < pov.shots; i++) viewModel.attack('primary', performance.now() / 1000 + i * 1e-4);
+      for (let i = 0; i < pov.shots; i++) viewModel.attack('primary', vmNow + i * 1e-4);
       pov.shots = 0;
     }
     viewModel.update(dt, {
+      now: vmNow,
       speed: pov.speed,
       onGround: !pov.airborne,
       viewYaw: pov.yaw,
@@ -1926,6 +1932,43 @@ export function createView3d({ slug, onModeChange, onFailed = null, sampleSlot, 
       if (matchHud) matchHud.el.hidden = !hudOn || !visible;
     },
 
+    /** Show or hide players through walls, for a camera too far off to see them otherwise. */
+    setXray(on) {
+      xrayWanted = !!on;
+      if (xray) xray.enabled = xrayWanted;
+      if (!xrayWanted) xray?.updateLabels(camera, []);
+    },
+
+    /** Where the camera is, in the demo's own terms: what setFreeCamera takes. */
+    cameraPose() {
+      if (!camera) return null;
+      return {
+        x: camera.position.x,
+        y: -camera.position.z,
+        z: camera.position.y,
+        yaw: sourceYawFromCamera(camera.rotation.y),
+        pitch: -camera.rotation.x / DEG
+      };
+    },
+
+    /**
+     * Fly mode with the camera held at a place in the demo's coordinates, looking along yaw and pitch in degrees.
+     * Nothing moves it from here: the keys and the mouse are left out of it, so a clip made in the background is
+     * not steered by whatever is being typed in the page.
+     */
+    setFreeCamera({ x, y, z, yaw = 0, pitch = 0 }) {
+      setCamMode('fly');
+      controls?.setEnabled(false);
+      if (!camera || !player) return;
+      player.flyVel?.set(0, 0, 0);
+      Object.assign(player.input, { fwd: 0, side: 0, up: 0, fast: false, crouch: false });
+      camera.position.set(x, z, -y);
+      player.yaw = cameraYawFromSource(yaw);
+      player.pitch = -pitch * DEG;
+      camera.rotation.set(player.pitch, player.yaw, 0, 'YXZ');
+      applyFrame();
+    },
+
     /** The keypress overlay over the followed player. */
     setKeypresses(on) {
       keysOn = !!on;
@@ -1954,6 +1997,7 @@ export function createView3d({ slug, onModeChange, onFailed = null, sampleSlot, 
      */
     beginCapture({ pov = null } = {}) {
       capturing = true;
+      captureVmNow = performance.now() / 1000;
       if (Number.isInteger(pov) && pov >= 0) {
         povSlot = pov;
         capturePinned = true;
@@ -1962,8 +2006,28 @@ export function createView3d({ slug, onModeChange, onFailed = null, sampleSlot, 
       syncLoop();
       lastNow = 0;
     },
+    /**
+     * Have what a clip will show in hand before its first frame: the side's arms, and every weapon this player
+     * holds in it. Nothing else gets a chance to load between frames made flat out, which is what the live view
+     * has and a scene just opened in the background does not.
+     *
+     * @param {{ weapons?: string[], side?: string }} [opts]
+     */
+    async prepareCapture({ weapons = [], side = '' } = {}) {
+      if ((await vmAssets.load()) === false) return;
+      if (disposed) return;
+      await vmAssets.preload(weapons.map(heldWeapon));
+      if (disposed) return;
+      if (side === 'T' || side === 'CT') viewModel.setSide(side);
+      if (weapons.length) await viewModel.setWeapon(heldWeapon(weapons[0]), { draw: false });
+    },
     /** Draw one frame at `nowMs` on the capture clock. Returns the canvas holding it. */
     captureFrame(nowMs) {
+      if (lastNow) captureVmNow += Math.max(0, nowMs - lastNow) / 1000;
+      // Three only moves its frame counter from a requestAnimationFrame of its own, and a skeleton uploads its bones
+      // once per count. A clip made flat out, or in a tab nobody is looking at (which is the point of a queue), gets
+      // few of those or none, so every body and gun stayed in the pose of the last one, or the rest pose if new.
+      renderer?._nodes?.nodeFrame?.update();
       drawFrame(nowMs);
       return canvas;
     },

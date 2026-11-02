@@ -96,6 +96,67 @@ assert.equal(g.frames, 3);
 assert.equal(g.width, 8);
 assert.equal(g.title, 'A split');
 
+// ---- a note's perspectives ----------------------------------------------------
+
+{
+  const { addPerspective, removePerspective, removeGif: remove, listGifs: list, videoFile: video } = await import('./gifStore.js');
+  const { MAX_PERSPECTIVES, notePerspectives, perspectiveLabel, cleanPerspective } = await import('../../src/replays/gif/gifMeta.js');
+  const note = await addGif(LIB, tinyGif(2), { ...meta, view: 'pov', label: 's1mple, first person' }, alice);
+  assert.equal(notePerspectives(note).length, 1, 'a new note is its own one clip');
+  assert.equal(perspectiveLabel(notePerspectives(note)[0]), 's1mple, first person');
+
+  const two = await addPerspective(LIB, note.id, tinyGif(4), { kind: '2d', view: 'map', label: '2D map', fromTick: 1000, toTick: 1640 }, alice);
+  const clips = notePerspectives(two);
+  assert.equal(clips.length, 2, 'the clip joins the note');
+  assert.equal(clips[1].frames, 4, 'with its own numbers');
+  assert.equal(clips[1].kind, '2d');
+  assert.notEqual(clips[1].id, note.id, 'and its own id');
+  assert.ok(await video(LIB, clips[1].id), 'its file answers by id, like any clip');
+  assert.equal((await list(LIB, alice)).filter((x) => x.id === note.id).length, 1, 'still one note on the wall');
+  assert.equal((await list(LIB, alice)).filter((x) => x.id === clips[1].id).length, 0, 'a perspective is not a note of its own');
+
+  // Only the note's owner, only real clips, only so many.
+  await assert.rejects(addPerspective(LIB, note.id, tinyGif(2), {}, bob), /belongs to someone else/);
+  await assert.rejects(addPerspective(LIB, note.id, tinyGif(2), {}, null), /Sign in/);
+  await assert.rejects(addPerspective(LIB, note.id, Buffer.from('nope, text'), {}, alice), /not a GIF/);
+  await assert.rejects(addPerspective(LIB, 'f'.repeat(16), tinyGif(2), {}, alice), /not found/);
+  await assert.rejects(addPerspective(LIB, '../../etc', tinyGif(2), {}, alice), /not found/);
+  await assert.rejects(removePerspective(LIB, note.id, clips[1].id, bob), /belongs to someone else/);
+  assert.equal(cleanPerspective({ kind: 'webm', view: 'nope', label: 'x'.repeat(500) }).kind, '2d', 'cleaned like the rest');
+  assert.equal(cleanPerspective({ view: 'nope' }).view, '');
+  assert.ok(cleanPerspective({ label: 'x'.repeat(500) }).label.length <= 60);
+
+  // The first stays with the note: its id is the share link.
+  await assert.rejects(removePerspective(LIB, note.id, note.id, alice), /stays with the note/);
+
+  const after = await removePerspective(LIB, note.id, clips[1].id, alice);
+  assert.equal(notePerspectives(after).length, 1, 'an added one comes off');
+  assert.equal(await video(LIB, clips[1].id), null, 'and its file goes');
+
+  // Filling it up, then deleting takes every clip's file with it.
+  let full = after;
+  for (let i = notePerspectives(full).length; i < MAX_PERSPECTIVES; i++) full = await addPerspective(LIB, note.id, tinyGif(2), { kind: '3d', player: `p${i}` }, alice);
+  assert.equal(notePerspectives(full).length, MAX_PERSPECTIVES);
+  await assert.rejects(addPerspective(LIB, note.id, tinyGif(2), {}, alice), /holds up to/);
+  const files = notePerspectives(full).map((c) => c.id);
+  assert.equal(await remove(LIB, note.id, alice), true);
+  for (const id of files) assert.equal(await video(LIB, id), null, 'no clip outlives its note');
+
+  // Filters see all of a note's perspectives.
+  const mixed = { id: 'a', kind: '3d', player: 'alpha', perspectives: [{ id: 'b', kind: '2d', player: 'bravo' }] };
+  assert.equal(filterGifs([mixed], { kind: '2d' }).length, 1, 'a 3D note with a 2D perspective is both');
+  assert.equal(filterGifs([mixed], { kind: '3d' }).length, 1);
+  assert.equal(filterGifs([mixed], { q: 'bravo' }).length, 1, 'searched by any perspective');
+  assert.equal(filterGifs([{ id: 'c', kind: '3d' }], { kind: '2d' }).length, 0);
+
+  // The share page offers each of them, and All. One clip keeps the plain page.
+  const page = sharePageHtml({ ...meta, id: 'a'.repeat(16), perspectives: [{ id: 'b'.repeat(16), kind: '2d', label: '2D <map>' }] }, 'https://aim4.io');
+  assert.match(page, /data-clip="bbbbbbbbbbbbbbbb"/);
+  assert.match(page, /data-clip="all"/);
+  assert.match(page, /2D &lt;map&gt;/, 'a label is escaped');
+  assert.ok(!/data-clips/.test(sharePageHtml({ ...meta, id: 'a'.repeat(16) }, 'https://aim4.io')), 'no tabs for one clip');
+}
+
 await assert.rejects(addGif(LIB, Buffer.from('nope, text'), meta, alice), /not a GIF/);
 await assert.rejects(addGif(LIB, bytes, meta, null), /Sign in/);
 

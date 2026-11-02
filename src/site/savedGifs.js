@@ -1,18 +1,19 @@
 // ---------------------------------------------------------------------------
 // site/savedGifs.js
-// Bookmarks > Saved GIFs: every GIF made with the GIF creator (in the round
+// Bookmarks > Visual Notes: every note made with the note creator (in the round
 // viewer, by aim4 eye, or by the antistrat creator), as a wall of pins.
 //
-// The wall: each GIF at its own height with one line under it (its title and
+// The wall: each note at its own height with one line under it (its title and
 // a menu), packed into columns left to right. A row of filters sits above it.
 //
-// A pin opens in place at the top of the wall, four columns wide: the GIF on
-// the left; on the right the two link buttons (Page link: the share page
-// with the GIF, its title and its description; Image link: the GIF's own
-// address on aim4, so it embeds wherever it is pasted), the title, the
-// description and what the GIF shows (map, round, both teams' sides and
-// buys, who won). The rest of
-// the wall keeps flowing to the right of it and below it.
+// A pin opens in place at the top of the wall, four columns wide: the note on
+// the left, with a tab per perspective and one showing them all together; on the
+// right the two link buttons (Page link: the share page with every perspective,
+// its title and its description; Image link: the perspective on screen as a GIF,
+// so it embeds wherever it is pasted), the title, the description and what the
+// note shows (map, round, both teams' sides and buys, who won). More perspectives
+// can be added from there: they are rendered here in the queue and join the note.
+// The rest of the wall keeps flowing to the right of it and below it.
 //
 // In a description, text between < and > is a copy link: <setpos ...> copies
 // the setpos. The public share page reads descriptions the same way.
@@ -22,16 +23,20 @@
 // more columns, so dense placement packs the rest around it.
 // ---------------------------------------------------------------------------
 
-import { deleteGif, fetchGifs, gifPosterUrl, gifVideoUrl, updateGif } from '../replays/api.js';
+import { deleteGif, fetchGifs, fetchRoundMeta, gifPosterUrl, gifVideoUrl, removeGifPerspective, updateGif } from '../replays/api.js';
 import {
   GIF_DESCRIPTION_MAX,
   GIF_TITLE_MAX,
+  MAX_PERSPECTIVES,
   descriptionParts,
   filterGifs,
   gifDisplayTitle,
-  gifFilterOptions
+  gifFilterOptions,
+  notePerspectives,
+  perspectiveLabel
 } from '../replays/gif/gifMeta.js';
 import { downloadSavedGif, gifPageUrl, gifShareUrl, warmGif } from '../replays/gif/gifCapture.js';
+import { createPerspectivePicker } from '../replays/gif/perspectivePicker.js';
 import { spinnerHtml } from '../lib/spinner.js';
 
 /** Narrowest column, gap between pins, the grid's row unit and the one line under each pin. */
@@ -78,8 +83,8 @@ const SOURCE_LABEL = { viewer: 'Round viewer', eye: 'aim4 eye', antistrat: 'Anti
 export function createSavedGifs({ host, escapeHtml, openRound }) {
   host.innerHTML = `
     <div class="bm-gifs">
-      <div class="bm-filterbar" role="search" aria-label="Filter saved GIFs">
-        <input type="search" class="site-input bm-search" data-f="q" placeholder="Search saved GIFs" aria-label="Search saved GIFs" />
+      <div class="bm-filterbar" role="search" aria-label="Filter visual notes">
+        <input type="search" class="site-input bm-search" data-f="q" placeholder="Search visual notes" aria-label="Search visual notes" />
         ${segHtml('kind', 'View')}
         <select class="site-select" data-f="map" aria-label="Map"></select>
         <select class="site-select" data-f="team" aria-label="Team"></select>
@@ -116,6 +121,10 @@ export function createSavedGifs({ host, escapeHtml, openRound }) {
   let editing = false;
   let menu = null;
   let visible = false;
+  /** Which perspective of the open note is on screen: a clip's id, or 'all' for all of them together. */
+  let activeClip = '';
+  /** Adding perspectives to the open note: the picker while it is showing. */
+  let adding = null;
 
   function setStatus(text, bad = false) {
     statusEl.textContent = text || '';
@@ -189,10 +198,12 @@ export function createSavedGifs({ host, escapeHtml, openRound }) {
 
   function pinHtml(g) {
     const size = g.width && g.height ? ` width="${g.width}" height="${g.height}"` : '';
+    const clips = notePerspectives(g).length;
     return `
       <article class="bm-pin${g.id === openId ? ' is-open' : ''}" data-id="${escapeHtml(g.id)}" data-ratio="${ratioOf(g)}">
         <button type="button" class="bm-pin-img" data-act="open" aria-label="Open ${escapeHtml(gifDisplayTitle(g))}">
           <video data-src="${escapeHtml(gifVideoUrl(g.id))}" poster="${escapeHtml(gifPosterUrl(g.id))}"${size} loop muted playsinline preload="none"></video>
+          ${clips > 1 ? `<span class="bm-pin-count" title="${clips} perspectives">${clips}</span>` : ''}
         </button>
         <div class="bm-pin-line">
           <span class="bm-pin-title">${escapeHtml(gifDisplayTitle(g))}</span>
@@ -219,9 +230,66 @@ export function createSavedGifs({ host, escapeHtml, openRound }) {
         ? `<span class="bm-team side-${g.winnerSide.toLowerCase()}">${g.winnerTeam ? escapeHtml(g.winnerTeam) : g.winnerSide}</span>${g.winnerTeam ? ` (${g.winnerSide})` : ''}`
         : ''
     );
-    add('Size', g.width ? `${g.width} x ${g.height}, ${g.frames || '?'} frames, ${((g.bytes || 0) / 1024 / 1024).toFixed(1)} MB` : '');
+    const clips = notePerspectives(g);
+    const clip = clips.find((c) => c.id === activeClip) || clips[0];
+    add('Part', g.clockFrom && g.clockTo ? `${escapeHtml(g.clockFrom)} to ${escapeHtml(g.clockTo)}` : '');
+    add('Size', clip.width ? `${clip.width} x ${clip.height}, ${clip.frames || '?'} frames, ${((clip.bytes || 0) / 1024 / 1024).toFixed(1)} MB` : '');
+    if (clips.length > 1) add('All of it', `${clips.length} perspectives, ${(clips.reduce((sum, c) => sum + (c.bytes || 0), 0) / 1024 / 1024).toFixed(1)} MB`);
     add('Made in', escapeHtml(SOURCE_LABEL[g.source] || ''));
     return rows.join('');
+  }
+
+  /** The perspective on screen, as the viewer sees it: one clip, or a grid of them that start together. */
+  function mediaHtml(g) {
+    const clips = notePerspectives(g);
+    const video = (c, extra = '') =>
+      `<video src="${escapeHtml(gifVideoUrl(c.id))}" poster="${escapeHtml(gifPosterUrl(c.id))}" aria-label="${escapeHtml(perspectiveLabel(c))}"${c.width ? ` width="${c.width}" height="${c.height}"` : ''} autoplay loop muted playsinline${extra}></video>`;
+    if (activeClip === 'all' && clips.length > 1) {
+      return `<div class="bm-grid-media" data-count="${clips.length}">${clips.map((c) => `<figure>${video(c)}<figcaption>${escapeHtml(perspectiveLabel(c))}</figcaption></figure>`).join('')}</div>`;
+    }
+    return video(clips.find((c) => c.id === activeClip) || clips[0]);
+  }
+
+  /** A tab per perspective, plus All once there is more than one. An added one can be taken off from here. */
+  function tabsHtml(g) {
+    const clips = notePerspectives(g);
+    const active = activeClip === 'all' ? 'all' : (clips.find((c) => c.id === activeClip) || clips[0]).id;
+    const tab = (id, label, removable) =>
+      `<span class="bm-tab${active === id ? ' active' : ''}"><button type="button" class="bm-tab-btn" data-act="clip" data-clip="${escapeHtml(id)}" aria-pressed="${active === id ? 'true' : 'false'}">${escapeHtml(label)}</button>${removable ? `<button type="button" class="bm-tab-x" data-act="clip-remove" data-clip="${escapeHtml(id)}" aria-label="Remove ${escapeHtml(label)}" title="Remove">×</button>` : ''}</span>`;
+    return `<div class="bm-tabs" role="group" aria-label="Perspectives">${clips.map((c, i) => tab(c.id, perspectiveLabel(c), i > 0)).join('')}${clips.length > 1 ? tab('all', 'All', false) : ''}</div>`;
+  }
+
+  /** Line every video of the grid up on the first one, so they show the same moment. */
+  function syncGrid() {
+    const videos = [...grid.querySelectorAll('.bm-grid-media video')];
+    if (videos.length < 2) return;
+    videos[0].addEventListener('timeupdate', () => {
+      const t = videos[0].currentTime;
+      for (const v of videos.slice(1)) {
+        if (Math.abs(v.currentTime - t) > 0.25 && t < (v.duration || Infinity)) v.currentTime = t;
+      }
+    });
+  }
+
+  /** The perspective the Image link and Download mean. */
+  function activeClipId(g) {
+    return activeClip && activeClip !== 'all' ? activeClip : g.id;
+  }
+
+  function addHtml(g) {
+    if (!g.file) return '';
+    const room = notePerspectives(g).length < MAX_PERSPECTIVES;
+    if (!adding) {
+      return room ? '<button type="button" class="btn btn-sm bm-add-btn" data-act="add-open">Add perspective</button>' : '';
+    }
+    return `
+      <div class="bm-add">
+        <div data-add-picker></div>
+        <div class="bm-edit-actions">
+          <button type="button" class="btn btn-sm" data-act="add-cancel">Cancel</button>
+          <button type="button" class="btn btn-sm primary" data-act="add-go">Add to note</button>
+        </div>
+      </div>`;
   }
 
   function detailHtml(g) {
@@ -238,8 +306,9 @@ export function createSavedGifs({ host, escapeHtml, openRound }) {
       <section class="bm-detail" data-detail="${escapeHtml(g.id)}" aria-label="${escapeHtml(gifDisplayTitle(g))}">
         <div class="bm-detail-card">
           <div class="bm-detail-media">
-            <video src="${escapeHtml(gifVideoUrl(g.id))}" poster="${escapeHtml(gifPosterUrl(g.id))}" aria-label="${escapeHtml(gifDisplayTitle(g))}"${g.width ? ` width="${g.width}" height="${g.height}"` : ''} autoplay loop muted playsinline></video>
+            <div data-media>${mediaHtml(g)}</div>
             <button type="button" class="bm-round-btn bm-detail-back" data-act="close" aria-label="Close" title="Close">${ICON.back}</button>
+            <div data-tabs>${tabsHtml(g)}</div>
           </div>
           <div class="bm-detail-side">
             <div class="bm-detail-bar">
@@ -247,11 +316,12 @@ export function createSavedGifs({ host, escapeHtml, openRound }) {
               ${g.file ? `<button type="button" class="bm-icon-btn" data-act="round" aria-label="Open the round" title="Open the round">${ICON.play}</button>` : ''}
               <button type="button" class="bm-icon-btn" data-act="menu" aria-label="More" title="More">${ICON.more}</button>
               <div class="bm-link-split" role="group" aria-label="Copy link">
-                <button type="button" class="bm-link-btn" data-act="copy-page" title="Copy a link to a page with the GIF, its title and its description, setpos links included">${ICON.link}<span>Page link</span></button>
-                <button type="button" class="bm-link-btn" data-act="copy-image" title="Copy the link to the GIF file itself, which plays wherever it is pasted"><span>Image link</span></button>
+                <button type="button" class="bm-link-btn" data-act="copy-page" title="Copy a link to a page with every perspective, its title and its description, setpos links included">${ICON.link}<span>Page link</span></button>
+                <button type="button" class="bm-link-btn" data-act="copy-image" title="Copy the link to the perspective on screen as a GIF, which plays wherever it is pasted"><span>Image link</span></button>
               </div>
             </div>
             ${text}
+            <div data-add>${addHtml(g)}</div>
             <dl class="bm-detail-meta">${metaRows(g)}</dl>
             <span class="bm-detail-msg" data-msg></span>
           </div>
@@ -290,18 +360,129 @@ export function createSavedGifs({ host, escapeHtml, openRound }) {
     closeMenu();
     if (!gifs) return;
     if (!gifs.length) {
-      grid.innerHTML = '<p class="view-empty bm-wall-empty">No saved GIFs yet. Make one with the GIF button in the round viewer.</p>';
+      grid.innerHTML = '<p class="view-empty bm-wall-empty">No visual notes yet. Make one with the note button in the round viewer.</p>';
       setStatus('');
       return;
     }
     const shown = filterGifs(gifs, filters);
     const open = gifs.find((g) => g.id === openId) || null;
-    setStatus(shown.length === gifs.length ? `${gifs.length} GIF${gifs.length === 1 ? '' : 's'}` : `${shown.length} of ${gifs.length}`);
+    setStatus(shown.length === gifs.length ? `${gifs.length} note${gifs.length === 1 ? '' : 's'}` : `${shown.length} of ${gifs.length}`);
     const pins = shown.filter((g) => g.id !== openId).map(pinHtml).join('');
-    grid.innerHTML = (open ? detailHtml(open) : '') + (pins || (open ? '' : '<p class="view-empty bm-wall-empty">No saved GIF fits these filters.</p>'));
+    grid.innerHTML = (open ? detailHtml(open) : '') + (pins || (open ? '' : '<p class="view-empty bm-wall-empty">No visual note fits these filters.</p>'));
     observeDetail();
     layout();
     watchPins();
+    syncGrid();
+    mountAddPicker();
+  }
+
+  /** Show another perspective of the open note where the last one had got to. */
+  function showClip(g, id) {
+    const before = grid.querySelector('[data-media] video');
+    const at = before ? before.currentTime : 0;
+    activeClip = id;
+    const media = grid.querySelector('[data-media]');
+    if (!media) return;
+    media.innerHTML = mediaHtml(g);
+    grid.querySelector('[data-tabs]').innerHTML = tabsHtml(g);
+    grid.querySelector('.bm-detail-meta').innerHTML = metaRows(g);
+    for (const v of media.querySelectorAll('video')) {
+      v.addEventListener('loadedmetadata', () => {
+        if (at < (v.duration || 0)) v.currentTime = at;
+      }, { once: true });
+    }
+    syncGrid();
+  }
+
+  // ---- adding perspectives -----------------------------------------------------------
+
+  /** The picker in the open note's panel, which needs the round to know who was in it. */
+  async function mountAddPicker() {
+    if (!adding) return;
+    const el = grid.querySelector('[data-add-picker]');
+    if (!el) return;
+    const state = adding;
+    const picker = createPerspectivePicker({ host: el, escapeHtml });
+    state.picker = picker;
+    if (!state.meta) {
+      el.innerHTML = spinnerHtml('Loading the round…');
+      try {
+        state.meta = await fetchRoundMeta(state.file);
+      } catch (err) {
+        say(err.message || 'That round could not be loaded.', true);
+      }
+      if (adding !== state) return;
+      if (!state.meta) {
+        el.textContent = '';
+        return;
+      }
+    }
+    picker.setRound(state.meta);
+  }
+
+  /** Render the choices in the queue, and put them on the note as each one lands. */
+  async function startAdding(g) {
+    const state = adding;
+    if (!state?.picker || !state.meta) return;
+    const { specs } = state.picker.specs({ fromTick: g.fromTick, toTick: g.toTick });
+    const room = MAX_PERSPECTIVES - notePerspectives(g).length;
+    if (!specs.length) {
+      say('Pick at least one perspective.', true);
+      return;
+    }
+    const chosen = specs.slice(0, room);
+    adding = null;
+    render();
+    const { enqueueEyeJob } = await import('../replays/eye/eyeJobs.js');
+    const { failuresText, noteHref, renderPerspectives } = await import('../replays/gif/visualNote.js');
+    const title = gifDisplayTitle(g);
+    const replace = (note) => {
+      const at = gifs.findIndex((x) => x.id === note.id);
+      if (at < 0) return;
+      gifs[at] = note;
+      if (openId !== note.id || adding || editing) return;
+      grid.querySelector('[data-tabs]').innerHTML = tabsHtml(note);
+      grid.querySelector('.bm-detail-meta').innerHTML = metaRows(note);
+      grid.querySelector('[data-add]').innerHTML = addHtml(note);
+    };
+    enqueueEyeJob({
+      label: title,
+      name: 'Visual note',
+      run: async (task) => {
+        const res = await renderPerspectives({
+          file: g.file,
+          noteId: g.id,
+          fromTick: g.fromTick,
+          toTick: g.toTick,
+          specs: chosen,
+          fps: 24,
+          quality: 3,
+          clock: true,
+          onProgress: (text) => task.setStatus(text),
+          onSaved: replace
+        });
+        const problem = failuresText(res.failed);
+        return {
+          title: res.made ? `${res.made} ${res.made === 1 ? 'perspective' : 'perspectives'} added: ${title}` : `No perspectives added: ${title}`,
+          body: problem,
+          href: noteHref(g.id)
+        };
+      }
+    });
+    say(`${chosen.length} ${chosen.length === 1 ? 'perspective' : 'perspectives'} queued.`);
+  }
+
+  async function removeClip(g, id) {
+    const clip = notePerspectives(g).find((c) => c.id === id);
+    if (!clip || !window.confirm(`Remove "${perspectiveLabel(clip)}" from this note?`)) return;
+    try {
+      const next = await removeGifPerspective(g.id, id);
+      gifs[gifs.findIndex((x) => x.id === g.id)] = next;
+      if (activeClip === id) activeClip = '';
+      render();
+    } catch (err) {
+      say(err.message || 'Could not remove it.', true);
+    }
   }
 
   /** Columns from the wall's width, then every pin's row span from its height. */
@@ -338,7 +519,7 @@ export function createSavedGifs({ host, escapeHtml, openRound }) {
 
   async function load() {
     if (loading) return loading;
-    if (!gifs) grid.innerHTML = spinnerHtml('Loading saved GIFs…');
+    if (!gifs) grid.innerHTML = spinnerHtml('Loading visual notes…');
     loading = (async () => {
       try {
         gifs = await fetchGifs();
@@ -347,7 +528,7 @@ export function createSavedGifs({ host, escapeHtml, openRound }) {
         if (wanted && gifs.some((g) => g.id === wanted)) openId = wanted;
         render();
       } catch (err) {
-        grid.innerHTML = `<p class="view-empty bm-wall-empty">${escapeHtml(err.message || 'Could not load saved GIFs.')}</p>`;
+        grid.innerHTML = `<p class="view-empty bm-wall-empty">${escapeHtml(err.message || 'Could not load visual notes.')}</p>`;
       } finally {
         loading = null;
       }
@@ -372,6 +553,8 @@ export function createSavedGifs({ host, escapeHtml, openRound }) {
   function openPin(id) {
     openId = id;
     editing = false;
+    adding = null;
+    activeClip = '';
     syncUrl();
     render();
     // The filter row's top, clear of the page's sticky header (scroll-margin in CSS).
@@ -381,6 +564,8 @@ export function createSavedGifs({ host, escapeHtml, openRound }) {
   function closePin() {
     openId = '';
     editing = false;
+    adding = null;
+    activeClip = '';
     syncUrl();
     render();
   }
@@ -406,7 +591,7 @@ export function createSavedGifs({ host, escapeHtml, openRound }) {
 
   async function download(g) {
     try {
-      await downloadSavedGif(g.id, g);
+      await downloadSavedGif(g.id === openId ? activeClipId(g) : g.id, g);
     } catch (err) {
       say(err.message || 'Download failed.', true);
     }
@@ -421,7 +606,7 @@ export function createSavedGifs({ host, escapeHtml, openRound }) {
       syncUrl();
       fillSelects();
       render();
-      setStatus('GIF deleted.');
+      setStatus('Note deleted.');
     } catch (err) {
       say(err.message || 'Could not delete.', true);
     }
@@ -490,8 +675,9 @@ export function createSavedGifs({ host, escapeHtml, openRound }) {
   function run(act, g, btn) {
     if (act === 'copy-page' || act === 'copy-image') {
       const page = act === 'copy-page';
-      if (!page) warmGif(g.id);
-      copyText(page ? gifPageUrl(g.id) : gifShareUrl(g.id), () => {
+      const clipId = g.id === openId ? activeClipId(g) : g.id;
+      if (!page) warmGif(clipId);
+      copyText(page ? gifPageUrl(g.id) : gifShareUrl(clipId), () => {
         const msg = page ? 'Page link copied.' : 'Image link copied.';
         if (openId === g.id) say(msg);
         else setStatus(msg);
@@ -521,6 +707,15 @@ export function createSavedGifs({ host, escapeHtml, openRound }) {
     const act = btn.dataset.act;
     if (act === 'open') openPin(g.id);
     else if (act === 'close') closePin();
+    else if (act === 'clip') showClip(g, btn.dataset.clip);
+    else if (act === 'clip-remove') removeClip(g, btn.dataset.clip);
+    else if (act === 'add-open') {
+      adding = { file: g.file, meta: null, picker: null };
+      render();
+    } else if (act === 'add-cancel') {
+      adding = null;
+      render();
+    } else if (act === 'add-go') startAdding(g);
     else if (act === 'edit-cancel') {
       editing = false;
       render();

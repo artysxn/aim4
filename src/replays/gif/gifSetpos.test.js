@@ -42,6 +42,14 @@ assert.equal(lines.length, 2);
 assert.equal(lines[0], `01:45 s1mple Smoke <setpos 0.25 -${64 * 30 - 1}.00 64.00; setang -12.34 90.50 0>`);
 assert.match(lines[1], /^01:35 b1t Flash <setpos 600\.25 /);
 
+// With a player selected, only that player's grenades.
+const own = utilitySetposLines(meta, track, { fromTick: 64 * 25, toTick: 64 * 60, timing, player: 'b' });
+assert.equal(own.length, 1);
+assert.match(own[0], / b1t Flash /);
+// Or several selected players'.
+assert.equal(utilitySetposLines(meta, track, { fromTick: 64 * 25, toTick: 64 * 60, timing, player: ['a', 'b'] }).length, 2);
+assert.equal(utilitySetposLines(meta, track, { fromTick: 64 * 25, toTick: 64 * 60, timing, player: ['b'] }).length, 1);
+
 // Incendiaries and molotovs read the same.
 const fire = utilitySetposLines(meta, track, { fromTick: 64 * 89, toTick: 64 * 91, timing });
 assert.match(fire[0], / s1mple Molotov <setpos /);

@@ -8,7 +8,7 @@
 // way screenshot_round frames a single moment. 3D boots the viewer's 3D scene
 // in an offscreen box at a fixed size, follows a player in first or third
 // person, and captures it on the clip's own clock. Either way the result is
-// saved to Bookmarks > Saved GIFs with the round's metadata.
+// saved to Bookmarks > Visual Notes with the round's metadata.
 //
 // Nothing here touches the viewer on screen, so a 3D clip can be made while the
 // person stays in 2D. Several clips of one round can share a scene
@@ -24,6 +24,7 @@ import { cs3dMap } from '../../../shared/cs3d/maps.js';
 import { DEFAULT_QUALITY, MAX_SECONDS, clampFps, frameTicks, outputSize } from './gifCore.js';
 import { gifMetaFromRound, mapNameOf } from './gifMeta.js';
 import { captureClip, saveGifFitting } from './gifCapture.js';
+import { overviewPose } from './perspectives.js';
 
 /** The radar's own pixel size: an offscreen 2D GIF's full resolution. */
 const RADAR_PX = 1024;
@@ -100,6 +101,30 @@ function frameOnClip(renderer, track, ticks, mapCode, size) {
   renderer.panY = size / 2 - cy * scale - (size - RADAR_SIZE * scale) / 2;
 }
 
+/** Close in on one place on the map: where a grenade came down. */
+function frameOnPoint(renderer, at, mapCode, size) {
+  const pt = worldToRadar(mapCode, at.x, at.y, { x: 0, y: 0 });
+  const zoom = 2.6;
+  const scale = (size / RADAR_SIZE) * zoom;
+  renderer.zoom = zoom;
+  renderer.panX = size / 2 - pt.x * scale - (size - RADAR_SIZE * scale) / 2;
+  renderer.panY = size / 2 - pt.y * scale - (size - RADAR_SIZE * scale) / 2;
+}
+
+/** Where everyone alive is during the clip, a couple of dozen samples across it. */
+function clipPoints(track, ticks) {
+  const points = [];
+  const states = [];
+  const step = Math.max(1, Math.floor(ticks.length / 24));
+  for (let i = 0; i < ticks.length; i += step) {
+    track.sampleAll(ticks[i], states);
+    for (const s of states) {
+      if (s?.alive) points.push({ x: s.x, y: s.y, z: s.z });
+    }
+  }
+  return points;
+}
+
 /** A player by slot or by name (any part of it, any case). */
 function playerOf(meta, who) {
   const players = meta.players || [];
@@ -138,8 +163,11 @@ function defaultPlayer(meta, fromTick, toTick) {
  * @param {string} [opts.to]
  * @param {number} [opts.fps]
  * @param {number} [opts.quality]     1, 2 or 3
- * @param {'players'|'map'} [opts.view]   2D: frame on the players (default) or the whole map
- * @param {{ player?: string|number, mode?: 'pov'|'third' }} [opts.camera]  3D
+ * @param {'players'|'map'|{ focus: { x: number, y: number } }} [opts.view]
+ *   2D: frame on the players (default), the whole map, or close in on one place
+ * @param {{ player?: string|number, mode?: 'pov'|'third', pose?: object, overview?: boolean }} [opts.camera]
+ *   3D: a player, a camera held at a pose (view3d.setFreeCamera), or one above the action
+ * @param {{ view?: string, label?: string }} [opts.perspective]  what this clip is called in its note
  * @param {string} [opts.title]
  * @param {string} [opts.description]
  * @param {'viewer'|'eye'|'antistrat'} [opts.source]
@@ -179,7 +207,8 @@ export async function makeRoundGif(opts) {
     renderer.showNames = true;
     renderer.showWeapons = true;
     await renderer.setMap(meta.map);
-    if (opts.view !== 'map') frameOnClip(renderer, track, ticks, meta.map, RADAR_PX);
+    if (opts.view?.focus) frameOnPoint(renderer, opts.view.focus, meta.map, RADAR_PX);
+    else if (opts.view !== 'map') frameOnClip(renderer, track, ticks, meta.map, RADAR_PX);
     size = outputSize('2d', quality, RADAR_PX, RADAR_PX);
     const states = [];
     blob = await captureClip({
@@ -211,14 +240,29 @@ export async function makeRoundGif(opts) {
   } else {
     const slug = cs3dMap(meta.map)?.slug;
     if (!slug) throw new Error(`${mapNameOf(meta.map)} has no 3D map.`);
-    follow = playerOf(meta, opts.camera?.player) || defaultPlayer(meta, fromTick, toTick);
+    const pose = opts.camera?.overview ? overviewPose(clipPoints(track, ticks)) : opts.camera?.pose || null;
+    if ((opts.camera?.overview || opts.camera?.pose) && !pose) throw new Error('There is nothing to point that camera at.');
+    follow = pose ? null : playerOf(meta, opts.camera?.player) || defaultPlayer(meta, fromTick, toTick);
     if (follow && !track.sample(follow.slot, ticks[0], {})?.alive) {
       throw new Error(`${follow.name || 'That player'} is already dead at ${label(ticks[0])}.`);
     }
     const scene = opts.scene || (opts.onProgress?.('Loading the 3D map'), await openRoundScene({ meta, track }));
     let shot;
     try {
-      shot = await capture3d({ scene, ticks, fps, quality, follow, camMode: opts.camera?.mode, label, progress, clock: opts.clock, signal: opts.signal });
+      shot = await capture3d({
+        scene,
+        ticks,
+        fps,
+        quality,
+        follow,
+        camMode: opts.camera?.mode,
+        pose,
+        xray: Boolean(opts.camera?.overview),
+        label,
+        progress,
+        clock: opts.clock,
+        signal: opts.signal
+      });
     } finally {
       if (!opts.scene) scene.close();
     }
@@ -235,6 +279,8 @@ export async function makeRoundGif(opts) {
     clockTo: label(ticks[ticks.length - 1]),
     side: sideOfPlayer(meta, follow),
     player: follow?.name || '',
+    view: opts.perspective?.view || (kind === '2d' ? 'map' : follow ? (opts.camera?.mode === 'third' ? 'third' : 'pov') : 'free'),
+    label: opts.perspective?.label || '',
     title: opts.title,
     description: opts.description,
     source: opts.source || 'eye'
@@ -284,6 +330,8 @@ export async function openRoundScene({ meta, track }) {
     host.remove();
   };
   const states = [];
+  /** Each clip reads as a round of its own to the scene, which clears what the last one left on the walls. */
+  let clipIndex = 0;
   const frameAt = (tick) => {
     track.sampleAll(tick, states);
     return {
@@ -294,30 +342,53 @@ export async function openRoundScene({ meta, track }) {
       events: meta.events || {},
       weapons: meta.weapons || [],
       teamSides: { 1: meta.team1Side, 2: meta.team2Side },
-      roundKey: meta.file || '',
+      roundKey: `${meta.file || ''}#${clipIndex}`,
       stats: meta.stats || {},
       clock: clockAt(timing, tick).seconds,
       scoreT: 0,
       scoreCt: 0
     };
   };
+  /** What a player holds over these ticks, first held first. */
+  const weaponsOf = (slot, ticks) => {
+    const seen = new Set();
+    const out = {};
+    for (const tick of ticks) {
+      const s = track.sample(slot, tick, out);
+      const name = s?.alive ? meta.weapons?.[s.weapon] : '';
+      if (name) seen.add(name);
+    }
+    return [...seen];
+  };
+  const sideOf = (slot, tick) => track.sample(slot, tick, {})?.side || '';
   try {
     const starting = v3.start(host);
     v3.show();
     await starting;
     if (v3.failed || !v3.ready) throw new Error(`The 3D view could not start${v3.failed ? `: ${v3.failed}` : ''}.`);
-    return { v3, frameAt, close };
+    return { v3, frameAt, weaponsOf, sideOf, nextClip: () => clipIndex++, close };
   } catch (err) {
     close();
     throw err;
   }
 }
 
-/** One clip from a scene: one frame per tick, on the clip's own clock, through one player's eyes when there is one. */
-async function capture3d({ scene, ticks, fps, quality, follow, camMode, label, progress, clock: stampClock, signal }) {
-  const { v3, frameAt } = scene;
+/**
+ * One clip from a scene: one frame per tick, on the clip's own clock, through one player's eyes when there is one,
+ * or from a camera held in one place.
+ */
+async function capture3d({ scene, ticks, fps, quality, follow, camMode, pose, xray, label, progress, clock: stampClock, signal }) {
+  const { v3, frameAt, weaponsOf, sideOf, nextClip } = scene;
+  // Bullet holes and bodies from the clip before do not carry into this one.
+  nextClip();
   v3.setFrame(frameAt(ticks[0]));
-  if (follow) v3.setMode(camMode === 'third' ? 'third' : 'pov');
+  if (pose) {
+    v3.setFreeCamera(pose);
+  } else if (follow) {
+    v3.setMode(camMode === 'third' ? 'third' : 'pov');
+    await v3.prepareCapture({ weapons: weaponsOf(follow.slot, ticks), side: sideOf(follow.slot, ticks[0]) });
+  }
+  v3.setXray(xray);
   v3.beginCapture({ pov: follow ? follow.slot : null });
   try {
     const size = outputSize('3d', quality, v3.canvas.width || VIEW_3D.width, v3.canvas.height || VIEW_3D.height);
@@ -340,5 +411,6 @@ async function capture3d({ scene, ticks, fps, quality, follow, camMode, label, p
     return { blob, size };
   } finally {
     v3.endCapture();
+    v3.setXray(false);
   }
 }

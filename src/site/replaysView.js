@@ -4245,7 +4245,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     nav.setAttribute('aria-label', 'Bookmarks');
     for (const [id, label] of [
       ['playlists', 'Playlists'],
-      ['gifs', 'Saved GIFs']
+      ['gifs', 'Visual Notes']
     ]) {
       const btn = document.createElement('button');
       btn.type = 'button';
@@ -4280,7 +4280,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       return;
     }
     if (!savedGifs && gifsPanelEl) {
-      gifsPanelEl.innerHTML = spinnerHtml('Loading saved GIFs…');
+      gifsPanelEl.innerHTML = spinnerHtml('Loading visual notes…');
       const { createSavedGifs } = await import('./savedGifs.js');
       if (savedGifs) return;
       savedGifs = createSavedGifs({

@@ -12,7 +12,7 @@
 // makes a GIF, and the server turns that into the MP4.
 // ---------------------------------------------------------------------------
 
-import { gifImageUrl, saveGif } from '../api.js';
+import { addGifPerspective, gifImageUrl, saveGif } from '../api.js';
 import { MAX_GIF_BYTES } from './gifCore.js';
 import { createGifEncoder } from './gifEncoder.js';
 import { publicOrigin } from '../../site/publicOrigin.js';
@@ -361,12 +361,13 @@ export async function shrinkGif(blob, { fps, palette = 'local', maxBytes = MAX_G
  * Save a GIF to Bookmarks. One over what the server keeps is never sent as it
  * is (the upload would be cut off, and the browser only says it failed): a
  * smaller copy that fits is made and saved instead, and the full one stays
- * with the person who made it.
+ * with the person who made it. With `noteId` it goes on that note as another perspective.
  *
  * @returns {Promise<{ gif: object, copy: null | { width: number, height: number, fps: number, bytes: number } }>}
  */
-export async function saveGifFitting(blob, meta, { fps, palette, maxBytes = MAX_GIF_BYTES, onShrink, onProgress, signal } = {}) {
-  if (blob.size <= maxBytes) return { gif: await saveGif(blob, meta), copy: null };
+export async function saveGifFitting(blob, meta, { noteId = '', fps, palette, maxBytes = MAX_GIF_BYTES, onShrink, onProgress, signal } = {}) {
+  const keep = (file) => (noteId ? addGifPerspective(noteId, file, meta) : saveGif(file, meta));
+  if (blob.size <= maxBytes) return { gif: await keep(blob), copy: null };
   if (blob.type === 'video/mp4') {
     throw Object.assign(new Error(`it is ${mb(blob.size)} MB and Bookmarks keep up to ${mb(maxBytes)} MB. Lower the quality or the FPS, or shorten the part of the round.`), { code: 'too-big' });
   }
@@ -380,7 +381,7 @@ export async function saveGifFitting(blob, meta, { fps, palette, maxBytes = MAX_
       { code: 'too-big' }
     );
   }
-  const gif = await saveGif(small.blob, meta);
+  const gif = await keep(small.blob);
   return { gif, copy: { width: small.width, height: small.height, fps: Math.round(small.fps * 10) / 10, bytes: small.blob.size } };
 }
 

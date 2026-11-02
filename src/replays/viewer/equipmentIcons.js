@@ -515,20 +515,30 @@ export function inventoryAt({
 }) {
   const items = normalizeLoadout(loadout);
 
-  // Ground pickups / drops after freezetime (buys are already in loadout).
+  // Everything after freezetime in the order it happened (buys are already in
+  // the loadout). Demos log pickups but never drops, so a player passing one flash
+  // around logs a pickup each time and nothing taking it back out: 18 grenades on
+  // one player in a real round. In order, a pickup past what a player can carry is
+  // that same grenade coming back, and does not count twice.
+  const steps = [];
   for (const e of itemEvents || []) {
     if (e.player !== playerId) continue;
-    if ((e.tick ?? 0) > tick) continue;
+    const at = e.tick ?? 0;
+    if (at > tick) continue;
     const id = inventoryItemId(e.item);
     if (!id || id === 'none') continue;
-    if (e.op === 'remove') removeOne(items, id);
-    else items.push(id);
+    steps.push({ at, id, out: e.op === 'remove' });
   }
-
   for (const g of grenades || []) {
     if (g.player !== playerId) continue;
-    if ((g.throwTick ?? g.tick ?? 0) > tick) continue;
-    removeOne(items, normalizeGrenadeType(g.type) || bareWeapon(g.type));
+    const at = g.throwTick ?? g.tick ?? 0;
+    if (at > tick) continue;
+    steps.push({ at, id: normalizeGrenadeType(g.type) || bareWeapon(g.type), out: true });
+  }
+  steps.sort((a, b) => a.at - b.at || Number(b.out) - Number(a.out));
+  for (const step of steps) {
+    if (step.out) removeOne(items, step.id);
+    else if (canCarry(items, step.id)) items.push(step.id);
   }
 
   // Held grenade must appear even if pickup events are missing on old parses.
@@ -586,6 +596,16 @@ export function inventoryAt({
 function gunRank(name) {
   const i = GUN_PRIORITY.indexOf(bareWeapon(name));
   return i === -1 ? 999 : i;
+}
+
+/** CS2's carry limits: four grenades in all, two flashes, one of anything else. */
+function canCarry(items, id) {
+  if (!GRENADES.includes(id)) return true;
+  const nades = items.filter((it) => GRENADES.includes(it));
+  if (nades.length >= 4) return false;
+  const fire = id === 'molotov' || id === 'incgrenade';
+  const same = nades.filter((it) => it === id || (fire && (it === 'molotov' || it === 'incgrenade')));
+  return same.length < (id === 'flashbang' ? 2 : 1);
 }
 
 function removeOne(list, name) {

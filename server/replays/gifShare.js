@@ -18,7 +18,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import { identify } from './auth.js';
 import { gifFile, gifRecord, posterFile, videoFile } from './gifStore.js';
-import { descriptionParts, descriptionPlain, gifDisplayTitle } from '../../src/replays/gif/gifMeta.js';
+import { descriptionParts, descriptionPlain, gifDisplayTitle, notePerspectives, perspectiveLabel } from '../../src/replays/gif/gifMeta.js';
 
 const escape = (s) =>
   String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -138,7 +138,15 @@ const ALT_SCRIPT = `(function(){var c=document.documentElement.classList;var set
  */
 const COPY_SCRIPT = `document.addEventListener('click',function(e){var b=e.target.closest&&e.target.closest('[data-copy]');if(!b)return;e.preventDefault();var t=b.getAttribute('data-copy');if(b.hasAttribute('data-warm'))fetch(t,{method:'HEAD'}).catch(function(){});var done=function(){b.classList.add('ok');setTimeout(function(){b.classList.remove('ok')},1200)};if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(t).then(done,function(){window.prompt('Copy:',t)})}else{window.prompt('Copy:',t)}});`;
 
+/**
+ * Switching perspective: a tab swaps the video and keeps the moment, and the image link follows it so that link is
+ * of what is on screen. All shows them together, lined up on the first.
+ */
+const CLIPS_SCRIPT = `(function(){var root=document.querySelector('[data-clips]');if(!root)return;var one=document.getElementById('clip');var all=document.getElementById('clips-all');var copy=document.querySelector('[data-image-link]');var dl=document.querySelector('[data-download]');var origin=copy?copy.getAttribute('data-copy').replace(/\\/g\\/[^/]*$/,''):'';function press(b){root.querySelectorAll('button').forEach(function(x){x.classList.toggle('on',x===b)})}function pick(b){var id=b.getAttribute('data-clip');press(b);if(id==='all'){one.pause();one.hidden=true;all.hidden=false;var vs=all.querySelectorAll('video');vs.forEach(function(v){if(!v.src)v.src=v.getAttribute('data-src');v.play().catch(function(){})});if(vs.length>1&&!all.dataset.synced){all.dataset.synced='1';vs[0].addEventListener('timeupdate',function(){var t=vs[0].currentTime;for(var i=1;i<vs.length;i++){if(Math.abs(vs[i].currentTime-t)>0.25&&t<(vs[i].duration||Infinity))vs[i].currentTime=t}})}return}all.hidden=true;all.querySelectorAll('video').forEach(function(v){v.pause()});one.hidden=false;var at=one.currentTime;one.src='/g/'+id+'.mp4';one.poster='/g/'+id+'.jpg';one.addEventListener('loadedmetadata',function f(){one.removeEventListener('loadedmetadata',f);if(at<(one.duration||0))one.currentTime=at;one.play().catch(function(){})});if(copy)copy.setAttribute('data-copy',origin+'/g/'+id+'.gif');if(dl)dl.setAttribute('href','/g/'+id+'.gif')}root.addEventListener('click',function(e){var b=e.target.closest&&e.target.closest('button[data-clip]');if(b)pick(b)})})();`;
+
 export function sharePageHtml(g, origin) {
+  const clips = notePerspectives(g);
+  const many = clips.length > 1;
   const title = gifDisplayTitle(g);
   const summary = summaryOf(g);
   // A link preview shows a line or two; a description carrying a setpos per grenade is far longer.
@@ -190,22 +198,37 @@ ${g.width ? `<meta property="og:image:width" content="${g.width}" />\n<meta prop
   .link { padding: 6px 14px; border: 0; background: #e60611; color: #fff; font: 600 14px system-ui, sans-serif; cursor: pointer; }
   .link + .link { box-shadow: inset 1px 0 0 rgba(255,255,255,.35); }
   .link.ok { background: #2e7d43; }
+  video[hidden], .grid[hidden] { display: none; }
+  .clips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+  .clips button { padding: 4px 10px; border: 1px solid #242424; border-radius: 6px; background: rgba(255,255,255,.03); color: #a3a3a8; font: 600 13px system-ui, sans-serif; cursor: pointer; }
+  .clips button:hover { color: #fff; }
+  .clips button.on { background: rgba(255,255,255,.1); color: #fff; box-shadow: inset 0 0 0 1px rgba(255,255,255,.12); }
+  .grid { display: grid; grid-template-columns: repeat(${clips.length > 4 ? 3 : clips.length > 2 ? 2 : 1}, minmax(0, 1fr)); gap: 4px; }
+  .grid figure { position: relative; margin: 0; min-width: 0; }
+  .grid video { aspect-ratio: 16 / 9; object-fit: contain; }
+  .grid figcaption { position: absolute; left: 4px; bottom: 4px; padding: 2px 6px; border-radius: 4px; background: rgba(5,5,5,.72); font-size: 12px; }
 </style>
 </head>
 <body>
 <main>
-  <video src="/g/${escape(g.id)}.mp4" poster="/g/${escape(g.id)}.jpg" aria-label="${escape(title)}" width="${g.width || ''}" height="${g.height || ''}" autoplay loop muted playsinline></video>
+  <video src="/g/${escape(g.id)}.mp4" id="clip" poster="/g/${escape(g.id)}.jpg" aria-label="${escape(title)}" width="${g.width || ''}" height="${g.height || ''}" autoplay loop muted playsinline></video>
+  ${
+    many
+      ? `<div id="clips-all" class="grid" hidden>${clips.map((c) => `<figure><video data-src="/g/${escape(c.id)}.mp4" poster="/g/${escape(c.id)}.jpg" loop muted playsinline></video><figcaption>${escape(perspectiveLabel(c))}</figcaption></figure>`).join('')}</div>
+  <div class="clips" data-clips>${clips.map((c, i) => `<button type="button" data-clip="${escape(c.id)}"${i === 0 ? ' class="on"' : ''}>${escape(perspectiveLabel(c))}</button>`).join('')}<button type="button" data-clip="all">All</button></div>`
+      : ''
+  }
   <h1>${escape(title)}</h1>
   ${g.description ? `<p class="desc">${descriptionHtml(g.description)}</p>` : ''}
   <div class="row">
-    <span class="links"><button type="button" class="link" data-copy="${escape(`${origin}/g/${g.id}`)}" title="Copy a link to this page">Share</button><button type="button" class="link" data-copy="${escape(image)}" data-warm title="The GIF file itself, which plays wherever it is pasted">Copy image URL</button></span>
+    <span class="links"><button type="button" class="link" data-copy="${escape(`${origin}/g/${g.id}`)}" title="Copy a link to this page">Share</button><button type="button" class="link" data-copy="${escape(image)}" data-warm data-image-link title="The GIF file itself, which plays wherever it is pasted">Copy image URL</button></span>
     ${round ? `<a class="ico" href="${escape(round)}" title="Open the round" aria-label="Open the round">${ICON_PLAY}</a>` : ''}
-    <a class="ico" href="/g/${escape(g.id)}.gif" download title="Download" aria-label="Download">${ICON_DOWNLOAD}</a>
+    <a class="ico" href="/g/${escape(g.id)}.gif" download data-download title="Download" aria-label="Download">${ICON_DOWNLOAD}</a>
     <a class="ico" href="/" title="aim4.io" aria-label="aim4.io">${ICON_HOME}</a>
   </div>
 </main>
 ${summary ? `<p class="tech">${escape(summary)}</p>` : ''}
-<script>${COPY_SCRIPT}${ALT_SCRIPT}</script>
+<script>${COPY_SCRIPT}${ALT_SCRIPT}${many ? CLIPS_SCRIPT : ''}</script>
 </body>
 </html>`;
 }

@@ -1251,7 +1251,7 @@ const SITE_PAGES = [
   { page: 'Player scouting', link: '/patterns?chapter=scout', about: 'One player at a time: roles, positions, habits.' },
   { page: 'Charts', link: '/patterns?chapter=charts', about: 'Scatter and bar charts over the Database columns.' },
   { page: 'Team documents', link: '/team/documents', about: "The team's written notes and generated sheets (team_documents reads these)." },
-  { page: 'Bookmarks', link: '/bookmarks', about: 'Playlists, and Saved GIFs (?tab=gifs).' },
+  { page: 'Bookmarks', link: '/bookmarks', about: 'Playlists, and Visual Notes (?tab=gifs).' },
   { page: 'Aim trainer', link: '/trainer', about: 'Aim scenarios and routines.' }
 ];
 
@@ -3004,7 +3004,7 @@ async function runToolInner(name, args = {}, ctx = {}) {
           };
         }
         return {
-          content: `Saved a ${what} to the user's Bookmarks (Saved GIFs) and showed it in the chat. Page link (the GIF with its title and description): ${gifPageUrl(res.gif.id)}. Image link (the GIF file itself): ${gifShareUrl(res.gif.id)}${res.capped ? `. It was cut to the longest a ${kind.toUpperCase()} GIF can be.` : ''}`,
+          content: `Saved a ${what} to the user's Bookmarks (Visual Notes) and showed it in the chat. Page link (the GIF with its title and description): ${gifPageUrl(res.gif.id)}. Image link (the GIF file itself): ${gifShareUrl(res.gif.id)}${res.capped ? `. It was cut to the longest a ${kind.toUpperCase()} GIF can be.` : ''}`,
           display: `GIF saved: ${gifDisplayTitle(m)}`,
           widget: { gif: { id: res.gif.id, title: gifDisplayTitle(m), width: res.gif.width, height: res.gif.height } }
         };
