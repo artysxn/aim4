@@ -482,7 +482,7 @@ async function teamScan(teamName, map, onProgress) {
 
 const CONDITION_HELP =
   'Conditions (times are the round clock from "1:55" down to "0:00"): ' +
-  '{"players_in":{"zone":"Silo","who":"team"|"opponent","min":1,"max":5,"from":"1:55","to":"1:20"}}, ' +
+  '{"players_in":{"zone":"Silo","who":"team"|"opponent","min":1,"max":5,"from":"1:55","to":"1:20"}} (at one moment; a zone list counts together, so "exactly 4 on B and the fifth elsewhere" is one condition: "zone":["B Ramp","B Street"],"min":4,"max":4; "dead":true also counts those killed, where they died), ' +
   '{"utility":{"who":"team"|"opponent","type":"smoke"|"molotov"|"flash"|"he"|"any","zone":"Heaven","from":"1:55","to":"0:00","min":1}}, ' +
   '{"kill":{"by":"team"|"opponent","zone":"...","from":"...","to":"...","min":1}}, {"first_kill":{"by":"team"|"opponent","zone":"..."}}, ' +
   '{"site":"A"|"B"|"none"}, {"plant":true|false}, {"won":true|false}, {"pace":"rush"|"pop"|"contact"|"full-exec"|"default"|"slow-default"|"other"}, {"not":<condition>}, {"any":[<condition>]}. ' +
@@ -1058,7 +1058,7 @@ TOOLS.push(
       name: 'save_playlist',
       description:
         'Create a round playlist (no id or name of an existing one) or edit one (id, or its exact name): rename it, share it with the team or make it private, add rounds, remove rounds, or replace them all. ' +
-        'Rounds are given by match and number ({"match":"<id>","number":7}) or as round files from find_rounds. add_from "last_result" adds every round the last tool you ran matched (a query_rounds, classify_rounds, find_rounds or player_patterns answer), so "make a playlist of those rounds" is one call after the query.',
+        'Rounds are given by match and number ({"match":"<id>","number":7}) or as round files from find_rounds. add_from "last_result" adds every round the last tool you ran matched (a scout_rounds search with all its "more" parts, or a query_rounds, classify_rounds, find_rounds or player_patterns answer), so "make a playlist of those rounds" is one call after the query.',
       parameters: {
         type: 'object',
         properties: {
@@ -1127,6 +1127,7 @@ TOOLS.push(
           where: { type: 'array', items: { type: 'object' }, description: 'The conditions of query_rounds ("team" is the side read).' },
           sort: { type: 'string', enum: ['random', 'dominance', 'newest'] },
           count: { type: 'number', description: 'Default 8, at most 30.' },
+          all: { type: 'boolean', description: 'Every round that fits, not a pick ("all rounds where..."): reads the whole pool, shows a few and keeps all of them as the last result.' },
           more: { type: 'number', description: 'The next rounds of the same search: 1, then 2.' },
           describe: { type: 'boolean', description: 'The line on what the side did: on by default up to 12 rounds.' }
         }
@@ -1661,6 +1662,9 @@ const SCOUT_SIDES_MAX = 4000;
 const SCOUT_GRENADES_MAX = 4000;
 const SCOUT_RECORDS_MAX = 400;
 const SCOUT_POSITIONS_MAX = 120;
+/** "all": the whole pool in one call. Its answer stays small, so only the wait grows. */
+const SCOUT_ALL_MAX = 2000;
+const SCOUT_ALL_SHOWN = 5;
 const SCOUT_LIST_CAP = 8000;
 /** A search's rounds already read and how many fit so far, for "more" to go on from. */
 const scoutSeen = new Map();
@@ -1773,7 +1777,7 @@ async function scoutRounds(args, ctx) {
 
   // ---- the order, and what an earlier call of the same search already read ----
   const key = JSON.stringify({ ...args, count: undefined, more: undefined });
-  if (!a.more || !scoutSeen.has(key)) scoutSeen.set(key, { files: new Set(), found: 0 });
+  if (!a.more || !scoutSeen.has(key)) scoutSeen.set(key, { files: new Set(), found: [] });
   while (scoutSeen.size > 8) scoutSeen.delete(scoutSeen.keys().next().value);
   const search = scoutSeen.get(key);
   const seen = search.files;
@@ -1802,7 +1806,9 @@ async function scoutRounds(args, ctx) {
   let grenadesRead = 0;
   let landedCount = 0;
   let stoppedShort = false;
-  const atLimit = () => (usePositions && positions >= SCOUT_POSITIONS_MAX) || ((useRecord || usePositions) && records >= SCOUT_RECORDS_MAX) || grenadesRead >= SCOUT_GRENADES_MAX;
+  const positionsMax = a.all ? SCOUT_ALL_MAX : SCOUT_POSITIONS_MAX;
+  const recordsMax = a.all ? SCOUT_ALL_MAX : SCOUT_RECORDS_MAX;
+  const atLimit = () => (usePositions && positions >= positionsMax) || ((useRecord || usePositions) && records >= recordsMax) || grenadesRead >= SCOUT_GRENADES_MAX;
   const full = () => fits.length >= a.count || atLimit();
   /**
    * The rounds whose grenades landed where the question says. One request for a few hundred rounds,
@@ -1962,10 +1968,12 @@ async function scoutRounds(args, ctx) {
   // ---- the answer ----
   const picked = fits.slice(0, a.count).map((c) => ({ ...c, fit: true }));
   if (a.prefer && picked.length < a.count) picked.push(...others.slice(0, a.count - picked.length).map((c) => ({ ...c, fit: false })));
-  const describe = a.describe ?? picked.length <= 12;
-  ctx.onProgress?.(`Reading the ${picked.length} rounds found…`);
-  const rows = new Array(picked.length);
-  await eachFew(picked.map((c, i) => ({ c, i })), 4, async ({ c, i }) => {
+  // "all" can be hundreds: the answer shows a few, the last result keeps every one.
+  const shown = a.all ? picked.slice(0, SCOUT_ALL_SHOWN) : picked;
+  const describe = a.describe ?? shown.length <= 12;
+  ctx.onProgress?.(`Reading the ${shown.length} rounds found…`);
+  const rows = new Array(shown.length);
+  await eachFew(shown.map((c, i) => ({ c, i })), 4, async ({ c, i }) => {
     const { row } = c;
     let meta = c.meta;
     let did = '';
@@ -2005,22 +2013,33 @@ async function scoutRounds(args, ctx) {
     };
   });
   const allRead = !stoppedShort && !capped && (useSides ? sidesRead >= list.length : true);
-  const stoppedAt = stoppedShort ? ` (the search stops at ${usePositions ? `${SCOUT_POSITIONS_MAX} rounds read in full` : a.grenadeWhere.length && !useRecord ? `${SCOUT_GRENADES_MAX} rounds` : `${SCOUT_RECORDS_MAX} records`}: "more": ${a.more + 1} goes on from there)` : capped ? ` (the list stops at ${SCOUT_LIST_CAP} rounds: narrow it)` : ` (${sidesRead} of ${list.length} read)`;
+  const stoppedAt = stoppedShort ? ` (the search stops at ${usePositions ? `${positionsMax} rounds read in full` : a.grenadeWhere.length && !useRecord ? `${SCOUT_GRENADES_MAX} rounds` : `${recordsMax} records`}: "more": ${a.more + 1} goes on from there)` : capped ? ` (the list stops at ${SCOUT_LIST_CAP} rounds: narrow it)` : ` (${sidesRead} of ${list.length} read)`;
   const short = fits.length < a.count;
   const asked = askedWords(a);
   // Over several calls of one search the running total is what a count is taken from (30 Oct: 12 rounds over 3 calls were reported as 8).
-  search.found += fits.length;
+  // It is also what save_playlist adds: the rounds of earlier parts are folded away by then, and typed
+  // back from memory 15 of 31 went missing (2 Nov).
+  search.found.push(...picked.map((c) => c.row.file));
+  const wholeSearch = [...new Set(search.found)];
+  const noteHead = a.all
+    ? `${fits.length} fit everything${allRead ? ' in the whole pool' : stoppedAt}. ${rows.length < fits.length ? `The first ${rows.length} are shown. ` : ''}`
+    : a.more && !fits.length && allRead
+      ? `Nothing more: the whole pool is read, ${wholeSearch.length} in all. `
+      : short
+        ? `Only ${fits.length} fit everything${allRead ? ' in the whole pool' : stoppedAt}${a.prefer && rows.length > fits.length ? `; the other ${rows.length - fits.length} pass everything but the gap` : ''}. `
+        : '';
   return {
     content: fit({
       ...(asked ? { asked } : {}),
       filters_left: funnel.join(' → '),
-      picked: rows.length,
-      ...(a.more ? { found_in_this_search_so_far: search.found } : {}),
+      ...(a.all ? { fit: fits.length } : { picked: rows.length }),
+      ...(a.more ? { found_in_this_search_so_far: wholeSearch.length } : {}),
       rounds: rows.filter(Boolean),
-      note: `${short ? `Only ${fits.length} fit everything${allRead ? ' in the whole pool' : stoppedAt}${a.prefer && rows.length > fits.length ? `; the other ${rows.length - fits.length} pass everything but the gap` : ''}. ` : ''}${a.sort === 'random' ? 'Picked at random. ' : ''}These rounds are the last result for save_playlist.`
+      note: `${noteHead}${a.sort === 'random' && !a.all ? 'Picked at random. ' : ''}${a.more ? `All ${wholeSearch.length} rounds of this search are` : a.all ? `All ${wholeSearch.length} are` : 'These rounds are'} the last result for save_playlist: add_from "last_result", do not type them out.`
     }),
-    display: `Scouted ${rows.length} round${rows.length === 1 ? '' : 's'}${mapCode ? ` on ${mapName(mapCode)}` : ''} (${funnel.at(-1)})`,
-    link: roundsLink(picked.map((c) => c.row.file))
+    display: `Scouted ${picked.length} round${picked.length === 1 ? '' : 's'}${mapCode ? ` on ${mapName(mapCode)}` : ''} (${funnel.at(-1)})`,
+    link: roundsLink(picked.map((c) => c.row.file)),
+    files: wholeSearch
   };
 }
 
@@ -2044,7 +2063,8 @@ export async function runTool(name, args = {}, ctx = {}) {
   const result = await runToolInner(name, args, ctx);
   // The rounds an answer matched, for save_playlist's add_from "last_result".
   const linked = /^\/demos\?rounds=([^&#]+)/.exec(String(result?.link || ''));
-  if (linked && !PLAYLIST_TOOLS.has(name)) lastMatched = { tool: name, files: linked[1].split(',').map(decodeURIComponent).filter(Boolean) };
+  if (Array.isArray(result?.files)) lastMatched = { tool: name, files: result.files };
+  else if (linked && !PLAYLIST_TOOLS.has(name)) lastMatched = { tool: name, files: linked[1].split(',').map(decodeURIComponent).filter(Boolean) };
   noteRounds(roundIdsIn(result?.content));
   if (DATA_TOOLS.has(name) && typeof result?.content === 'string' && !result.content.startsWith('Error:')) {
     for (const n of result.content.match(/\d+(?:\.\d+)?/g) || []) turnNumbers.add(n);
@@ -3265,8 +3285,11 @@ async function runToolInner(name, args = {}, ctx = {}) {
         const now = target ? saved.find((p) => p.id === target.id) : saved.find((p) => !list.some((o) => o.id === p.id));
         const kept = now?.rounds?.length ?? rounds.length;
         const label = now?.name || newName || target?.name;
+        // Rounds typed out by hand can fall short of the search they came from: said here, not found later by the user.
+        const typedFromSearch = args.add_from !== 'last_result' && lastMatched?.tool === 'scout_rounds' && lastMatched.files.some((f) => add.includes(f));
+        const leftOut = typedFromSearch ? lastMatched.files.filter((f) => !rounds.includes(f)).length : 0;
         return {
-          content: `${target ? 'Updated' : 'Created'} the playlist "${label}"${now?.id ? ` (id ${now.id})` : ''}: ${kept} round${kept === 1 ? '' : 's'}${target ? ` (${added} added, ${removed} removed)` : ''}, ${now?.scope === 'team' ? 'shared with the team' : 'private'}.${kept < rounds.length ? ` ${rounds.length - kept} rounds were not kept (a playlist holds at most 400).` : ''}`,
+          content: `${target ? 'Updated' : 'Created'} the playlist "${label}"${now?.id ? ` (id ${now.id})` : ''}: ${kept} round${kept === 1 ? '' : 's'}${target ? ` (${added} added, ${removed} removed)` : ''}, ${now?.scope === 'team' ? 'shared with the team' : 'private'}.${kept < rounds.length ? ` ${rounds.length - kept} rounds were not kept (a playlist holds at most 400).` : ''}${leftOut ? ` ${leftOut} rounds of the search are not in it: save again with add_from "last_result" to add them.` : ''}`,
           display: `${target ? 'Updated' : 'Created'} playlist "${label}"`,
           link: roundsLink(now?.rounds || rounds)
         };

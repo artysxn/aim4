@@ -126,4 +126,27 @@ assert.deepEqual(runRoundQuery(lurks, network, { side: 'T', where: [lurk] }).fil
 assert.deepEqual(runRoundQuery(lurks, network, { side: 'T', where: [{ players_in: { ...lurk.players_in, entry_site: 'B' } }] }).files, ['e1', 'e3']);
 assert.throws(() => runRoundQuery(lurks, network, { where: [{ players_in: { zone: 'Silo', around: 'plant' } }] }), QueryError);
 
+// ---- several zones at one moment, and the dead where they died ----
+const split = { zone: ['Silo', 'Hut'], min: 4, max: 4, from: '1:55', to: '1:30' };
+const asked = (rs, cond) => runRoundQuery(rs, network, { side: 'T', where: [{ players_in: cond }] }).files;
+const dropped = (id, elapsed, zone) => ({ clock: 115 - elapsed, victim: id, victimOurs: true, victimZone: zone, attackerOurs: false });
+const spread = [
+  // 2 + 2 are 4 together, and the fifth is elsewhere.
+  round('s1', { ours: { 10: ['Silo', 'Silo', 'Hut', 'Hut', 'Heaven'] } }),
+  // All five on those zones: exactly 4 is not it.
+  round('s2', { ours: { 10: ['Silo', 'Silo', 'Hut', 'Hut', 'Hut'] } }),
+  // 4 of them only ever apart in time: 3 at one second, 1 at the next.
+  round('s3', { ours: { 10: ['Silo', 'Silo', 'Hut', 'Heaven', 'Heaven'], 11: ['Hut', 'Heaven', 'Heaven', 'Heaven', 'Heaven'] } }),
+  // 3 standing and one who died there, only with dead.
+  round('s4', { ours: { 10: ['Silo', 'Hut', 'Hut', 'Heaven'] }, kills: [dropped('gone', 5, 'Silo')] }),
+  // The second of the kill still shows the player: not counted twice.
+  round('s5', { ours: { 10: ['Silo', 'Silo', 'Hut', 'Hut', 'Heaven'] }, kills: [dropped('o0', 10, 'Silo')] }),
+  // Died later than this second: not there yet.
+  round('s6', { ours: { 10: ['Silo', 'Hut', 'Hut', 'Heaven'] }, kills: [dropped('gone', 20, 'Silo')] })
+];
+assert.deepEqual(asked(spread, split), ['s1', 's5'], 'a zone list counts together, at one second');
+assert.deepEqual(asked(spread, { ...split, dead: true }), ['s1', 's4', 's5'], 'the dead count where they died, once');
+assert.deepEqual(runRoundQuery(spread, network, { where: [{ players_in: { zone: ['Silo', 'Silloo'] } }] }).unknownZones, ['Silloo'], 'a wrong name in a list is said');
+assert.throws(() => runRoundQuery(spread, network, { where: [{ players_in: { zone: [] } }] }), QueryError, 'an empty list is no zone');
+
 console.log('roundQuery.test.js ok');

@@ -21,7 +21,9 @@
 //   { "players_in": { "zone": "Silo", "who": "team"|"opponent", "min": 1, "max": 5,
 //                     "from": "1:55", "to": "1:20" } }
 //       at some second in the window, at least min (at most max) of them
-//       stood in that zone at the same time
+//       stood in that zone at the same time. "zone" can be a list, counted
+//       together: 2 in one and 2 in another are 4. "dead": true also counts the
+//       ones already killed, where they died.
 //   { "utility": { "who": "team"|"opponent", "type": "smoke"|"molotov"|"flash"|"he"|"any",
 //                  "zone": "Heaven", "from": "1:55", "to": "0:00", "min": 1 } }
 //       grenades thrown in the window (landing in the zone, when one is named)
@@ -207,7 +209,8 @@ function compile(raw, zones, unknown, regions = []) {
   /** Is this `who` the team read in this round? */
   const isOurs = (who, r) => who === 'team' || who === r.side;
   const zoneSet = (name) => {
-    if (!name) return null;
+    if (!name || (Array.isArray(name) && !name.length)) return null;
+    if (Array.isArray(name)) return new Set(name.flatMap((n) => [...(zoneSet(n) || [])]));
     const hit = zones.get(String(name).trim().toLowerCase());
     if (!hit) {
       unknown.add(String(name));
@@ -268,17 +271,22 @@ function compile(raw, zones, unknown, regions = []) {
       const who = whoOf(arg.who);
       const min = Number.isFinite(arg.min) ? arg.min : 1;
       const max = Number.isFinite(arg.max) ? arg.max : 5;
+      const dead = Boolean(arg.dead);
       const win = windowOf(arg);
       return (r) => {
         const w = win(r);
         if (!w) return false;
         const [from, to] = w;
+        const ours = isOurs(who, r);
+        const fallen = dead ? (r.kills || []).filter((k) => k.victimOurs === ours) : [];
         for (const s of r.series || []) {
           if (s.elapsed < from) continue;
           if (s.elapsed > to) break;
-          const pts = isOurs(who, r) ? s.pts : s.opp || [];
+          const pts = ours ? s.pts : s.opp || [];
           let n = 0;
           for (const p of pts) if ((!set || (p.pos && set.has(p.pos))) && (!region || inRegion(region, p.x, p.y, p.z))) n++;
+          // A body stays where it dropped. The kill's second can still show the player standing: counted once.
+          for (const k of fallen) if (ROUND_SECONDS - k.clock <= s.elapsed && !pts.some((p) => p.id === k.victim) && (!set || set.has(k.victimZone)) && (!region || inRegion(region, k.x, k.y, k.z))) n++;
           if (n >= min && n <= max) return true;
         }
         return false;

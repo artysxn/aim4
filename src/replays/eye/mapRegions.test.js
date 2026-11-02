@@ -197,6 +197,7 @@ add(6, { dom: 99, grenades: [thrown('a', 'flashbang', ...inside1, 20), thrown('a
 const asked = { dominance: 0, packs: 0, meta: 0, ticks: 0, packFiles: 0 };
 const roster = { players: [{ i: 'p1', n: 'x' }], demos: demos.map((d) => ({ ...d, p: [0, 0, 0, 0] })) };
 let packsAnswer = 'ok';
+let lists = [];
 globalThis.fetch = async (url, init = {}) => {
   const u = new URL(String(url), 'http://x');
   const json = (b) => new Response(JSON.stringify(b), { status: 200, headers: { 'Content-Type': 'application/json' } });
@@ -228,6 +229,10 @@ globalThis.fetch = async (url, init = {}) => {
     asked.meta++;
     const hit = library.get(decodeURIComponent(u.pathname.slice('/api/replays/rounds/'.length)));
     return hit ? json({ round: hit.meta }) : new Response('{}', { status: 404 });
+  }
+  if (u.pathname === '/api/replays/playlists') {
+    if (init.method === 'POST') lists = [{ id: 'n1', mine: true, ...JSON.parse(init.body) }];
+    return json({ playlists: lists });
   }
   if (u.pathname === '/api/replays/rounds') return json({ rounds: [...library.values()].map((x) => x.row), noted: [] });
   return new Response('{}', { status: 404 });
@@ -276,5 +281,31 @@ out = await scout(ask);
 assert.deepEqual(out.rounds.map((x) => x.number), [2, 1]);
 assert.equal(asked.meta, 2, 'a request per round instead, for the two of the five not already read');
 packsAnswer = 'ok';
+// A search over several parts is one last result: earlier parts are folded away before the save (2 Nov: 16 of 31 saved).
+const parts = { side: 'T', result: 'won', where: [{ any: [smokeIn(1), smokeIn(2)] }], count: 1 };
+for (const more of [0, 1, 2]) assert.equal((await scout({ ...parts, ...(more ? { more } : {}) })).rounds.length, 1);
+out = await scout({ ...parts, more: 3 });
+assert.equal(out.found_in_this_search_so_far, 3);
+assert.match(out.note, /Nothing more: the whole pool is read, 3 in all/);
+assert.match((await runTool('save_playlist', { name: 'Parts', add_from: 'last_result' })).content, /: 3 rounds, /, 'the empty last part does not lose the others');
+// Rounds typed out of a search are checked against it.
+const fileOf = (n) => [...library.keys()].find((f) => library.get(f).row.round === n);
+lists = [];
+const typed = (await runTool('save_playlist', { name: 'Typed', add: [{ round: fileOf(1) }, { round: fileOf(2) }] })).content;
+assert.match(typed, /1 rounds of the search are not in it: save again with add_from "last_result"/);
+// "all": the answer stays small, the last result keeps every round, past the 150 a link holds.
+const small = new Map(library);
+for (let n = 7; n < 200; n++) add(n, { grenades: smokes });
+out = await scout({ side: 'T', where: [smokeIn(1)], all: true });
+library.clear();
+for (const [k, v] of small) library.set(k, v);
+assert.ok(out.fit > 150);
+assert.equal(out.rounds.length, 5);
+assert.match(out.note, new RegExp(`All ${out.fit} are the last result`));
+lists = [];
+assert.match((await runTool('save_playlist', { name: 'All', add_from: 'last_result' })).content, new RegExp(`: ${out.fit} rounds, `));
+// Nothing fit: the last result is empty, not the search before.
+await scout({ side: 'T', where: [smokeIn(1, { min: 3 })], all: true });
+assert.match((await runTool('save_playlist', { name: 'None', add_from: 'last_result' })).content, /No earlier tool answer/);
 
 console.log('mapRegions.test.js ok');

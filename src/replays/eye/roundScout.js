@@ -36,7 +36,7 @@ const ENDINGS = ['elimination', 'bomb', 'defuse', 'time'];
 const KNOWN = new Set([
   'map', 'team', 'opponent', 'player', 'side', 'buy', 'vs_buy', 'result', 'winner', 'dominance', 'gap', 'prefer',
   'first_kill', 'first_kill_by', 'plant', 'plant_by', 'ended_by', 'kills', 'awp', 'round_from', 'round_to',
-  'date_from', 'date_to', 'rank_own', 'rank_opp', 'not_in_playlist', 'where', 'hit', 'site', 'sort', 'count', 'more', 'describe'
+  'date_from', 'date_to', 'rank_own', 'rank_opp', 'not_in_playlist', 'where', 'hit', 'site', 'sort', 'count', 'all', 'more', 'describe'
 ]);
 
 /** "full", "eco,force", ["eco","force"], "low" -> the buckets, or null for any. */
@@ -123,6 +123,7 @@ export function parseScout(args = {}) {
   if (awp && !['team', 'opponent', 'both', 'none'].includes(awp)) throw new ScoutError('awp is team, opponent, both or none.');
   if (args.where !== undefined && !Array.isArray(args.where)) throw new ScoutError('where is a list of conditions, as in query_rounds.');
   const given = Array.isArray(args.where) ? args.where : [];
+  const all = args.all === true || String(args.all).toLowerCase() === 'true' || String(args.count).toLowerCase() === 'all';
   return {
     map: args.map || '',
     team: args.team || '',
@@ -157,7 +158,8 @@ export function parseScout(args = {}) {
     hit,
     site,
     sort,
-    count: Math.max(1, Math.min(30, Math.round(Number(args.count)) || 8)),
+    all,
+    count: all ? Infinity : Math.max(1, Math.min(30, Math.round(Number(args.count)) || 8)),
     more: Math.max(0, Math.round(Number(args.more)) || 0),
     describe: args.describe === undefined ? null : Boolean(args.describe)
   };
