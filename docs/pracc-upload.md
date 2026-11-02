@@ -36,11 +36,16 @@ If you are signed out of aim4, that tab stays open: sign in there and click Uplo
 ## How it works
 
 PRACC's DEMO button navigates to a `DownloadUrl` that comes from `GET /api/team/server/demos`. That
-URL is an S3 presigned link: SigV4 over the `host` header only, valid for one hour, with no cookie
-and no client address in the signature. So:
+URL is a `pracc.com/api/...` address that needs the PRACC cookie, and it redirects to an S3 presigned
+link: SigV4 over the `host` header only, valid for one hour, with no cookie and no client address in
+the signature. So:
 
-- The browser reads the list using your PRACC session, on pracc.com, and sends aim4 **only the links**.
+- The browser reads the list and follows each redirect using your PRACC session, on pracc.com, asking
+  for one byte and hanging up at the headers. It sends aim4 **only the signed links** it ended up on.
   Your PRACC session never reaches aim4.
+- The browser remembers which rows aim4 has confirmed, so a later click does not ask PRACC for those
+  links again. Those rows count as already in aim4, so a demo you delete from aim4 will not come back
+  from here until that entry ages out after two months, or you clear the script's storage.
 - The aim4 token travels only in an `Authorization` header. It is the one-hour access token, copied
   from your aim4.io session into Tampermonkey's storage. The refresh token is never copied.
 - Status polling needs no token, because an import can outlast the one that started it. The status
@@ -75,6 +80,7 @@ the parse queue has room. Demos arrive `private`.
 
 | Reason | Meaning |
 | --- | --- |
+| `no_link` | PRACC would not give the browser a signed link for this row |
 | `host_not_allowed` | not a known PRACC storage location; the error names it |
 | `bad_url` | not https, a login or port in the link, an IP address, a name resolving to a private address, or too many redirects |
 | `link_expired` | the host answered 401 or 403. The button fetches fresh links and re-sends these, up to three times |

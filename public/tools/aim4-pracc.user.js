@@ -1,12 +1,14 @@
 // ==UserScript==
 // @name         aim4: upload PRACC demos
 // @namespace    https://aim4.io/
-// @version      1.0.0
+// @version      1.1.0
 // @description  Adds an Upload button to the Demos tab on pracc.com/team/server. aim4's server fetches the demos itself.
 // @match        https://pracc.com/*
 // @match        https://aim4.io/*
 // @connect      aim4.io
 // @connect      pracc.com
+// @connect      your-objectstorage.com
+// @connect      r2.cloudflarestorage.com
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_deleteValue
@@ -26,10 +28,13 @@
 //   on pracc.com   puts the button on the Demos tab. A click reads the list the
 //                  way the page itself does, and hands aim4 the signed links.
 //
-// What crosses between the two sites is the demo links and nothing else. The
-// PRACC cookie stays on PRACC: its list is read from pracc.com, and the aim4 calls
-// are `anonymous` so a browser cookie cannot ride along. The aim4 token only ever
-// travels in an Authorization header, never in a URL.
+// What crosses between the two sites is signed storage links and nothing else.
+// A row's DownloadUrl is a pracc.com address that only answers to the PRACC cookie
+// and redirects to a one-hour signed link. So the browser follows that redirect
+// and aim4 gets where it ended up, which works without any session. The PRACC
+// cookie stays on PRACC, and the aim4 calls are `anonymous` so a browser cookie
+// cannot ride along. The aim4 token only ever travels in an Authorization header,
+// never in a URL.
 
 (function () {
   'use strict';
@@ -37,6 +42,7 @@
   const AIM4 = 'https://aim4.io';
   const TOKEN_KEY = 'aim4Token';
   const REQUEST_KEY = 'aim4PraccRequest';
+  const KNOWN_KEY = 'aim4PraccKnown';
   /** Inside this the site renews on load, so a token this short is worth replacing. */
   const TOKEN_MARGIN_MS = 60 * 1000;
   const LINK_WAIT_MS = 25 * 1000;
@@ -189,7 +195,92 @@
     return names.join(' vs ').slice(0, 120);
   }
 
-  const toSend = (rows) => rows.map((row) => ({ uid: row.Uid, url: row.DownloadUrl, label: rowLabel(row) }));
+  /**
+   * Where a row's DownloadUrl redirects to: the signed link aim4 can use.
+   * Asks for one byte and hangs up on seeing the headers, so no demo comes down.
+   */
+  function resolveLink(url) {
+    if (new URL(url).hostname !== 'pracc.com') return Promise.resolve(url);
+    const headers = {};
+    const team = localStorage.getItem('app.active_team_id');
+    if (team) headers['X-Selected-Team-ID'] = team;
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      let req = null;
+      const check = (res) => {
+        if (settled || !res.finalUrl || new URL(res.finalUrl).hostname === 'pracc.com') return;
+        settled = true;
+        resolve(res.finalUrl);
+        if (req && req.abort) req.abort();
+      };
+      const fail = (message) => {
+        if (settled) return;
+        settled = true;
+        reject(new Error(message));
+      };
+      req = GM_xmlhttpRequest({
+        method: 'GET',
+        url,
+        headers: { ...headers, Range: 'bytes=0-0' },
+        timeout: 30 * 1000,
+        onreadystatechange: (res) => {
+          if (res.readyState >= 2) check(res);
+        },
+        onload: (res) => {
+          check(res);
+          fail(res.status === 401 ? 'Sign in to PRACC first.' : `PRACC answered ${res.status} for this demo's link.`);
+        },
+        onerror: () => fail('Could not get this demo\'s link from PRACC.'),
+        ontimeout: () => fail('PRACC did not answer for this demo\'s link.')
+      });
+    });
+  }
+
+  /**
+   * The rows as aim4 wants them, three at a time. A row whose link cannot be had
+   * goes into `results` as failed, and the others carry on.
+   */
+  async function toSend(rows, results) {
+    const out = new Array(rows.length).fill(null);
+    let next = 0;
+    let finished = 0;
+    const worker = async () => {
+      while (next < rows.length) {
+        const at = next++;
+        const row = rows[at];
+        try {
+          out[at] = { uid: row.Uid, url: await resolveLink(row.DownloadUrl), label: rowLabel(row) };
+        } catch (err) {
+          results.set(row.Uid, { uid: row.Uid, state: 'failed', reason: 'no_link', error: err.message });
+        }
+        say(`Getting links from PRACC, ${++finished} of ${rows.length}...`);
+      }
+    };
+    await Promise.all([worker(), worker(), worker()]);
+    return out.filter(Boolean);
+  }
+
+  /**
+   * Demos aim4 has confirmed, by PRACC's row id. A click only asks PRACC for the
+   * links it still needs, because nothing says those requests are free on PRACC's
+   * side. The list only spans a month, so entries older than that can go.
+   */
+  function knownDemos() {
+    const known = GM_getValue(KNOWN_KEY, {});
+    const cutoff = Date.now() - 2 * MONTH_MS;
+    for (const uid of Object.keys(known)) {
+      if (known[uid] < cutoff) delete known[uid];
+    }
+    return known;
+  }
+
+  function rememberDemos(demos) {
+    const known = knownDemos();
+    for (const demo of demos) {
+      if (demo.uid && (demo.state === 'done' || demo.state === 'duplicate')) known[demo.uid] = Date.now();
+    }
+    GM_setValue(KNOWN_KEY, known);
+  }
 
   // ---- the import ---------------------------------------------------------
 
@@ -291,21 +382,25 @@
         say('No demos to upload');
         return;
       }
-      say(`Sending ${rows.length} to aim4...`);
       const results = new Map();
-      let pending = toSend(rows);
+      const known = knownDemos();
+      for (const row of rows) {
+        if (known[row.Uid]) results.set(row.Uid, { uid: row.Uid, state: 'duplicate' });
+      }
+      let pending = await toSend(rows.filter((row) => !known[row.Uid]), results);
 
-      for (let attempt = 0; attempt <= MAX_RESENDS; attempt++) {
+      for (let attempt = 0; pending.length && attempt <= MAX_RESENDS; attempt++) {
+        say(`Sending ${pending.length} to aim4...`);
         const request = await sendAndFollow(pending);
         for (const demo of request.demos) results.set(demo.uid, demo);
+        rememberDemos(request.demos);
         const expired = request.demos.filter((d) => d.reason === 'link_expired').map((d) => d.uid);
         if (!expired.length || attempt === MAX_RESENDS) break;
-        // A signature only lasts an hour, and the list signs a fresh one each read.
+        // A signature only lasts an hour, and PRACC signs a fresh one each time it is asked.
         say(`${expired.length} links expired, getting new ones...`);
         rows = await fetchPraccDemos();
         const again = new Set(expired);
-        pending = toSend(rows.filter((row) => again.has(row.Uid)));
-        if (!pending.length) break;
+        pending = await toSend(rows.filter((row) => again.has(row.Uid)), results);
       }
       say(finalLine([...results.values()]));
     } catch (err) {
@@ -322,6 +417,7 @@
     setBusy(true);
     try {
       const request = await follow(id);
+      rememberDemos(request.demos);
       say(finalLine(request.demos));
     } catch (err) {
       say(err.message || String(err));
