@@ -89,6 +89,12 @@ function botsView() {
  * from wallets with almost no history or brand new, and in-game after the
  * team had fallen well below its start price. One score per match (0-100).
  */
+/** Never suspicious: a VRS top-20 team, or both teams in the top 30 (0 = unranked). */
+export function isTopVrsMatch(ev) {
+  const r = (ev.vrs || []).filter((x) => x > 0);
+  return r.some((x) => x <= 20) || ((ev.vrs || []).length === 2 && r.length === 2 && r.every((x) => x <= 30));
+}
+
 function suspiciousView(minScore = 35) {
   const events = col('events');
   const wallets = col('wallets');
@@ -98,7 +104,7 @@ function suspiciousView(minScore = 35) {
   for (const f of col('flags')) {
     if (f.kind !== 'entry' || f.market !== 'match') continue;
     const ev = events[f.eventId];
-    if (!ev) continue;
+    if (!ev || isTopVrsMatch(ev)) continue;
     const cash = Math.max(f.cash || 0, f.stackCash || 0);
     const w = wallets[f.wallet] || {};
     const ageDays = w.joinedAt ? (f.at - w.joinedAt) / 86400e3 : null;
