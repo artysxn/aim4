@@ -95,7 +95,8 @@ export function isTopVrsMatch(ev) {
   return r.some((x) => x <= 20) || ((ev.vrs || []).length === 2 && r.length === 2 && r.every((x) => x <= 30));
 }
 
-function suspiciousView(minScore = 35) {
+function suspiciousView(minScore = 35, minCash = 200) {
+  minCash = Math.max(200, minCash || 200);
   const events = col('events');
   const wallets = col('wallets');
   const prices = col('prices');
@@ -127,7 +128,7 @@ function suspiciousView(minScore = 35) {
     const score = Math.min(100, Math.round(pts));
     let row = byEvent.get(ev.id);
     if (!row) byEvent.set(ev.id, (row = { id: ev.id, title: ev.title, teams: ev.teams, league: ev.league, start: ev.start, live: ev.live && !ev.settledAt, settled: Boolean(ev.settledAt), winner: engine.winnerOf(ev.markets.find((m) => m.kind === 'match') || {}), score: 0, total: 0, bets: [] }));
-    if (score >= minScore) {
+    if (score >= minScore && cash >= minCash) {
       row.bets.push({ at: f.at, wallet: f.wallet, name: w.name || w.pseudonym || '', outcome: f.outcome, outcomeIndex: f.outcomeIndex, price: f.price, cash, score, reasons });
       row.total += cash;
     }
@@ -524,7 +525,7 @@ export async function handleInsightsRequest(req, res, url) {
     }
 
     if (m === 'GET' && p === '/api/insights/suspicious') {
-      return json(res, 200, { matches: suspiciousView(Number(url.searchParams.get('min')) || 35) }), true;
+      return json(res, 200, { matches: suspiciousView(Number(url.searchParams.get('min')) || 35, Number(url.searchParams.get('cash')) || 200) }), true;
     }
     if (m === 'GET' && p === '/api/insights/whales') {
       return json(res, 200, { whales: whalesView(url.searchParams.get('sort') || 'edge', Number(url.searchParams.get('min')) || 1) }), true;

@@ -956,7 +956,7 @@ export function initInsightsView({ escapeHtml, openRoute }) {
     if (segBtn) {
       const key = segBtn.closest('[data-seg]').dataset.seg;
       const raw = segBtn.dataset.v;
-      ui[key] = ['statsLine', 'susMin'].includes(key) ? Number(raw) : raw;
+      ui[key] = ['statsLine', 'susMin', 'susCash'].includes(key) ? Number(raw) : raw;
       if (key === 'btKind' && raw === 'history') ui.btStrategy = 'swing';
       return renderPage();
     }
@@ -1248,7 +1248,7 @@ export function initInsightsView({ escapeHtml, openRoute }) {
   // ---- suspicious matches ---------------------------------------------------------
 
   async function pageSuspicious() {
-    const d = await api(`/api/insights/suspicious?min=${ui.susMin || 35}`);
+    const d = await api(`/api/insights/suspicious?min=${ui.susMin || 35}&cash=${ui.susCash || 200}`);
     const rows = d.matches
       .map((m) => {
         const res = m.suspectWon === null ? (m.live ? '<span class="ins-live">LIVE</span>' : m.settled ? 'Void' : '<span class="ins-dim">Not played</span>') : m.suspectWon ? '<span class="ins-tag won">Money side won</span>' : '<span class="ins-tag lost">Money side lost</span>';
@@ -1256,7 +1256,7 @@ export function initInsightsView({ escapeHtml, openRoute }) {
         return `<tr data-open data-match="${esc(m.id)}"><td><span class="ins-score" data-band="${band(m.score)}">${m.score}</span></td><td>${esc(dayTime(m.start))}</td><td class="wrap"><b>${esc((m.teams || []).join(' vs '))}</b><div class="ins-dim">${esc(m.league || '')}</div></td><td>${esc(m.suspectSide || '')}</td><td class="r">${usd(m.total)}</td><td>${res}</td><td class="wrap">${bets}</td></tr>`;
       })
       .join('');
-    return `<div class="ins-bar">${seg('susMin', [[35, 'Score 35+'], [50, '50+'], [70, '70+']], ui.susMin || 35)}</div><div class="ins-table-wrap"><table class="ins-table"><thead><tr><th>Score</th><th>Start</th><th>Match</th><th>Money on</th><th class="r">Suspicious $</th><th>Result</th><th>Bets</th></tr></thead><tbody>${rows || '<tr><td colspan="7" class="ins-empty">Nothing suspicious</td></tr>'}</tbody></table></div><div class="ins-hint">Score: bet size, plus a brand-new or nearly unused wallet, plus money arriving in-game after the team fell well below its start price.</div>`;
+    return `<div class="ins-bar">${seg('susMin', [[35, 'Score 35+'], [50, '50+'], [70, '70+'], [85, '85+']], ui.susMin || 35)}${seg('susCash', [[200, 'Bets $200+'], [500, '$500+'], [1000, '$1k+'], [5000, '$5k+']], ui.susCash || 200)}<button type="button" class="ins-btn ins-btn-icon" data-refresh title="Scan now" aria-label="Scan now">${ICON_REFRESH}</button></div><div class="ins-table-wrap"><table class="ins-table"><thead><tr><th>Score</th><th>Start</th><th>Match</th><th>Money on</th><th class="r">Suspicious $</th><th>Result</th><th>Bets</th></tr></thead><tbody>${rows || '<tr><td colspan="7" class="ins-empty">Nothing suspicious</td></tr>'}</tbody></table></div><div class="ins-hint">Score: bet size, plus a brand-new or nearly unused wallet, plus money arriving in-game after the team fell well below its start price.</div>`;
   }
 
   // ---- bots ---------------------------------------------------------------------
