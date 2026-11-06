@@ -317,6 +317,11 @@ a {
   min-width: 0;
 }
 
+/* Owner-only categories (Insights) start hidden. */
+.side-cat[hidden] {
+  display: none;
+}
+
 .side-cat-label {
   padding: 8px 10px 3px;
   color: var(--muted);

@@ -133,6 +133,50 @@
 
           <div class="side-divider"></div>
 
+          <!-- Owner only: shown by site.js once /api/insights/access answers 200. -->
+          <div class="side-cat" id="side-insights" hidden>
+            <span class="side-cat-label">Private</span>
+            <a class="side-link" href="/insights" data-nav="insights">
+              <span class="side-icon" data-icon="insights"></span>
+              <span class="side-label">Insights</span>
+            </a>
+            <div class="side-sub" id="side-insights-sub" hidden>
+              <a class="side-link side-sub-link" href="/insights/matches" data-nav="insights-matches">
+                <span class="side-icon" data-icon="charts"></span>
+                <span class="side-label">Matches</span>
+              </a>
+              <a class="side-link side-sub-link" href="/insights/whales" data-nav="insights-whales">
+                <span class="side-icon" data-icon="pf-players"></span>
+                <span class="side-label">Whales</span>
+              </a>
+              <a class="side-link side-sub-link" href="/insights/signals" data-nav="insights-signals">
+                <span class="side-icon" data-icon="pf-search"></span>
+                <span class="side-label">Signals</span>
+              </a>
+              <a class="side-link side-sub-link" href="/insights/decisions" data-nav="insights-decisions">
+                <span class="side-icon" data-icon="pf-explore"></span>
+                <span class="side-label">Decisions</span>
+              </a>
+              <a class="side-link side-sub-link" href="/insights/bets" data-nav="insights-bets">
+                <span class="side-icon" data-icon="bookmarks"></span>
+                <span class="side-label">Bets</span>
+              </a>
+              <a class="side-link side-sub-link" href="/insights/brain" data-nav="insights-brain">
+                <span class="side-icon" data-icon="eye"></span>
+                <span class="side-label">Brain</span>
+              </a>
+              <a class="side-link side-sub-link" href="/insights/stats" data-nav="insights-stats">
+                <span class="side-icon" data-icon="performance"></span>
+                <span class="side-label">Stats</span>
+              </a>
+              <a class="side-link side-sub-link" href="/insights/settings" data-nav="insights-settings">
+                <span class="side-icon" data-icon="pf-meta"></span>
+                <span class="side-label">Settings</span>
+              </a>
+            </div>
+            <div class="side-divider"></div>
+          </div>
+
           <div class="side-cat">
             <span class="side-cat-label" id="side-team-label">Team</span>
             <a class="side-link" href="/team" data-nav="team">
@@ -449,6 +493,11 @@
             <div class="view-pad view-pad-fill">
               <div class="is-loading" role="status" aria-live="polite"><span class="spinner" aria-hidden="true"></span><span class="sr-only">Loading</span></div>
             </div>
+          </section>
+
+          <!-- Insights (owner only; the API refuses everyone else) ---------- -->
+          <section class="view" data-view="insights">
+            <div class="view-pad view-pad-fill"></div>
           </section>
 
           <!-- Admin (renders only for site admins) ------------------------- -->

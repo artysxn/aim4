@@ -38,6 +38,8 @@ import { handleBillingRequest } from './billing/routes.js';
 import { handleFaceitWebhookRequest } from './ingest/faceit/webhookRoutes.js';
 import { handleCs3dRequest } from './cs3d/routes.js';
 import { handleLocalRequest } from './local/routes.js';
+import { handleInsightsRequest } from './insights/routes.js';
+import { handleInsightsLocalRequest, maybeStartExecutor } from './insights/executor.js';
 import { checkCaseSensitivity, sweepStaleUploads } from './replays/demoStore.js';
 import { resumeInterruptedParses, sweepBatchFiles } from './replays/jobs.js';
 import { printHostBanner, fetchPublicIp } from './network.js';
@@ -256,6 +258,16 @@ const server = http.createServer(async (req, res) => {
 
     // 3D map packs: static, public, long-cached binaries with their own CORS.
     if (url.pathname.startsWith('/api/cs3d/') && (await handleCs3dRequest(req, res, url))) {
+      return;
+    }
+
+    // Insights (the owner's Polymarket tracker). Reads its own bodies; answers
+    // 404 to everyone but the owner and the owner's linked PC executor.
+    if (url.pathname.startsWith('/api/insights/') && (await handleInsightsRequest(req, res, url))) {
+      return;
+    }
+    // The executor's settings on this PC (key, wallet). Never proxied upstream.
+    if (url.pathname.startsWith('/api/insights-local/') && (await handleInsightsLocalRequest(req, res, url))) {
       return;
     }
 
@@ -542,6 +554,17 @@ setTimeout(async () => {
 // liability.
 
 server.listen(PORT, HOST, async () => {
+  // Insights: the engine runs where the data lives (not in the desktop app's
+  // proxy server, which forwards /api/insights to aim4.io); the executor runs
+  // wherever this PC has been linked with a wallet. AIM4_INSIGHTS=0 turns both off.
+  if (process.env.AIM4_INSIGHTS !== '0') {
+    if (!process.env.AIM4_UPSTREAM) {
+      import('./insights/engine.js')
+        .then((m) => m.startEngine())
+        .catch((err) => console.warn(`[insights] engine did not start: ${err.message}`));
+    }
+    maybeStartExecutor();
+  }
   if (LOCAL) {
     // No public IP lookup: this box is not published, and asking an outside
     // service where it is would be the one network call local mode exists to

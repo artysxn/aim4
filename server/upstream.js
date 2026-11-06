@@ -32,7 +32,7 @@ import { CONNECT_TIMEOUT_MS, isNetworkError, isOnline, markOffline, noteToken, r
 export const UPSTREAM = String(process.env.AIM4_UPSTREAM || '').trim().replace(/\/$/, '');
 
 /** Routes that are answered here even with an upstream set. */
-const LOCAL_ONLY = ['/api/eye/', '/api/cs3d/', '/api/recorder', '/api/offline/', '/api/similar/'];
+const LOCAL_ONLY = ['/api/eye/', '/api/cs3d/', '/api/recorder', '/api/offline/', '/api/similar/', '/api/insights-local/'];
 /** The pages as well as the data (the desktop app's own server). */
 const SITE_UPSTREAM = process.env.AIM4_UPSTREAM_SITE === '1';
 

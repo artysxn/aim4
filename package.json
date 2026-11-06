@@ -48,6 +48,8 @@
     "aim:baselines": "node scripts/aim-baselines.mjs"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^1.6.0",
+    "@polymarket/client": "^0.17.0",
     "@supabase/supabase-js": "^2.108.2",
     "cloakbrowser": "^0.5.6",
     "fzstd": "^0.1.1",
@@ -60,6 +62,7 @@
     "socks-proxy-agent": "^10.1.0",
     "three": "^0.169.0",
     "three-mesh-bvh": "^0.9.14",
+    "viem": "^2.57.16",
     "ws": "^8.21.0"
   },
   "devDependencies": {

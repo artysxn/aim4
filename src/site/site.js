@@ -46,6 +46,7 @@ import sideTeamUtilityArchive from '../icons/sideicons/sideicon_utility_archive.
 import sideTeamCoach from '../icons/sideicons/sideicon_teamreplays.svg?raw';
 import sideTeamComms from '../icons/sideicons/sideicon_comms.svg?raw';
 import sideTeamCreator from '../icons/sideicons/sideicon_2d_creator.svg?raw';
+import sideInsights from '../icons/sideicons/sideicon_insights.svg?raw';
 import logoFullUrl from '../icons/aim4logos/logocolor.png';
 import logoMarkUrl from '../icons/aim4logos/logo1x1.png';
 import { SettingsManager } from '../core/SettingsManager.js';
@@ -202,7 +203,8 @@ const ICONS = {
   'team-utility-archive': sideTeamUtilityArchive,
   'team-autocoach': sideTeamCoach,
   'team-comms': sideTeamComms,
-  'team-creator': sideTeamCreator
+  'team-creator': sideTeamCreator,
+  insights: sideInsights
 };
 
 document.querySelectorAll('[data-icon]').forEach((el) => {
@@ -792,6 +794,17 @@ const ROUTES = {
   // API answers 404 to everyone else. This entry only stops the deep link from
   // falling through to the trainer.
   admin: { title: 'Admin', path: '/admin', shell: 'admin' },
+  // Insights: the owner's Polymarket tracker. The API answers 404 to everyone
+  // else and the view shows nothing; these only route the deep links.
+  insights: { title: 'Insights', path: '/insights', shell: 'insights', page: 'ins-overview' },
+  'insights-matches': { title: 'Insights', path: '/insights/matches', shell: 'insights', page: 'ins-matches' },
+  'insights-whales': { title: 'Insights', path: '/insights/whales', shell: 'insights', page: 'ins-whales' },
+  'insights-signals': { title: 'Insights', path: '/insights/signals', shell: 'insights', page: 'ins-signals' },
+  'insights-decisions': { title: 'Insights', path: '/insights/decisions', shell: 'insights', page: 'ins-decisions' },
+  'insights-bets': { title: 'Insights', path: '/insights/bets', shell: 'insights', page: 'ins-bets' },
+  'insights-brain': { title: 'Insights', path: '/insights/brain', shell: 'insights', page: 'ins-brain' },
+  'insights-stats': { title: 'Insights', path: '/insights/stats', shell: 'insights', page: 'ins-stats' },
+  'insights-settings': { title: 'Insights', path: '/insights/settings', shell: 'insights', page: 'ins-settings' },
   // The training pages are the admin shell on a stage of its Training tab.
   'admin-training-1': { title: 'Training 1', path: '/admin/training_1', shell: 'admin' },
   'admin-training-2': { title: 'Training 2', path: '/admin/training_2', shell: 'admin' },
@@ -973,6 +986,11 @@ function setView(name, push = false, params = null) {
   document.getElementById('page-head-actions')?.replaceChildren();
   const patternsSub = document.getElementById('side-patterns-sub');
   if (patternsSub) patternsSub.hidden = routeName !== 'patterns';
+  // Insights: its sub pages open under it, and the parent stays lit on all of them.
+  const insightsRoute = routeName.startsWith('insights');
+  const insightsSub = document.getElementById('side-insights-sub');
+  if (insightsSub) insightsSub.hidden = !insightsRoute;
+  if (insightsRoute) document.querySelector('.side-link[data-nav="insights"]')?.classList.add('active');
 
   if (push) {
     const q = { ...resolvedParams };
@@ -1142,6 +1160,27 @@ viewControllers.pitchdeck = lazyController(async () => {
     // query string, so the lang param has to be handed back to it.
     openRoute: (name, lang) => setView(name, true, lang && lang !== 'en' ? { lang } : {})
   });
+});
+viewControllers.insights = lazyController(async () => {
+  const { initInsightsView } = await import('./insights/insightsView.js');
+  return initInsightsView({ escapeHtml, openRoute: (name) => setView(name, true, {}) });
+});
+// The Insights entry is in the sidebar only for its owner; the server decides.
+async function syncInsightsNav() {
+  const cat = document.getElementById('side-insights');
+  if (!cat) return;
+  if (!auth.isLoggedIn) {
+    cat.hidden = true;
+    return;
+  }
+  const { insightsAccess } = await import('./insights/insightsView.js');
+  // Ask again only when the signed-in account changes; auth fires several times per load.
+  const who = auth.user?.id || 'local';
+  cat.hidden = !(await insightsAccess(who !== syncInsightsNav.lastUser));
+  syncInsightsNav.lastUser = who;
+}
+auth.onChange(() => {
+  syncInsightsNav().catch(() => {});
 });
 viewControllers.admin = lazyController(async () => {
   const { initAdminView } = await import('./admin/adminView.js');

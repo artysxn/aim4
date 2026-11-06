@@ -94,6 +94,8 @@ export const SITE_VIEW_PATHS = new Set([
   '/team',
   '/account',
   '/admin',
+  // The owner's Polymarket tracker; its sub pages are under /insights/.
+  '/insights',
   // Legacy bookmarks still land on the SPA shell (client redirects).
   '/replays',
   '/replays/playlists',
@@ -105,7 +107,7 @@ export const SITE_VIEW_PATHS = new Set([
 
 // Shell-owned subtrees: /team/*, /account/* (sub-pages), /admin/* (training pages), /i/* (invites),
 // /s2/* (shared 2D rounds), /d/* (shared documents).
-export const SITE_VIEW_PREFIXES = ['/team/', '/account/', '/admin/', '/i/', '/s2/', '/d/', '/player/'];
+export const SITE_VIEW_PREFIXES = ['/team/', '/account/', '/admin/', '/insights/', '/i/', '/s2/', '/d/', '/player/'];
 
 function isSiteViewPath(rel) {
   return SITE_VIEW_PATHS.has(rel) || SITE_VIEW_PREFIXES.some((p) => rel.startsWith(p));
