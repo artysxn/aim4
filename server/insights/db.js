@@ -20,6 +20,9 @@ function open() {
   db = new DatabaseSync(path.join(insightsDir(), 'insights.db'));
   db.exec(`
     PRAGMA journal_mode = WAL;
+    -- During a rolling deploy the old and new container share this file for a
+    -- few seconds: wait for the lock instead of failing the write.
+    PRAGMA busy_timeout = 5000;
     CREATE TABLE IF NOT EXISTS decisions (
       id TEXT PRIMARY KEY,
       at INTEGER NOT NULL,

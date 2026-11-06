@@ -1085,7 +1085,16 @@ export function startEngine() {
   // Trades already stored are not processed again after a restart.
   for (const f of col('flags')) if (f.tx) run.seen.add(`${f.tx}|${f.wallet}|${f.tokenId}|${f.side}|${f.shares}`);
   tick(discover, 3 * MIN);
-  tick(watch, () => (hotEvents().some((e) => e.live) ? 5000 : 20000));
+  tick(watch, () => (hotEvents().some((e) => e.live) ? 2000 : 15000));
+  // A large print on the live book: fetch the wallet behind it now, not at the next poll.
+  let soon = null;
+  feeds.on('trade', (token, t) => {
+    if (t.p * t.s < Math.min(10, settings().minCash) || soon) return;
+    soon = setTimeout(() => {
+      soon = null;
+      watch().catch(() => {});
+    }, 400);
+  });
   tick(refreshLive, 15000);
   logLine('info', 'Engine started');
 }

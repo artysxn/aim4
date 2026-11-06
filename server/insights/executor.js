@@ -23,9 +23,9 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { geoblock } from './polymarket.js';
+import { geoblock, getJson, DATA } from './polymarket.js';
 
-const POLL_MS = 1500;
+const POLL_MS = 700;
 const HEARTBEAT_MS = 30e3;
 const GEO_TTL = 10 * 60e3;
 
@@ -105,10 +105,13 @@ function normalizeKey(k) {
 }
 
 async function client(cfg) {
-  const key = `${cfg.wallet}|${cfg.privateKey.slice(-6)}`;
+  const key = `${cfg.wallet}|${cfg.privateKey.slice(-6)}|${cfg.relayerKey ? cfg.relayerKey.slice(-4) : ''}`;
   if (state.client && state.clientKey === key) return state.client;
   const m = await sdk();
-  state.client = await m.createSecureClient({ wallet: cfg.wallet, signer: m.privateKey(normalizeKey(cfg.privateKey)) });
+  const opts = { wallet: cfg.wallet, signer: m.privateKey(normalizeKey(cfg.privateKey)) };
+  // Claims are gasless wallet transactions; Polymarket authorises those with a Relayer API key.
+  if (cfg.relayerKey && cfg.relayerAddress) opts.apiKey = m.relayerApiKey({ key: cfg.relayerKey, address: cfg.relayerAddress });
+  state.client = await m.createSecureClient(opts);
   state.clientKey = key;
   state.signer = await addressOf(cfg.privateKey);
   return state.client;
@@ -261,6 +264,52 @@ async function execute(cfg, intent) {
   return { ok: true, orderId: r.orderId, status: r.status, spent: Number(r.takingAmount) || 0, shares: Number(r.makingAmount) || 0 };
 }
 
+// ---- claiming winnings -------------------------------------------------------------
+// A resolved market's winning shares sit in the wallet until they are redeemed
+// for pUSD. Until then they are not in the cash balance, so stakes sized as a
+// % of the wallet shrink and the balance looks like it is draining. Every five
+// minutes the executor redeems every resolved market
+// with a winning value, as soon as Polymarket marks it redeemable. Losing
+// positions (worth 0) are left alone.
+
+const CLAIM_EVERY_MS = 5 * 60e3;
+const claims = { running: false, lastScan: 0, total: 0, count: 0, last: null, errors: 0, lastError: '', pending: 0, retryAt: new Map() };
+
+async function claimWinnings(cfg) {
+  if (claims.running || !ready(cfg)) return;
+  claims.running = true;
+  try {
+    const body = await getJson(`${DATA}/v2/positions?user=${encodeURIComponent(cfg.wallet)}&status=REDEEMABLE&limit=500`);
+    const rows = (body?.data || []).filter((r) => Number(r.current_value) >= 0.05);
+    const byCond = new Map();
+    for (const r of rows) byCond.set(r.condition_id, (byCond.get(r.condition_id) || 0) + Number(r.current_value || 0));
+    claims.pending = [...byCond.values()].reduce((sum, v) => sum + v, 0);
+    for (const [cond, value] of byCond) {
+      if ((claims.retryAt.get(cond) || 0) > Date.now()) continue;
+      try {
+        const c = await client(cfg);
+        const handle = await c.redeemPositions({ conditionId: cond });
+        const out = await handle.wait();
+        claims.total += value;
+        claims.count++;
+        claims.pending -= value;
+        claims.last = { at: Date.now(), value, tx: String(out?.transactionHash || '') };
+        claims.retryAt.delete(cond);
+        state.lastBeat = 0; // the balance changed: report it with the next round
+      } catch (err) {
+        claims.errors++;
+        claims.lastError = /relayer|api key|unauthor|401|403/i.test(err.message) && !cfg.relayerKey ? `${err.message.slice(0, 160)} (add a Relayer API key)` : err.message.slice(0, 200);
+        claims.retryAt.set(cond, Date.now() + 30 * 60e3);
+      }
+    }
+  } catch (err) {
+    claims.lastError = `scan: ${err.message.slice(0, 160)}`;
+  } finally {
+    claims.running = false;
+    claims.lastScan = Date.now();
+  }
+}
+
 async function loop() {
   if (state.busy) return;
   state.busy = true;
@@ -279,6 +328,7 @@ async function loop() {
       const geo = await checkGeo();
       await call(cfg, 'heartbeat', { balance: state.balance, wallet: cfg.wallet, signer: state.signer || (await addressOf(cfg.privateKey)), geo, sdk: state.sdk, error });
     }
+    if (Date.now() - claims.lastScan > CLAIM_EVERY_MS) claimWinnings(cfg).catch(() => {});
     const work = await call(cfg, 'poll', {});
     state.lastOk = Date.now();
     state.lastError = '';
@@ -359,7 +409,9 @@ export async function executorStatus() {
     sdk: state.sdk,
     placed: state.placed,
     failed: state.failed,
-    file: executorFile()
+    file: executorFile(),
+    relayer: Boolean(cfg.relayerKey && cfg.relayerAddress),
+    claims: { total: claims.total, count: claims.count, last: claims.last, pending: claims.pending, errors: claims.errors, lastError: claims.lastError, lastScan: claims.lastScan }
   };
 }
 
@@ -429,6 +481,12 @@ export async function handleInsightsLocalRequest(req, res, url) {
         if (w && !/^0x[0-9a-fA-F]{40}$/.test(w)) return json(res, 400, { error: 'Wallet address should be 0x followed by 40 hex characters.' }), true;
         cfg.wallet = w;
       }
+      if (typeof body.relayerKey === 'string' && body.relayerKey.trim()) cfg.relayerKey = body.relayerKey.trim().slice(0, 200);
+      if (typeof body.relayerAddress === 'string') {
+        const a = body.relayerAddress.trim();
+        if (a && !/^0x[0-9a-fA-F]{40}$/.test(a)) return json(res, 400, { error: 'Relayer key address should be 0x followed by 40 hex characters.' }), true;
+        if (a) cfg.relayerAddress = a;
+      }
       if (typeof body.privateKey === 'string' && body.privateKey.trim()) {
         const k = normalizeKey(body.privateKey);
         if (!/^0x[0-9a-fA-F]{64}$/.test(k)) return json(res, 400, { error: 'Private key should be 64 hex characters.' }), true;
@@ -449,6 +507,11 @@ export async function handleInsightsLocalRequest(req, res, url) {
       state.client = null;
       state.balance = null;
       state.signer = '';
+      return json(res, 200, await executorStatus()), true;
+    }
+    if (p === '/api/insights-local/claim' && req.method === 'POST') {
+      claims.retryAt.clear();
+      await claimWinnings(readConfig());
       return json(res, 200, await executorStatus()), true;
     }
     if (p === '/api/insights-local/test' && req.method === 'POST') {

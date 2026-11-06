@@ -759,8 +759,11 @@ export function initInsightsView({ escapeHtml, openRoute }) {
           ${row('Link', `<button type="button" class="ins-btn" data-link-pc>${le.linked ? 'Link again' : 'Link this PC'}</button>`)}
           ${row('Polymarket wallet', `<input class="ins-field" style="width:340px" placeholder="0x... (profile menu on polymarket.com)" data-local-wallet value="${esc(le.wallet)}">`)}
           ${row('Signer key', `<input class="ins-field" style="width:340px" type="password" autocomplete="off" placeholder="${le.hasKey ? `Saved · signer ${esc(short(le.signer))}` : 'Private key or session key'}" data-local-key>`)}
+          ${row('Relayer API key', `<input class="ins-field" style="width:340px" type="password" autocomplete="off" placeholder="${le.relayer ? 'Saved' : 'For claiming winnings, if Polymarket asks for it'}" data-local-relayer-key>`)}
+          ${row('Relayer key address', `<input class="ins-field" style="width:340px" placeholder="0x... shown next to the Relayer key" data-local-relayer-addr>`)}
           ${row('', `<button type="button" class="ins-btn" data-local-save>Save on this PC</button><button type="button" class="ins-btn" data-local-test>Test</button>${le.hasKey || le.linked ? '<button type="button" class="ins-btn ins-btn-danger" data-local-forget>Forget</button>' : ''}`)}
           ${row('Status', `<span class="ins-muted">${le.running ? `Polling ${ago(le.lastOk)} ago` : 'Idle'}${le.balance !== null && le.balance !== undefined ? ` · ${usd(le.balance)}` : ''}${le.geo ? ` · ${esc(le.geo.country || '')} ${le.geo.blocked ? '<span class="ins-neg">blocked</span>' : 'allowed'}` : ''}${le.lastError ? ` · <span class="ins-neg">${esc(le.lastError)}</span>` : ''}${le.sdk && le.sdk !== 'ok' ? ` · <span class="ins-neg">${esc(le.sdk)}</span>` : ''}</span>`)}
+          ${le.claims ? row('Winnings', `<span class="ins-muted">Claimed ${usd(le.claims.total)} in ${le.claims.count} market${le.claims.count === 1 ? '' : 's'}${le.claims.pending > 0.049 ? ` · ${usd(le.claims.pending)} waiting` : ''}${le.claims.last ? ` · last ${ago(le.claims.last.at)} ago` : ''}${le.claims.lastScan ? ` · checked ${ago(le.claims.lastScan)} ago` : ''}${le.claims.lastError ? ` · <span class="ins-neg">${esc(le.claims.lastError)}</span>` : ''}</span><button type="button" class="ins-btn ins-btn-sm" data-local-claim>Claim now</button>`) : ''}
         </div><div class="ins-hint">The key is stored only on this PC (${esc(le.file)}) and never sent to aim4.io. A session key or a dedicated wallet with a small balance limits what a leaked key could do.</div></div>`
       : `<div class="ins-hint">Real orders are placed by the aim4 desktop app on your PC: Polymarket blocks trading from the aim4.io server's location. Open Insights in the desktop app to link it.</div>`;
     const bf = d.status.backfill;
@@ -1045,9 +1048,25 @@ export function initInsightsView({ escapeHtml, openRoute }) {
     if (e.target.closest('[data-local-save]')) {
       const wallet = body.querySelector('[data-local-wallet]')?.value.trim() || '';
       const key = body.querySelector('[data-local-key]')?.value.trim() || '';
+      const relayerKey = body.querySelector('[data-local-relayer-key]')?.value.trim() || '';
+      const relayerAddress = body.querySelector('[data-local-relayer-addr]')?.value.trim() || '';
+      const payload = { wallet };
+      if (key) payload.privateKey = key;
+      if (relayerKey) payload.relayerKey = relayerKey;
+      if (relayerAddress) payload.relayerAddress = relayerAddress;
       try {
-        ui.localExec = await local('/api/insights-local/config', { method: 'POST', body: key ? { wallet, privateKey: key } : { wallet } });
+        ui.localExec = await local('/api/insights-local/config', { method: 'POST', body: payload });
         toast('Saved on this PC');
+        return renderPage();
+      } catch (err) {
+        return toast(err.message, true);
+      }
+    }
+    if (e.target.closest('[data-local-claim]')) {
+      try {
+        ui.localExec = await local('/api/insights-local/claim', { method: 'POST' });
+        const c = ui.localExec.claims;
+        toast(c.lastError ? c.lastError : `Claimed ${usd(c.total)} so far`, Boolean(c.lastError));
         return renderPage();
       } catch (err) {
         return toast(err.message, true);
@@ -1227,7 +1246,7 @@ export function initInsightsView({ escapeHtml, openRoute }) {
 
   // ---- bots ---------------------------------------------------------------------
 
-  const stakeText = (b) => `${b.sizing.kind === 'pct' ? `${b.sizing.value}% of wallet` : usd(b.sizing.value)} ${{ whale: 'per match', swing: 'per trade', mm: 'per quote' }[b.type]}`;
+  const stakeText = (b) => `${b.sizing.kind === 'pct' ? `${b.sizing.value}% of wallet` : usd(b.sizing.value)} ${{ whale: 'per match', swing: 'per trade', mm: 'per quote', value: 'per match' }[b.type]}`;
   const getPath = (o, path) => path.split('.').reduce((x, k) => x?.[k], o);
   function setPath(o, path, v) {
     const keys = path.split('.');

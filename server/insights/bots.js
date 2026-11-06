@@ -40,7 +40,9 @@ export const BOT_TYPES = {
       { key: 'minEdge', label: 'Analyst edge at least', kind: 'num', unit: 'c', scale: 100, min: -0.2, max: 0.2, step: 0.5, def: 0 },
       { key: 'followedOnly', label: 'Followed wallets only', kind: 'bool', def: false },
       { key: 'minWhaleCash', label: 'Whale bet of at least', kind: 'num', unit: '$', min: 0, max: 1e6, step: 10, def: 0 },
+      { key: 'minWhalePrice', label: 'Whale price at least', kind: 'num', unit: '%', scale: 100, min: 0, max: 0.6, step: 1, def: 0 },
       { key: 'maxWhalePrice', label: 'Whale price at most', kind: 'num', unit: '%', scale: 100, min: 0.01, max: 0.6, step: 1, def: 0.3 },
+      { key: 'maxWhaleCash', label: 'Whale total at most (0 = any)', kind: 'num', unit: '$', min: 0, max: 1e6, step: 10, def: 0 },
       { key: 'copyLive', label: 'Copy live bets', kind: 'bool', def: true },
       { key: 'copyPrematch', label: 'Copy pre-match bets', kind: 'bool', def: true },
       { key: 'copyMaps', label: 'Copy map-winner bets', kind: 'bool', def: false },
@@ -69,6 +71,18 @@ export const BOT_TYPES = {
       { key: 'stopK', label: 'Stop loss', kind: 'num', unit: 'x usual move', min: 0.1, max: 5, step: 0.1, def: 1.2 },
       { key: 'timeMult', label: 'Time limit', kind: 'num', unit: 'x look-ahead', min: 0.5, max: 10, step: 0.5, def: 2 },
       { key: 'edgeExit', label: 'Sell when the edge is gone', kind: 'bool', def: true }
+    ]
+  },
+  value: {
+    label: 'Start-price value',
+    sizingLabel: 'Stake per match',
+    fields: [
+      { key: 'priceMin', label: 'Team priced at least', kind: 'num', unit: '%', scale: 100, min: 0.01, max: 0.99, step: 1, def: 0.3 },
+      { key: 'priceMax', label: 'Team priced at most', kind: 'num', unit: '%', scale: 100, min: 0.01, max: 0.99, step: 1, def: 0.5 },
+      { key: 'windowMax', label: 'Buy from this long before start', kind: 'num', unit: 'min', min: 1, max: 600, step: 1, def: 30 },
+      { key: 'windowMin', label: 'Until this long before start', kind: 'num', unit: 'min', min: 0, max: 600, step: 1, def: 5 },
+      { key: 'maker', label: 'Limit orders (no fee)', kind: 'bool', def: true },
+      { key: 'maps', label: 'Map-winner markets too', kind: 'bool', def: false }
     ]
   },
   mm: {
@@ -141,6 +155,14 @@ export function allBots() {
   const b = col('bots');
   if (!Array.isArray(b.list)) {
     b.list = seedBots();
+    touch('bots');
+  }
+  // 2026-11-06 data review: the two edges become bots; the losing styles go off.
+  if (!b.v2) {
+    b.v2 = true;
+    for (const x of b.list) if (['w-score', 'w-edge', 's-maker3', 's-taker5', 's-score'].includes(x.id)) x.enabled = false;
+    if (!b.list.some((x) => x.id === 'split-buys')) b.list.push({ ...sanitizeBot({ type: 'whale', name: 'Split buys 25-30%, small', enabled: true, sizing: { kind: 'pct', value: 2 }, maxStake: 50, params: { minScore: 0, needs: ['stacking'], minWhalePrice: 0.25, maxWhalePrice: 0.31, maxWhaleCash: 150, skipLosers: false, maxSlippage: 0.03, maxEntry: 0.34, copyMaps: false } }), id: 'split-buys' });
+    if (!b.list.some((x) => x.id === 'value-dogs')) b.list.push({ ...sanitizeBot({ type: 'value', name: 'Slight underdogs at start', enabled: true, sizing: { kind: 'pct', value: 2 }, maxStake: 50 }), id: 'value-dogs' });
     touch('bots');
   }
   return b.list;

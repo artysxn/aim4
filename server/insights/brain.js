@@ -230,9 +230,10 @@ export async function consider({ bot, ev, m, idx, flag = null, whale = null }) {
 
   let maxPrice;
   if (strategy === 'whale') maxPrice = Math.min(params.maxEntry, flag.price + params.maxSlippage);
+  else if (strategy === 'value') maxPrice = params.priceMax;
   else maxPrice = Math.min(0.97, comb.expected - params.minEdge);
   const fill = pm.walkAsks(book, target, maxPrice);
-  const maker = strategy === 'swing' && params.maker && ask - (bid ?? 0) >= 0.02;
+  const maker = (strategy === 'swing' || strategy === 'value') && params.maker && ask - (bid ?? 0) >= 0.02;
   const makerPx = maker ? Math.min(maxPrice, Math.round(((bid ?? 0) + 0.01) * 100) / 100) : null;
   const e = edgeOf({ side: 'BUY', expected: comb.expected, ask, bid, fill: maker ? { avg: makerPx } : fill, feeRate: m.feeRate, maker });
   if (strategy === 'swing') {
@@ -254,6 +255,8 @@ export async function consider({ bot, ev, m, idx, flag = null, whale = null }) {
     if (params.needs?.length && !flag.reasons.some((r) => params.needs.includes(r.key))) return finish('skipped', `Needs ${params.needs.join(' or ')}`);
     if ((flag.stackCash || flag.cash) < params.minWhaleCash) return finish('skipped', `Whale bet under $${params.minWhaleCash}`);
     if (flag.price > params.maxWhalePrice) return finish('skipped', `Whale paid over ${Math.round(params.maxWhalePrice * 100)}%`);
+    if (flag.price < (params.minWhalePrice || 0)) return finish('skipped', `Whale paid under ${Math.round(params.minWhalePrice * 100)}%`);
+    if (params.maxWhaleCash && (flag.stackCash || flag.cash) > params.maxWhaleCash) return finish('skipped', `Whale total over $${params.maxWhaleCash}`);
     if (params.requireEdge && e.edge < params.minEdge) return finish('skipped', `Edge ${(e.edge * 100).toFixed(1)}c under ${(params.minEdge * 100).toFixed(1)}c`);
     if (m.kind === 'map' && !params.copyMaps) return finish('skipped', 'Map markets not copied');
     if (ctx.live && !params.copyLive) return finish('skipped', 'Live bets not copied');
@@ -262,6 +265,11 @@ export async function consider({ bot, ev, m, idx, flag = null, whale = null }) {
       const rec = api.walletRecord(whale);
       if (rec.resolved >= params.loserMinResolved && rec.edge !== null && rec.edge < 0) return finish('skipped', `Losing record ${rec.wins}/${rec.resolved}`);
     }
+  } else if (strategy === 'value') {
+    const mins = (ev.start - Date.now()) / MIN;
+    if (ctx.live || mins > params.windowMax || mins < params.windowMin) return finish('skipped', 'Outside the start window');
+    if (mid < params.priceMin || mid > params.priceMax) return finish('skipped', 'Price outside the band');
+    if (wallet.mine.some((x) => x.eventId === ev.id)) return finish('skipped', 'Already in this match');
   } else if (strategy === 'swing') {
     if (mid < params.priceMin || mid > params.priceMax) return finish('skipped', 'Price outside the band');
     if (ctx.live && !params.live) return finish('skipped', 'Live trading off');
@@ -298,8 +306,8 @@ export async function consider({ bot, ev, m, idx, flag = null, whale = null }) {
   // Exit plan, sized to how much this market usually moves.
   const sdH = (vol.sd5 || 0.03) * Math.sqrt(horizon / 5);
   decision.plan =
-    strategy === 'whale'
-      ? { hold: true, mirror: params.mirrorExits, sellAt: params.sellAt || 0 }
+    strategy === 'whale' || strategy === 'value'
+      ? { hold: true, mirror: Boolean(params.mirrorExits), sellAt: params.sellAt || 0 }
       : { target: Math.min(0.99, e.px + Math.max(params.minEdge, params.targetK * sdH)), stop: Math.max(0.01, e.px - Math.max(0.03, params.stopK * sdH)), timeStop: Date.now() + horizon * params.timeMult * MIN, edgeExit: params.edgeExit };
 
   // A pre-match bet of real size gets a second opinion first.
@@ -677,6 +685,21 @@ function onBook(token) {
   checkExits(token).catch(() => {});
 }
 
+/** Start-price bots: once a minute per token inside their window before the start. */
+async function evaluateValue(ev, m, idx) {
+  const token = m.tokens[idx];
+  for (const bot of activeBots('value', botsOn())) {
+    if (m.kind === 'map' && !bot.params.maps) continue;
+    const mins = (ev.start - Date.now()) / MIN;
+    if (mins > bot.params.windowMax || mins < bot.params.windowMin) continue;
+    const k = `${token}|${bot.id}`;
+    if (Date.now() - (state.lastEval.get(k) || 0) < 60e3) continue;
+    state.lastEval.set(k, Date.now());
+    if (walletFor(bot).mine.some((b) => b.eventId === ev.id)) continue;
+    await consider({ bot, ev, m, idx }).catch((err) => logLine('error', `value bot ${bot.name}: ${err.message}`));
+  }
+}
+
 /** The periodic sweep over hot markets: swing evaluations and quotes. */
 async function sweep() {
   const events = api.hotEvents();
@@ -688,6 +711,7 @@ async function sweep() {
       if (m.closed || !m.accepting || (m.kind === 'map' && !api.settings().mapMarkets)) continue;
       // (bots decide for themselves whether map markets are theirs)
       for (const i of [0, 1]) await evaluateSwing(ev, m, i);
+      if (!live) for (const i of [0, 1]) await evaluateValue(ev, m, i);
       await quoteMarket(ev, m).catch((err) => logLine('error', `mm: ${err.message}`));
     }
   }
