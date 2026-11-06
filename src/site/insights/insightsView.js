@@ -23,6 +23,7 @@ export const INSIGHTS_PAGES = [
   { page: 'ins-overview', route: 'insights', label: 'Overview' },
   { page: 'ins-bots', route: 'insights-bots', label: 'Bots' },
   { page: 'ins-matches', route: 'insights-matches', label: 'Matches' },
+  { page: 'ins-suspicious', route: 'insights-suspicious', label: 'Suspicious' },
   { page: 'ins-whales', route: 'insights-whales', label: 'Whales' },
   { page: 'ins-signals', route: 'insights-signals', label: 'Signals' },
   { page: 'ins-decisions', route: 'insights-decisions', label: 'Decisions' },
@@ -955,7 +956,7 @@ export function initInsightsView({ escapeHtml, openRoute }) {
     if (segBtn) {
       const key = segBtn.closest('[data-seg]').dataset.seg;
       const raw = segBtn.dataset.v;
-      ui[key] = ['statsLine'].includes(key) ? Number(raw) : raw;
+      ui[key] = ['statsLine', 'susMin'].includes(key) ? Number(raw) : raw;
       if (key === 'btKind' && raw === 'history') ui.btStrategy = 'swing';
       return renderPage();
     }
@@ -1244,6 +1245,20 @@ export function initInsightsView({ escapeHtml, openRoute }) {
     return `${kpis}${leaderboard(d.bots)}${learnCard}${grid}${backtestCard}${models}`;
   }
 
+  // ---- suspicious matches ---------------------------------------------------------
+
+  async function pageSuspicious() {
+    const d = await api(`/api/insights/suspicious?min=${ui.susMin || 35}`);
+    const rows = d.matches
+      .map((m) => {
+        const res = m.suspectWon === null ? (m.live ? '<span class="ins-live">LIVE</span>' : m.settled ? 'Void' : '<span class="ins-dim">Not played</span>') : m.suspectWon ? '<span class="ins-tag won">Money side won</span>' : '<span class="ins-tag lost">Money side lost</span>';
+        const bets = m.bets.slice(0, 3).map((b) => `<div class="ins-reasons"><span class="ins-score" data-band="${band(b.score)}">${b.score}</span><span class="ins-link" data-wallet="${esc(b.wallet)}">${esc(nameOf(b.name, b.wallet))}</span><span class="ins-dim">on ${esc(b.outcome)}</span>${b.reasons.map((r) => `<span class="ins-reason">${esc(r)}</span>`).join('')}</div>`).join('');
+        return `<tr data-open data-match="${esc(m.id)}"><td><span class="ins-score" data-band="${band(m.score)}">${m.score}</span></td><td>${esc(dayTime(m.start))}</td><td class="wrap"><b>${esc((m.teams || []).join(' vs '))}</b><div class="ins-dim">${esc(m.league || '')}</div></td><td>${esc(m.suspectSide || '')}</td><td class="r">${usd(m.total)}</td><td>${res}</td><td class="wrap">${bets}</td></tr>`;
+      })
+      .join('');
+    return `<div class="ins-bar">${seg('susMin', [[35, 'Score 35+'], [50, '50+'], [70, '70+']], ui.susMin || 35)}</div><div class="ins-table-wrap"><table class="ins-table"><thead><tr><th>Score</th><th>Start</th><th>Match</th><th>Money on</th><th class="r">Suspicious $</th><th>Result</th><th>Bets</th></tr></thead><tbody>${rows || '<tr><td colspan="7" class="ins-empty">Nothing suspicious</td></tr>'}</tbody></table></div><div class="ins-hint">Score: bet size, plus a brand-new or nearly unused wallet, plus money arriving in-game after the team fell well below its start price.</div>`;
+  }
+
   // ---- bots ---------------------------------------------------------------------
 
   const stakeText = (b) => `${b.sizing.kind === 'pct' ? `${b.sizing.value}% of wallet` : usd(b.sizing.value)} ${{ whale: 'per match', swing: 'per trade', mm: 'per quote', value: 'per match' }[b.type]}`;
@@ -1402,6 +1417,7 @@ export function initInsightsView({ escapeHtml, openRoute }) {
     'ins-signals': pageSignals,
     'ins-decisions': pageDecisions,
     'ins-bots': pageBots,
+    'ins-suspicious': pageSuspicious,
     'ins-bets': pageBets,
     'ins-brain': pageBrain,
     'ins-stats': pageStats,

@@ -799,6 +799,7 @@ const ROUTES = {
   insights: { title: 'Insights', path: '/insights', shell: 'insights', page: 'ins-overview' },
   'insights-bots': { title: 'Insights', path: '/insights/bots', shell: 'insights', page: 'ins-bots' },
   'insights-matches': { title: 'Insights', path: '/insights/matches', shell: 'insights', page: 'ins-matches' },
+  'insights-suspicious': { title: 'Insights', path: '/insights/suspicious', shell: 'insights', page: 'ins-suspicious' },
   'insights-whales': { title: 'Insights', path: '/insights/whales', shell: 'insights', page: 'ins-whales' },
   'insights-signals': { title: 'Insights', path: '/insights/signals', shell: 'insights', page: 'ins-signals' },
   'insights-decisions': { title: 'Insights', path: '/insights/decisions', shell: 'insights', page: 'ins-decisions' },

@@ -84,6 +84,62 @@ function botsView() {
   };
 }
 
+/**
+ * Matches where big money came in the way inside information would: large,
+ * from wallets with almost no history or brand new, and in-game after the
+ * team had fallen well below its start price. One score per match (0-100).
+ */
+function suspiciousView(minScore = 35) {
+  const events = col('events');
+  const wallets = col('wallets');
+  const prices = col('prices');
+  const teams = col('teams');
+  const byEvent = new Map();
+  for (const f of col('flags')) {
+    if (f.kind !== 'entry' || f.market !== 'match') continue;
+    const ev = events[f.eventId];
+    if (!ev) continue;
+    const cash = Math.max(f.cash || 0, f.stackCash || 0);
+    const w = wallets[f.wallet] || {};
+    const ageDays = w.joinedAt ? (f.at - w.joinedAt) / 86400e3 : null;
+    const pre = prices[f.conditionId]?.pre?.[f.outcomeIndex] ?? teams[f.conditionId]?.teams?.[f.outcomeIndex]?.pre ?? null;
+    const reasons = [];
+    let pts = Math.max(0, Math.min(40, Math.log10(cash / 50) * 18));
+    reasons.push(`$${Math.round(cash)} at ${Math.round(f.price * 100)}%`);
+    if ((ageDays !== null && ageDays <= 7) || (Number.isFinite(w.markets) && w.markets <= 3)) {
+      pts += 35;
+      reasons.push(ageDays !== null && ageDays <= 7 ? `wallet ${Math.max(0, Math.round(ageDays))}d old` : `${w.markets} markets ever`);
+    } else if ((ageDays !== null && ageDays <= 30) || (Number.isFinite(w.markets) && w.markets <= 10)) {
+      pts += 20;
+      reasons.push(ageDays !== null && ageDays <= 30 ? `wallet ${Math.round(ageDays)}d old` : `${w.markets} markets ever`);
+    }
+    const inGame = ev.start && f.at >= ev.start;
+    if (inGame && Number.isFinite(pre) && pre - f.price >= 0.15) {
+      pts += pre - f.price >= 0.25 ? 30 : 22;
+      reasons.push(`in-game, fell ${Math.round(pre * 100)}% → ${Math.round(f.price * 100)}%`);
+    }
+    const score = Math.min(100, Math.round(pts));
+    let row = byEvent.get(ev.id);
+    if (!row) byEvent.set(ev.id, (row = { id: ev.id, title: ev.title, teams: ev.teams, league: ev.league, start: ev.start, live: ev.live && !ev.settledAt, settled: Boolean(ev.settledAt), winner: engine.winnerOf(ev.markets.find((m) => m.kind === 'match') || {}), score: 0, total: 0, bets: [] }));
+    if (score >= minScore) {
+      row.bets.push({ at: f.at, wallet: f.wallet, name: w.name || w.pseudonym || '', outcome: f.outcome, outcomeIndex: f.outcomeIndex, price: f.price, cash, score, reasons });
+      row.total += cash;
+    }
+  }
+  const out = [];
+  for (const row of byEvent.values()) {
+    if (!row.bets.length) continue;
+    row.bets.sort((a, b) => b.score - a.score);
+    row.score = Math.min(100, row.bets[0].score + 5 * (row.bets.length - 1));
+    const side = row.bets[0].outcomeIndex;
+    row.suspectSide = row.teams?.[side] || row.bets[0].outcome;
+    row.suspectWon = row.winner === null || row.winner === undefined || row.winner === -1 ? null : row.winner === side;
+    row.bets = row.bets.slice(0, 6);
+    out.push(row);
+  }
+  return out.sort((a, b) => b.score - a.score || b.start - a.start).slice(0, 300);
+}
+
 /** The learning state and the live plumbing. */
 async function brainView() {
   const t = reactionTables();
@@ -461,6 +517,9 @@ export async function handleInsightsRequest(req, res, url) {
       );
     }
 
+    if (m === 'GET' && p === '/api/insights/suspicious') {
+      return json(res, 200, { matches: suspiciousView(Number(url.searchParams.get('min')) || 35) }), true;
+    }
     if (m === 'GET' && p === '/api/insights/whales') {
       return json(res, 200, { whales: whalesView(url.searchParams.get('sort') || 'edge', Number(url.searchParams.get('min')) || 1) }), true;
     }
