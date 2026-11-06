@@ -46,31 +46,49 @@ import { reviewStatus, reviewerConfigured } from './review.js';
 import { getWeights } from './analysts.js';
 import { tables as reactionTables, MOVE_LABELS } from './reaction.js';
 import { learnedPoints } from './signals.js';
+import * as botsMod from './bots.js';
 
-/** Strategies with their variants' results, the learning state and the live plumbing. */
-async function brainView() {
-  const st = brain.strategies();
-  const bets = col('bets');
+/** One bot with its results: paper wallet, real share, decisions against later prices. */
+function botRow(bot, clv) {
+  const bets = col('bets').filter((b) => b.botId === bot.id);
+  const paperBets = bets.filter((b) => b.mode === 'sim' && b.placedAt >= (bot.paperEpoch || 0));
+  const realBets = bets.filter((b) => b.mode === 'real');
+  const settledCost = (list) => list.filter((b) => b.settledAt && ['won', 'lost', 'sold', 'void'].includes(b.status)).reduce((sum, b) => sum + (b.cost || 0), 0);
+  const pt = betTotals(paperBets);
+  const rt = betTotals(realBets);
+  const w = brain.walletFor(bot);
+  const c = clv.get(bot.id);
+  return {
+    ...bot,
+    wallet: { mode: w.mode, bankroll: w.bankroll, blocker: w.blocker },
+    paper: { ...pt, equity: bot.paperBankroll + pt.realized + pt.openMark - pt.openCost, roi: settledCost(paperBets) ? pt.realized / settledCost(paperBets) : null },
+    real: { ...rt, roi: settledCost(realBets) ? rt.realized / settledCost(realBets) : null },
+    clv: c?.clv ?? null,
+    nClose: c?.nClose || 0,
+    move30: c?.move30 ?? null,
+    n30: c?.n30 || 0,
+    lastAt: bets.reduce((mx, b) => Math.max(mx, b.placedAt || 0), 0)
+  };
+}
+
+function botsView() {
   const clv = new Map(db.variantStats().map((r) => [r.variant, r]));
-  const strategies = Object.entries(brain.STRATEGY_DEFS).map(([key, def]) => ({
-    key,
-    label: def.label,
-    enabled: st[key].enabled,
-    realAllowed: st[key].realAllowed,
-    champion: st[key].champion,
-    allocation: st[key].allocation,
-    pendingPromotion: st[key].pendingPromotion,
-    history: (st[key].history || []).slice(-5).reverse(),
-    variants: Object.entries(def.variants).map(([id, params]) => {
-      const vb = bets.filter((b) => b.variant === id && b.strategy === key);
-      const t = betTotals(vb);
-      const c = clv.get(id);
-      return { id, label: params.label, params, champion: st[key].champion === id, totals: t, roi: t.staked ? t.realized / Math.max(1, vb.filter((b) => b.settledAt).reduce((s, b) => s + (b.cost || 0), 0)) : null, clv: c?.clv ?? null, nClose: c?.nClose || 0, move30: c?.move30 ?? null, n30: c?.n30 || 0 };
-    })
-  }));
+  const s = engine.settings();
+  const rep = learn.learnStatus.lastReport?.bots || null;
+  return {
+    schema: botsMod.botSchema(),
+    bots: botsMod.allBots().map((b) => botRow(b, clv)),
+    botsOn: s.botsOn !== false,
+    real: { ...engine.realWallet(), armed: Boolean(col('executor').armed), blocker: brain.realBlocker(), dailyCap: s.realDailyCap, executor: engine.onlineDevice() ? engine.publicDevice(engine.onlineDevice()) : null },
+    report: rep ? { suggestions: rep.suggestions, stopped: rep.stopped, benchmark: rep.benchmark, at: learn.learnStatus.lastReport.at } : null
+  };
+}
+
+/** The learning state and the live plumbing. */
+async function brainView() {
   const t = reactionTables();
   return {
-    strategies,
+    bots: botsView().bots.map((b) => ({ id: b.id, name: b.name, type: b.type, mode: b.mode, enabled: b.enabled, paper: b.paper, real: b.real, clv: b.clv, nClose: b.nClose, move30: b.move30, n30: b.n30, params: b.params })),
     learn: { ...learn.learnStatus, lastReport: learn.learnStatus.lastReport ? { ...learn.learnStatus.lastReport, reasons: undefined } : null },
     weights: getWeights(),
     reasonPoints: learnedPoints(),
@@ -247,10 +265,10 @@ function whalesView(sort = 'edge', minBets = 1) {
   return rows.slice(0, 1000);
 }
 
-function betsView(mode, variant = '', strategy = '') {
-  const meta = col('meta');
+function betsView(mode, botId = '') {
+  const epochs = new Map(botsMod.allBots().map((b) => [b.id, b.paperEpoch || 0]));
   const bets = col('bets')
-    .filter((b) => b.mode === mode && (mode !== 'sim' || b.placedAt >= (meta.simEpoch || 0)) && (!variant || b.variant === variant) && (!strategy || (b.strategy || 'whale') === strategy))
+    .filter((b) => b.mode === mode && (mode !== 'sim' || b.placedAt >= (epochs.get(b.botId) || 0)) && (!botId || b.botId === botId))
     .slice()
     .sort((a, b) => b.placedAt - a.placedAt);
   // Running realized P&L, oldest settlement first.
@@ -349,8 +367,14 @@ function overviewView() {
   const dayStart = Math.floor(now / 86400e3) * 86400e3;
   const today = flags.filter((f) => f.source === 'live' && f.at >= dayStart);
   const topWallets = whalesView('edge', 1).filter((w) => w.resolved >= 3).slice(0, 6);
+  const all = botsMod.allBots();
+  const paperOn = all.filter((b) => b.enabled && b.mode === 'paper').length;
+  const realOn = all.filter((b) => b.enabled && b.mode === 'real').length;
+  const botsOn = s.botsOn !== false;
   return {
-    mode: s.mode,
+    // The banner: red while any real-money bot is on, blue for paper only, grey when stopped.
+    mode: !botsOn || paperOn + realOn === 0 ? 'off' : realOn ? 'real' : 'sim',
+    bots: { on: botsOn, paper: paperOn, real: realOn, blocker: brain.realBlocker() },
     tracking: s.tracking,
     status: engine.engineStatus(),
     sim: engine.simWallet(),
@@ -491,10 +515,15 @@ export async function handleInsightsRequest(req, res, url) {
 
     if (m === 'GET' && p === '/api/insights/bets') {
       const q = url.searchParams;
-      const mode = ['real', 'shadow'].includes(q.get('mode')) ? q.get('mode') : 'sim';
-      const view = betsView(mode, q.get('variant') || '', q.get('strategy') || '');
+      const mode = q.get('mode') === 'real' ? 'real' : 'sim';
+      const botId = q.get('bot') || '';
+      const view = betsView(mode, botId);
+      const names = Object.fromEntries(botsMod.allBots().map((b) => [b.id, b.name]));
+      view.bets = view.bets.map((b) => ({ ...b, botName: names[b.botId] || b.botId || '' }));
       const s = engine.settings();
-      const wallet = mode === 'sim' ? engine.simWallet() : mode === 'real' ? engine.realWallet() : { cash: null, equity: s.simBankroll + view.totals.realized + view.totals.openMark - view.totals.openCost, realized: view.totals.realized, openCost: view.totals.openCost, today: view.totals.today };
+      const bot = botId ? botsMod.botById(botId) : null;
+      const wallet = mode === 'real' ? engine.realWallet() : bot ? (() => { const w = brain.walletFor({ ...bot, mode: 'paper' }); return { cash: null, equity: w.bankroll, realized: view.totals.realized, openCost: view.totals.openCost, today: view.totals.today }; })() : engine.simWallet();
+      void s;
       return json(res, 200, { mode, ...view, wallet }), true;
     }
 
@@ -536,7 +565,8 @@ export async function handleInsightsRequest(req, res, url) {
     if (m === 'POST' && p === '/api/insights/real/arm') {
       const body = await readJson(req, 1024);
       if (body.confirm !== 'REAL') return json(res, 400, { error: 'Type REAL to arm real trading.' }), true;
-      if (engine.settings().mode !== 'real') return json(res, 409, { error: 'Switch the mode to Real first.' }), true;
+      if (!botsMod.allBots().some((b) => b.enabled && b.mode === 'real')) return json(res, 409, { error: 'No bot is set to real money. Set one to Real on the Bots page first.' }), true;
+      if (engine.settings().botsOn === false) return json(res, 409, { error: 'Bots are switched off.' }), true;
       const dev = engine.onlineDevice();
       if (!dev) return json(res, 409, { error: 'No PC executor online. Open the aim4 app on your PC with Insights linked.' }), true;
       if (dev.info?.geo?.blocked) return json(res, 409, { error: `Polymarket blocks trading from the executor's location (${dev.info.geo.country}).` }), true;
@@ -557,34 +587,40 @@ export async function handleInsightsRequest(req, res, url) {
       return json(res, 200, executorView()), true;
     }
 
-    // ---- the brain: strategies, champions, training, backtests, decisions ----
+    // ---- bots, training, backtests, decisions ----
     if (m === 'GET' && p === '/api/insights/brain') return json(res, 200, await brainView()), true;
-    if (m === 'POST' && p === '/api/insights/brain/strategy') {
-      const body = await readJson(req, 2048);
-      const st = brain.strategies()[body.strategy];
-      if (!st) return json(res, 404, { error: 'No such strategy.' }), true;
-      if (typeof body.enabled === 'boolean') st.enabled = body.enabled;
-      if (typeof body.realAllowed === 'boolean') {
-        if (body.realAllowed && body.confirm !== 'REAL') return json(res, 400, { error: 'Type REAL to let this strategy use real money.' }), true;
-        st.realAllowed = body.realAllowed;
+    if (p === '/api/insights/bots') {
+      if (m === 'GET') return json(res, 200, botsView()), true;
+      if (m === 'POST') {
+        const body = await readJson(req, 16 * 1024);
+        if (!botsMod.BOT_TYPES[body.type]) return json(res, 400, { error: 'Pick a bot type.' }), true;
+        const bot = botsMod.createBot(body);
+        return json(res, 200, { bot, ...botsView() }), true;
       }
-      if (typeof body.champion === 'string' && brain.STRATEGY_DEFS[body.strategy].variants[body.champion]) {
-        st.history = [...(st.history || []), { at: Date.now(), from: st.champion, to: body.champion, manual: true }].slice(-20);
-        st.champion = body.champion;
-        st.pendingPromotion = null;
-      }
-      touch('strategies');
-      return json(res, 200, await brainView()), true;
     }
-    if (m === 'POST' && p === '/api/insights/brain/promote') {
-      const body = await readJson(req, 1024);
-      const st = brain.strategies()[body.strategy];
-      if (!st?.pendingPromotion) return json(res, 409, { error: 'Nothing waiting for approval.' }), true;
-      st.history = [...(st.history || []), { at: Date.now(), from: st.champion, to: st.pendingPromotion.variant, approved: true }].slice(-20);
-      st.champion = st.pendingPromotion.variant;
-      st.pendingPromotion = null;
-      touch('strategies');
-      return json(res, 200, await brainView()), true;
+    hit = p.match(/^\/api\/insights\/bots\/([\w-]+)(?:\/(duplicate|reset))?$/);
+    if (hit) {
+      const [, id, action] = hit;
+      const bot = botsMod.botById(id);
+      if (!bot) return json(res, 404, { error: 'No such bot.' }), true;
+      if (m === 'PUT' && !action) {
+        const body = await readJson(req, 16 * 1024);
+        if (body.mode === 'real' && bot.mode !== 'real') {
+          if (botsMod.BOT_TYPES[bot.type].paperOnly) return json(res, 400, { error: 'Market making runs on paper only for now.' }), true;
+          if (body.confirm !== 'REAL') return json(res, 400, { error: 'Type REAL to let this bot use real money.' }), true;
+        }
+        const next = botsMod.updateBot(id, body);
+        return json(res, 200, { bot: next, ...botsView() }), true;
+      }
+      if (m === 'DELETE' && !action) {
+        botsMod.deleteBot(id);
+        return json(res, 200, botsView()), true;
+      }
+      if (m === 'POST' && action === 'duplicate') return json(res, 200, { bot: botsMod.duplicateBot(id), ...botsView() }), true;
+      if (m === 'POST' && action === 'reset') {
+        botsMod.resetPaper(id);
+        return json(res, 200, botsView()), true;
+      }
     }
     if (m === 'POST' && p === '/api/insights/train') {
       learn.runTraining().catch(() => {});
@@ -593,19 +629,23 @@ export async function handleInsightsRequest(req, res, url) {
     if (m === 'POST' && p === '/api/insights/backtest') {
       const body = await readJson(req, 2048);
       const days = Math.min(365, Math.max(1, Number(body.days) || 30));
+      const bot = botsMod.botById(body.bot);
+      if (!bot) return json(res, 400, { error: 'Pick a bot to test.' }), true;
       if (body.kind === 'ticks') {
-        const out = await backtest.tickBacktest(body.strategy, body.variant, { days, tables: reactionTables() });
+        const size = bot.sizing.kind === 'fixed' ? bot.sizing.value : 15;
+        const out = await backtest.tickBacktest(bot.type, bot.params, { days, tables: reactionTables(), size, name: bot.name });
         return json(res, 200, out), true;
       }
+      if (bot.type !== 'swing') return json(res, 400, { error: '5-minute history backtests run swing bots; use recorded ticks for market making.' }), true;
       // Cached histories only: training fetches new ones; a backtest should answer fast.
       const { matches } = await learn.loadHistories({ fetchLimit: 0 });
-      return json(res, 200, backtest.historyBacktest(matches, body.variant)), true;
+      return json(res, 200, backtest.historyBacktest(matches, bot.params, { name: bot.name })), true;
     }
     if (m === 'GET' && p === '/api/insights/decisions') {
       const q = url.searchParams;
       return (
         json(res, 200, {
-          decisions: db.listDecisions({ strategy: q.get('strategy') || '', variant: q.get('variant') || '', action: q.get('action') || '', eventId: q.get('event') || '', limit: Number(q.get('limit')) || 150, before: Number(q.get('before')) || 0 }),
+          decisions: db.listDecisions({ strategy: q.get('strategy') || '', variant: q.get('bot') || q.get('variant') || '', action: q.get('action') || '', eventId: q.get('event') || '', limit: Number(q.get('limit')) || 150, before: Number(q.get('before')) || 0 }),
           counts: db.counts()
         }),
         true

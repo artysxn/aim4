@@ -12,11 +12,10 @@
 //                    after each decision; adopted only if they beat both the
 //                    current weights and "no change" on later, unseen decisions
 //   5 whale reasons  points per signal reason from settled whale bets
-//   6 champions      a challenger variant that beat its champion over enough
-//                    settled bets (bootstrap, 95%) takes over; a champion
-//                    losing with 95% confidence loses its real-money permission
-//   7 allocation     Thompson sampling: each strategy's share of the stake
-//                    follows how likely it is to be the best one right now
+//   6 bots           every bot ranked on its settled bets; a paper bot that
+//                    beats your real bots with 95% confidence (bootstrap) is
+//                    pointed out; a real bot losing with 95% confidence goes
+//                    back to paper when its auto-stop is on
 // ---------------------------------------------------------------------------
 
 import fs from 'node:fs';
@@ -27,7 +26,7 @@ import { col, touch, logLine, insightsDir } from './store.js';
 import { fitTables, walkForward, samplesOf, setTables, tables, fitScoreReaction, scoreEpisodes } from './reaction.js';
 import { ANALYST_KEYS, getWeights, setWeights } from './analysts.js';
 import { setLearnedPoints } from './signals.js';
-import { STRATEGY_DEFS, strategies } from './brain.js';
+import { allBots } from './bots.js';
 import { listRecordings, readRecording } from './recorder.js';
 import { replayMids } from './backtest.js';
 
@@ -179,9 +178,9 @@ export function fitReasonPoints() {
 
 // ---- champion / challenger ---------------------------------------------------------------
 
-function returnsOf(variant, since) {
+function returnsOf(botId, mode, since) {
   return col('bets')
-    .filter((b) => b.variant === variant && b.settledAt && b.settledAt >= since && b.cost > 0 && ['won', 'lost', 'sold', 'void'].includes(b.status))
+    .filter((b) => b.botId === botId && b.mode === mode && b.settledAt && b.settledAt >= since && b.cost > 0 && ['won', 'lost', 'sold', 'void'].includes(b.status))
     .sort((a, b) => a.settledAt - b.settledAt)
     .map((b) => ((b.payout || 0) - b.cost) / b.cost);
 }
@@ -202,92 +201,41 @@ export function probBetter(a, b, iters = 2000, rnd = Math.random) {
   return wins / iters;
 }
 
-export function reviewChampions() {
-  const s = col('settings');
-  const st = strategies();
+/**
+ * Every bot's settled results over 60 days, compared. Paper bots are compared
+ * with the best real bot (or with breaking even when no bot trades real money).
+ */
+export function botReport(rnd = Math.random) {
   const since = Date.now() - 60 * 86400e3;
-  const out = [];
-  for (const [key, def] of Object.entries(STRATEGY_DEFS)) {
-    const champ = st[key].champion;
-    const cr = returnsOf(champ, since);
-    const row = { strategy: key, champion: champ, n: cr.length, mean: mean(cr), challengers: [] };
-    let best = null;
-    for (const v of Object.keys(def.variants)) {
-      if (v === champ) continue;
-      const r = returnsOf(v, since);
-      const p = probBetter(r, cr);
-      row.challengers.push({ variant: v, n: r.length, mean: mean(r), pBetter: p });
-      if (r.length >= 30 && cr.length >= 30 && p >= 0.95 && mean(r) > 0 && (!best || p > best.p)) best = { v, p, n: r.length, m: mean(r) };
-    }
-    if (best) {
-      const realOn = st[key].realAllowed && s.mode === 'real';
-      if (realOn && !s.autoPromoteReal) {
-        st[key].pendingPromotion = { variant: best.v, at: Date.now(), pBetter: best.p, n: best.n, mean: best.m };
-        row.action = `Ready to promote ${best.v} (needs your approval for real money)`;
-      } else if (s.autoPromote) {
-        st[key].history = [...(st[key].history || []), { at: Date.now(), from: champ, to: best.v, pBetter: best.p }].slice(-20);
-        st[key].champion = best.v;
-        st[key].pendingPromotion = null;
-        row.action = `Promoted ${best.v} over ${champ}`;
-        logLine('info', `${key}: ${best.v} promoted over ${champ} (P better ${(best.p * 100).toFixed(0)}%, ${best.n} bets)`);
-      }
-    }
-    // A champion that is losing with confidence stops trading real money.
-    const recent = cr.slice(-40);
-    if (recent.length >= 30 && probBetter(recent.map(() => 0), recent) >= 0.95 && st[key].realAllowed) {
-      st[key].realAllowed = false;
-      row.action = `${champ} lost with 95% confidence over its last ${recent.length} bets: real money switched off for ${key}`;
-      logLine('error', row.action);
-    }
-    out.push(row);
-  }
-  touch('strategies');
-  return out;
-}
-
-/** Thompson sampling over strategies: share of draws in which each one is the best. */
-export function allocate(rnd = Math.random) {
-  const st = strategies();
-  const keys = Object.keys(STRATEGY_DEFS).filter((k) => st[k].enabled);
-  if (!keys.length) return {};
-  const since = Date.now() - 60 * 86400e3;
-  const post = keys.map((k) => {
-    const r = returnsOf(st[k].champion, since);
-    const n0 = 10;
-    const n = r.length;
-    const m = (r.reduce((s, x) => s + x, 0) + 0 * n0) / (n + n0);
-    const v = r.length > 1 ? r.reduce((s, x) => s + (x - mean(r)) ** 2, 0) / (r.length - 1) : 0.5;
-    return { k, m, sd: Math.sqrt((v + 0.25) / (n + n0)) };
+  const bots = allBots();
+  const rows = bots.map((b) => {
+    const paper = returnsOf(b.id, 'sim', Math.max(since, b.paperEpoch || 0));
+    const real = returnsOf(b.id, 'real', since);
+    return { id: b.id, name: b.name, type: b.type, mode: b.mode, enabled: b.enabled, paper: { n: paper.length, mean: mean(paper) }, real: { n: real.length, mean: mean(real) }, _paper: paper, _real: real };
   });
-  const wins = Object.fromEntries(keys.map((k) => [k, 0]));
-  const draws = 4000;
-  const gauss = () => {
-    const u = 1 - rnd();
-    return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * rnd());
-  };
-  for (let i = 0; i < draws; i++) {
-    let best = null;
-    let bestV = -Infinity;
-    for (const p of post) {
-      const x = p.m + p.sd * gauss();
-      if (x > bestV) {
-        bestV = x;
-        best = p.k;
-      }
-    }
-    wins[best]++;
+  const reals = rows.filter((r) => r.mode === 'real' && r.real.n >= 30).sort((a, b) => b.real.mean - a.real.mean);
+  const benchmark = reals[0] || null;
+  const suggestions = [];
+  for (const r of rows) {
+    if (r.mode !== 'paper' || r.paper.n < 30) continue;
+    const p = benchmark ? probBetter(r._paper, benchmark._real, 2000, rnd) : probBetter(r._paper, [0], 2000, rnd);
+    r.pBetter = p;
+    if (p >= 0.95 && r.paper.mean > 0) suggestions.push({ id: r.id, name: r.name, pBetter: p, n: r.paper.n, mean: r.paper.mean, vs: benchmark ? benchmark.name : 'breaking even' });
   }
-  const floor = 0.1;
-  const raw = keys.map((k) => Math.max(floor, wins[k] / draws));
-  const sum = raw.reduce((s, x) => s + x, 0);
-  const alloc = {};
-  keys.forEach((k, i) => {
-    alloc[k] = raw[i] / sum;
-    st[k].allocation = alloc[k];
-  });
-  for (const k of Object.keys(STRATEGY_DEFS)) if (!keys.includes(k)) st[k].allocation = 0;
-  touch('strategies');
-  return { alloc, posterior: post };
+  // Auto-stop: a real bot whose last 40 settled bets lose with 95% confidence.
+  const stopped = [];
+  for (const b of bots) {
+    if (b.mode !== 'real' || !b.autoStop) continue;
+    const recent = returnsOf(b.id, 'real', since).slice(-40);
+    if (recent.length >= 30 && probBetter([0], recent, 2000, rnd) >= 0.95) {
+      b.mode = 'paper';
+      b.updatedAt = Date.now();
+      stopped.push({ id: b.id, name: b.name, n: recent.length, mean: mean(recent) });
+      logLine('error', `${b.name} lost with 95% confidence over its last ${recent.length} real bets: moved back to paper`);
+    }
+  }
+  if (stopped.length) touch('bots');
+  return { bots: rows.map(({ _paper, _real, ...r }) => r), suggestions, stopped, benchmark: benchmark ? benchmark.name : null };
 }
 
 // ---- the run -------------------------------------------------------------------------------
@@ -335,10 +283,8 @@ export async function runTraining() {
     report.reasons = rp;
     db.saveModel('reasons', rp, true);
 
-    learnStatus.step = 'Champions';
-    report.champions = reviewChampions();
-    learnStatus.step = 'Allocation';
-    report.allocation = allocate();
+    learnStatus.step = 'Bots';
+    report.bots = botReport();
     db.saveModel('report', report, true);
     learnStatus.lastReport = report;
     learnStatus.lastRun = Date.now();

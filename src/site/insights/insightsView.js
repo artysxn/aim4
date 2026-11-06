@@ -21,6 +21,7 @@ const API = (import.meta.env?.VITE_API_URL || '').replace(/\/$/, '');
 
 export const INSIGHTS_PAGES = [
   { page: 'ins-overview', route: 'insights', label: 'Overview' },
+  { page: 'ins-bots', route: 'insights-bots', label: 'Bots' },
   { page: 'ins-matches', route: 'insights-matches', label: 'Matches' },
   { page: 'ins-whales', route: 'insights-whales', label: 'Whales' },
   { page: 'ins-signals', route: 'insights-signals', label: 'Signals' },
@@ -178,7 +179,10 @@ export function initInsightsView({ escapeHtml, openRoute }) {
     btVariant: '',
     btDays: 30,
     backtest: null,
-    betsVariant: ''
+    betsBot: '',
+    decBot: '',
+    editBot: null,
+    btBot: ''
   };
 
   const banner = document.createElement('div');
@@ -546,17 +550,18 @@ export function initInsightsView({ escapeHtml, openRoute }) {
     const dev = o.executor?.online;
     let facts = '';
     let label = '';
-    if (mode === 'sim') {
-      label = 'Simulation · paper money';
-      facts = `<div class="ins-mode-fact"><b>${usd(o.sim.equity)}</b><span>Paper wallet</span></div><div class="ins-mode-fact"><b class="${signCls(o.sim.today)}">${usd(o.sim.today, true)}</b><span>Today</span></div><div class="ins-mode-fact"><b>${o.sim.totals.open} · ${usd(o.sim.openCost)}</b><span>Open</span></div><div class="ins-mode-fact"><b class="${signCls(o.sim.realized)}">${usd(o.sim.realized, true)}</b><span>Settled P&L</span></div>`;
-    } else if (mode === 'real') {
-      label = armed ? 'Real money · armed' : 'Real money · not armed';
-      facts = `<div class="ins-mode-fact"><b>${o.real.cash === null ? '-' : usd(o.real.cash)}</b><span>Polymarket balance</span></div><div class="ins-mode-fact"><b>${dev ? 'Online' : 'Offline'}</b><span>PC executor${dev?.info?.geo ? ` · ${esc(dev.info.geo.country)}${dev.info.geo.blocked ? ' blocked' : ''}` : ''}</span></div><div class="ins-mode-fact"><b>${usd(o.real.todayStaked)} / ${usd(o.limits.realDailyCap)}</b><span>Staked today</span></div><div class="ins-mode-fact"><b class="${signCls(o.real.realized)}">${usd(o.real.realized, true)}</b><span>Settled P&L</span></div>`;
+    const b = o.bots || { paper: 0, real: 0 };
+    if (mode === 'real') {
+      label = `Real money · ${b.real} bot${b.real === 1 ? '' : 's'} · ${armed ? 'armed' : 'not armed'}`;
+      facts = `<div class="ins-mode-fact"><b>${o.real.cash === null ? '-' : usd(o.real.cash)}</b><span>Polymarket balance</span></div><div class="ins-mode-fact"><b>${dev ? 'Online' : 'Offline'}</b><span>PC executor${dev?.info?.geo ? ` · ${esc(dev.info.geo.country)}${dev.info.geo.blocked ? ' blocked' : ''}` : ''}</span></div><div class="ins-mode-fact"><b>${usd(o.real.todayStaked)} / ${usd(o.limits.realDailyCap)}</b><span>Staked today</span></div><div class="ins-mode-fact"><b class="${signCls(o.real.realized)}">${usd(o.real.realized, true)}</b><span>Real P&L</span></div><div class="ins-mode-fact"><b>${b.paper}</b><span>Paper bots</span></div>`;
+    } else if (mode === 'sim') {
+      label = `Paper money · ${b.paper} bot${b.paper === 1 ? '' : 's'}`;
+      facts = `<div class="ins-mode-fact"><b>${usd(o.sim.equity)}</b><span>All paper wallets</span></div><div class="ins-mode-fact"><b class="${signCls(o.sim.today)}">${usd(o.sim.today, true)}</b><span>Today</span></div><div class="ins-mode-fact"><b>${o.sim.totals.open} · ${usd(o.sim.openCost)}</b><span>Open</span></div><div class="ins-mode-fact"><b class="${signCls(o.sim.realized)}">${usd(o.sim.realized, true)}</b><span>Settled P&L</span></div>`;
     } else {
-      label = 'Off · nothing is copied';
+      label = b.on === false ? 'Bots off · signals only' : 'No bot is on';
       facts = `<div class="ins-mode-fact"><b>${o.tracking ? 'Tracking' : 'Paused'}</b><span>Signals</span></div>`;
     }
-    const actions = `${mode === 'real' && armed ? '<button type="button" class="ins-btn ins-btn-danger" data-disarm>Disarm</button>' : ''}<button type="button" class="ins-btn ins-btn-icon" data-refresh title="Scan now" aria-label="Scan now">${ICON_REFRESH}</button>`;
+    const actions = `${mode === 'real' && armed ? '<button type="button" class="ins-btn ins-btn-danger" data-disarm>Disarm</button>' : ''}<button type="button" class="ins-btn" data-go-bots>Bots</button><button type="button" class="ins-btn ins-btn-icon" data-refresh title="Scan now" aria-label="Scan now">${ICON_REFRESH}</button>`;
     banner.className = 'ins-mode';
     banner.dataset.mode = mode;
     banner.dataset.armed = armed ? '1' : '0';
@@ -564,6 +569,7 @@ export function initInsightsView({ escapeHtml, openRoute }) {
   }
 
   banner.addEventListener('click', async (e) => {
+    if (e.target.closest('[data-go-bots]')) return openRoute('insights-bots');
     if (e.target.closest('[data-disarm]')) {
       try {
         await api('/api/insights/real/disarm', { method: 'POST' });
@@ -608,7 +614,7 @@ export function initInsightsView({ escapeHtml, openRoute }) {
     const settled = t.won + t.lost;
     const st = o.status;
     const kpis = `<div class="ins-kpis">
-      ${kpi(o.mode === 'real' ? 'Balance' : 'Paper wallet', o.mode === 'real' ? (w.cash === null ? '-' : usd(w.cash)) : usd(w.equity), o.mode === 'real' ? (o.executor?.online ? 'Executor online' : 'Executor offline') : `Started ${usd(ui.settings?.simBankroll ?? null)}`)}
+      ${kpi(o.mode === 'real' ? 'Balance' : 'All paper wallets', o.mode === 'real' ? (w.cash === null ? '-' : usd(w.cash)) : usd(w.equity), o.mode === 'real' ? (o.executor?.online ? 'Executor online' : 'Executor offline') : `${o.sim.bots || 0} paper bots`)}
       ${kpi('Today', usd(w.today, true), `${o.today.signals} signals · ${o.today.copied} copied`, signCls(w.today))}
       ${kpi('Open', `${t.open}`, `${usd(t.openCost)} in · marked ${usd(t.openMark)}`)}
       ${kpi('Settled P&L', usd(w.realized, true), `${t.won} won · ${t.lost} lost${t.sold ? ` · ${t.sold} sold` : ''}`, signCls(w.realized))}
@@ -676,7 +682,7 @@ export function initInsightsView({ escapeHtml, openRoute }) {
       .map((b) => {
         const pnl = b.status === 'open' ? (b.shares || 0) * (b.mark ?? b.price ?? 0) + (b.exitProceeds || 0) - (b.cost || 0) : b.payout !== undefined ? (b.payout || 0) - (b.cost || 0) : null;
         const statusLabel = { open: 'Open', won: 'Won', lost: 'Lost', void: 'Void', sold: 'Sold', pending: 'Sending', failed: 'Failed', missed: 'Missed' }[b.status] || b.status;
-        return `<tr${withMatch ? ` data-open data-match="${esc(b.eventId)}"` : ''}><td><span class="ins-tag ${b.mode}">${b.mode === 'real' ? 'Real' : 'Sim'}</span></td><td>${esc(dayTime(b.placedAt))}</td>${withMatch ? `<td class="wrap">${esc(b.title)}</td>` : ''}<td>${esc(b.outcome)}${b.market === 'map' ? ` <span class="ins-tag">${esc(b.marketLabel)}</span>` : ''}</td><td class="r">${b.price ? pct(b.price, 1) : '-'} <span class="ins-dim">/ ${pct(b.whalePrice, 1)}</span></td><td class="r">${usd(b.cost ?? b.amount)}</td><td class="r">${b.shares ? nf0.format(b.shares) : '-'}</td><td class="r">${b.status === 'open' && Number.isFinite(b.mark) ? pct(b.mark) : '-'}</td><td class="r ${signCls(pnl ?? 0)}">${pnl === null ? '-' : usd(pnl, true)}</td><td><span class="ins-link" data-wallet="${esc(b.sourceWallet)}">${esc(short(b.sourceWallet))}</span></td><td><span class="ins-tag ${b.status}" title="${esc(b.error || b.exitReason || '')}">${statusLabel}</span></td></tr>`;
+        return `<tr${withMatch ? ` data-open data-match="${esc(b.eventId)}"` : ''}><td><span class="ins-tag ${b.mode}">${b.mode === 'real' ? 'Real' : 'Paper'}</span> <span class="ins-dim">${esc(b.botName || '')}</span></td><td>${esc(dayTime(b.placedAt))}</td>${withMatch ? `<td class="wrap">${esc(b.title)}</td>` : ''}<td>${esc(b.outcome)}${b.market === 'map' ? ` <span class="ins-tag">${esc(b.marketLabel)}</span>` : ''}</td><td class="r">${b.price ? pct(b.price, 1) : '-'} <span class="ins-dim">/ ${pct(b.whalePrice, 1)}</span></td><td class="r">${usd(b.cost ?? b.amount)}</td><td class="r">${b.shares ? nf0.format(b.shares) : '-'}</td><td class="r">${b.status === 'open' && Number.isFinite(b.mark) ? pct(b.mark) : '-'}</td><td class="r ${signCls(pnl ?? 0)}">${pnl === null ? '-' : usd(pnl, true)}</td><td><span class="ins-link" data-wallet="${esc(b.sourceWallet)}">${esc(short(b.sourceWallet))}</span></td><td><span class="ins-tag ${b.status}" title="${esc(b.error || b.exitReason || '')}">${statusLabel}</span></td></tr>`;
       })
       .join('');
     return `<div class="ins-table-wrap"><table class="ins-table"><thead><tr><th></th><th>Placed</th>${withMatch ? '<th>Match</th>' : ''}<th>Pick</th><th class="r">Ours / whale</th><th class="r">Stake</th><th class="r">Shares</th><th class="r">Now</th><th class="r">P&L</th><th>From</th><th>Status</th></tr></thead><tbody>${rows || `<tr><td colspan="11" class="ins-empty">No bets</td></tr>`}</tbody></table></div>`;
@@ -684,18 +690,18 @@ export function initInsightsView({ escapeHtml, openRoute }) {
 
   async function pageBets() {
     if (!ui.betsMode) ui.betsMode = ui.overview?.mode === 'real' ? 'real' : 'sim';
-    if (ui.betsMode === 'shadow' && !ui.betsVariant) ui.betsVariant = 's-maker3';
-    const d = await api(`/api/insights/bets?mode=${ui.betsMode}${ui.betsMode === 'shadow' ? `&variant=${encodeURIComponent(ui.betsVariant)}` : ''}`);
+    if (ui.betsMode === 'shadow') ui.betsMode = 'sim';
+    if (!ui.botList) ui.botList = (await api('/api/insights/bots')).bots;
+    const d = await api(`/api/insights/bets?mode=${ui.betsMode}${ui.betsBot ? `&bot=${encodeURIComponent(ui.betsBot)}` : ''}`);
     let bets = d.bets;
     if (ui.betsStatus === 'open') bets = bets.filter((b) => b.status === 'open' || b.status === 'pending');
     if (ui.betsStatus === 'settled') bets = bets.filter((b) => !['open', 'pending'].includes(b.status));
     const t = d.totals;
     const w = d.wallet;
     const settled = t.won + t.lost;
-    const kpis = `<div class="ins-kpis">${kpi(ui.betsMode === 'real' ? 'Balance' : ui.betsMode === 'shadow' ? `Shadow wallet ${esc(ui.betsVariant)}` : 'Paper wallet', ui.betsMode === 'real' ? (w.cash === null ? '-' : usd(w.cash)) : usd(w.equity))}${kpi('Settled P&L', usd(w.realized, true), `${t.won} won · ${t.lost} lost · ${t.voided} void · ${t.sold} sold`, signCls(w.realized))}${kpi('Open', `${t.open}`, `${usd(t.openCost)} in · marked ${usd(t.openMark)}`)}${kpi('Hit rate', settled ? pct(t.won / settled) : '-', `${settled} settled`)}${kpi('Staked', usd(t.staked), `${t.count} bets`)}</div>`;
-    const reset = ui.betsMode === 'sim' ? '<button type="button" class="ins-btn" data-reset-sim>Reset paper wallet</button>' : '';
-    const variantIds = ['w-score', 'w-edge', 'w-proven', 's-maker3', 's-taker5', 's-score', 'm-tight', 'm-wide'];
-    const modeSeg = `<div class="ins-seg ins-modeswitch" data-seg="betsMode"><button type="button" class="ins-seg-btn${ui.betsMode === 'sim' ? ' on' : ''}" data-v="sim">Simulation</button><button type="button" class="ins-seg-btn${ui.betsMode === 'real' ? ' on' : ''}" data-v="real">Real money</button><button type="button" class="ins-seg-btn${ui.betsMode === 'shadow' ? ' on' : ''}" data-v="shadow">Shadow</button></div>${ui.betsMode === 'shadow' ? `<select class="ins-select" data-bets-variant>${variantIds.map((v) => `<option${v === ui.betsVariant ? ' selected' : ''}>${v}</option>`).join('')}</select>` : ''}`;
+    const kpis = `<div class="ins-kpis">${kpi(ui.betsMode === 'real' ? 'Balance' : ui.betsBot ? 'Bot paper wallet' : 'All paper wallets', ui.betsMode === 'real' ? (w.cash === null ? '-' : usd(w.cash)) : usd(w.equity))}${kpi('Settled P&L', usd(w.realized, true), `${t.won} won · ${t.lost} lost · ${t.voided} void · ${t.sold} sold`, signCls(w.realized))}${kpi('Open', `${t.open}`, `${usd(t.openCost)} in · marked ${usd(t.openMark)}`)}${kpi('Hit rate', settled ? pct(t.won / settled) : '-', `${settled} settled`)}${kpi('Staked', usd(t.staked), `${t.count} bets`)}</div>`;
+    const reset = '';
+    const modeSeg = `<div class="ins-seg ins-modeswitch" data-seg="betsMode"><button type="button" class="ins-seg-btn${ui.betsMode === 'sim' ? ' on' : ''}" data-v="sim">Paper</button><button type="button" class="ins-seg-btn${ui.betsMode === 'real' ? ' on' : ''}" data-v="real">Real money</button></div><select class="ins-select" data-bets-bot><option value="">All bots</option>${ui.botList.map((b) => `<option value="${esc(b.id)}"${b.id === ui.betsBot ? ' selected' : ''}>${esc(b.name)}</option>`).join('')}</select>`;
     return `<div class="ins-bar">${modeSeg}${seg('betsStatus', [['open', 'Open'], ['settled', 'Settled'], ['all', 'All']], ui.betsStatus)}<span class="ins-grow"></span>${reset}</div>${kpis}<div class="ins-card"><div class="ins-card-h"><h3>Settled P&L over time</h3></div>${pnlChart(d.curve)}</div>${betsTable(bets)}`;
   }
 
@@ -739,14 +745,6 @@ export function initInsightsView({ escapeHtml, openRoute }) {
       ui.localExec = await local('/api/insights-local/status').catch(() => null);
     }
     const exec = d.executor;
-    const realPanel =
-      s.mode === 'real'
-        ? `<div class="ins-arm">${
-            exec.armed
-              ? `<div class="ins-bar"><b>Armed.</b><span class="ins-muted">Qualifying signals now place real orders from your PC.</span><span class="ins-grow"></span><button type="button" class="ins-btn ins-btn-danger" data-disarm-real>Disarm</button></div>`
-              : `<div class="ins-bar"><input class="ins-field" placeholder="Type REAL" data-arm-input style="width:140px"><button type="button" class="ins-btn ins-btn-danger" data-arm>Arm real trading</button><span class="ins-muted">${exec.online ? `Executor online${exec.online.info?.balance !== null && exec.online.info?.balance !== undefined ? ` · ${usd(exec.online.info.balance)}` : ''}` : 'No executor online'}</span></div>`
-          }</div>`
-        : '';
     const devices = exec.devices.length
       ? exec.devices
           .map((dev) => {
@@ -769,10 +767,10 @@ export function initInsightsView({ escapeHtml, openRoute }) {
     const bfLine = bf ? (bf.running ? `<div class="ins-progress"><i style="width:${bf.matches ? Math.round((bf.done / bf.matches) * 100) : 5}%"></i></div><span class="ins-muted">${bf.done}/${bf.matches || '?'} matches · ${bf.flagged} flagged</span>` : `<span class="ins-muted">Last run ${ago(bf.finishedAt)} ago: ${bf.matches} matches, ${bf.flagged} flagged${bf.error ? ` · <span class="ins-neg">${esc(bf.error)}</span>` : ''}</span>`) : '';
     const log = d.log.map((l) => `<div class="${l.level}">${esc(dayTime(l.at))} ${esc(l.msg)}</div>`).join('');
     return `
-      <div class="ins-card"><div class="ins-card-h"><h3>Mode</h3></div>
-        <div class="ins-bar"><div class="ins-seg ins-modeswitch" data-mode-switch><button type="button" class="ins-seg-btn${s.mode === 'off' ? ' on' : ''}" data-v="off">Off</button><button type="button" class="ins-seg-btn${s.mode === 'sim' ? ' on' : ''}" data-v="sim">Simulation</button><button type="button" class="ins-seg-btn${s.mode === 'real' ? ' on' : ''}" data-v="real">Real money</button></div><span class="ins-grow"></span><span class="ins-muted">Tracking</span>${toggle('tracking', s.tracking)}</div>
-        ${realPanel}
-      </div>
+      <div class="ins-card"><div class="ins-card-h"><h3>Bots</h3><button type="button" class="ins-btn" data-go="insights-bots">Manage bots</button></div><div class="ins-set">
+        ${row('All bots', toggle('botsOn', s.botsOn !== false))}
+        ${row('Tracking and signals', toggle('tracking', s.tracking))}
+      </div></div>
       <div class="ins-card"><div class="ins-card-h"><h3>Matches</h3><span class="ins-muted" data-preview>Tracking ${d.preview.tracked} of ${d.preview.of} open matches</span></div><div class="ins-set">
         ${row('Teams', toggle('useTeams', s.useTeams))}
         ${chipEditor('teams', s.teams, 'Add a team, Enter')}
@@ -790,23 +788,7 @@ export function initInsightsView({ escapeHtml, openRoute }) {
         ${row('On a team priced at most', numberField('maxPrice', s.maxPrice, '%', 100, 1))}
         ${row('Flag sales too', toggle('watchSells', s.watchSells))}
       </div></div>
-      <div class="ins-card"><div class="ins-card-h"><h3>Copying</h3></div><div class="ins-set">
-        ${row('Copy from score', numberField('minScore', s.minScore, '', 1, 1))}
-        ${row('Stake per match', numberField('stakePct', s.stakePct, '% of wallet', 1, 0.1))}
-        ${row('Max per match', numberField('maxStake', s.maxStake, '$', 1, 1))}
-        ${row('Min stake', numberField('minStake', s.minStake, '$', 1, 1))}
-        ${row('Pay up to whale price plus', numberField('maxSlippage', s.maxSlippage, 'c', 100, 0.5))}
-        ${row('Never buy above', numberField('maxEntry', s.maxEntry, '%', 100, 1))}
-        ${row('All open bets at most', numberField('maxOpenPct', s.maxOpenPct, '% of wallet', 1, 1))}
-        ${row('Stop for the day after losing', numberField('dailyLossPct', s.dailyLossPct, '% of wallet', 1, 1))}
-        ${row('Copy live bets', toggle('copyLive', s.copyLive))}
-        ${row('Copy pre-match bets', toggle('copyPrematch', s.copyPrematch))}
-        ${row('Copy map winner bets', toggle('copyMaps', s.copyMaps))}
-        ${row('Skip wallets with a losing record', `${toggle('skipLosers', s.skipLosers)}<span class="ins-unit">after${numberField('loserMinResolved', s.loserMinResolved, '', 1, 1)}settled</span>`)}
-        ${row('Sell when the whale sells', toggle('mirrorExits', s.mirrorExits))}
-      </div><div class="ins-hint">Followed wallets are copied whatever their score. Ignored wallets never are.</div></div>
-      <div class="ins-card"><div class="ins-card-h"><h3>Strategies and risk</h3><button type="button" class="ins-btn ins-btn-sm" data-go="insights-brain">Brain</button></div><div class="ins-set">
-        ${row('Swing stake', numberField('swingStakePct', s.swingStakePct, '% of wallet', 1, 0.1))}
+      <div class="ins-card"><div class="ins-card-h"><h3>Risk limits for every wallet</h3><button type="button" class="ins-btn ins-btn-sm" data-go="insights-brain">Brain</button></div><div class="ins-set">
         ${row('Everything on one match at most', numberField('matchCapPct', s.matchCapPct, '% of wallet', 1, 0.5))}
         ${row('Everything on one team at most', numberField('teamCapPct', s.teamCapPct, '% of wallet', 1, 0.5))}
         ${row('Worst case on one match at most', numberField('worstCasePct', s.worstCasePct, '% of wallet', 1, 0.5))}
@@ -814,15 +796,9 @@ export function initInsightsView({ escapeHtml, openRoute }) {
         ${row('AI review before pre-match bets', toggle('reviewer', s.reviewer))}
         ${row('Review bets from', numberField('reviewMinStake', s.reviewMinStake, '$', 1, 1))}
         ${row('Record every tick', toggle('recordTicks', s.recordTicks))}
-        ${row('Promote better challengers on paper', toggle('autoPromote', s.autoPromote))}
-        ${row('Promote them for real money too', toggle('autoPromoteReal', s.autoPromoteReal))}
-      </div></div>
-      <div class="ins-card"><div class="ins-card-h"><h3>Paper wallet</h3></div><div class="ins-set">
-        ${row('Starting balance', numberField('simBankroll', s.simBankroll, '$', 1, 1))}
-        ${row('', '<button type="button" class="ins-btn" data-reset-sim>Reset paper wallet</button>')}
       </div></div>
       <div class="ins-card"><div class="ins-card-h"><h3>Real money</h3></div><div class="ins-set">
-        ${row('Daily cap', numberField('realDailyCap', s.realDailyCap, '$', 1, 1))}
+        ${row('Daily cap, all real bots together', numberField('realDailyCap', s.realDailyCap, '$', 1, 1))}
       </div>${devices}</div>
       ${thisPc}
       <div class="ins-card"><div class="ins-card-h"><h3>History</h3></div><div class="ins-set">
@@ -857,6 +833,57 @@ export function initInsightsView({ escapeHtml, openRoute }) {
   body.addEventListener('click', async (e) => {
     const go = e.target.closest('[data-go]');
     if (go) return openRoute(go.dataset.go);
+
+    // ---- bots ----
+    const ensureBots = async () => {
+      if (!ui.botsData) ui.botsData = await api('/api/insights/bots');
+      return ui.botsData;
+    };
+    const botOn = e.target.closest('[data-bot-on] .ins-seg-btn');
+    if (botOn) {
+      const id = botOn.closest('[data-bot-on]').dataset.botOn;
+      await api(`/api/insights/bots/${encodeURIComponent(id)}`, { method: 'PUT', body: { enabled: botOn.dataset.v === '1' } }).catch((err) => toast(err.message, true));
+      await loadOverview().catch(() => {});
+      return renderPage();
+    }
+    const botMode = e.target.closest('[data-bot-mode] .ins-seg-btn');
+    if (botMode) {
+      const id = botMode.closest('[data-bot-mode]').dataset.botMode;
+      const bot = (await ensureBots()).bots.find((b) => b.id === id);
+      const toReal = botMode.dataset.v === 'real';
+      if (!bot || (toReal ? bot.mode === 'real' : bot.mode === 'paper')) return;
+      const body2 = { mode: toReal ? 'real' : 'paper' };
+      if (toReal) {
+        body2.confirm = window.prompt(`Let "${bot.name}" trade REAL money (when real trading is armed)? Type REAL to confirm.`) || '';
+        if (body2.confirm !== 'REAL') return;
+      }
+      await api(`/api/insights/bots/${encodeURIComponent(id)}`, { method: 'PUT', body: body2 }).catch((err) => toast(err.message, true));
+      await loadOverview().catch(() => {});
+      return renderPage();
+    }
+    const editB = e.target.closest('[data-edit-bot]');
+    if (editB) {
+      const bot = (await ensureBots()).bots.find((b) => b.id === editB.dataset.editBot);
+      if (bot) openBotEditor(bot);
+      return;
+    }
+    const nb = e.target.closest('[data-new-bot] .ins-seg-btn');
+    if (nb) {
+      const d = await ensureBots();
+      const type = nb.dataset.v;
+      const t = d.schema.types[type];
+      const fresh = { isNew: true, id: '', type, name: t.label, enabled: false, mode: 'paper', sizing: type === 'mm' ? { kind: 'fixed', value: 15 } : { kind: 'pct', value: 2 }, params: {} };
+      for (const fdef of d.schema.common) fresh[fdef.key] = Array.isArray(fdef.def) ? [...fdef.def] : fdef.def;
+      for (const fdef of t.fields) fresh.params[fdef.key] = Array.isArray(fdef.def) ? [...fdef.def] : fdef.def;
+      return openBotEditor(fresh);
+    }
+    const bb = e.target.closest('[data-bot-bets]');
+    if (bb) {
+      ui.betsBot = bb.dataset.botBets;
+      ui.betsMode = bb.dataset.botModeNow === 'real' ? 'real' : 'sim';
+      ui.betsStatus = 'all';
+      return openRoute('insights-bets');
+    }
 
     const decH = e.target.closest('[data-dec]');
     if (decH && !e.target.closest('[data-wallet],[data-match]')) {
@@ -911,10 +938,10 @@ export function initInsightsView({ escapeHtml, openRoute }) {
       runBt.textContent = 'Running';
       const variant = body.querySelector('[data-bt-variant]')?.value;
       const days = Number(body.querySelector('[data-bt-days]')?.value) || 30;
-      ui.btVariant = variant;
+      ui.btBot = variant;
       ui.btDays = days;
       try {
-        ui.backtest = await api('/api/insights/backtest', { method: 'POST', body: { kind: ui.btKind, strategy: ui.btStrategy, variant, days } });
+        ui.backtest = await api('/api/insights/backtest', { method: 'POST', body: { kind: ui.btKind, bot: variant, days } });
       } catch (err) {
         ui.backtest = { error: err.message };
       }
@@ -927,7 +954,6 @@ export function initInsightsView({ escapeHtml, openRoute }) {
       const raw = segBtn.dataset.v;
       ui[key] = ['statsLine'].includes(key) ? Number(raw) : raw;
       if (key === 'btKind' && raw === 'history') ui.btStrategy = 'swing';
-      if (key === 'betsMode' && raw !== 'shadow') ui.betsVariant = '';
       return renderPage();
     }
     const sortTh = e.target.closest('th[data-sort]');
@@ -968,6 +994,7 @@ export function initInsightsView({ escapeHtml, openRoute }) {
       try {
         await api('/api/insights/real/arm', { method: 'POST', body: { confirm: input?.value.trim() } });
         toast('Real trading ARMED');
+        ui.botsData = null;
         await loadOverview();
         return renderPage();
       } catch (err) {
@@ -1076,9 +1103,15 @@ export function initInsightsView({ escapeHtml, openRoute }) {
   });
 
   body.addEventListener('change', (e) => {
-    const bv = e.target.closest?.('[data-bets-variant]');
+    const bv = e.target.closest?.('[data-bets-bot]');
     if (bv) {
-      ui.betsVariant = bv.value;
+      ui.betsBot = bv.value;
+      renderPage();
+      return;
+    }
+    const db = e.target.closest?.('[data-dec-bot]');
+    if (db) {
+      ui.decBot = db.value;
       renderPage();
       return;
     }
@@ -1092,7 +1125,7 @@ export function initInsightsView({ escapeHtml, openRoute }) {
   // ---- decisions ------------------------------------------------------------------
 
   const ACTION_TAGS = { entered: ['copied', 'Entered'], queued: ['queued', 'Order sent'], skipped: ['', 'Skipped'], vetoed: ['lost', 'Vetoed'], review: ['open', 'In review'], exited: ['', 'Exited'] };
-  const modeTag = (m) => `<span class="ins-tag ${m === 'real' ? 'real' : m === 'sim' ? 'sim' : ''}">${m === 'real' ? 'Real' : m === 'sim' ? 'Sim' : 'Shadow'}</span>`;
+  const modeTag = (m) => `<span class="ins-tag ${m === 'real' ? 'real' : 'sim'}">${m === 'real' ? 'Real' : 'Paper'}</span>`;
   const signedC = (x) => (Number.isFinite(x) ? `${x >= 0 ? '+' : ''}${(x * 100).toFixed(1)}c` : '-');
 
   function analystRows(list) {
@@ -1109,7 +1142,7 @@ export function initInsightsView({ escapeHtml, openRoute }) {
     const open = ui.openDecision === d.id;
     const [cls, label] = ACTION_TAGS[d.action] || ['', d.action];
     const c = d.combined || {};
-    const head = `<div class="ins-dec-h" data-dec="${esc(d.id)}"><span class="ins-dim ins-num">${esc(dayTime(d.at))}</span><span class="ins-tag">${esc(d.strategy)}·${esc(d.variant)}</span>${modeTag(d.mode)}<span class="ins-dec-t">${esc(d.title || '')}${d.market && d.market !== 'Match' ? ` · ${esc(d.market)}` : ''}</span><b>${esc(d.outcome || '')}</b><span class="ins-num">${d.price ? pct(d.price, 1) : '-'}</span><span class="ins-num">${d.stake ? usd(d.stake) : ''}</span><span class="ins-tag ${cls}">${label}</span><span class="ins-dec-r">${esc(d.reason || '')}</span></div>`;
+    const head = `<div class="ins-dec-h" data-dec="${esc(d.id)}"><span class="ins-dim ins-num">${esc(dayTime(d.at))}</span><span class="ins-tag">${esc(ui.botList?.find((b) => b.id === d.variant)?.name || d.variant)}</span>${modeTag(d.mode)}<span class="ins-dec-t">${esc(d.title || '')}${d.market && d.market !== 'Match' ? ` · ${esc(d.market)}` : ''}</span><b>${esc(d.outcome || '')}</b><span class="ins-num">${d.price ? pct(d.price, 1) : '-'}</span><span class="ins-num">${d.stake ? usd(d.stake) : ''}</span><span class="ins-tag ${cls}">${label}</span><span class="ins-dec-r">${esc(d.reason || '')}</span></div>`;
     if (!open) return `<div class="ins-dec">${head}</div>`;
     const sum = `<div class="ins-dec-sum ins-num">Market ${d.p_market !== null && d.p_market !== undefined ? pct(d.p_market, 1) : '-'} → expected ${d.p_final !== null && d.p_final !== undefined ? pct(d.p_final, 1) : '-'}${c.sd ? ` ±${(c.sd * 100).toFixed(1)}c` : ''} in ${c.horizon || 30} min · edge ${signedC(d.edge)}${d.live ? ' · live' : ''}</div>`;
     const checks = d.risk?.checks?.length ? `<div class="ins-checks">${d.risk.checks.map((k) => `<span class="ins-check ${k.ok ? 'ok' : 'no'}" title="${esc(k.detail)}">${k.ok ? '✓' : '✗'} ${esc(k.key)}</span>`).join('')}</div>` : '';
@@ -1121,25 +1154,26 @@ export function initInsightsView({ escapeHtml, openRoute }) {
   }
 
   async function pageDecisions() {
-    const q = new URLSearchParams({ strategy: ui.decStrategy, action: ui.decAction, limit: '150' });
+    if (!ui.botList) ui.botList = (await api('/api/insights/bots')).bots;
+    const q = new URLSearchParams({ bot: ui.decBot, action: ui.decAction, limit: '150' });
     const d = await api(`/api/insights/decisions?${q}`);
     const list = d.decisions.length ? d.decisions.map(decisionCard).join('') : '<div class="ins-empty">No decisions yet</div>';
-    return `<div class="ins-bar">${seg('decStrategy', [['', 'All'], ['whale', 'Whale'], ['swing', 'Swing'], ['mm', 'Market making']], ui.decStrategy)}${seg('decAction', [['taken', 'Taken'], ['skipped', 'Skipped'], ['', 'All']], ui.decAction)}<span class="ins-grow"></span><span class="ins-muted ins-num">${nf0.format(d.counts.decisions)} recorded · ${nf0.format(d.counts.taken)} taken · ${nf0.format(d.counts.followed)} with 30-min follow-up</span></div><div class="ins-card ins-decs">${list}</div>`;
+    return `<div class="ins-bar"><select class="ins-select" data-dec-bot><option value="">All bots</option>${ui.botList.map((b) => `<option value="${esc(b.id)}"${b.id === ui.decBot ? ' selected' : ''}>${esc(b.name)}</option>`).join('')}</select>${seg('decAction', [['taken', 'Taken'], ['skipped', 'Skipped'], ['', 'All']], ui.decAction)}<span class="ins-grow"></span><span class="ins-muted ins-num">${nf0.format(d.counts.decisions)} recorded · ${nf0.format(d.counts.taken)} taken · ${nf0.format(d.counts.followed)} with 30-min follow-up</span></div><div class="ins-card ins-decs">${list}</div>`;
   }
 
   // ---- brain ----------------------------------------------------------------------
 
-  function strategyCard(st) {
-    const rows = st.variants
-      .map((v) => {
-        const t = v.totals;
+  function leaderboard(bots) {
+    const rows = bots
+      .slice()
+      .sort((a, b) => (b.paper.realized + b.real.realized) - (a.paper.realized + a.real.realized))
+      .map((b) => {
+        const t = b.mode === 'real' ? b.real : b.paper;
         const settled = t.won + t.lost;
-        return `<tr><td>${v.champion ? '<span class="ins-tag copied">Champion</span>' : '<span class="ins-tag">Challenger</span>'}</td><td>${esc(v.label)} <span class="ins-dim">${esc(v.id)}</span></td><td class="r">${t.count}</td><td class="r">${t.open}</td><td class="r">${t.won}-${t.lost}${t.sold ? ` <span class="ins-dim">+${t.sold} sold</span>` : ''}</td><td class="r">${settled ? pct(t.won / settled) : '-'}</td><td class="r ${signCls(t.realized)}">${usd(t.realized, true)}</td><td class="r ${signCls(v.roi ?? 0)}">${v.roi === null ? '-' : pct(v.roi, 1)}</td><td class="r ${signCls(v.clv ?? 0)}" title="Average start price minus our entry, ${v.nClose} bets">${v.clv === null ? '-' : signedC(v.clv)}</td><td class="r ${signCls(v.move30 ?? 0)}" title="Average move 30 minutes after entry, ${v.n30} bets">${v.move30 === null ? '-' : signedC(v.move30)}</td><td><a class="ins-btn ins-btn-sm" data-shadow="${esc(v.id)}" data-strategy="${esc(st.key)}">Bets</a>${v.champion ? '' : ` <button type="button" class="ins-btn ins-btn-sm" data-champion="${esc(v.id)}" data-strategy="${esc(st.key)}">Make champion</button>`}</td></tr>`;
+        return `<tr data-edit-bot="${esc(b.id)}" data-open><td>${modeTag(b.mode === 'real' ? 'real' : 'sim')} ${esc(b.name)}${b.enabled ? '' : ' <span class="ins-dim">off</span>'}</td><td class="r">${t.count}</td><td class="r">${t.won}-${t.lost}</td><td class="r">${settled ? pct(t.won / settled) : '-'}</td><td class="r ${signCls(t.realized)}">${usd(t.realized, true)}</td><td class="r ${signCls(t.roi ?? 0)}">${t.roi === null ? '-' : pct(t.roi, 1)}</td><td class="r ${signCls(b.clv ?? 0)}" title="Average start price minus our entry, ${b.nClose} bets">${b.clv === null ? '-' : signedC(b.clv)}</td><td class="r ${signCls(b.move30 ?? 0)}" title="Average move 30 minutes after entry, ${b.n30} bets">${b.move30 === null ? '-' : signedC(b.move30)}</td></tr>`;
       })
       .join('');
-    const pending = st.pendingPromotion ? `<div class="ins-arm"><div class="ins-bar"><b>${esc(st.pendingPromotion.variant)} beat the champion</b><span class="ins-muted">${pct(st.pendingPromotion.pBetter)} likely better over ${st.pendingPromotion.n} bets</span><span class="ins-grow"></span><button type="button" class="ins-btn ins-btn-danger" data-approve="${esc(st.key)}">Approve for real money</button></div></div>` : '';
-    const hist = st.history?.length ? `<div class="ins-hint">${st.history.map((h) => `${esc(dayTime(h.at))}: ${esc(h.from)} → ${esc(h.to)}${h.manual ? ' (manual)' : h.approved ? ' (approved)' : h.pBetter ? ` (${pct(h.pBetter)})` : ''}`).join(' · ')}</div>` : '';
-    return `<div class="ins-card"><div class="ins-card-h"><h3>${esc(st.label)}</h3><div class="ins-bar"><span class="ins-muted">Stake share ${pct(st.allocation)}</span><span class="ins-alloc"><i style="width:${Math.round((st.allocation || 0) * 100)}%"></i></span><span class="ins-muted">On</span>${toggleFor(`strategy:${st.key}:enabled`, st.enabled)}<span class="ins-muted">Real money</span>${toggleFor(`strategy:${st.key}:realAllowed`, st.realAllowed)}</div></div>${pending}<div class="ins-table-wrap" style="border:0;background:none"><table class="ins-table"><thead><tr><th></th><th>Variant</th><th class="r">Bets</th><th class="r">Open</th><th class="r">W-L</th><th class="r">Won</th><th class="r">P&L</th><th class="r">ROI</th><th class="r" title="Average start price minus our entry">vs start</th><th class="r" title="Average move 30 minutes after entry">30 min</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>${hist}</div>`;
+    return `<div class="ins-card"><div class="ins-card-h"><h3>Bot results</h3><button type="button" class="ins-btn ins-btn-sm" data-go="insights-bots">Manage bots</button></div><div class="ins-table-wrap" style="border:0;background:none"><table class="ins-table"><thead><tr><th>Bot</th><th class="r">Bets</th><th class="r">W-L</th><th class="r">Won</th><th class="r">P&L</th><th class="r">ROI</th><th class="r" title="Average start price minus our entry">vs start</th><th class="r" title="Average move 30 minutes after entry">30 min</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
   }
 
   const toggleFor = (key, on) => `<div class="ins-seg" data-btoggle="${key}"><button type="button" class="ins-seg-btn${on ? ' on' : ''}" data-v="1">On</button><button type="button" class="ins-seg-btn${!on ? ' on' : ''}" data-v="0">Off</button></div>`;
@@ -1182,13 +1216,162 @@ export function initInsightsView({ escapeHtml, openRoute }) {
       ${kpi('Analyst weights', rep.weights?.adopted ? 'Updated' : 'Kept', esc(rep.weights?.reason || 'Not trained yet'))}
     </div><div class="ins-grid2"><div><div class="ins-hint">Analyst weights</div><table class="ins-table">${Object.entries(d.weights).map(([k, v]) => `<tr><td>${esc(k)}</td><td class="r ins-num">${Number(v).toFixed(2)}</td></tr>`).join('')}</table></div><div><div class="ins-hint">Learned whale-reason points</div><table class="ins-table">${Object.keys(d.reasonPoints).length ? Object.entries(d.reasonPoints).map(([k, v]) => `<tr><td>${esc(k)}</td><td class="r ins-num ${signCls(v)}">${v > 0 ? '+' : ''}${v}</td></tr>`).join('') : '<tr><td class="ins-dim">Defaults until 40 settled bets per reason hold up on later bets</td></tr>'}</table></div></div></div>`;
     const grid = `<div class="ins-card"><div class="ins-card-h"><h3>How these markets react</h3>${seg('brainPhase', [['pre', 'Before start'], ['live', 'Live']], ui.brainPhase)}</div><div class="ins-hint">Average move over the next 30 minutes after the move in each column, shrunk toward zero when there are few cases.</div><div class="ins-table-wrap" style="border:0;background:none">${reactionGrid(d.reaction)}</div></div>`;
-    const variants = Object.fromEntries(d.strategies.map((s2) => [s2.key, s2.variants.map((v) => v.id)]));
     const bt = ui.backtest;
-    const btVariant = variants[ui.btStrategy]?.includes(ui.btVariant) ? ui.btVariant : variants[ui.btStrategy]?.[0];
+    const testable = d.bots.filter((b) => (ui.btKind === 'history' ? b.type === 'swing' : b.type !== 'whale'));
+    const btBot = testable.some((b) => b.id === ui.btBot) ? ui.btBot : testable[0]?.id || '';
     const btResult = bt ? (bt.error ? `<div class="ins-neg">${esc(bt.error)}</div>` : `<div class="ins-kpis">${kpi('Trades', nf0.format(bt.trades), bt.kind === 'history' ? `${bt.testMatches} later matches` : `${bt.recordings} recordings`)}${kpi('Won', bt.winRate === null ? '-' : pct(bt.winRate))}${kpi('Avg return', bt.avgReturn === null ? '-' : pct(bt.avgReturn, 1), 'per $ staked, after costs', signCls(bt.avgReturn ?? 0))}${kpi('Total', `${bt.totalPerDollar >= 0 ? '+' : ''}${bt.totalPerDollar.toFixed(2)}`, '$ per $1 bet each time', signCls(bt.totalPerDollar))}${kpi('Worst run', bt.maxDrawdown.toFixed(2), '$ per $1, peak to trough')}</div>`) : '';
-    const backtestCard = `<div class="ins-card"><div class="ins-card-h"><h3>Backtest</h3></div><div class="ins-bar">${seg('btKind', [['history', '5-min history'], ['ticks', 'Recorded ticks']], ui.btKind)}${seg('btStrategy', ui.btKind === 'history' ? [['swing', 'Swing']] : [['swing', 'Swing'], ['mm', 'Market making']], ui.btStrategy)}<select class="ins-select" data-bt-variant>${(variants[ui.btStrategy] || []).map((v) => `<option${v === btVariant ? ' selected' : ''}>${esc(v)}</option>`).join('')}</select><span class="ins-unit"><input class="ins-field" type="number" data-bt-days value="${ui.btDays}" style="width:70px">days</span><button type="button" class="ins-btn" data-run-bt>Run</button></div>${btResult}</div>`;
+    const backtestCard = `<div class="ins-card"><div class="ins-card-h"><h3>Backtest</h3></div><div class="ins-bar">${seg('btKind', [['history', '5-min history'], ['ticks', 'Recorded ticks']], ui.btKind)}<select class="ins-select" data-bt-variant>${testable.map((b) => `<option value="${esc(b.id)}"${b.id === btBot ? ' selected' : ''}>${esc(b.name)}</option>`).join('')}</select><span class="ins-unit"><input class="ins-field" type="number" data-bt-days value="${ui.btDays}" style="width:70px">days</span><button type="button" class="ins-btn" data-run-bt>Run</button></div>${btResult}</div>`;
     const models = d.models.length ? `<div class="ins-card"><div class="ins-card-h"><h3>Model history</h3></div><table class="ins-table">${d.models.map((m2) => `<tr><td>${esc(dayTime(m2.at))}</td><td>${esc(m2.kind)}</td><td>${m2.adopted ? '<span class="ins-tag copied">In use</span>' : '<span class="ins-tag">Kept old</span>'}</td><td class="ins-dim">${esc(m2.reason || '')}</td></tr>`).join('')}</table></div>` : '';
-    return `${kpis}${d.strategies.map(strategyCard).join('')}${learnCard}${grid}${backtestCard}${models}`;
+    return `${kpis}${leaderboard(d.bots)}${learnCard}${grid}${backtestCard}${models}`;
+  }
+
+  // ---- bots ---------------------------------------------------------------------
+
+  const stakeText = (b) => `${b.sizing.kind === 'pct' ? `${b.sizing.value}% of wallet` : usd(b.sizing.value)} ${{ whale: 'per match', swing: 'per trade', mm: 'per quote' }[b.type]}`;
+  const getPath = (o, path) => path.split('.').reduce((x, k) => x?.[k], o);
+  function setPath(o, path, v) {
+    const keys = path.split('.');
+    let x = o;
+    for (const k of keys.slice(0, -1)) x = x[k] = x[k] || {};
+    x[keys[keys.length - 1]] = v;
+  }
+
+  async function pageBots() {
+    const d = await api('/api/insights/bots');
+    ui.botsData = d;
+    ui.botList = d.bots;
+    const r = d.real;
+    const exec = r.executor;
+    const realBots = d.bots.filter((b) => b.enabled && b.mode === 'real').length;
+    const realBox = `<div class="ins-arm${r.armed ? '' : ' idle'}"><div class="ins-bar"><b>${r.armed ? 'Real money armed' : 'Real money not armed'}</b><span class="ins-muted">${exec ? `PC online · ${exec.info?.balance === null || exec.info?.balance === undefined ? '-' : usd(exec.info.balance)}${exec.info?.geo ? ` · ${esc(exec.info.geo.country)} ${exec.info.geo.blocked ? 'blocked' : 'allowed'}` : ''}` : 'PC executor offline'} · ${realBots} real bot${realBots === 1 ? '' : 's'} on · ${usd(r.todayStaked)} of ${usd(r.dailyCap)} staked today</span><span class="ins-grow"></span>${r.armed ? '<button type="button" class="ins-btn ins-btn-danger" data-disarm-real>Disarm</button>' : `<input class="ins-field" placeholder="Type REAL" data-arm-input style="width:120px"><button type="button" class="ins-btn ins-btn-danger" data-arm>Arm</button>`}</div></div>`;
+    const sugg = (d.report?.suggestions || []).map((x) => `<div class="ins-hint ins-pos">${esc(x.name)} beat ${esc(x.vs)} with ${pct(x.pBetter)} confidence over ${x.n} paper bets (${pct(x.mean, 1)} per bet).</div>`).join('') + (d.report?.stopped || []).map((x) => `<div class="ins-hint ins-neg">${esc(x.name)} went back to paper after losing over its last ${x.n} real bets.</div>`).join('');
+    const rows = d.bots
+      .map((b) => {
+        const t = b.mode === 'real' ? b.real : b.paper;
+        const settled = t.won + t.lost;
+        const type = d.schema.types[b.type];
+        const modeSeg = type.paperOnly
+          ? '<span class="ins-tag sim">Paper</span>'
+          : `<div class="ins-seg ins-modeswitch ins-seg-sm" data-bot-mode="${esc(b.id)}"><button type="button" class="ins-seg-btn${b.mode === 'paper' ? ' on' : ''}" data-v="sim">Paper</button><button type="button" class="ins-seg-btn${b.mode === 'real' ? ' on' : ''}" data-v="real">Real</button></div>`;
+        return `<tr><td>${`<div class="ins-seg ins-seg-sm" data-bot-on="${esc(b.id)}"><button type="button" class="ins-seg-btn${b.enabled ? ' on' : ''}" data-v="1">On</button><button type="button" class="ins-seg-btn${!b.enabled ? ' on' : ''}" data-v="0">Off</button></div>`}</td><td><span class="ins-link" data-edit-bot="${esc(b.id)}">${esc(b.name)}</span><div class="ins-dim">${esc(type.label)}</div></td><td>${modeSeg}${b.mode === 'real' && b.wallet.blocker ? `<div class="ins-dim" title="${esc(b.wallet.blocker)}">${esc(b.wallet.blocker)}</div>` : ''}</td><td>${esc(stakeText(b))}<div class="ins-dim">max ${usd(b.maxStake)}</div></td><td class="r">${b.mode === 'real' ? '<span class="ins-dim">real</span>' : usd(b.paper.equity)}</td><td class="r">${t.count}${t.open ? ` <span class="ins-dim">${t.open} open</span>` : ''}</td><td class="r">${settled ? `${t.won}-${t.lost}` : '-'}</td><td class="r ${signCls(t.realized)}">${usd(t.realized, true)}</td><td class="r ${signCls(t.roi ?? 0)}">${t.roi === null ? '-' : pct(t.roi, 1)}</td><td class="r ${signCls(b.clv ?? 0)}" title="Average start price minus our entry, ${b.nClose} bets">${b.clv === null ? '-' : signedC(b.clv)}</td><td class="r">${b.lastAt ? ago(b.lastAt) : '-'}</td><td><button type="button" class="ins-btn ins-btn-sm" data-edit-bot="${esc(b.id)}">Edit</button> <button type="button" class="ins-btn ins-btn-sm" data-bot-bets="${esc(b.id)}" data-bot-mode-now="${b.mode === 'real' ? 'real' : 'sim'}">Bets</button></td></tr>`;
+      })
+      .join('');
+    const newSeg = `<div class="ins-seg" data-new-bot>${Object.entries(d.schema.types).map(([k, t]) => `<button type="button" class="ins-seg-btn" data-v="${k}">${esc(t.label)}</button>`).join('')}</div>`;
+    return `<div class="ins-card"><div class="ins-card-h"><h3>Bots</h3><div class="ins-bar"><span class="ins-muted">All bots</span>${toggle('botsOn', d.botsOn)}<span class="ins-muted">New</span>${newSeg}</div></div>${realBox}${sugg}</div><div class="ins-table-wrap"><table class="ins-table"><thead><tr><th></th><th>Bot</th><th>Money</th><th>Stake</th><th class="r">Paper wallet</th><th class="r">Bets</th><th class="r">W-L</th><th class="r">P&L</th><th class="r">ROI</th><th class="r" title="Average start price minus our entry">vs start</th><th class="r">Last</th><th></th></tr></thead><tbody>${rows || '<tr><td colspan="12" class="ins-empty">No bots yet</td></tr>'}</tbody></table></div>`;
+  }
+
+  function fieldHtml(f, value, path) {
+    if (f.kind === 'bool') return `<div class="ins-seg" data-be-bool="${path}"><button type="button" class="ins-seg-btn${value ? ' on' : ''}" data-v="1">On</button><button type="button" class="ins-seg-btn${!value ? ' on' : ''}" data-v="0">Off</button></div>`;
+    if (f.kind === 'choice') return `<div class="ins-seg" data-be-choice="${path}">${f.options.map((o) => `<button type="button" class="ins-seg-btn${o === value ? ' on' : ''}" data-v="${o}">${o}${f.unit ? ` ${esc(f.unit)}` : ''}</button>`).join('')}</div>`;
+    if (f.kind === 'multi') return `<div class="ins-chips-t">${f.options.map((o) => `<button type="button" class="ins-chip-t${(value || []).includes(o) ? ' on' : ''}" data-be-multi="${path}" data-v="${esc(o)}">${esc(o)}</button>`).join('')}</div>`;
+    const scale = f.scale || 1;
+    return `<span class="ins-unit">${f.unit === '$' ? '$' : ''}<input class="ins-field" type="number" step="${f.step || 'any'}" data-be-num="${path}" data-scale="${scale}" value="${Number((Number(value) * scale).toFixed(4))}">${f.unit && f.unit !== '$' ? esc(f.unit) : ''}</span>`;
+  }
+
+  function botEditorHtml(bot, schema) {
+    const type = schema.types[bot.type];
+    const sizing = `<div class="ins-seg" data-be-sizing><button type="button" class="ins-seg-btn${bot.sizing.kind === 'pct' ? ' on' : ''}" data-v="pct">% of wallet</button><button type="button" class="ins-seg-btn${bot.sizing.kind === 'fixed' ? ' on' : ''}" data-v="fixed">Fixed $</button></div><span class="ins-unit">${bot.sizing.kind === 'fixed' ? '$' : ''}<input class="ins-field" type="number" step="${bot.sizing.kind === 'fixed' ? 1 : 0.1}" data-be-num="sizing.value" data-scale="1" value="${bot.sizing.value}">${bot.sizing.kind === 'pct' ? '%' : ''}</span>`;
+    const mode = type.paperOnly
+      ? '<span class="ins-tag sim">Paper only for now</span>'
+      : `<div class="ins-seg ins-modeswitch" data-be-mode><button type="button" class="ins-seg-btn${bot.mode === 'paper' ? ' on' : ''}" data-v="sim">Paper</button><button type="button" class="ins-seg-btn${bot.mode === 'real' ? ' on' : ''}" data-v="real">Real money</button></div>`;
+    const commons = schema.common.filter((f) => f.key !== 'review' || bot.type !== 'mm').map((f) => row(esc(f.label), fieldHtml(f, bot[f.key], f.key))).join('');
+    const params = type.fields.map((f) => row(esc(f.label), fieldHtml(f, bot.params[f.key], `params.${f.key}`))).join('');
+    const actions = bot.isNew
+      ? `<button type="button" class="ins-btn" data-be-save>Create</button><button type="button" class="ins-btn" data-close>Cancel</button>`
+      : `<button type="button" class="ins-btn" data-be-save>Save</button><button type="button" class="ins-btn" data-be-dup>Duplicate</button>${bot.mode === 'paper' ? '<button type="button" class="ins-btn" data-be-reset>Reset paper wallet</button>' : ''}<span class="ins-grow"></span><button type="button" class="ins-btn ins-btn-danger" data-be-delete>Delete</button>`;
+    return `<div class="ins-card"><div class="ins-set">
+      ${row('Name', `<input class="ins-field" style="width:280px" data-be-name value="${esc(bot.name)}">`)}
+      ${row('On', fieldHtml({ kind: 'bool' }, bot.enabled, 'enabled'))}
+      ${row('Money', mode)}
+      ${row(esc(type.sizingLabel), sizing)}
+    </div></div>
+    <div class="ins-card"><div class="ins-card-h"><h3>Wallet and limits</h3></div><div class="ins-set">${commons}</div></div>
+    <div class="ins-card"><div class="ins-card-h"><h3>${esc(type.label)} settings</h3></div><div class="ins-set">${params}</div></div>
+    <div class="ins-bar">${actions}</div>`;
+  }
+
+  function openBotEditor(bot) {
+    const schema = ui.botsData.schema;
+    ui.editBot = structuredClone(bot);
+    ui.editBot.origMode = bot.isNew ? 'paper' : bot.mode;
+    const title = bot.isNew ? `New ${esc(schema.types[bot.type].label.toLowerCase())} bot` : esc(bot.name);
+    const panel = openDrawer(title, botEditorHtml(ui.editBot, schema));
+    const redraw = () => {
+      panel.querySelector('.ins-drawer-b').innerHTML = botEditorHtml(ui.editBot, schema);
+    };
+    panel.addEventListener('input', (e) => {
+      const n = e.target.closest('[data-be-num]');
+      if (n) {
+        const v = Number(n.value);
+        if (Number.isFinite(v)) setPath(ui.editBot, n.dataset.beNum, v / Number(n.dataset.scale || 1));
+      }
+      const nm = e.target.closest('[data-be-name]');
+      if (nm) ui.editBot.name = nm.value;
+    });
+    panel.addEventListener('click', async (e) => {
+      const bo = e.target.closest('[data-be-bool] .ins-seg-btn');
+      if (bo) return setPath(ui.editBot, bo.closest('[data-be-bool]').dataset.beBool, bo.dataset.v === '1'), redraw();
+      const ch = e.target.closest('[data-be-choice] .ins-seg-btn');
+      if (ch) return setPath(ui.editBot, ch.closest('[data-be-choice]').dataset.beChoice, Number(ch.dataset.v)), redraw();
+      const mu = e.target.closest('[data-be-multi]');
+      if (mu) {
+        const list = new Set(getPath(ui.editBot, mu.dataset.beMulti) || []);
+        if (list.has(mu.dataset.v)) list.delete(mu.dataset.v);
+        else list.add(mu.dataset.v);
+        setPath(ui.editBot, mu.dataset.beMulti, [...list]);
+        return redraw();
+      }
+      const sz = e.target.closest('[data-be-sizing] .ins-seg-btn');
+      if (sz && sz.dataset.v !== ui.editBot.sizing.kind) {
+        ui.editBot.sizing = { kind: sz.dataset.v, value: sz.dataset.v === 'pct' ? 2 : 10 };
+        return redraw();
+      }
+      const md = e.target.closest('[data-be-mode] .ins-seg-btn');
+      if (md) return (ui.editBot.mode = md.dataset.v === 'real' ? 'real' : 'paper'), redraw();
+      if (e.target.closest('[data-be-save]')) return saveBot();
+      if (e.target.closest('[data-be-dup]')) {
+        await api(`/api/insights/bots/${encodeURIComponent(ui.editBot.id)}/duplicate`, { method: 'POST' }).catch((err) => toast(err.message, true));
+        closeDrawer();
+        return renderPage();
+      }
+      if (e.target.closest('[data-be-reset]')) {
+        if (!window.confirm('Start this bot on a fresh paper wallet? Its earlier paper bets stay in history but stop counting.')) return;
+        await api(`/api/insights/bots/${encodeURIComponent(ui.editBot.id)}/reset`, { method: 'POST' }).catch((err) => toast(err.message, true));
+        closeDrawer();
+        return renderPage();
+      }
+      if (e.target.closest('[data-be-delete]')) {
+        if (!window.confirm(`Delete ${ui.editBot.name}? Its bets stay in history.`)) return;
+        await api(`/api/insights/bots/${encodeURIComponent(ui.editBot.id)}`, { method: 'DELETE' }).catch((err) => toast(err.message, true));
+        closeDrawer();
+        return renderPage();
+      }
+    });
+  }
+
+  async function saveBot() {
+    const b = ui.editBot;
+    const body = { name: b.name, type: b.type, enabled: b.enabled, sizing: b.sizing, params: b.params };
+    for (const f of ui.botsData.schema.common) body[f.key] = b[f.key];
+    const wantsReal = b.mode === 'real' && b.origMode !== 'real';
+    let confirm = '';
+    if (wantsReal) {
+      confirm = window.prompt(`Let "${b.name}" trade REAL money (when real trading is armed)? Type REAL to confirm.`) || '';
+      if (confirm !== 'REAL') return toast('Not switched to real money', true);
+    }
+    try {
+      let id = b.id;
+      if (b.isNew) id = (await api('/api/insights/bots', { method: 'POST', body })).bot.id;
+      else await api(`/api/insights/bots/${encodeURIComponent(id)}`, { method: 'PUT', body: { ...body, mode: b.mode === 'real' && !wantsReal ? 'real' : 'paper' } });
+      if (wantsReal) await api(`/api/insights/bots/${encodeURIComponent(id)}`, { method: 'PUT', body: { mode: 'real', confirm } });
+      toast(b.isNew ? 'Bot created' : 'Saved');
+      closeDrawer();
+      ui.botList = null;
+      await loadOverview().catch(() => {});
+      return renderPage();
+    } catch (err) {
+      return toast(err.message, true);
+    }
   }
 
   // ---- render loop -------------------------------------------------------------
@@ -1199,6 +1382,7 @@ export function initInsightsView({ escapeHtml, openRoute }) {
     'ins-whales': pageWhales,
     'ins-signals': pageSignals,
     'ins-decisions': pageDecisions,
+    'ins-bots': pageBots,
     'ins-bets': pageBets,
     'ins-brain': pageBrain,
     'ins-stats': pageStats,

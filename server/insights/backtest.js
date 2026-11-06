@@ -15,7 +15,6 @@
 import { fitTables, samplesOf, predict, priceAt, volOf } from './reaction.js';
 import { listRecordings, readRecording } from './recorder.js';
 import { col } from './store.js';
-import { STRATEGY_DEFS } from './brain.js';
 
 const MIN = 60e3;
 const fee = (rate, p) => rate * Math.min(p, 1 - p);
@@ -53,10 +52,9 @@ export function replayMids(lines, token, every = 5000) {
   return out;
 }
 
-/** Swing on 5-minute history, walk-forward. */
-export function historyBacktest(matches, variantId, { split = 0.7, spread = 0.02, feeRate = 0.03 } = {}) {
-  const p = STRATEGY_DEFS.swing.variants[variantId];
-  if (!p) throw new Error(`Unknown swing variant ${variantId}`);
+/** A swing bot's settings on 5-minute history, walk-forward. */
+export function historyBacktest(matches, p, { split = 0.7, spread = 0.02, feeRate = 0.03, name = 'swing' } = {}) {
+  if (!p || p.minEdge === undefined) throw new Error('History backtests run swing bots');
   const sorted = matches.filter((m) => m.path?.length > 3).sort((a, b) => a.start - b.start);
   const cut = Math.floor(sorted.length * split);
   const fit = fitTables(sorted.slice(0, cut).flatMap((m) => samplesOf(m)));
@@ -66,6 +64,8 @@ export function historyBacktest(matches, variantId, { split = 0.7, spread = 0.02
     for (const s of samplesOf(m, 5 * MIN)) {
       if (s.fut[h] === null) continue;
       if (p.afterScore) continue; // needs recorded score changes; see the tick backtest
+      if (s.p < (p.priceMin ?? 0) || s.p > (p.priceMax ?? 1)) continue;
+      if (s.phase === 'live' ? p.live === false : p.prematch === false) continue;
       const pred = predict(fit, s.phase, s.p, s.move)[h].shrunk;
       const ask = s.p + spread / 2;
       const cost = ask - s.p + fee(feeRate, ask);
@@ -76,7 +76,7 @@ export function historyBacktest(matches, variantId, { split = 0.7, spread = 0.02
       trades.push({ t: s.t, p: s.p, pred, edge, ret, cost });
     }
   }
-  return summarize(trades, { kind: 'history', variant: variantId, trainMatches: cut, testMatches: sorted.length - cut });
+  return summarize(trades, { kind: 'history', bot: name, trainMatches: cut, testMatches: sorted.length - cut });
 }
 
 function summarize(trades, meta) {
@@ -95,11 +95,9 @@ function summarize(trades, meta) {
   return { ...meta, trades: n, winRate: n ? wins / n : null, avgReturn: n ? total / n : null, totalPerDollar: total, median: n ? sorted[Math.floor(n / 2)] : null, maxDrawdown: dd };
 }
 
-/** Replay recorded ticks for a market-making or swing variant. */
-export async function tickBacktest(strategy, variantId, { days = 30, feeRate = 0.03, tables = null } = {}) {
-  const def = STRATEGY_DEFS[strategy];
-  const p = def?.variants[variantId];
-  if (!p || strategy === 'whale') throw new Error('Tick backtests run market-making and swing variants');
+/** Replay recorded ticks for a market-making or swing bot's settings. */
+export async function tickBacktest(strategy, p, { days = 30, feeRate = 0.03, tables = null, size = 15, name = strategy } = {}) {
+  if (!p || strategy === 'whale') throw new Error('Tick backtests run market-making and swing bots');
   const since = new Date(Date.now() - days * 86400e3).toISOString().slice(0, 10);
   const recs = listRecordings().filter((r) => r.day >= since);
   const events = col('events');
@@ -172,7 +170,7 @@ export async function tickBacktest(strategy, variantId, { days = 30, feeRate = 0
           const ref = j === 0 ? mid : 1 - mid;
           const inv = pos[j].cost;
           const px = Math.round(Math.floor((ref - half) * 100) / 100 * 1000) / 1000;
-          quotes[j] = inv < p.maxInv && px > 0.01 ? { px, usd: p.size, filled: 0 } : null;
+          quotes[j] = inv < p.maxInv && px > 0.01 ? { px, usd: size, filled: 0 } : null;
         }
       } else {
         const m5 = priceAt(mp, l.t - 5 * MIN);
@@ -210,5 +208,5 @@ export async function tickBacktest(strategy, variantId, { days = 30, feeRate = 0
       trades.push({ t: lines[lines.length - 1].t, ret: (last - open.px) / open.px, event: rec.eventId });
     }
   }
-  return summarize(trades, { kind: 'ticks', strategy, variant: variantId, recordings: recs.length, quotesFilled });
+  return summarize(trades, { kind: 'ticks', strategy, bot: name, recordings: recs.length, quotesFilled });
 }

@@ -31,6 +31,8 @@ export const MODES = ['off', 'sim', 'real'];
 export const DEFAULT_SETTINGS = Object.freeze({
   // Tracking: discovery + trade polling. Off stops every request to Polymarket.
   tracking: true,
+  // Master switch for every bot (paper and real). Off: signals only.
+  botsOn: true,
   // What happens to a qualifying signal. 'sim' is paper money; 'real' places
   // orders through the linked PC executor. Starts in sim, always.
   mode: 'sim',
@@ -131,6 +133,7 @@ export function sanitizeSettings(patch = {}, current = DEFAULT_SETTINGS) {
   const pick = (k) => (k in p ? p[k] : base[k]);
   return {
     tracking: bool(pick('tracking'), base.tracking),
+    botsOn: bool(pick('botsOn'), base.botsOn),
     mode: MODES.includes(pick('mode')) ? pick('mode') : base.mode,
     teams: cleanList(pick('teams'), base.teams),
     tournaments: cleanList(pick('tournaments'), base.tournaments),

@@ -171,7 +171,12 @@ globalThis.fetch = async (url) => {
 };
 const store = await import('./store.js');
 const engine = await import('./engine.js');
-engine.updateSettings({ mode: 'sim', simBankroll: 1000, stakePct: 2, maxStake: 100, minScore: 30 });
+engine.updateSettings({ simBankroll: 1000, stakePct: 2, maxStake: 100, minScore: 30 });
+const botsMod = await import('./bots.js');
+// The first look at the bots seeds them from the settings above: eight paper bots.
+assert(botsMod.allBots().length === 8 && botsMod.allBots().every((b) => b.mode === 'paper'), 'eight paper bots seeded');
+assert(botsMod.botById('w-score').params.minScore === 30 && botsMod.botById('w-score').sizing.value === 2, 'seeded from the old settings');
+for (const b of botsMod.allBots()) botsMod.updateBot(b.id, { enabled: b.id === 'w-score' });
 const ev = normalizeEvent(rawEvent('Counter-Strike: Vitality vs Nobody (BO3) - United21', ['Vitality', 'Nobody']));
 Object.assign(ev, { track: true, reasons: ['event:United21'], live: true, score: '3-9|0-1|Bo3', start: Date.now() - 3600e3 });
 ev.markets[0].prices = [0.8, 0.2];
@@ -183,18 +188,42 @@ const flag = await engine.handleTrade(big, ev, ev.markets[0], 'live');
 assert(flag.kind === 'entry', 'flagged');
 assert(flag.action === 'copied', `copied (${flag.action}: ${flag.actionReason})`);
 const bets = store.col('bets');
-assert(bets.length === 1 && bets[0].mode === 'sim', 'one paper bet');
+assert(bets.length === 1 && bets[0].mode === 'sim' && bets[0].botId === 'w-score', 'one paper bet, owned by the bot');
 assert(bets[0].cost <= 20.0001 && bets[0].cost > 19, `2% of 1000 (${bets[0].cost})`);
 const again = await engine.handleTrade({ ...big, transaction_hash: '0xt2', proxy_wallet: '0x' + '2'.repeat(40) }, ev, ev.markets[0], 'live');
 assert(again.action === 'skip' && /Match stake/.test(again.actionReason), `match cap holds (${again.actionReason})`);
 const other = await engine.handleTrade({ ...big, transaction_hash: '0xt3', token_id: '111', outcome: 'Vitality', outcome_index: 0, price: 0.1, proxy_wallet: '0x' + '3'.repeat(40) }, ev, ev.markets[0], 'live');
 assert(other.action === 'skip', 'never both sides of one market');
-engine.updateSettings({ mode: 'off' });
+engine.updateSettings({ botsOn: false });
 const offFlag = await engine.handleTrade({ ...big, transaction_hash: '0xt4', proxy_wallet: '0x' + '4'.repeat(40) }, ev, ev.markets[0], 'live');
 assert(offFlag.action === 'skip' && /off/i.test(offFlag.actionReason), 'off copies nothing');
-engine.updateSettings({ mode: 'real' });
+engine.updateSettings({ botsOn: true });
+botsMod.updateBot('w-score', { mode: 'real' });
 const realFlag = await engine.handleTrade({ ...big, transaction_hash: '0xt5', proxy_wallet: '0x' + '5'.repeat(40) }, { ...ev, id: '2' }, ev.markets[0], 'live');
 assert(realFlag.action === 'skip' && /armed/i.test(realFlag.actionReason), 'real mode does nothing until armed');
+botsMod.updateBot('w-score', { mode: 'paper' });
+
+// ---- bots: sizing, sanitizing, copies ------------------------------------------------
+
+const fixed = botsMod.sanitizeBot({ type: 'swing', sizing: { kind: 'fixed', value: 25 }, maxStake: 20 });
+assert(botsMod.stakeFor(fixed, 1000) === 20, 'fixed stake inside the max');
+const pctBot = botsMod.sanitizeBot({ type: 'whale', sizing: { kind: 'pct', value: 3 } });
+assert(near(botsMod.stakeFor(pctBot, 500), 15), '3% of 500');
+const wild = botsMod.sanitizeBot({ type: 'mm', mode: 'real', params: { spreadK: 99, nonsense: 1, priceMin: 0.9, priceMax: 0.1 } });
+assert(wild.mode === 'paper', 'market making stays on paper');
+assert(wild.params.spreadK === 6 && !('nonsense' in wild.params), 'params clamped, unknown dropped');
+assert(wild.params.priceMin < wild.params.priceMax, 'price band put in order');
+const made = botsMod.createBot({ type: 'whale', name: 'Test bot', params: { minScore: 10 } });
+assert(made.mode === 'paper' && !made.enabled && made.params.minScore === 10, 'new bots start off, on paper');
+const dup = botsMod.duplicateBot(made.id);
+assert(dup.id !== made.id && dup.name === 'Test bot copy', 'duplicate');
+assert(botsMod.deleteBot(dup.id) && !botsMod.botById(dup.id), 'delete');
+botsMod.updateBot(made.id, { enabled: true });
+const twoBots = await engine.handleTrade({ ...big, transaction_hash: '0xt6', proxy_wallet: '0x' + '6'.repeat(40) }, { ...ev, id: '3' }, ev.markets[0], 'live');
+assert(twoBots.copies.length === 2 && twoBots.copies.every((c) => c.action === 'entered'), `two bots copy the same signal (${JSON.stringify(twoBots.copies)})`);
+assert(/2 paper bots/.test(twoBots.actionReason), 'the flag says how many copied');
+const own = store.col('bets').filter((b) => b.eventId === '3');
+assert(new Set(own.map((b) => b.botId)).size === 2, 'each bot has its own bet');
 
 // Settlement: the paper bet pays out, the whale's record updates.
 ev.markets[0].closed = true;
@@ -284,8 +313,12 @@ const goodR = Array.from({ length: 60 }, () => 0.1 + (rnd() - 0.5) * 0.1);
 const badR = Array.from({ length: 60 }, () => -0.05 + (rnd() - 0.5) * 0.1);
 assert(learn.probBetter(goodR, badR, 1000, rnd) > 0.95, 'bootstrap sees the better variant');
 assert(near(learn.probBetter(goodR, goodR, 1000, rnd), 0.5, 0.1), 'and no difference against itself');
-const alloc = learn.allocate(rnd).alloc;
-assert(Math.abs(Object.values(alloc).reduce((x, y) => x + y, 0) - 1) < 1e-9, 'allocation sums to one');
+const losingBot = botsMod.createBot({ type: 'whale', name: 'Losing real bot' });
+botsMod.updateBot(losingBot.id, { mode: 'real', autoStop: true });
+for (let i = 0; i < 36; i++) store.col('bets').push({ id: 'lb' + i, botId: losingBot.id, mode: 'real', status: i % 6 ? 'lost' : 'won', cost: 10, payout: i % 6 ? 0 : 25, settledAt: Date.now() - (36 - i) * 1000, placedAt: Date.now() - 1e6 });
+const report = learn.botReport(rnd);
+assert(report.bots.length >= 9, 'report covers every bot');
+assert(report.stopped.some((x) => x.id === losingBot.id) && botsMod.botById(losingBot.id).mode === 'paper', 'a losing real bot goes back to paper');
 
 // ---- tick replay and the backtester -------------------------------------------------
 
@@ -298,7 +331,7 @@ const lines = [
 ];
 const rm = backtest.replayMids(lines, 'T', 5000);
 assert(rm.length === 3 && near(rm[0][1], 0.41) && near(rm[1][1], 0.425) && rm[2][0] === 12000, `mid path from book deltas (${JSON.stringify(rm)})`);
-const hb = backtest.historyBacktest(synth, 's-taker5', { spread: 0.01 });
+const hb = backtest.historyBacktest(synth, botsMod.botById('s-taker5').params, { spread: 0.01 });
 assert(hb.testMatches > 0 && hb.trades >= 0, 'history backtest runs walk-forward');
 
 // ---- paper limit orders fill only when the tape trades through ------------------------

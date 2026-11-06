@@ -26,6 +26,7 @@ import { scoreTrade, teamBehind } from './signals.js';
 import { betTotals, walletRecord } from './stats.js';
 import { CAPS, col, logLine, touch } from './store.js';
 import * as brain from './brain.js';
+import { allBots } from './bots.js';
 import * as feeds from './feeds.js';
 import { startRecorder, setRecordFilter } from './recorder.js';
 import { restoreModels, scheduleTraining, runTraining } from './learn.js';
@@ -498,11 +499,6 @@ export async function handleTrade(t, ev, m, source = 'live', resultIdx = null) {
         flag.actionReason = 'Seen too late to copy';
       } else {
         await brain.onWhaleEntry(flag, ev, m, w);
-        if (settings().mode === 'off') Object.assign(flag, { action: 'skip', actionReason: 'Mode is off' });
-        else if (settings().mode === 'real' && flag.action !== 'queued') {
-          const why = !col('executor').armed ? 'Real trading not armed' : !onlineDevice() ? 'PC executor offline' : !brain.strategies().whale.realAllowed ? 'Whale strategy not allowed real money' : '';
-          if (why) Object.assign(flag, { action: 'skip', actionReason: why });
-        }
       }
     } else if (verdict.kind === 'exit') {
       await brain.mirrorWhaleExit(flag, w);
@@ -523,12 +519,14 @@ function betsFor(mode) {
   return col('bets').filter((b) => b.mode === mode && (mode !== 'sim' || b.placedAt >= (meta.simEpoch || 0)));
 }
 
-/** Paper wallet: starting bankroll plus what settled bets made, minus what is still out. */
+/** All paper bots together: the sum of their paper wallets. */
 export function simWallet() {
-  const s = settings();
-  const t = betTotals(betsFor('sim'));
-  const cash = s.simBankroll + t.realized - t.openCost;
-  return { cash, equity: cash + t.openMark, openCost: t.openCost, realized: t.realized, today: t.today, totals: t };
+  const bots = allBots().filter((b) => b.mode === 'paper');
+  const bets = col('bets').filter((b) => b.mode === 'sim' && bots.some((x) => x.id === b.botId && b.placedAt >= (x.paperEpoch || 0)));
+  const t = betTotals(bets);
+  const start = bots.reduce((sum, b) => sum + b.paperBankroll, 0);
+  const cash = start + t.realized - t.openCost;
+  return { cash, equity: cash + t.openMark, openCost: t.openCost, realized: t.realized, today: t.today, totals: t, bots: bots.length };
 }
 
 export function realWallet() {
@@ -870,7 +868,7 @@ export function pollIntents(device) {
   const s = settings();
   const now = Date.now();
   const out = [];
-  if (exec.armed && s.mode === 'real') {
+  if (exec.armed && s.botsOn !== false) {
     for (const i of col('intents')) {
       if (i.status !== 'queued' || i.expiresAt < now) continue;
       i.status = 'sent';
@@ -880,7 +878,7 @@ export function pollIntents(device) {
     }
     if (out.length) touch('intents');
   }
-  return { armed: Boolean(exec.armed), mode: s.mode, intents: out };
+  return { armed: Boolean(exec.armed), intents: out };
 }
 
 /** The executor reports what one intent did. */
@@ -976,8 +974,8 @@ export function setArmed(on) {
 export function updateSettings(patch) {
   const prev = settings();
   const next = sanitizeSettings(patch, prev);
-  // Leaving real mode always disarms. Arming is its own deliberate step.
-  if (prev.mode === 'real' && next.mode !== 'real') setArmed(false);
+  // Switching all bots off always disarms real trading. Arming is its own deliberate step.
+  if (prev.botsOn !== false && next.botsOn === false) setArmed(false);
   const store = col('settings');
   Object.assign(store, next);
   touch('settings');
@@ -993,7 +991,7 @@ export function updateSettings(patch) {
     touch('events');
     setTimeout(() => discover(), 10);
   }
-  if (prev.mode !== next.mode) logLine('info', `Mode ${prev.mode.toUpperCase()} -> ${next.mode.toUpperCase()}`);
+  if (prev.botsOn !== next.botsOn) logLine('info', `Bots ${next.botsOn ? 'on' : 'off'}`);
   return store;
 }
 

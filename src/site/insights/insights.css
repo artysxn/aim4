@@ -278,8 +278,13 @@
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
-.ins-field[type='number']::-webkit-inner-spin-button {
-  opacity: 0.4;
+.ins-field[type='number']::-webkit-inner-spin-button,
+.ins-field[type='number']::-webkit-outer-spin-button {
+  margin: 0;
+  -webkit-appearance: none;
+}
+.ins-field[type='number'] {
+  -moz-appearance: textfield;
 }
 .ins-unit {
   display: inline-flex;
@@ -1165,4 +1170,46 @@
   .ins-dec-h {
     flex-wrap: wrap;
   }
+}
+
+/* ---- Bots ----------------------------------------------------------------------- */
+
+.ins-seg-sm .ins-seg-btn {
+  height: 26px;
+  padding: 0 9px;
+  font-size: 11px;
+}
+.ins-modeswitch.ins-seg-sm .ins-seg-btn {
+  min-width: 0;
+  height: 26px;
+  font-size: 11px;
+}
+.ins-arm.idle {
+  border-color: var(--border);
+  background: var(--ins-field);
+}
+.ins-chips-t {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+  max-width: 420px;
+}
+.ins-chip-t {
+  height: 26px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--muted);
+  font: 600 11px var(--font-body);
+  cursor: pointer;
+}
+.ins-chip-t.on {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+.ins-drawer .ins-bar .ins-grow {
+  flex: 1;
 }

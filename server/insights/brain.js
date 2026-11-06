@@ -15,10 +15,9 @@
 //   record     a decision record in SQLite, taken or not, then follow-up
 //              prices at +5 min, +30 min and the start, and the result
 //
-// Strategies run as variants. One variant per strategy is the champion and
-// trades the main wallet (paper in Simulation, real when armed and allowed);
-// the others are challengers trading their own shadow paper wallets on the
-// same signals, so learn.js can compare them on equal terms.
+// Strategies run as bots (bots.js): each with its own settings, stake rule,
+// paper wallet or the real one. Every enabled bot sees every signal, so bots
+// with different settings can be compared on the same matches.
 // ---------------------------------------------------------------------------
 
 import crypto from 'node:crypto';
@@ -32,120 +31,55 @@ import { reviewDecision, reviewerConfigured } from './review.js';
 import { tables, volOf, priceAt } from './reaction.js';
 import { betTotals, teamTable } from './stats.js';
 import { normName } from './matching.js';
+import { activeBots, botById, stakeFor } from './bots.js';
 
 const newId = (p) => `${p}_${crypto.randomBytes(6).toString('hex')}`;
 const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
 const MIN = 60e3;
 
-/** Strategy variants. Parameters are fixed per variant; challengers differ on purpose. */
-export const STRATEGY_DEFS = {
-  whale: {
-    label: 'Whale copy',
-    variants: {
-      'w-score': { label: 'Score over the line', minScore: null },
-      'w-edge': { label: 'Score 40+ and analysts agree', minScore: 40, minEdge: 0 },
-      'w-proven': { label: 'Specialists and split buys', minScore: 25, needs: ['specialist', 'stacking'] }
-    },
-    champion: 'w-score'
-  },
-  swing: {
-    label: 'Swing',
-    variants: {
-      's-maker3': { label: '3c edge, limit orders', minEdge: 0.03, horizon: 30, maker: true },
-      's-taker5': { label: '5c edge, market orders', minEdge: 0.05, horizon: 30, maker: false },
-      's-score': { label: 'Fade score overreactions', minEdge: 0.025, horizon: 15, maker: false, afterScore: true }
-    },
-    champion: 's-maker3'
-  },
-  mm: {
-    label: 'Market making',
-    variants: {
-      'm-tight': { label: 'Tight quotes', spreadK: 1.0, size: 15, maxInv: 60 },
-      'm-wide': { label: 'Wide quotes', spreadK: 2.0, size: 15, maxInv: 60 }
-    },
-    champion: 'm-wide'
-  }
-};
-
 let api = null; // engine hooks, set by initBrain
 const state = {
   started: false,
   timers: [],
-  lastEval: new Map(), // token|variant -> t
-  lastRecorded: new Map(), // token|variant -> t (skips)
+  lastEval: new Map(), // token|bot -> t
+  lastRecorded: new Map(), // token|bot -> t (skips)
   lastExitCheck: new Map(),
   paperOrders: new Map(), // id -> order
-  quotePause: new Map(), // eventId -> until
+  scoreChangedAt: new Map(), // eventId -> t
   teamRows: null,
   teamRowsAt: 0,
   stats: { decisions: 0, entered: 0, exits: 0, quotes: 0, fills: 0, reviews: 0, vetoes: 0 }
 };
 export const brainStatus = () => ({ ...state.stats, paperOrders: state.paperOrders.size, started: state.started });
 
-// ---- strategy state -------------------------------------------------------------
+const botsOn = () => api.settings().botsOn !== false;
+const openOf = (bets) => bets.filter((b) => b.status === 'open' || b.status === 'pending');
 
-export function strategies() {
-  const s = col('strategies');
-  let changed = false;
-  for (const [key, def] of Object.entries(STRATEGY_DEFS)) {
-    if (!s[key]) {
-      // Market making starts on (paper only; its real path is blocked until promoted
-      // and allowed). Only the whale strategy may use real money out of the box.
-      s[key] = { enabled: true, realAllowed: key === 'whale', champion: def.champion, allocation: 1 / Object.keys(STRATEGY_DEFS).length, pendingPromotion: null, history: [] };
-      changed = true;
-    }
-    if (!def.variants[s[key].champion]) s[key].champion = def.champion;
-  }
-  if (changed) touch('strategies');
-  return s;
+/** Why a real-money bot cannot trade right now, or '' when it can. */
+export function realBlocker() {
+  if (!botsOn()) return 'Bots are switched off';
+  if (!col('executor').armed) return 'Real trading not armed';
+  if (!api.onlineDevice()) return 'PC executor offline';
+  return '';
 }
 
-function variantParams(strategy, variantId) {
-  const p = { ...STRATEGY_DEFS[strategy].variants[variantId] };
-  // The whale champion follows the Settings page's score line.
-  if (strategy === 'whale' && p.minScore === null) p.minScore = api.settings().minScore;
-  return p;
-}
-
-/** Which wallet a variant's trade lands in, and how big that wallet is. */
-function walletFor(strategy, variantId) {
-  const s = api.settings();
-  const st = strategies()[strategy];
-  const champion = st.champion === variantId;
-  const exec = col('executor');
-  // Real mode never falls back to the paper wallet: a champion that may not
-  // trade real money right now trades its shadow wallet, and the flag says why.
-  let mode = 'shadow';
-  if (champion && s.mode === 'real' && exec.armed && st.realAllowed && api.onlineDevice()) mode = 'real';
-  else if (champion && s.mode === 'sim') mode = 'sim';
+/**
+ * The wallet a bot trades: its own paper wallet, or the shared real one.
+ * `open` is what risk checks run against (the whole real wallet for a real
+ * bot); `mine` is the bot's own share of it.
+ */
+export function walletFor(bot) {
   const all = col('bets');
-  let bets;
-  let bankroll;
-  let today;
-  if (mode === 'shadow') {
-    bets = all.filter((b) => b.mode === 'shadow' && b.variant === variantId);
-    const t = betTotals(bets);
-    bankroll = s.simBankroll + t.realized + t.openMark - t.openCost;
-    today = t.today;
-  } else if (mode === 'sim') {
-    const w = api.simWallet();
-    bets = all.filter((b) => b.mode === 'sim' && b.placedAt >= (col('meta').simEpoch || 0));
-    bankroll = w.equity;
-    today = w.today;
-  } else {
+  if (bot.mode === 'real') {
     const w = api.realWallet();
-    bets = all.filter((b) => b.mode === 'real');
-    bankroll = w.equity ?? 0;
-    today = w.today;
+    const real = all.filter((b) => b.mode === 'real');
+    const mine = real.filter((b) => b.botId === bot.id);
+    const t = betTotals(mine);
+    return { mode: 'real', bankroll: w.equity ?? 0, today: t.today, open: openOf(real), mine: openOf(mine), mineCost: t.openCost, blocker: realBlocker() };
   }
-  const open = bets.filter((b) => b.status === 'open' || b.status === 'pending');
-  // Allocation shares are normalized over the strategies that are switched on,
-  // so an even split means a multiplier of 1 whatever the number of strategies.
-  const enabled = Object.values(strategies()).filter((x) => x.enabled);
-  const n = enabled.length || 1;
-  const total = enabled.reduce((sum, x) => sum + (x.allocation || 1 / n), 0) || 1;
-  const allocMult = mode === 'shadow' ? 1 : clamp(((st.allocation || 1 / n) / total) * n, 0.25, 2);
-  return { mode, champion, bankroll, today, open, allocMult };
+  const mine = all.filter((b) => b.mode === 'sim' && b.botId === bot.id && b.placedAt >= (bot.paperEpoch || 0));
+  const t = betTotals(mine);
+  return { mode: 'sim', bankroll: bot.paperBankroll + t.realized + t.openMark - t.openCost, today: t.today, open: openOf(mine), mine: openOf(mine), mineCost: t.openCost, blocker: '' };
 }
 
 // ---- context for the analysts ------------------------------------------------------
@@ -238,11 +172,13 @@ async function contextFor(ev, m, idx, horizon) {
  * @param {object} [a.flag]   the whale flag that triggered it
  * @param {object} [a.whale]  the whale wallet
  */
-export async function consider({ strategy, variantId, ev, m, idx, flag = null, whale = null }) {
+export async function consider({ bot, ev, m, idx, flag = null, whale = null }) {
   const s = api.settings();
-  const params = variantParams(strategy, variantId);
-  const horizon = params.horizon || 30;
-  const wallet = walletFor(strategy, variantId);
+  const strategy = bot.type;
+  const variantId = bot.id;
+  const params = bot.params;
+  const horizon = strategy === 'swing' ? params.horizon : 30;
+  const wallet = walletFor(bot);
   const { token, book, bid, ask, mid, ctx } = await contextFor(ev, m, idx, horizon);
   const decision = {
     id: newId('d'),
@@ -277,22 +213,23 @@ export async function consider({ strategy, variantId, ev, m, idx, flag = null, w
   decision.pMarket = mid;
   decision.pFinal = comb.expected;
 
+  if (wallet.blocker) return finish('skipped', wallet.blocker);
+
   // Size before the edge check: the edge depends on how deep we walk the book.
-  let target;
+  let target = stakeFor(bot, wallet.bankroll);
   if (strategy === 'whale') {
-    // "Stake per match" on the Settings page: whatever the whale strategy already
-    // put on this match counts against it.
-    const already = wallet.open.filter((b) => b.eventId === ev.id && (b.strategy || 'whale') === 'whale').reduce((sum, b) => sum + (b.cost || b.amount || 0), 0);
-    target = Math.min(wallet.bankroll * (s.stakePct / 100) * wallet.allocMult, s.maxStake) - already;
-    if (target < s.minStake) {
+    // The whale stake is per match: what this bot already put on it counts.
+    const already = wallet.mine.filter((x) => x.eventId === ev.id).reduce((sum, x) => sum + (x.cost || x.amount || 0), 0);
+    target -= already;
+    if (target < bot.minStake) {
       decision.analysts = [];
       return finish('skipped', already > 0 ? 'Match stake already in' : 'Stake under minimum');
     }
-  } else target = Math.min(wallet.bankroll * (s.swingStakePct / 100) * wallet.allocMult, s.maxStake);
+  }
   target = Math.floor(target * 100) / 100;
 
   let maxPrice;
-  if (strategy === 'whale') maxPrice = Math.min(s.maxEntry, flag.price + s.maxSlippage);
+  if (strategy === 'whale') maxPrice = Math.min(params.maxEntry, flag.price + params.maxSlippage);
   else maxPrice = Math.min(0.97, comb.expected - params.minEdge);
   const fill = pm.walkAsks(book, target, maxPrice);
   const maker = strategy === 'swing' && params.maker && ask - (bid ?? 0) >= 0.02;
@@ -307,22 +244,28 @@ export async function consider({ strategy, variantId, ev, m, idx, flag = null, w
   decision.price = e.px;
   decision.edge = e.edge;
 
-  // Strategy gates.
+  // The bot's own rules.
   if (strategy === 'whale') {
     if (!flag) return finish('skipped', 'No flag');
     if (whale?.ignore) return finish('skipped', 'Wallet ignored');
     const followed = Boolean(whale?.follow);
+    if (params.followedOnly && !followed) return finish('skipped', 'Not a followed wallet');
     if (!followed && flag.score < params.minScore) return finish('skipped', `Score ${flag.score} under ${params.minScore}`);
-    if (params.needs && !flag.reasons.some((r) => params.needs.includes(r.key))) return finish('skipped', `Needs ${params.needs.join(' or ')}`);
-    if (params.minEdge !== undefined && e.edge < params.minEdge) return finish('skipped', `Edge ${(e.edge * 100).toFixed(1)}c under ${(params.minEdge * 100).toFixed(1)}c`);
-    if (m.kind === 'map' && !s.copyMaps) return finish('skipped', 'Map markets not copied');
-    if (ctx.live && !s.copyLive) return finish('skipped', 'Live bets not copied');
-    if (!ctx.live && !s.copyPrematch) return finish('skipped', 'Pre-match bets not copied');
-    if (s.skipLosers && !followed && whale) {
+    if (params.needs?.length && !flag.reasons.some((r) => params.needs.includes(r.key))) return finish('skipped', `Needs ${params.needs.join(' or ')}`);
+    if ((flag.stackCash || flag.cash) < params.minWhaleCash) return finish('skipped', `Whale bet under $${params.minWhaleCash}`);
+    if (flag.price > params.maxWhalePrice) return finish('skipped', `Whale paid over ${Math.round(params.maxWhalePrice * 100)}%`);
+    if (params.requireEdge && e.edge < params.minEdge) return finish('skipped', `Edge ${(e.edge * 100).toFixed(1)}c under ${(params.minEdge * 100).toFixed(1)}c`);
+    if (m.kind === 'map' && !params.copyMaps) return finish('skipped', 'Map markets not copied');
+    if (ctx.live && !params.copyLive) return finish('skipped', 'Live bets not copied');
+    if (!ctx.live && !params.copyPrematch) return finish('skipped', 'Pre-match bets not copied');
+    if (params.skipLosers && !followed && whale) {
       const rec = api.walletRecord(whale);
-      if (rec.resolved >= s.loserMinResolved && rec.edge !== null && rec.edge < 0) return finish('skipped', `Losing record ${rec.wins}/${rec.resolved}`);
+      if (rec.resolved >= params.loserMinResolved && rec.edge !== null && rec.edge < 0) return finish('skipped', `Losing record ${rec.wins}/${rec.resolved}`);
     }
   } else if (strategy === 'swing') {
+    if (mid < params.priceMin || mid > params.priceMax) return finish('skipped', 'Price outside the band');
+    if (ctx.live && !params.live) return finish('skipped', 'Live trading off');
+    if (!ctx.live && !params.prematch) return finish('skipped', 'Pre-match trading off');
     if (params.afterScore && !(analysts.find((a) => a.key === 'overreaction')?.conf > 0)) return finish('skipped', 'No recent score change');
     if (e.edge < params.minEdge) return finish('skipped', `Edge ${(e.edge * 100).toFixed(1)}c under ${(params.minEdge * 100).toFixed(1)}c`);
     if (comb.sd > 0 && e.edge / comb.sd < 0.25) return finish('skipped', `Edge small against the uncertainty (${(comb.sd * 100).toFixed(1)}c)`);
@@ -330,14 +273,19 @@ export async function consider({ strategy, variantId, ev, m, idx, flag = null, w
   if (m.closed || !m.accepting) return finish('skipped', 'Market not taking orders');
   if (!maker && fill.shares <= 0) return finish('skipped', `No asks under ${(maxPrice * 100).toFixed(0)}%`);
 
-  // Risk against the whole wallet.
-  if (strategy === 'swing') target = Math.min(target * clamp(e.edge / params.minEdge, 0.5, 2), s.maxStake);
+  // The bot's own exposure, then the risk gate against the whole wallet.
+  if (strategy === 'swing') target = Math.min(target * clamp(e.edge / params.minEdge, 0.5, 2), bot.maxStake);
+  const ownRoom = wallet.bankroll * (bot.maxOpenPct / 100) - wallet.mineCost;
+  if (ownRoom < bot.minStake) return finish('skipped', `Bot open-bets limit (${bot.maxOpenPct}% of wallet)`);
+  target = Math.min(target, ownRoom);
+  if (wallet.mode === 'real' && wallet.today <= -wallet.bankroll * (bot.dailyLossPct / 100)) return finish('skipped', 'Bot daily loss stop');
+  const limits = wallet.mode === 'real' ? { ...s, minStake: bot.minStake } : { ...s, minStake: bot.minStake, maxOpenPct: bot.maxOpenPct, dailyLossPct: bot.dailyLossPct };
   const risk = riskGate({
     cand: { eventId: ev.id, conditionId: m.conditionId, tokenId: token, outcome: m.outcomes[idx], side: 'BUY', stake: target, price: e.px, needsExit: strategy === 'swing', start: ev.start, live: ctx.live },
     open: wallet.open,
     bankroll: wallet.bankroll,
     todayPnl: wallet.today,
-    limits: s,
+    limits,
     exitDepth: ctx.depth,
     spread: ask - (bid ?? ask),
     rules: ev.rules
@@ -345,16 +293,17 @@ export async function consider({ strategy, variantId, ev, m, idx, flag = null, w
   decision.risk = risk;
   decision.stake = risk.stake;
   if (!risk.ok) return finish('skipped', `Risk: ${risk.checks.filter((c) => !c.ok).map((c) => c.key).join(', ')}`);
+  if (wallet.mode === 'real' && risk.stake + (api.realWallet().todayStaked || 0) > s.realDailyCap) return finish('skipped', `Real daily cap $${s.realDailyCap} reached`);
 
   // Exit plan, sized to how much this market usually moves.
   const sdH = (vol.sd5 || 0.03) * Math.sqrt(horizon / 5);
   decision.plan =
     strategy === 'whale'
-      ? { hold: true, mirror: true }
-      : { target: Math.min(0.99, e.px + Math.max(params.minEdge, 0.8 * sdH)), stop: Math.max(0.01, e.px - Math.max(0.03, 1.2 * sdH)), timeStop: Date.now() + horizon * 2 * MIN, edgeExit: true };
+      ? { hold: true, mirror: params.mirrorExits, sellAt: params.sellAt || 0 }
+      : { target: Math.min(0.99, e.px + Math.max(params.minEdge, params.targetK * sdH)), stop: Math.max(0.01, e.px - Math.max(0.03, params.stopK * sdH)), timeStop: Date.now() + horizon * params.timeMult * MIN, edgeExit: params.edgeExit };
 
   // A pre-match bet of real size gets a second opinion first.
-  const wantsReview = s.reviewer && wallet.mode !== 'shadow' && !ctx.live && ev.start - Date.now() > 10 * MIN && risk.stake >= s.reviewMinStake && reviewerConfigured();
+  const wantsReview = s.reviewer && bot.review && !ctx.live && ev.start - Date.now() > 10 * MIN && risk.stake >= s.reviewMinStake && reviewerConfigured();
   if (wantsReview) {
     decision.action = 'review';
     decision.reason = 'Waiting for the AI review';
@@ -376,11 +325,11 @@ export async function consider({ strategy, variantId, ev, m, idx, flag = null, w
         return;
       }
       decision.review = rv;
-      await execute(decision, { ev, m, idx, book: fresh, maxPrice, maker, makerPx, flag, wallet });
+      await execute(decision, { ev, m, idx, book: fresh, maxPrice, maker, makerPx, flag, wallet, bot });
     });
     return decision;
   }
-  await execute(decision, { ev, m, idx, book, maxPrice, maker, makerPx, flag, wallet });
+  await execute(decision, { ev, m, idx, book, maxPrice, maker, makerPx, flag, wallet, bot });
   return decision;
 }
 
@@ -410,6 +359,7 @@ function newBet(decision, fields) {
   return {
     id: newId('b'),
     mode: decision.mode,
+    botId: decision.variant,
     strategy: decision.strategy,
     variant: decision.variant,
     decisionId: decision.id,
@@ -432,7 +382,7 @@ function newBet(decision, fields) {
   };
 }
 
-async function execute(decision, { ev, m, idx, book, maxPrice, maker, makerPx, flag }) {
+async function execute(decision, { m, idx, book, maxPrice, maker, makerPx, bot }) {
   const stake = decision.stake;
   const outcomeIndex = idx;
   if (decision.mode === 'real') {
@@ -444,8 +394,8 @@ async function execute(decision, { ev, m, idx, book, maxPrice, maker, makerPx, f
     touch('bets');
     decision.betId = bet.id;
     decision.action = 'queued';
-    decision.reason = `${maker ? 'Limit' : 'Market'} order $${stake.toFixed(2)} up to ${(maxPrice * 100).toFixed(1)}%`;
-    if (flag) Object.assign(flag, { action: 'queued', actionReason: decision.reason, betId: bet.id });
+    decision.reason = `Real ${maker ? 'limit' : 'market'} order $${stake.toFixed(2)} up to ${(maxPrice * 100).toFixed(1)}%`;
+    logLine('info', `REAL ${bot?.name || decision.variant}: ${decision.title} ${decision.outcome} ${decision.reason}`);
   } else if (maker) {
     // A paper limit order: fills only if the tape trades through our price.
     const order = { id: newId('o'), kind: 'entry', decisionId: decision.id, token: decision.token, side: 'BUY', price: makerPx, usd: stake, filledShares: 0, cost: 0, expiresAt: Date.now() + 90e3, decision, outcomeIndex, feeRate: 0 };
@@ -461,14 +411,10 @@ async function execute(decision, { ev, m, idx, book, maxPrice, maker, makerPx, f
     decision.betId = bet.id;
     decision.price = fill.avg;
     decision.action = 'entered';
-    decision.reason = `${decision.mode === 'shadow' ? 'Shadow' : 'Paper'} $${bet.cost.toFixed(2)} at ${(fill.avg * 100).toFixed(1)}%`;
-    if (flag && decision.mode !== 'shadow') Object.assign(flag, { action: 'copied', actionReason: decision.reason, betId: bet.id });
+    decision.reason = `Paper $${bet.cost.toFixed(2)} at ${(fill.avg * 100).toFixed(1)}%`;
     state.stats.entered++;
   }
-  if (flag && decision.mode !== 'shadow' && flag.action === 'none') Object.assign(flag, { action: 'skip', actionReason: decision.reason });
-  if (decision.mode !== 'shadow') logLine('info', `${decision.mode.toUpperCase()} ${decision.strategy}/${decision.variant} ${decision.title}: ${decision.outcome} ${decision.reason}`);
   record(decision);
-  touch('flags');
 }
 
 // ---- paper limit orders and market-making fills --------------------------------------
@@ -509,9 +455,9 @@ function paperFill(o, shares) {
     bet.cost += shares * o.price;
     bet.price = bet.cost / bet.shares;
   } else if (o.kind === 'mm-bid') {
-    let bet = bets.find((b) => b.strategy === 'mm' && b.variant === o.variant && b.tokenId === o.token && b.status === 'open' && b.mode === o.mode);
+    let bet = bets.find((b) => b.strategy === 'mm' && b.botId === o.variant && b.tokenId === o.token && b.status === 'open' && b.mode === o.mode);
     if (!bet) {
-      bet = { id: newId('b'), mode: o.mode, strategy: 'mm', variant: o.variant, status: 'open', eventId: o.eventId, title: o.title, conditionId: o.conditionId, market: o.market, marketLabel: o.marketLabel, tokenId: o.token, outcome: o.outcome, outcomeIndex: o.outcomeIndex, placedAt: Date.now(), shares: 0, cost: 0, price: o.price, mark: o.price, fee: 0, plan: { mm: true } };
+      bet = { id: newId('b'), mode: o.mode, botId: o.variant, strategy: 'mm', variant: o.variant, status: 'open', eventId: o.eventId, title: o.title, conditionId: o.conditionId, market: o.market, marketLabel: o.marketLabel, tokenId: o.token, outcome: o.outcome, outcomeIndex: o.outcomeIndex, placedAt: Date.now(), shares: 0, cost: 0, price: o.price, mark: o.price, fee: 0, plan: { mm: true } };
       bets.push(bet);
     }
     bet.shares += shares;
@@ -527,7 +473,6 @@ function paperFill(o, shares) {
 }
 
 function logFill(o, shares) {
-  if (o.mode === 'shadow') return;
   try {
     db.saveDecision({ id: newId('d'), at: Date.now(), strategy: 'mm', variant: o.variant, mode: o.mode, eventId: o.eventId, conditionId: o.conditionId, token: o.token, outcome: o.outcome, side: o.side, price: o.price, pMarket: feeds.midOf(o.token), pFinal: o.ref, edge: o.side === 'BUY' ? o.ref - o.price : o.price - o.ref, stake: shares * o.price, action: 'entered', reason: `Quote filled: ${o.side === 'BUY' ? 'bought' : 'sold'} ${shares.toFixed(1)} at ${(o.price * 100).toFixed(1)}%`, live: o.live, start: o.start, title: o.title, market: o.marketLabel });
   } catch {
@@ -568,7 +513,7 @@ export async function exitBet(bet, reason, minPrice = 0.01) {
   }
   state.stats.exits++;
   touch('bets');
-  if (bet.mode !== 'shadow') logLine('info', `${bet.mode.toUpperCase()} exit ${bet.title} ${bet.outcome}: ${reason}`);
+  if (bet.mode === 'real') logLine('info', `REAL exit ${bet.title} ${bet.outcome}: ${reason}`);
 }
 
 /** Every open position with a plan, checked against the live price. */
@@ -580,9 +525,13 @@ async function checkExits(token) {
   if (!b || b.bestBid === null) return;
   const bid = b.bestBid;
   for (const bet of col('bets')) {
-    if (bet.tokenId !== token || bet.status !== 'open' || !bet.plan || bet.plan.hold || bet.plan.mm || bet.exiting) continue;
+    if (bet.tokenId !== token || bet.status !== 'open' || !bet.plan || bet.plan.mm || bet.exiting) continue;
     bet.mark = feeds.midOf(token) ?? bet.mark;
     const p = bet.plan;
+    if (p.hold) {
+      if (p.sellAt && bid >= p.sellAt) await exitBet(bet, `Take profit at ${Math.round(p.sellAt * 100)}%`);
+      continue;
+    }
     if (bid >= p.target) await exitBet(bet, `Target ${(p.target * 100).toFixed(1)}% reached`);
     else if (bid <= p.stop) await exitBet(bet, `Stop ${(p.stop * 100).toFixed(1)}% hit`);
     else if (now >= p.timeStop) await exitBet(bet, 'Time limit');
@@ -601,76 +550,80 @@ async function checkExits(token) {
   }
 }
 
-/** The copied whale sold: every whale-strategy bet following it sells too. */
+/** The copied whale sold: every whale bot that follows exits and holds a copy sells too. */
 export async function mirrorWhaleExit(flag, whale) {
-  if (!api.settings().mirrorExits) return 0;
   const entry = whale.entries.filter((e) => e.tokenId === flag.tokenId);
-  const shares = entry.reduce((s, e) => s + (e.shares || 0), 0);
-  const sold = entry.reduce((s, e) => s + (e.exitShares || 0), 0);
+  const shares = entry.reduce((sum, e) => sum + (e.shares || 0), 0);
+  const sold = entry.reduce((sum, e) => sum + (e.exitShares || 0), 0);
   if (!shares || sold / shares < 0.5) return 0;
-  const mine = col('bets').filter((b) => b.status === 'open' && b.strategy === 'whale' && b.sourceWallet === whale.addr && b.tokenId === flag.tokenId && !b.exiting);
+  const mine = col('bets').filter((b) => b.status === 'open' && b.strategy === 'whale' && b.sourceWallet === whale.addr && b.tokenId === flag.tokenId && !b.exiting && (botById(b.botId)?.params.mirrorExits ?? b.plan?.mirror ?? true));
   for (const bet of mine) await exitBet(bet, 'Whale sold');
   if (mine.length) Object.assign(flag, { action: 'mirrored', actionReason: `Exit mirrored on ${mine.length} bet${mine.length > 1 ? 's' : ''}` });
   return mine.length;
 }
 
-// ---- triggers ------------------------------------------------------------------------
-
-/** A live whale entry: every enabled whale variant considers it. */
+/**
+ * A live whale entry: every whale bot that is on considers it. The flag ends
+ * up saying what happened: a real order beats a paper copy beats a skip.
+ */
 export async function onWhaleEntry(flag, ev, m, whale) {
-  const st = strategies().whale;
-  if (!st.enabled) {
-    Object.assign(flag, { action: 'skip', actionReason: 'Whale strategy off' });
+  const bots = activeBots('whale', botsOn());
+  if (!bots.length) {
+    Object.assign(flag, { action: 'skip', actionReason: botsOn() ? 'No whale bot is on' : 'Bots are switched off' });
     return;
   }
-  // Champion first, so the flag shows what the main wallet did.
-  const order = [st.champion, ...Object.keys(STRATEGY_DEFS.whale.variants).filter((v) => v !== st.champion)];
-  for (const variantId of order) {
-    const d = await consider({ strategy: 'whale', variantId, ev, m, idx: flag.outcomeIndex, flag, whale }).catch((err) => {
-      logLine('error', `whale ${variantId}: ${err.message}`);
+  const copies = [];
+  for (const bot of bots) {
+    const d = await consider({ bot, ev, m, idx: flag.outcomeIndex, flag, whale }).catch((err) => {
+      logLine('error', `whale bot ${bot.name}: ${err.message}`);
       return null;
     });
-    if (variantId === st.champion && d && flag.action === 'none') Object.assign(flag, { action: 'skip', actionReason: d.reason });
+    if (d) copies.push({ botId: bot.id, name: bot.name, mode: d.mode, action: d.action, reason: d.reason, betId: d.betId || null });
   }
+  flag.copies = copies;
+  const real = copies.find((c) => c.action === 'queued');
+  const paper = copies.filter((c) => c.action === 'entered');
+  if (real) Object.assign(flag, { action: 'queued', actionReason: `${real.name}: ${real.reason}`, betId: real.betId });
+  else if (paper.length) Object.assign(flag, { action: 'copied', actionReason: paper.length === 1 ? `${paper[0].name}: ${paper[0].reason}` : `Copied by ${paper.length} paper bots`, betId: paper[0].betId });
+  else if (copies[0]) Object.assign(flag, { action: 'skip', actionReason: copies.length === 1 ? copies[0].reason : `No bot copied (${copies[0].name}: ${copies[0].reason})` });
 }
 
-/** The swing strategy looks at one token. Throttled per token and variant. */
+/** Swing bots look at one token. Throttled per token and bot. */
 async function evaluateSwing(ev, m, idx, force = false) {
-  const st = strategies().swing;
-  if (!st.enabled) return;
   const token = m.tokens[idx];
-  for (const variantId of Object.keys(STRATEGY_DEFS.swing.variants)) {
-    const k = `${token}|${variantId}`;
+  for (const bot of activeBots('swing', botsOn())) {
+    if (m.kind === 'map' && !bot.params.maps) continue;
+    const k = `${token}|${bot.id}`;
     if (!force && Date.now() - (state.lastEval.get(k) || 0) < 10e3) continue;
     state.lastEval.set(k, Date.now());
-    // Already holding this token in this variant's wallet: let the exit plan run.
-    const wallet = walletFor('swing', variantId);
-    if (wallet.open.some((b) => b.tokenId === token && b.strategy === 'swing')) continue;
-    await consider({ strategy: 'swing', variantId, ev, m, idx }).catch((err) => logLine('error', `swing ${variantId}: ${err.message}`));
+    // Already holding this token: its exit plan runs instead.
+    if (walletFor(bot).mine.some((b) => b.tokenId === token)) continue;
+    await consider({ bot, ev, m, idx }).catch((err) => logLine('error', `swing bot ${bot.name}: ${err.message}`));
   }
 }
 
-/** Market making: keep two paper (or real) bids around the analysts' price, and asks on inventory. */
+/** Market-making bots keep two bids around the analysts' price, and asks on inventory. Paper only. */
 async function quoteMarket(ev, m) {
-  const st = strategies().mm;
-  if (!st.enabled) return;
-  if ((state.quotePause.get(ev.id) || 0) > Date.now()) return;
+  const bots = activeBots('mm', botsOn()).filter((b) => b.mode === 'paper' && (m.kind === 'match' || b.params.maps));
+  if (!bots.length) return;
   const t0 = m.tokens[0];
   const b0 = feeds.books.get(t0);
   if (!b0 || b0.bestBid === null || b0.bestAsk === null) return;
   const spread = b0.bestAsk - b0.bestBid;
-  if (spread < 0.02) return; // nothing to earn inside a one-tick spread
   const { ctx, mid } = await contextFor(ev, m, 0, 5);
-  if (mid === null || mid < 0.05 || mid > 0.95) return;
+  if (mid === null) return;
   const { analysts, vol } = runAnalysts(ctx);
   const ref = combine(mid, analysts, vol, 5).expected;
   const tick = b0.tick || 0.01;
-  for (const variantId of Object.keys(STRATEGY_DEFS.mm.variants)) {
-    const p = STRATEGY_DEFS.mm.variants[variantId];
-    const wallet = walletFor('mm', variantId);
-    if (wallet.mode === 'real') continue; // real market making waits for a promoted, explicitly allowed champion
+  const sinceScore = Date.now() - (state.scoreChangedAt.get(ev.id) || 0);
+  for (const bot of bots) {
+    const p = bot.params;
+    if (spread < p.minSpread - 1e-9 || mid < p.priceMin || mid > p.priceMax || sinceScore < p.pauseSec * 1000) continue;
+    const wallet = walletFor(bot);
+    const size = stakeFor(bot, wallet.bankroll);
+    if (size < bot.minStake) continue;
     const half = Math.max(tick, p.spreadK * (vol.sd5 || 0.02) * 0.5);
-    const inv = [0, 1].map((i) => wallet.open.filter((b) => b.strategy === 'mm' && b.tokenId === m.tokens[i]).reduce((s, b) => s + (b.cost || 0), 0));
+    const inv = [0, 1].map((i) => wallet.mine.filter((b) => b.tokenId === m.tokens[i]).reduce((sum, b) => sum + (b.cost || 0), 0));
     const skew = ((inv[0] - inv[1]) / Math.max(1, p.maxInv)) * tick * 2;
     const refs = [ref, 1 - ref];
     for (const i of [0, 1]) {
@@ -680,40 +633,41 @@ async function quoteMarket(ev, m) {
       let px = Math.floor((refs[i] - half - (i === 0 ? skew : -skew)) / tick) * tick;
       px = Math.min(px, bk.bestAsk - tick);
       px = Math.round(px * 1000) / 1000;
-      const key = `mm|${variantId}|${token}`;
+      const key = `mm|${bot.id}|${token}`;
       const existing = state.paperOrders.get(key);
-      if (inv[i] >= p.maxInv || px <= 0.01) {
+      const room = Math.min(p.maxInv - inv[i], wallet.bankroll * (bot.maxOpenPct / 100) - wallet.mineCost);
+      if (room < bot.minStake || px <= 0.01) {
         if (existing) state.paperOrders.delete(key);
       } else if (!existing || Math.abs(existing.price - px) >= tick - 1e-9 || existing.expiresAt < Date.now()) {
-        state.paperOrders.set(key, { id: key, kind: 'mm-bid', mode: wallet.mode, variant: variantId, token, side: 'BUY', price: px, usd: p.size, filledShares: 0, cost: 0, expiresAt: Date.now() + 60e3, ref: refs[i], eventId: ev.id, title: `${ev.teams[0]} vs ${ev.teams[1]}`, conditionId: m.conditionId, market: m.kind, marketLabel: m.kind === 'match' ? 'Match' : m.label, outcome: m.outcomes[i], outcomeIndex: i, live: ctx.live, start: ev.start });
+        state.paperOrders.set(key, { id: key, kind: 'mm-bid', mode: 'sim', variant: bot.id, token, side: 'BUY', price: px, usd: Math.min(size, room), filledShares: 0, cost: 0, expiresAt: Date.now() + 60e3, ref: refs[i], eventId: ev.id, title: `${ev.teams[0]} vs ${ev.teams[1]}`, conditionId: m.conditionId, market: m.kind, marketLabel: m.kind === 'match' ? 'Match' : m.label, outcome: m.outcomes[i], outcomeIndex: i, live: ctx.live, start: ev.start });
         state.stats.quotes++;
       }
       // Offer held inventory back at the reference plus the half spread.
-      for (const bet of wallet.open.filter((b) => b.strategy === 'mm' && b.tokenId === token && b.status === 'open' && b.shares > 0.5)) {
+      for (const bet of wallet.mine.filter((b) => b.tokenId === token && b.status === 'open' && b.shares > 0.5)) {
         const askKey = `mmask|${bet.id}`;
-        const apx = Math.max(Math.round((Math.ceil((refs[i] + half) / tick) * tick) * 1000) / 1000, bk.bestBid !== null ? bk.bestBid + tick : 0);
+        const apx = Math.max(Math.round(Math.ceil((refs[i] + half) / tick) * tick * 1000) / 1000, bk.bestBid !== null ? bk.bestBid + tick : 0);
         const cur = state.paperOrders.get(askKey);
         if (!cur || Math.abs(cur.price - apx) >= tick - 1e-9) {
-          state.paperOrders.set(askKey, { id: askKey, kind: 'mm-ask', mode: wallet.mode, variant: variantId, token, side: 'SELL', price: apx, shares: bet.shares, filledShares: 0, cost: 0, betId: bet.id, expiresAt: Date.now() + 60e3, ref: refs[i], eventId: ev.id, title: bet.title, conditionId: m.conditionId, market: bet.market, marketLabel: bet.marketLabel, outcome: bet.outcome, outcomeIndex: i, live: ctx.live, start: ev.start });
+          state.paperOrders.set(askKey, { id: askKey, kind: 'mm-ask', mode: 'sim', variant: bot.id, token, side: 'SELL', price: apx, shares: bet.shares, filledShares: 0, cost: 0, betId: bet.id, expiresAt: Date.now() + 60e3, ref: refs[i], eventId: ev.id, title: bet.title, conditionId: m.conditionId, market: bet.market, marketLabel: bet.marketLabel, outcome: bet.outcome, outcomeIndex: i, live: ctx.live, start: ev.start });
         }
       }
     }
   }
 }
 
-/** A score changed: pull market-making quotes for 20 s and look for overreactions. */
+/** A score changed: pull market-making quotes and look for overreactions. */
 function onScore(eventId, prev, next) {
-  state.quotePause.set(eventId, Date.now() + 20e3);
+  state.scoreChangedAt.set(eventId, Date.now());
   for (const o of [...state.paperOrders.values()]) if (o.eventId === eventId && o.kind.startsWith('mm')) state.paperOrders.delete(o.id);
   const ev = col('events')[eventId];
   if (!ev) return;
   ev.score = next.score;
   ev.live = next.live;
   touch('events');
-  // Give the market 45 s to react, then let the swing strategy judge the jump.
+  // Give the market 45 s to react, then let the swing bots judge the jump.
   setTimeout(() => {
     for (const m of ev.markets) {
-      if (m.closed || (m.kind === 'map' && !api.settings().mapMarkets)) continue;
+      if (m.closed) continue;
       for (const i of [0, 1]) evaluateSwing(ev, m, i, true).catch(() => {});
     }
   }, 45e3).unref?.();
@@ -732,6 +686,7 @@ async function sweep() {
     if (!live && !soon) continue;
     for (const m of ev.markets) {
       if (m.closed || !m.accepting || (m.kind === 'map' && !api.settings().mapMarkets)) continue;
+      // (bots decide for themselves whether map markets are theirs)
       for (const i of [0, 1]) await evaluateSwing(ev, m, i);
       await quoteMarket(ev, m).catch((err) => logLine('error', `mm: ${err.message}`));
     }
@@ -805,7 +760,6 @@ export function initBrain(hooks) {
 export function startBrain() {
   if (state.started) return;
   state.started = true;
-  strategies();
   const every = (fn, ms) => {
     const loop = async () => {
       if (api.settings().tracking) {

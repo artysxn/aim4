@@ -34,6 +34,7 @@ const FILES = {
   intents: () => [],
   executor: () => ({ devices: [], armed: false }),
   strategies: () => ({}),
+  bots: () => ({}),
   meta: () => ({ simEpoch: 0, backfill: null, log: [] })
 };
 
