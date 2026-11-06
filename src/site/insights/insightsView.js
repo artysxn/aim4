@@ -953,6 +953,13 @@ export function initInsightsView({ escapeHtml, openRoute }) {
     }
 
     const segBtn = e.target.closest('[data-seg] .ins-seg-btn');
+    const susTh = e.target.closest('[data-sus-sort]');
+    if (susTh) {
+      const k = susTh.dataset.susSort;
+      ui.susDir = (ui.susSort || 'start') === k ? -(ui.susDir ?? -1) : -1;
+      ui.susSort = k;
+      return renderPage();
+    }
     if (segBtn) {
       const key = segBtn.closest('[data-seg]').dataset.seg;
       const raw = segBtn.dataset.v;
@@ -1249,6 +1256,10 @@ export function initInsightsView({ escapeHtml, openRoute }) {
 
   async function pageSuspicious() {
     const d = await api(`/api/insights/suspicious?min=${ui.susMin || 35}&cash=${ui.susCash || 200}`);
+    const sk = ui.susSort || 'start', sd = ui.susDir ?? -1;
+    const keyOf = { score: (m) => m.score, start: (m) => m.start || 0, match: (m) => (m.teams || []).join(' ').toLowerCase(), side: (m) => String(m.suspectSide || '').toLowerCase(), total: (m) => m.total, result: (m) => (m.suspectWon === null ? 0.5 : m.suspectWon ? 1 : 0), bets: (m) => m.bets.length }[sk];
+    d.matches.sort((a, b) => { const x = keyOf(a), y = keyOf(b); return (x < y ? -1 : x > y ? 1 : 0) * sd; });
+    const th = (k, label, cls = '') => `<th class="${cls}" data-sus-sort="${k}" style="cursor:pointer">${label}${sk === k ? (sd < 0 ? ' ↓' : ' ↑') : ''}</th>`;
     const rows = d.matches
       .map((m) => {
         const res = m.suspectWon === null ? (m.live ? '<span class="ins-live">LIVE</span>' : m.settled ? 'Void' : '<span class="ins-dim">Not played</span>') : m.suspectWon ? '<span class="ins-tag won">Money side won</span>' : '<span class="ins-tag lost">Money side lost</span>';
@@ -1256,7 +1267,7 @@ export function initInsightsView({ escapeHtml, openRoute }) {
         return `<tr data-open data-match="${esc(m.id)}"><td><span class="ins-score" data-band="${band(m.score)}">${m.score}</span></td><td>${esc(dayTime(m.start))}</td><td class="wrap"><b>${esc((m.teams || []).join(' vs '))}</b><div class="ins-dim">${esc(m.league || '')}</div></td><td>${esc(m.suspectSide || '')}</td><td class="r">${usd(m.total)}</td><td>${res}</td><td class="wrap">${bets}</td></tr>`;
       })
       .join('');
-    return `<div class="ins-bar">${seg('susMin', [[35, 'Score 35+'], [50, '50+'], [70, '70+'], [85, '85+']], ui.susMin || 35)}${seg('susCash', [[200, 'Bets $200+'], [500, '$500+'], [1000, '$1k+'], [5000, '$5k+']], ui.susCash || 200)}<button type="button" class="ins-btn ins-btn-icon" data-refresh title="Scan now" aria-label="Scan now">${ICON_REFRESH}</button></div><div class="ins-table-wrap"><table class="ins-table"><thead><tr><th>Score</th><th>Start</th><th>Match</th><th>Money on</th><th class="r">Suspicious $</th><th>Result</th><th>Bets</th></tr></thead><tbody>${rows || '<tr><td colspan="7" class="ins-empty">Nothing suspicious</td></tr>'}</tbody></table></div><div class="ins-hint">Score: bet size, plus a brand-new or nearly unused wallet, plus money arriving in-game after the team fell well below its start price.</div>`;
+    return `<div class="ins-bar">${seg('susMin', [[35, 'Score 35+'], [50, '50+'], [70, '70+'], [85, '85+']], ui.susMin || 35)}${seg('susCash', [[200, 'Bets $200+'], [500, '$500+'], [1000, '$1k+'], [5000, '$5k+']], ui.susCash || 200)}<button type="button" class="ins-btn ins-btn-icon" data-refresh title="Scan now" aria-label="Scan now">${ICON_REFRESH}</button></div><div class="ins-table-wrap"><table class="ins-table"><thead><tr>${th('score', 'Score')}${th('start', 'Start')}${th('match', 'Match')}${th('side', 'Money on')}${th('total', 'Suspicious $', 'r')}${th('result', 'Result')}${th('bets', 'Bets')}</tr></thead><tbody>${rows || '<tr><td colspan="7" class="ins-empty">Nothing suspicious</td></tr>'}</tbody></table></div><div class="ins-hint">Score: bet size, plus a brand-new or nearly unused wallet, plus money arriving in-game after the team fell well below its start price.</div>`;
   }
 
   // ---- bots ---------------------------------------------------------------------
