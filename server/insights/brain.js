@@ -253,6 +253,8 @@ export async function consider({ bot, ev, m, idx, flag = null, whale = null }) {
     if (params.followedOnly && !followed) return finish('skipped', 'Not a followed wallet');
     if (!followed && flag.score < params.minScore) return finish('skipped', `Score ${flag.score} under ${params.minScore}`);
     if (params.needs?.length && !flag.reasons.some((r) => params.needs.includes(r.key))) return finish('skipped', `Needs ${params.needs.join(' or ')}`);
+    const banned = flag.reasons.find((r) => (params.excludes || []).includes(r.key));
+    if (banned) return finish('skipped', `Excluded: ${banned.key}`);
     if ((flag.stackCash || flag.cash) < params.minWhaleCash) return finish('skipped', `Whale bet under $${params.minWhaleCash}`);
     if (flag.price > params.maxWhalePrice) return finish('skipped', `Whale paid over ${Math.round(params.maxWhalePrice * 100)}%`);
     if (flag.price < (params.minWhalePrice || 0)) return finish('skipped', `Whale paid under ${Math.round(params.minWhalePrice * 100)}%`);
@@ -269,6 +271,7 @@ export async function consider({ bot, ev, m, idx, flag = null, whale = null }) {
     const mins = (ev.start - Date.now()) / MIN;
     if (ctx.live || mins > params.windowMax || mins < params.windowMin) return finish('skipped', 'Outside the start window');
     if (mid < params.priceMin || mid > params.priceMax) return finish('skipped', 'Price outside the band');
+    if (params.formats?.length && ev.format && !params.formats.includes(ev.format)) return finish('skipped', `${ev.format} not traded`);
     if (wallet.mine.some((x) => x.eventId === ev.id)) return finish('skipped', 'Already in this match');
   } else if (strategy === 'swing') {
     if (mid < params.priceMin || mid > params.priceMax) return finish('skipped', 'Price outside the band');
