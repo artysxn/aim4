@@ -248,6 +248,14 @@ async function handle(msg) {
     const got = top ? next?.[key] : next?.params?.[key];
     return say(got === undefined ? `Not a setting of ${esc(bot.name)}: ${esc(key)}` : `${esc(bot.name)}: ${esc(key)} = ${esc(JSON.stringify(got))}`);
   }
+  if (cmd === '/today' || cmd === '/bets') {
+    const day0 = new Date().setHours(0, 0, 0, 0);
+    const real = col('bets').filter((b) => b.mode === 'real').sort((a, b) => b.placedAt - a.placedAt);
+    const list = cmd === '/today' ? real.filter((b) => b.placedAt >= day0 || (b.settledAt || 0) >= day0) : real.slice(0, 10);
+    const pnl = list.filter((b) => ['won', 'lost', 'sold', 'void'].includes(b.status)).reduce((s, b) => s + (b.payout || 0) - (b.cost || 0), 0);
+    const icon = (b) => (['won', 'lost', 'sold', 'void'].includes(b.status) ? ((b.payout || 0) > (b.cost || 0) ? '✅' : '❌') : '⏳');
+    return say(`<b>${cmd === '/today' ? 'Today' : 'Last 10 real bets'}</b> · settled P&L ${usd(pnl)}\n${list.map((b) => `${icon(b)} ${esc(b.outcome)} (${esc(b.title)}) at ${pct(b.price ?? b.maxPrice)} · ${usd(b.cost || b.amount)}${b.payout !== undefined ? ` → ${usd(b.payout)}` : ''}`).join('\n') || 'No real bets.'}`);
+  }
   if (cmd === '/digest') {
     return dailyDigest(true);
   }
