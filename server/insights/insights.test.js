@@ -200,6 +200,73 @@ const offFlag = await engine.handleTrade({ ...big, transaction_hash: '0xt4', pro
 assert(offFlag.action === 'skip' && /off/i.test(offFlag.actionReason), 'off copies nothing');
 engine.updateSettings({ botsOn: true });
 
+// V3 and the leader bot through the real decision code: a live crash, books in
+// the feed, Polymarket's trade history stubbed (quiet vs busy market).
+{
+  const brainM = await import('./brain.js');
+  const feedsM = await import('./feeds.js');
+  const botsM = await import('./bots.js');
+  const now = Date.now();
+  const start = now - 30 * 60e3;
+  const mkEv = (id, format, cond, slow = false) => {
+    const e = normalizeEvent({ ...rawEvent(`Counter-Strike: Alpha ${id} vs Beta ${id} (${format}) - Cup`, [`Alpha ${id}`, `Beta ${id}`]), id: `cb_${id}` });
+    e.markets[0].conditionId = cond;
+    e.markets[0].tokens = [`${cond}_a`, `${cond}_b`];
+    Object.assign(e, { live: true, start, format, vrs: [0, 0], tier: '' });
+    store.col('events')[e.id] = e;
+    // A sudden fall (60% -> 12% in five minutes), or a slow bleed (only 22% ten minutes ago).
+    store.col('prices')[cond] = { pre: [0.7, 0.3], last: [0.12, 0.88], min: [0.12, 0.3], max: [0.7, 0.88], lastAt: now, series: slow ? [[now - 8 * 60e3, 0.22], [now - 60e3, 0.12]] : [[now - 5 * 60e3, 0.6], [now - 60e3, 0.12]] };
+    const book = (bid, ask) => ({ bids: new Map([[bid, 400]]), asks: new Map([[ask, 400]]), bestBid: bid, bestAsk: ask, tick: 0.01, at: Date.now(), last: null, tape: [], mids: [], lastMidAt: 0 });
+    feedsM.books.set(e.markets[0].tokens[0], book(0.11, 0.13));
+    feedsM.books.set(e.markets[0].tokens[1], book(0.87, 0.89));
+    return e;
+  };
+  const trades = (e, n) => Array.from({ length: n }, (_, i) => ({ condition_id: e.markets[0].conditionId, outcome: e.markets[0].outcomes[0], timestamp: Math.floor((start + (i + 1) * (25 * 60e3 / n)) / 1000), size: 50, price: 0.3 + (i % 7) / 100 }));
+  const quiet = mkEv('q', 'BO3', '0xquiet');
+  const busy = mkEv('b', 'BO3', '0xbusy');
+  const bo1 = mkEv('o', 'BO1', '0xbo1');
+  const bleed = mkEv('s', 'BO3', '0xbleed', true);
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, o) => {
+    const u = String(url);
+    const cond = new URL(u).searchParams.get('condition');
+    if (u.includes('/v2/trades') && cond) {
+      const e = [quiet, busy, bo1, bleed].find((x) => x.markets[0].conditionId === cond);
+      const n = e === busy || e === bleed ? 300 : 20; // ~10 vs ~0.7 trades a minute
+      return new Response(JSON.stringify({ data: trades(e, n).reverse(), pagination: { has_more: false } }), { status: 200 });
+    }
+    return realFetch(url, o);
+  };
+  try {
+    assert(near(await brainM.tradesPerMin(busy, busy.markets[0]), 300 / 30, 0.5) && (await brainM.tradesPerMin(quiet, quiet.markets[0])) < 1, 'trades a minute counted from the trade history');
+    const v3 = botsM.createBot({ type: 'comeback', name: 'V3 test', sizing: { kind: 'fixed', value: 2 }, maxStake: 25, params: { preMin: 0.5, collapseAt: 0.2, maxSlippage: 0.02, maxOverMid: 0.015, minDrop: 0.2, games: ['cs2'], formats: ['BO3', 'BO5'], lowTierOnly: true, maxTradesPerMin: 4, sellAt: 0.65 } });
+    botsM.updateBot(v3.id, { enabled: true });
+    const V3 = botsM.botById(v3.id);
+    const dq = await brainM.consider({ bot: V3, ev: quiet, m: quiet.markets[0], idx: 0, leg: 'comeback' });
+    assert(dq.action === 'entered' && dq.tradesPerMin < 1 && dq.price <= 0.135 + 1e-9, `V3 buys the crash in a quiet market (${dq.action}: ${dq.reason})`);
+    const db2 = await brainM.consider({ bot: V3, ev: busy, m: busy.markets[0], idx: 0, leg: 'comeback' });
+    assert(db2.action === 'skipped' && /Busy market/.test(db2.reason), `V3 skips the busy market (${db2.reason})`);
+    const ld = botsM.createBot({ type: 'comeback', name: 'Leader test', sizing: { kind: 'fixed', value: 2 }, maxStake: 25, params: { bet: 'leader', busyAt: 4, preMin: 0.5, collapseAt: 0.2, maxSlippage: 0.02, maxOverMid: 0.015, minDrop: 0, formats: [], lowTierOnly: false, sellAt: 0, games: ['cs2'] } });
+    botsM.updateBot(ld.id, { enabled: true });
+    const L = botsM.botById(ld.id);
+    const lq = await brainM.consider({ bot: L, ev: quiet, m: quiet.markets[0], idx: 1, leg: 'comeback' });
+    assert(lq.action === 'skipped' && /real comeback chance/.test(lq.reason), `leader leaves the quiet low-tier BO3 crash alone (${lq.reason})`);
+    // A busy BO3 sudden crash is one the crash bots qualify for (still +4..+23% for the crashed side): leave it.
+    const lb = await brainM.consider({ bot: L, ev: busy, m: busy.markets[0], idx: 1, leg: 'comeback' });
+    assert(lb.action === 'skipped' && /real comeback chance/.test(lb.reason), `leader leaves a sudden crash to the crash bots (${lb.reason})`);
+    // A slow bleed in a busy market: the comeback is overpriced, buy the leader.
+    const ls = await brainM.consider({ bot: L, ev: bleed, m: bleed.markets[0], idx: 1, leg: 'comeback' });
+    assert(ls.action === 'entered' && ls.outcome === bleed.markets[0].outcomes[1] && ls.price >= 0.85, `leader buys the leader on a busy slow bleed (${ls.action}: ${ls.reason})`);
+    const lo = await brainM.consider({ bot: L, ev: bo1, m: bo1.markets[0], idx: 1, leg: 'comeback' });
+    assert(lo.action === 'entered', `leader buys the leader in a BO1 crash (${lo.action}: ${lo.reason})`);
+    for (const id of [v3.id, ld.id]) botsM.deleteBot(id);
+    store.col('bets').splice(0, store.col('bets').length, ...store.col('bets').filter((b) => ![v3.id, ld.id].includes(b.botId)));
+  } finally {
+    globalThis.fetch = realFetch;
+    for (const e of [quiet, busy, bo1, bleed]) delete store.col('events')[e.id];
+  }
+}
+
 // Real orders: the report finds its bet (BUY by intentId, SELL by exiting), and a
 // "delayed" live-sports fill is confirmed from the wallet's positions (2026-11-07).
 {
