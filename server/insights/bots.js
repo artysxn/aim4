@@ -120,6 +120,7 @@ export const BOT_TYPES = {
       { key: 'listPreMin', label: 'Comeback teams: priced at the start at least', kind: 'num', unit: '%', scale: 100, min: 0.1, max: 0.9, step: 1, def: 0.4 },
       { key: 'listCollapseAt', label: 'Comeback teams: buy once they fall to', kind: 'num', unit: '%', scale: 100, min: 0.03, max: 0.45, step: 1, def: 0.25 },
       { key: 'skipAgainst', label: 'CS2: never buy a team playing against', kind: 'list', def: [] },
+      { key: 'neverTeams', label: 'CS2: never bet on a match with', kind: 'list', def: [] },
       { key: 'backListed', label: 'Back the comeback teams before the start', kind: 'bool', def: false },
       { key: 'backWindowMax', label: 'Back them from this long before the start', kind: 'num', unit: 'min', min: 1, max: 600, step: 1, def: 30 },
       { key: 'backMaxPrice', label: 'Back them at most at', kind: 'num', unit: '%', scale: 100, min: 0.05, max: 0.95, step: 1, def: 0.85 },
@@ -209,6 +210,9 @@ export function teamKey(s) {
 export function comebackRules(p, { game, team, opponent }) {
   const cs2 = (game || 'cs2') === 'cs2';
   const has = (list, name) => (list || []).some((x) => teamKey(x) === teamKey(name));
+  // Never-bet list: any match with one of these teams, on either side, is left alone.
+  const never = [team, opponent].find((n) => cs2 && has(p.neverTeams, n));
+  if (never) return { skip: `Match with ${never} (never-bet list)`, listed: false };
   if (cs2 && has(p.skipAgainst, opponent)) return { skip: `Plays ${opponent} (skip list)`, listed: false };
   if (cs2 && has(p.holdTeams, team)) return { skip: '', listed: true, preMin: p.listPreMin ?? 0.4, collapseAt: p.listCollapseAt ?? 0.25, minDrop: 0, maxMinutes: 0, formats: [], sellAt: 0 };
   return { skip: '', listed: false, preMin: p.preMin, collapseAt: p.collapseAt, minDrop: p.minDrop || 0, maxMinutes: cs2 ? p.maxMinutes || 0 : 0, formats: p.formats || [], sellAt: p.sellAt || 0 };
@@ -374,6 +378,13 @@ export function allBots() {
         id: 'oracle-v2-2'
       });
     }
+    touch('bots');
+  }
+  // 2026-11-07 owner rule: Oracle V2.2 never bets on a CS2 match with The Golden Horde.
+  if (!b.v10) {
+    b.v10 = true;
+    const v22 = b.list.find((x) => x.id === 'oracle-v2-2');
+    if (v22) v22.params.neverTeams = [...new Set([...(v22.params.neverTeams || []), 'The Golden Horde', 'Golden Horde'])];
     touch('bots');
   }
   return b.list;
