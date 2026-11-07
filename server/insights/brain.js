@@ -93,6 +93,13 @@ function teamRow(name) {
   return state.teamRows.get(normName(name)) || null;
 }
 
+/** The market's price tick (0.01 on most esports books, 0.001 near the ends). */
+function tickOf(token, book) {
+  return Number(book?.tick ?? book?.tick_size) || feeds.books.get(token)?.tick || 0.01;
+}
+export const floorTick = (p, t) => Math.round(Math.floor(p / t + 1e-9) * t * 1e6) / 1e6;
+export const ceilTick = (p, t) => Math.round(Math.ceil(p / t - 1e-9) * t * 1e6) / 1e6;
+
 async function bookFor(token) {
   const live = feeds.bookSnapshot(token);
   if (live && Date.now() - live.at < 60e3) return live;
@@ -256,6 +263,9 @@ export async function consider({ bot, ev, m, idx, flag = null, whale = null, leg
   }
   else if (strategy === 'value') maxPrice = params.priceMax;
   else maxPrice = Math.min(0.97, comb.expected - params.minEdge);
+  // On the market's tick grid, rounded down: Polymarket refuses anything else
+  // (2026-11-07: "maxPrice 0.125 must be a multiple of tick size 0.01", 3 real buys lost).
+  maxPrice = floorTick(maxPrice, tickOf(token, book));
   const fill = pm.walkAsks(book, target, maxPrice);
   const maker = (strategy === 'swing' || strategy === 'value') && params.maker && ask - (bid ?? 0) >= 0.02;
   const makerPx = maker ? Math.min(maxPrice, Math.round(((bid ?? 0) + 0.01) * 100) / 100) : null;
@@ -674,7 +684,7 @@ export async function exitBet(bet, reason, minPrice = 0.01) {
     const s = api.settings();
     const book = await bookFor(bet.tokenId);
     const { bid } = bestOf(book);
-    const intent = api.queueIntent({ type: 'market', side: 'SELL', tokenId: bet.tokenId, conditionId: bet.conditionId, shares: bet.shares, minPrice: Math.max(minPrice, (bid ?? 0.02) - s.maxSlippage) });
+    const intent = api.queueIntent({ type: 'market', side: 'SELL', tokenId: bet.tokenId, conditionId: bet.conditionId, shares: bet.shares, minPrice: ceilTick(Math.max(minPrice, (bid ?? 0.02) - s.maxSlippage), tickOf(bet.tokenId, book)) });
     bet.exiting = intent.id;
     bet.exitReason = reason;
   } else {

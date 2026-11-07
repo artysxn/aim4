@@ -270,6 +270,9 @@ engine.updateSettings({ botsOn: true });
     assert(ls.action === 'entered' && ls.outcome === bleed.markets[0].outcomes[1] && ls.price >= 0.85, `leader buys the leader on a busy slow bleed (${ls.action}: ${ls.reason})`);
     const lo = await brainM.consider({ bot: L, ev: bo1, m: bo1.markets[0], idx: 1, leg: 'comeback' });
     assert(lo.action === 'entered', `leader buys the leader in a BO1 crash (${lo.action}: ${lo.reason})`);
+    // Order prices sit on the market's tick grid (Polymarket refused a 0.125 cap on a 0.01 book): buy caps round down, sell floors up.
+    assert(brainM.floorTick(0.125, 0.01) === 0.12 && brainM.floorTick(0.13, 0.01) === 0.13 && brainM.floorTick(0.1255, 0.001) === 0.125 && brainM.ceilTick(0.66 - 0.05, 0.01) === 0.61 && brainM.ceilTick(0.605, 0.01) === 0.61, 'order prices on the tick grid');
+    assert(dq.price <= 0.13 + 1e-9, `V3 fills inside the tick-rounded cap (${dq.price})`);
     // V3.1 = V3 + the shock filter.
     const v31 = botsM.createBot({ ...structuredClone(V3), name: 'V3.1 test', params: { ...V3.params, minShock: 0.1 } });
     botsM.updateBot(v31.id, { enabled: true });
