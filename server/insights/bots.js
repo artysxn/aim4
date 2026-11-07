@@ -110,11 +110,13 @@ export const BOT_TYPES = {
     label: 'Low-tier comeback',
     sizingLabel: 'Stake per match',
     fields: [
-      { key: 'preMin', label: 'Team priced at the start at least', kind: 'num', unit: '%', scale: 100, min: 0.1, max: 0.9, step: 1, def: 0.4 },
-      { key: 'collapseAt', label: 'Buy once it falls to', kind: 'num', unit: '%', scale: 100, min: 0.03, max: 0.4, step: 1, def: 0.25 },
+      { key: 'preMin', label: 'Team priced at the start at least', kind: 'num', unit: '%', scale: 100, min: 0.1, max: 0.9, step: 1, def: 0.5 },
+      { key: 'collapseAt', label: 'Buy once it falls to', kind: 'num', unit: '%', scale: 100, min: 0.03, max: 0.4, step: 1, def: 0.2 },
       { key: 'maxSlippage', label: 'Pay at most that plus', kind: 'num', unit: 'c', scale: 100, min: 0, max: 0.1, step: 0.5, def: 0.02 },
-      { key: 'formats', label: 'Series lengths', kind: 'multi', options: ['BO1', 'BO3', 'BO5'], def: ['BO3'] },
-      { key: 'lowTierOnly', label: 'Both teams outside the VRS top 30', kind: 'bool', def: true },
+      { key: 'games', label: 'Games', kind: 'multi', options: ['cs2', 'valorant', 'lol', 'dota2'], def: ['cs2', 'valorant', 'lol', 'dota2'] },
+      { key: 'maxMinutes', label: 'CS2: only this long after the start', kind: 'num', unit: 'min', min: 10, max: 600, step: 5, def: 90 },
+      { key: 'formats', label: 'Series lengths', kind: 'multi', options: ['BO1', 'BO3', 'BO5'], def: ['BO3', 'BO5'] },
+      { key: 'lowTierOnly', label: 'Low tier only (CS2: both outside VRS top 30; others: league tier 3-5)', kind: 'bool', def: true },
       { key: 'maps', label: 'Map-winner markets too', kind: 'bool', def: false }
     ]
   },
@@ -156,7 +158,7 @@ export function sanitizeBot(patch = {}, prev = null) {
     enabled: typeof p.enabled === 'boolean' ? p.enabled : prev?.enabled ?? false,
     mode: def.paperOnly ? 'paper' : p.mode === 'real' || p.mode === 'paper' ? p.mode : prev?.mode || 'paper',
     sizing: {
-      kind: p.sizing?.kind === 'fixed' || p.sizing?.kind === 'pct' ? p.sizing.kind : prev?.sizing?.kind || 'pct',
+      kind: ['fixed', 'pct', 'auto'].includes(p.sizing?.kind) ? p.sizing.kind : prev?.sizing?.kind || 'pct',
       value: 0
     },
     createdAt: prev?.createdAt || Date.now(),
@@ -165,7 +167,7 @@ export function sanitizeBot(patch = {}, prev = null) {
     params: {}
   };
   const rawValue = p.sizing?.value ?? prev?.sizing?.value;
-  out.sizing.value = out.sizing.kind === 'pct' ? clamp(Number(rawValue) || 2, 0.1, 100) : clamp(Number(rawValue) || 10, 1, 1e6);
+  out.sizing.value = out.sizing.kind === 'auto' ? 1 : out.sizing.kind === 'pct' ? clamp(Number(rawValue) || 2, 0.1, 100) : clamp(Number(rawValue) || 10, 1, 1e6);
   for (const f of COMMON_FIELDS) out[f.key] = cleanField(f, f.key in p ? p[f.key] : undefined, prev?.[f.key]);
   for (const f of def.fields) out.params[f.key] = cleanField(f, p.params && f.key in p.params ? p.params[f.key] : undefined, prev?.params?.[f.key]);
   if (out.params.priceMin !== undefined && out.params.priceMin > out.params.priceMax) [out.params.priceMin, out.params.priceMax] = [out.params.priceMax, out.params.priceMin];
@@ -177,9 +179,37 @@ function newBotId() {
 }
 
 /** The stake one decision may use: the bot's rule, inside its own min and max. */
-export function stakeFor(bot, bankroll) {
+export function stakeFor(bot, bankroll, auto = null) {
+  if (bot.sizing.kind === 'auto') return autoStake({ bankroll, maxStake: bot.maxStake, minStake: bot.minStake, ...(auto || {}) }).stake;
   const raw = bot.sizing.kind === 'fixed' ? bot.sizing.value : (bankroll * bot.sizing.value) / 100;
   return Math.floor(Math.min(raw, bot.maxStake) * 100) / 100;
+}
+
+/**
+ * Automatic, risk-adjusted stake. From the 2026-11-07 wallet x stake grid
+ * (a year of low-tier esports comebacks, Monte Carlo on June-November):
+ *  - 1% of the wallet is the base: 0% yearly bust from $200 up, ~1.8% chance
+ *    of ever halving at $500; 2%+ adds drawdown for little gain under the cap.
+ *  - The edge depends on fill cost: +19.9%/bet as measured, +12% at 1c worse,
+ *    +5% at 2c worse, gone beyond that. So until 10 fills are measured, or
+ *    while they run 1.5-2.5c over the mid, the stake halves; past 2.5c it stops.
+ *  - A drawdown of 25% from the peak halves it again, 50% quarters it.
+ *  - Polymarket's $1 minimum is the floor; under $10 the bot stops.
+ *  - maxStake is the depth cap: $25 fits within 2c of the ask ~85% of the time.
+ * @param {{ bankroll:number, fillCost?:number|null, drawdown?:number, maxStake?:number, minStake?:number }} a
+ * @returns {{ stake:number, pct:number, reason:string }}
+ */
+export function autoStake({ bankroll, fillCost = null, drawdown = 0, maxStake = 25, minStake = 1 }) {
+  if (!(bankroll >= 10)) return { stake: 0, pct: 0, reason: 'Wallet under $10' };
+  if (fillCost !== null && fillCost > 0.025) return { stake: 0, pct: 0, reason: `Fills ${(fillCost * 100).toFixed(1)}c over the mid: no edge left` };
+  let pct = 0.01;
+  const notes = [];
+  if (fillCost === null) { pct /= 2; notes.push('fills not measured yet'); }
+  else if (fillCost > 0.015) { pct /= 2; notes.push(`fills ${(fillCost * 100).toFixed(1)}c over the mid`); }
+  if (drawdown >= 0.5) { pct /= 4; notes.push(`down ${Math.round(drawdown * 100)}% from the peak`); }
+  else if (drawdown >= 0.25) { pct /= 2; notes.push(`down ${Math.round(drawdown * 100)}% from the peak`); }
+  const stake = Math.floor(Math.min(maxStake, Math.max(minStake, bankroll * pct)) * 100) / 100;
+  return { stake, pct, reason: `${(pct * 100).toFixed(2).replace(/\.?0+$/, '')}% of $${Math.round(bankroll)}${notes.length ? ` (${notes.join(', ')})` : ''}` };
 }
 
 // ---- storage --------------------------------------------------------------------
@@ -215,6 +245,53 @@ export function allBots() {
     b.v4 = true;
     if (!b.list.some((x) => x.id === 'fade-prematch')) b.list.push({ ...sanitizeBot({ type: 'fade', name: 'Fade underdog money, BO3 pre-match', enabled: false, mode: 'paper', sizing: { kind: 'pct', value: 6 }, maxStake: 50 }), id: 'fade-prematch' });
     if (!b.list.some((x) => x.id === 'comeback-low')) b.list.push({ ...sanitizeBot({ type: 'comeback', name: 'Low-tier comeback, BO3', enabled: true, mode: 'paper', sizing: { kind: 'pct', value: 4 }, maxStake: 25 }), id: 'comeback-low' });
+    touch('bots');
+  }
+  // 2026-11-07 full-year replay: the 40%/25% rule went flat from June; the
+  // stricter rule (started 50%+, down to 20%, first 90 minutes) still paid
+  // +13.7% a bet from June to November. Sized for a $500 wallet at 1%.
+  if (!b.v5) {
+    b.v5 = true;
+    const cb = b.list.find((x) => x.id === 'comeback-low');
+    if (cb) {
+      Object.assign(cb.params, { preMin: 0.5, collapseAt: 0.2, maxSlippage: 0.02, maxMinutes: 90 });
+      Object.assign(cb, { name: 'Low-tier comeback, BO3 strict', sizing: { kind: 'pct', value: 1 }, maxStake: 25, paperBankroll: Math.max(cb.paperBankroll || 0, 500) });
+    }
+    touch('bots');
+  }
+  // 2026-11-07 all-esports test: the same low-tier comeback held in Valorant,
+  // LoL and Dota 2 (both halves of the year and June-November); R6 did not.
+  if (!b.v6) {
+    b.v6 = true;
+    const cb = b.list.find((x) => x.id === 'comeback-low');
+    if (cb) {
+      Object.assign(cb.params, { games: ['cs2', 'valorant', 'lol', 'dota2'], formats: ['BO3', 'BO5'] });
+      cb.name = 'Low-tier comeback, all esports';
+    }
+    touch('bots');
+  }
+  // 2026-11-07: Oracle V2 joins the lineup: the all-esports low-tier comeback
+  // with automatic, risk-adjusted sizing. The older comeback bot goes off so
+  // the two never double up on the same match.
+  if (!b.v7) {
+    b.v7 = true;
+    if (!b.list.some((x) => x.id === 'oracle-v2')) {
+      b.list.push({
+        ...sanitizeBot({
+          type: 'comeback',
+          name: 'Oracle V2',
+          enabled: true,
+          mode: 'paper',
+          sizing: { kind: 'auto', value: 1 },
+          maxStake: 25,
+          paperBankroll: 500,
+          params: { preMin: 0.5, collapseAt: 0.2, maxSlippage: 0.02, maxMinutes: 90, games: ['cs2', 'valorant', 'lol', 'dota2'], formats: ['BO3', 'BO5'], lowTierOnly: true, maps: false }
+        }),
+        id: 'oracle-v2'
+      });
+    }
+    const old = b.list.find((x) => x.id === 'comeback-low');
+    if (old) old.enabled = false;
     touch('bots');
   }
   return b.list;

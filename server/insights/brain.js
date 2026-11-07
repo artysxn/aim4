@@ -31,7 +31,7 @@ import { reviewDecision, reviewerConfigured } from './review.js';
 import { tables, volOf, priceAt } from './reaction.js';
 import { betTotals, teamTable } from './stats.js';
 import { normName } from './matching.js';
-import { activeBots, botById, stakeFor } from './bots.js';
+import { activeBots, botById, stakeFor, autoStake } from './bots.js';
 
 const newId = (p) => `${p}_${crypto.randomBytes(6).toString('hex')}`;
 const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
@@ -216,7 +216,13 @@ export async function consider({ bot, ev, m, idx, flag = null, whale = null }) {
   if (wallet.blocker) return finish('skipped', wallet.blocker);
 
   // Size before the edge check: the edge depends on how deep we walk the book.
-  let target = stakeFor(bot, wallet.bankroll);
+  let target;
+  if (bot.sizing.kind === 'auto') {
+    const a = autoStake({ bankroll: wallet.bankroll, maxStake: bot.maxStake, minStake: bot.minStake, ...autoInputs(bot, wallet) });
+    decision.sizing = a;
+    if (!a.stake) return finish('skipped', `Auto stake: ${a.reason}`);
+    target = a.stake;
+  } else target = stakeFor(bot, wallet.bankroll);
   if (strategy === 'whale' || strategy === 'fade' || strategy === 'comeback') {
     // The whale stake is per match: what this bot already put on it counts.
     const already = wallet.mine.filter((x) => x.eventId === ev.id).reduce((sum, x) => sum + (x.cost || x.amount || 0), 0);
@@ -281,8 +287,13 @@ export async function consider({ bot, ev, m, idx, flag = null, whale = null }) {
   } else if (strategy === 'comeback') {
     if (!ctx.live) return finish('skipped', 'Not live');
     if (m.kind === 'map' && !params.maps) return finish('skipped', 'Map markets off');
+    const game = ev.game || 'cs2';
+    if (params.games?.length && !params.games.includes(game)) return finish('skipped', `${game} not traded`);
+    const minsIn = (Date.now() - ev.start) / MIN;
+    if (game === 'cs2' && params.maxMinutes && minsIn > params.maxMinutes) return finish('skipped', `${Math.round(minsIn)} min in, over ${params.maxMinutes}`);
     if (params.formats?.length && ev.format && !params.formats.includes(ev.format)) return finish('skipped', `${ev.format} not traded`);
-    if (params.lowTierOnly && !(ev.vrs || []).every((r) => !r || r > 30)) return finish('skipped', 'A VRS top-30 team plays');
+    if (params.lowTierOnly && game === 'cs2' && !(ev.vrs || []).every((r) => !r || r > 30)) return finish('skipped', 'A VRS top-30 team plays');
+    if (params.lowTierOnly && game !== 'cs2' && Number(ev.tier) >= 1 && Number(ev.tier) <= 2) return finish('skipped', `League tier ${ev.tier}`);
     const pre = col('prices')[m.conditionId]?.pre?.[idx];
     if (!Number.isFinite(pre)) return finish('skipped', 'No start price');
     if (pre < params.preMin) return finish('skipped', `Started at ${Math.round(pre * 100)}%, under ${Math.round(params.preMin * 100)}%`);
@@ -387,6 +398,27 @@ function record(d) {
 
 // ---- execution ---------------------------------------------------------------------
 
+/**
+ * What the automatic stake reads from the bot's own record: how far over the
+ * mid its last 30 fills ran (null under 10 fills), and how far its wallet is
+ * below its best point.
+ */
+export function autoInputs(bot, wallet) {
+  const mine = col('bets')
+    .filter((b) => b.botId === bot.id && b.mode === (bot.mode === 'real' ? 'real' : 'sim') && (bot.mode === 'real' || b.placedAt >= (bot.paperEpoch || 0)))
+    .sort((a, b) => a.placedAt - b.placedAt);
+  const fills = mine.filter((b) => Number.isFinite(b.price) && Number.isFinite(b.midAt)).slice(-30);
+  const fillCost = fills.length >= 10 ? fills.reduce((s, b) => s + (b.price - b.midAt), 0) / fills.length : null;
+  let run = 0, peak = 0;
+  for (const b of mine.filter((x) => x.status === 'won' || x.status === 'lost' || x.status === 'sold' || x.status === 'void').sort((a, c) => (a.settledAt || 0) - (c.settledAt || 0))) {
+    run += (Number(b.payout) || 0) - (Number(b.cost) || 0);
+    peak = Math.max(peak, run);
+  }
+  const base = wallet.bankroll - run;
+  const drawdown = base + peak > 0 ? Math.max(0, (peak - run) / (base + peak)) : 0;
+  return { fillCost, drawdown };
+}
+
 function newBet(decision, fields) {
   return {
     id: newId('b'),
@@ -408,6 +440,8 @@ function newBet(decision, fields) {
     sourceWallet: decision.trigger?.wallet || '',
     sourceFlagId: decision.trigger?.flagId || '',
     whalePrice: decision.trigger?.price ?? null,
+    // The mid when the bot decided: fill price minus this is what the automatic stake measures.
+    midAt: Number.isFinite(decision.pMarket) ? decision.pMarket : null,
     live: decision.live,
     plan: decision.plan,
     ...fields
@@ -739,6 +773,9 @@ async function evaluateComeback(ev, m, idx) {
     const p = bot.params;
     if (m.kind === 'map' && !p.maps) continue;
     if (pre < p.preMin || mid > p.collapseAt) continue;
+    const game = ev.game || 'cs2';
+    if (p.games?.length && !p.games.includes(game)) continue;
+    if (game === 'cs2' && p.maxMinutes && (Date.now() - ev.start) / MIN > p.maxMinutes) continue;
     const k = `${token}|${bot.id}`;
     if (Date.now() - (state.lastEval.get(k) || 0) < 5e3) continue;
     state.lastEval.set(k, Date.now());

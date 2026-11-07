@@ -29,6 +29,7 @@ export const INSIGHTS_PAGES = [
   { page: 'ins-decisions', route: 'insights-decisions', label: 'Decisions' },
   { page: 'ins-bets', route: 'insights-bets', label: 'Bets' },
   { page: 'ins-brain', route: 'insights-brain', label: 'Brain' },
+  { page: 'ins-backtest', route: 'insights-backtest', label: 'Backtest' },
   { page: 'ins-stats', route: 'insights-stats', label: 'Stats' },
   { page: 'ins-settings', route: 'insights-settings', label: 'Settings' }
 ];
@@ -881,6 +882,25 @@ export function initInsightsView({ escapeHtml, openRoute }) {
       for (const fdef of t.fields) fresh.params[fdef.key] = Array.isArray(fdef.def) ? [...fdef.def] : fdef.def;
       return openBotEditor(fresh);
     }
+    const testBtn = e.target.closest('[data-bot-test]');
+    if (testBtn) {
+      ui.btBotId = testBtn.dataset.botTest;
+      ui.btResult = null;
+      return openRoute('insights-backtest');
+    }
+    const runBot = e.target.closest('[data-run-bot-bt]');
+    if (runBot) {
+      runBot.disabled = true;
+      runBot.textContent = 'Running';
+      ui.btBotId = body.querySelector('[data-btb-bot]')?.value || ui.btBotId;
+      ui.btStart = Math.max(10, Number(body.querySelector('[data-btb-start]')?.value) || 500);
+      try {
+        ui.btResult = await api('/api/insights/backtest-bot', { method: 'POST', body: { bot: ui.btBotId, days: ui.btbDays || 365, start: ui.btStart, extraSlip: (ui.btbSlip || 0) / 100 } });
+      } catch (err) {
+        ui.btResult = { error: err.message };
+      }
+      return renderPage();
+    }
     const bb = e.target.closest('[data-bot-bets]');
     if (bb) {
       ui.betsBot = bb.dataset.botBets;
@@ -963,7 +983,7 @@ export function initInsightsView({ escapeHtml, openRoute }) {
     if (segBtn) {
       const key = segBtn.closest('[data-seg]').dataset.seg;
       const raw = segBtn.dataset.v;
-      ui[key] = ['statsLine', 'susMin', 'susCash'].includes(key) ? Number(raw) : raw;
+      ui[key] = ['statsLine', 'susMin', 'susCash', 'btbDays', 'btbSlip'].includes(key) ? Number(raw) : raw;
       if (key === 'btKind' && raw === 'history') ui.btStrategy = 'swing';
       return renderPage();
     }
@@ -1270,9 +1290,41 @@ export function initInsightsView({ escapeHtml, openRoute }) {
     return `<div class="ins-bar">${seg('susMin', [[35, 'Score 35+'], [50, '50+'], [70, '70+'], [85, '85+']], ui.susMin || 35)}${seg('susCash', [[200, 'Bets $200+'], [500, '$500+'], [1000, '$1k+'], [5000, '$5k+']], ui.susCash || 200)}<button type="button" class="ins-btn ins-btn-icon" data-refresh title="Scan now" aria-label="Scan now">${ICON_REFRESH}</button></div><div class="ins-table-wrap"><table class="ins-table"><thead><tr>${th('score', 'Score')}${th('start', 'Start')}${th('match', 'Match')}${th('side', 'Money on')}${th('total', 'Suspicious $', 'r')}${th('result', 'Result')}${th('bets', 'Bets')}</tr></thead><tbody>${rows || '<tr><td colspan="7" class="ins-empty">Nothing suspicious</td></tr>'}</tbody></table></div><div class="ins-hint">Score: bet size, plus a brand-new or nearly unused wallet, plus money arriving in-game after the team fell well below its start price.</div>`;
   }
 
+  // ---- backtest --------------------------------------------------------------------
+
+  async function pageBacktest() {
+    const d = await api('/api/insights/backtest-bot');
+    const testable = d.bots.filter((b) => !['swing', 'mm'].includes(b.type));
+    if (!ui.btBotId || !testable.some((b) => b.id === ui.btBotId)) ui.btBotId = (testable.find((b) => b.id === 'oracle-v2') || testable[0])?.id;
+    const r = ui.btResult && !ui.btResult.error && ui.btResult.bot?.id === ui.btBotId ? ui.btResult : null;
+    const pack = d.pack;
+    const controls = `<div class="ins-bar"><select class="ins-select" data-btb-bot>${testable.map((b) => `<option value="${esc(b.id)}"${b.id === ui.btBotId ? ' selected' : ''}>${esc(b.name)}${b.enabled ? '' : ' (off)'}</option>`).join('')}</select>${seg('btbDays', [[30, '30 days'], [90, '90 days'], [180, '180 days'], [365, '1 year']], ui.btbDays || 365)}<span class="ins-unit">Start $<input class="ins-field" type="number" min="10" data-btb-start value="${ui.btStart || 500}" style="width:90px"></span>${seg('btbSlip', [[0, 'Fills as measured'], [1, '+1c'], [2, '+2c']], ui.btbSlip || 0)}<button type="button" class="ins-btn" data-run-bot-bt>Run</button></div>`;
+    const err = ui.btResult?.error ? `<div class="ins-hint ins-neg">${esc(ui.btResult.error)}</div>` : '';
+    const packLine = `<div class="ins-hint">History pack: ${(pack.matches || 0).toLocaleString('en-US')} settled matches (${Object.entries(pack.games || {}).map(([g, n]) => `${esc(g)} ${n}`).join(', ') || 'none yet'})${pack.from ? `, ${esc(new Date(pack.from * 1000).toLocaleDateString())} to ${esc(new Date(pack.to * 1000).toLocaleDateString())}` : ''}. New matches join as they settle.</div>`;
+    if (!r) return `<div class="ins-card"><div class="ins-card-h"><h3>Backtest a bot</h3></div>${controls}${err}${packLine}</div>`;
+    const s = (x) => (x.bets ? `${x.bets} bets · won ${pct(x.winRate, 1)} at ${pct(x.avgPrice, 1)} · <b class="${signCls(x.returnPerBet)}">${pct(x.returnPerBet, 1)}</b> per bet` : 'no bets');
+    const w = r.wallet, mc = r.monteCarlo;
+    const kpis = `<div class="ins-kpis">
+      <div class="ins-kpi"><span class="ins-kpi-l">Wallet</span><span class="ins-kpi-v ${signCls(w.end - w.start)}">${usd(w.start)} → ${usd(w.end)}</span><span class="ins-kpi-s">${w.broke ? 'went broke' : `peak ${usd(w.peak)} · worst drop ${pct(w.maxDrawdown)}`}</span></div>
+      <div class="ins-kpi"><span class="ins-kpi-l">Per bet</span><span class="ins-kpi-v ${signCls(r.all.returnPerBet ?? 0)}">${r.all.bets ? pct(r.all.returnPerBet, 1) : '-'}</span><span class="ins-kpi-s">${r.all.bets} bets · ${r.perDay.toFixed(1)} a day</span></div>
+      <div class="ins-kpi"><span class="ins-kpi-l">Last 90 days</span><span class="ins-kpi-v ${signCls(r.last90.returnPerBet ?? 0)}">${r.last90.bets ? pct(r.last90.returnPerBet, 1) : '-'}</span><span class="ins-kpi-s">${r.last90.bets || 0} bets</span></div>
+      <div class="ins-kpi"><span class="ins-kpi-l">Bust in a year</span><span class="ins-kpi-v ${mc && mc.bust > 0.01 ? 'ins-neg' : ''}">${mc ? pct(mc.bust, 1) : '-'}</span><span class="ins-kpi-s">${mc ? `ever below half ${pct(mc.everHalf, 1)} · months up ${pct(mc.monthsUp)}` : 'too few bets'}</span></div>
+      <div class="ins-kpi"><span class="ins-kpi-l">A year from ${usd(w.start)}</span><span class="ins-kpi-v">${mc ? usd(mc.median) : '-'}</span><span class="ins-kpi-s">${mc ? `worst 5% ${usd(mc.worst5)} · best 5% ${usd(mc.best5)}` : ''}</span></div>
+    </div>`;
+    const halves = `<div class="ins-hint">First half: ${s(r.firstHalf)}<br>Second half: ${s(r.secondHalf)}${r.extraSlip ? `<br>Every fill ${Math.round(r.extraSlip * 100)}c worse than measured.` : ''}</div>`;
+    const games = Object.keys(r.games).length ? `<table class="ins-table"><thead><tr><th>Game</th><th class="r">Bets</th><th class="r">Won</th><th class="r">Paid</th><th class="r">Per bet</th></tr></thead><tbody>${Object.entries(r.games).sort((a, b) => b[1].bets - a[1].bets).map(([g, x]) => `<tr><td>${esc(g)}</td><td class="r">${x.bets}</td><td class="r">${pct(x.winRate, 1)}</td><td class="r">${pct(x.avgPrice, 1)}</td><td class="r ${signCls(x.returnPerBet)}">${pct(x.returnPerBet, 1)}</td></tr>`).join('')}</tbody></table>` : '';
+    const months = `<table class="ins-table"><thead><tr><th>Month</th><th class="r">Bets</th><th class="r">Won</th><th class="r">Start</th><th class="r">Profit</th><th class="r">End</th></tr></thead><tbody>${r.months.map((m) => `<tr><td>${esc(m.month)}</td><td class="r">${m.bets}</td><td class="r">${m.won}</td><td class="r">${usd(m.start)}</td><td class="r ${signCls(m.profit)}">${usd(m.profit, true)}</td><td class="r">${usd(m.end)}</td></tr>`).join('')}</tbody></table>`;
+    const recent = r.recent.length ? `<table class="ins-table"><thead><tr><th>When</th><th>Match</th><th>Bought</th><th class="r">Price</th><th class="r">Stake</th><th>Result</th></tr></thead><tbody>${r.recent.map((b) => `<tr><td>${esc(dayTime(b.at * 1000))}</td><td class="wrap">${b.game ? `<span class="ins-dim">${esc(b.game)}</span> ` : ''}${esc(b.title)}</td><td>${esc(b.team)}</td><td class="r">${pct(b.price, 1)}</td><td class="r">${usd(b.stake)}</td><td>${b.won ? '<span class="ins-tag won">Won</span>' : '<span class="ins-tag lost">Lost</span>'}</td></tr>`).join('')}</tbody></table>` : '';
+    return `<div class="ins-card"><div class="ins-card-h"><h3>Backtest a bot</h3></div>${controls}${err}${packLine}</div>
+      <div class="ins-card"><div class="ins-card-h"><h3>${esc(r.bot.name)}</h3><span class="ins-dim">${esc(r.source)} · ${esc(new Date(r.from * 1000).toLocaleDateString())} to ${esc(new Date(r.to * 1000).toLocaleDateString())}</span></div>${kpis}${halves}</div>
+      <div class="ins-card"><div class="ins-card-h"><h3>Month by month</h3><span class="ins-dim">the bot's own stake rule, $1 minimum, open bets and daily stop</span></div><div class="ins-table-wrap">${months}</div></div>
+      ${games ? `<div class="ins-card"><div class="ins-card-h"><h3>By game</h3></div><div class="ins-table-wrap">${games}</div></div>` : ''}
+      ${recent ? `<div class="ins-card"><div class="ins-card-h"><h3>Latest bets in the test</h3></div><div class="ins-table-wrap">${recent}</div></div>` : ''}`;
+  }
+
   // ---- bots ---------------------------------------------------------------------
 
-  const stakeText = (b) => `${b.sizing.kind === 'pct' ? `${b.sizing.value}% of wallet` : usd(b.sizing.value)} ${{ whale: 'per match', swing: 'per trade', mm: 'per quote', value: 'per match' }[b.type]}`;
+  const stakeText = (b) => `${b.sizing.kind === 'auto' ? 'Auto, risk-adjusted' : b.sizing.kind === 'pct' ? `${b.sizing.value}% of wallet` : usd(b.sizing.value)} ${{ whale: 'per match', swing: 'per trade', mm: 'per quote', value: 'per match', fade: 'per match', comeback: 'per match' }[b.type] || ''}`.trim();
   const getPath = (o, path) => path.split('.').reduce((x, k) => x?.[k], o);
   function setPath(o, path, v) {
     const keys = path.split('.');
@@ -1298,7 +1350,7 @@ export function initInsightsView({ escapeHtml, openRoute }) {
         const modeSeg = type.paperOnly
           ? '<span class="ins-tag sim">Paper</span>'
           : `<div class="ins-seg ins-modeswitch ins-seg-sm" data-bot-mode="${esc(b.id)}"><button type="button" class="ins-seg-btn${b.mode === 'paper' ? ' on' : ''}" data-v="sim">Paper</button><button type="button" class="ins-seg-btn${b.mode === 'real' ? ' on' : ''}" data-v="real">Real</button></div>`;
-        return `<tr><td>${`<div class="ins-seg ins-seg-sm" data-bot-on="${esc(b.id)}"><button type="button" class="ins-seg-btn${b.enabled ? ' on' : ''}" data-v="1">On</button><button type="button" class="ins-seg-btn${!b.enabled ? ' on' : ''}" data-v="0">Off</button></div>`}</td><td><span class="ins-link" data-edit-bot="${esc(b.id)}">${esc(b.name)}</span><div class="ins-dim">${esc(type.label)}</div></td><td>${modeSeg}${b.mode === 'real' && b.wallet.blocker ? `<div class="ins-dim" title="${esc(b.wallet.blocker)}">${esc(b.wallet.blocker)}</div>` : ''}</td><td>${esc(stakeText(b))}<div class="ins-dim">max ${usd(b.maxStake)}</div></td><td class="r">${b.mode === 'real' ? '<span class="ins-dim">real</span>' : usd(b.paper.equity)}</td><td class="r">${t.count}${t.open ? ` <span class="ins-dim">${t.open} open</span>` : ''}</td><td class="r">${settled ? `${t.won}-${t.lost}` : '-'}</td><td class="r ${signCls(t.realized)}">${usd(t.realized, true)}</td><td class="r ${signCls(t.roi ?? 0)}">${t.roi === null ? '-' : pct(t.roi, 1)}</td><td class="r ${signCls(b.clv ?? 0)}" title="Average start price minus our entry, ${b.nClose} bets">${b.clv === null ? '-' : signedC(b.clv)}</td><td class="r">${b.lastAt ? ago(b.lastAt) : '-'}</td><td><button type="button" class="ins-btn ins-btn-sm" data-edit-bot="${esc(b.id)}">Edit</button> <button type="button" class="ins-btn ins-btn-sm" data-bot-bets="${esc(b.id)}" data-bot-mode-now="${b.mode === 'real' ? 'real' : 'sim'}">Bets</button></td></tr>`;
+        return `<tr><td>${`<div class="ins-seg ins-seg-sm" data-bot-on="${esc(b.id)}"><button type="button" class="ins-seg-btn${b.enabled ? ' on' : ''}" data-v="1">On</button><button type="button" class="ins-seg-btn${!b.enabled ? ' on' : ''}" data-v="0">Off</button></div>`}</td><td><span class="ins-link" data-edit-bot="${esc(b.id)}">${esc(b.name)}</span><div class="ins-dim">${esc(type.label)}</div></td><td>${modeSeg}${b.mode === 'real' && b.wallet.blocker ? `<div class="ins-dim" title="${esc(b.wallet.blocker)}">${esc(b.wallet.blocker)}</div>` : ''}</td><td>${esc(stakeText(b))}<div class="ins-dim">max ${usd(b.maxStake)}</div></td><td class="r">${b.mode === 'real' ? '<span class="ins-dim">real</span>' : usd(b.paper.equity)}</td><td class="r">${t.count}${t.open ? ` <span class="ins-dim">${t.open} open</span>` : ''}</td><td class="r">${settled ? `${t.won}-${t.lost}` : '-'}</td><td class="r ${signCls(t.realized)}">${usd(t.realized, true)}</td><td class="r ${signCls(t.roi ?? 0)}">${t.roi === null ? '-' : pct(t.roi, 1)}</td><td class="r ${signCls(b.clv ?? 0)}" title="Average start price minus our entry, ${b.nClose} bets">${b.clv === null ? '-' : signedC(b.clv)}</td><td class="r">${b.lastAt ? ago(b.lastAt) : '-'}</td><td><button type="button" class="ins-btn ins-btn-sm" data-edit-bot="${esc(b.id)}">Edit</button> <button type="button" class="ins-btn ins-btn-sm" data-bot-bets="${esc(b.id)}" data-bot-mode-now="${b.mode === 'real' ? 'real' : 'sim'}">Bets</button>${['swing', 'mm'].includes(b.type) ? '' : ` <button type="button" class="ins-btn ins-btn-sm" data-bot-test="${esc(b.id)}">Test</button>`}</td></tr>`;
       })
       .join('');
     const newSeg = `<div class="ins-seg" data-new-bot>${Object.entries(d.schema.types).map(([k, t]) => `<button type="button" class="ins-seg-btn" data-v="${k}">${esc(t.label)}</button>`).join('')}</div>`;
@@ -1315,7 +1367,7 @@ export function initInsightsView({ escapeHtml, openRoute }) {
 
   function botEditorHtml(bot, schema) {
     const type = schema.types[bot.type];
-    const sizing = `<div class="ins-seg" data-be-sizing><button type="button" class="ins-seg-btn${bot.sizing.kind === 'pct' ? ' on' : ''}" data-v="pct">% of wallet</button><button type="button" class="ins-seg-btn${bot.sizing.kind === 'fixed' ? ' on' : ''}" data-v="fixed">Fixed $</button></div><span class="ins-unit">${bot.sizing.kind === 'fixed' ? '$' : ''}<input class="ins-field" type="number" step="${bot.sizing.kind === 'fixed' ? 1 : 0.1}" data-be-num="sizing.value" data-scale="1" value="${bot.sizing.value}">${bot.sizing.kind === 'pct' ? '%' : ''}</span>`;
+    const sizing = `<div class="ins-seg" data-be-sizing><button type="button" class="ins-seg-btn${bot.sizing.kind === 'auto' ? ' on' : ''}" data-v="auto">Auto</button><button type="button" class="ins-seg-btn${bot.sizing.kind === 'pct' ? ' on' : ''}" data-v="pct">% of wallet</button><button type="button" class="ins-seg-btn${bot.sizing.kind === 'fixed' ? ' on' : ''}" data-v="fixed">Fixed $</button></div>${bot.sizing.kind === 'auto' ? '<span class="ins-dim" title="1% of the wallet; half until 10 fills are measured or while fills run 1.5-2.5c over the mid; stops past 2.5c; halves again 25% below the peak, quarters 50% below; $1 minimum; stops under $10; the largest stake caps it.">0.25-1% of the wallet</span>' : `<span class="ins-unit">${bot.sizing.kind === 'fixed' ? '$' : ''}<input class="ins-field" type="number" step="${bot.sizing.kind === 'fixed' ? 1 : 0.1}" data-be-num="sizing.value" data-scale="1" value="${bot.sizing.value}">${bot.sizing.kind === 'pct' ? '%' : ''}</span>`}`;
     const mode = type.paperOnly
       ? '<span class="ins-tag sim">Paper only for now</span>'
       : `<div class="ins-seg ins-modeswitch" data-be-mode><button type="button" class="ins-seg-btn${bot.mode === 'paper' ? ' on' : ''}" data-v="sim">Paper</button><button type="button" class="ins-seg-btn${bot.mode === 'real' ? ' on' : ''}" data-v="real">Real money</button></div>`;
@@ -1368,7 +1420,7 @@ export function initInsightsView({ escapeHtml, openRoute }) {
       }
       const sz = e.target.closest('[data-be-sizing] .ins-seg-btn');
       if (sz && sz.dataset.v !== ui.editBot.sizing.kind) {
-        ui.editBot.sizing = { kind: sz.dataset.v, value: sz.dataset.v === 'pct' ? 2 : 10 };
+        ui.editBot.sizing = { kind: sz.dataset.v, value: sz.dataset.v === 'pct' ? 2 : sz.dataset.v === 'auto' ? 1 : 10 };
         return redraw();
       }
       const md = e.target.closest('[data-be-mode] .ins-seg-btn');
@@ -1428,6 +1480,7 @@ export function initInsightsView({ escapeHtml, openRoute }) {
     'ins-signals': pageSignals,
     'ins-decisions': pageDecisions,
     'ins-bots': pageBots,
+    'ins-backtest': pageBacktest,
     'ins-suspicious': pageSuspicious,
     'ins-bets': pageBets,
     'ins-brain': pageBrain,

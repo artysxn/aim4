@@ -19,6 +19,8 @@
 //   POST   /api/insights/preview             how many open matches draft rules would track
 //   POST   /api/insights/refresh             run discovery + watch now
 //   POST   /api/insights/backfill            { days }
+//   GET    /api/insights/backtest-bot        history pack size and the bots
+//   POST   /api/insights/backtest-bot        { bot, days, start, extraSlip } -> replay with the bot's stake rule
 //   POST   /api/insights/sim/reset           start a fresh paper wallet
 //   POST   /api/insights/real/arm            { confirm: 'REAL' }
 //   POST   /api/insights/real/disarm
@@ -47,6 +49,8 @@ import { getWeights } from './analysts.js';
 import { tables as reactionTables, MOVE_LABELS } from './reaction.js';
 import { learnedPoints } from './signals.js';
 import * as botsMod from './bots.js';
+import { botBacktest } from './botbacktest.js';
+import { packInfo } from './history.js';
 
 /** One bot with its results: paper wallet, real share, decisions against later prices. */
 function botRow(bot, clv) {
@@ -691,6 +695,18 @@ export async function handleInsightsRequest(req, res, url) {
     if (m === 'POST' && p === '/api/insights/train') {
       learn.runTraining().catch(() => {});
       return json(res, 202, { started: true }), true;
+    }
+    if (m === 'GET' && p === '/api/insights/backtest-bot') {
+      return json(res, 200, { pack: packInfo(), bots: botsMod.allBots().map((b) => ({ id: b.id, name: b.name, type: b.type, enabled: b.enabled, mode: b.mode })) }), true;
+    }
+    if (m === 'POST' && p === '/api/insights/backtest-bot') {
+      const body = await readJson(req, 4096);
+      const bot = botsMod.botById(body.bot);
+      if (!bot) return json(res, 400, { error: 'Pick a bot to test.' }), true;
+      const days = Math.min(730, Math.max(7, Number(body.days) || 365));
+      const start = Math.min(1e7, Math.max(10, Number(body.start) || 500));
+      const extraSlip = Math.min(0.1, Math.max(0, Number(body.extraSlip) || 0));
+      return json(res, 200, botBacktest(bot, { days, start, extraSlip })), true;
     }
     if (m === 'POST' && p === '/api/insights/backtest') {
       const body = await readJson(req, 2048);

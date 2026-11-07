@@ -26,6 +26,11 @@ export const DEFAULT_TOURNAMENTS = ['Exort', 'EPL', 'European Pro League', 'Fies
 /** Polymarket's CS2 sport tag (gamma /sports: sport "cs2", primaryTagId 100780). */
 export const CS2_TAG_ID = 100780;
 
+/** Every esport Insights reads, by Polymarket tag. CS2 is tracked by the team,
+ *  VRS and tournament rules; the others by league tier (3-5 or unlabeled). */
+export const GAME_TAGS = { cs2: 100780, valorant: 101672, lol: 65, dota2: 102366 };
+export const OTHER_GAMES = ['valorant', 'lol', 'dota2'];
+
 export const MODES = ['off', 'sim', 'real'];
 
 export const DEFAULT_SETTINGS = Object.freeze({
@@ -50,6 +55,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
   useTournaments: true,
   // Track map-winner markets as well as the match winner.
   mapMarkets: true,
+  // Low-tier leagues (Polymarket tier 3-5 or unlabeled) of these games are tracked too.
+  otherGames: OTHER_GAMES,
   // How far ahead an upcoming match is polled for trades.
   prematchHours: 24,
 
@@ -144,6 +151,7 @@ export function sanitizeSettings(patch = {}, current = DEFAULT_SETTINGS) {
     useVrs: bool(pick('useVrs'), base.useVrs),
     useTournaments: bool(pick('useTournaments'), base.useTournaments),
     mapMarkets: bool(pick('mapMarkets'), base.mapMarkets),
+    otherGames: Array.isArray(pick('otherGames')) ? [...new Set(pick('otherGames').map(String).filter((g) => OTHER_GAMES.includes(g)))] : base.otherGames,
     prematchHours: num(pick('prematchHours'), base.prematchHours, 1, 168),
     minCash: num(pick('minCash'), base.minCash, 1, 1e6),
     maxPrice: num(pick('maxPrice'), base.maxPrice, 0.01, 0.6),

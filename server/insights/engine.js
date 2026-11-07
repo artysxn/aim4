@@ -20,13 +20,14 @@
 
 import crypto from 'node:crypto';
 import * as pm from './polymarket.js';
-import { CS2_TAG_ID, sanitizeSettings } from './config.js';
+import { CS2_TAG_ID, GAME_TAGS, sanitizeSettings } from './config.js';
 import { normalizeEvent, normName, parseScore, trackDecision } from './matching.js';
 import { scoreTrade, teamBehind } from './signals.js';
 import { betTotals, walletRecord } from './stats.js';
 import { CAPS, col, logLine, touch } from './store.js';
 import * as brain from './brain.js';
 import { allBots } from './bots.js';
+import { queueSettled } from './history.js';
 import * as feeds from './feeds.js';
 import { startRecorder, setRecordFilter } from './recorder.js';
 import { restoreModels, scheduleTraining, runTraining } from './learn.js';
@@ -240,14 +241,17 @@ async function discover() {
     await ensureRanks();
     const since = new Date(Date.now() - 2 * 86400e3).toISOString();
     const seenIds = new Set();
-    for (let page = 0; page < 6; page++) {
-      const rows = await pm.listEvents({ tag_id: CS2_TAG_ID, active: true, closed: false, end_date_min: since, limit: 200, offset: page * 200 });
-      if (!Array.isArray(rows) || !rows.length) break;
-      for (const raw of rows) {
-        seenIds.add(String(raw.id));
-        upsertEvent(raw);
+    const tags = [CS2_TAG_ID, ...(settings().otherGames || []).map((g) => GAME_TAGS[g]).filter(Boolean)];
+    for (const tag of tags) {
+      for (let page = 0; page < 6; page++) {
+        const rows = await pm.listEvents({ tag_id: tag, active: true, closed: false, end_date_min: since, limit: 200, offset: page * 200 });
+        if (!Array.isArray(rows) || !rows.length) break;
+        for (const raw of rows) {
+          seenIds.add(String(raw.id));
+          upsertEvent(raw);
+        }
+        if (rows.length < 200) break;
       }
-      if (rows.length < 200) break;
     }
     run.openEventsSeen = seenIds.size;
     // Tracked events that dropped out of the open list closed: read them once
@@ -597,6 +601,8 @@ async function settleClosed() {
       }
       settleMarket(ev, m, win);
       if (m.kind === 'match') await recordTeamMatch(ev, m, win, 'live').catch((err) => logLine('warn', `team stats ${ev.title}: ${err.message}`));
+      // The backtest history grows with every settled match.
+      if (m.kind === 'match') queueSettled(ev, m, win);
       m.settled = true;
     }
     if (allDone && ev.markets.some((m) => m.kind === 'match' && m.settled)) {

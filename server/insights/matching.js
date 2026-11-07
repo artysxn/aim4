@@ -112,13 +112,15 @@ export function vrsRankOf(teamName, ranks) {
 /** "Counter-Strike: A vs B (BO3) - League Stage" -> parts. */
 export function parseTitle(title) {
   const t = String(title || '').replace(/\s+/g, ' ').trim();
-  const m = t.match(/^(?:counter-strike|cs2?)\s*:\s*(.+?)\s+vs\.?\s+(.+?)\s*(?:\((bo\d)\))?\s*(?:-\s*(.+))?$/i);
+  const m = t.match(/^(counter-strike|cs2?|valorant|lol|league of legends|dota ?2)\s*:\s*(.+?)\s+vs\.?\s+(.+?)\s*(?:\((bo\d)\))?\s*(?:-\s*(.+))?$/i);
   if (!m) return null;
+  const g = m[1].toLowerCase();
   return {
-    teamA: m[1].trim(),
-    teamB: m[2].trim(),
-    format: (m[3] || '').toUpperCase(),
-    league: (m[4] || '').trim()
+    game: /^(counter-strike|cs)/.test(g) ? 'cs2' : g.startsWith('valorant') ? 'valorant' : g.startsWith('dota') ? 'dota2' : 'lol',
+    teamA: m[2].trim(),
+    teamB: m[3].trim(),
+    format: (m[4] || '').toUpperCase(),
+    league: (m[5] || '').trim()
   };
 }
 
@@ -189,6 +191,7 @@ export function normalizeEvent(e) {
     id: String(e.id),
     slug: String(e.slug || ''),
     title: String(e.title || ''),
+    game: parsed.game,
     teams,
     format: parsed.format || (meta.serie ? '' : ''),
     league: String(meta.league || parsed.league || ''),
@@ -214,6 +217,13 @@ export function normalizeEvent(e) {
  * @returns {{ track: boolean, reasons: string[], ranks: number[], listed: string[] }}
  */
 export function trackDecision(ev, settings, ranks) {
+  // Other esports: no team lists or VRS, only low-tier leagues of the games switched on.
+  if (ev.game && ev.game !== 'cs2') {
+    const on = (settings.otherGames || []).includes(ev.game);
+    const tier = Number(ev.tier) || 0;
+    const low = tier === 0 || tier >= 3;
+    return { track: on && low, reasons: on && low ? [`lowtier:${ev.game}${tier ? ` t${tier}` : ''}`] : [], ranks: [0, 0], listed: ['', ''] };
+  }
   const reasons = [];
   const listed = ev.teams.map((t) => (settings.useTeams ? matchEntry(t, settings.teams) : ''));
   const excluded = ev.teams.some((t) => matchEntry(t, settings.excludeTeams));
