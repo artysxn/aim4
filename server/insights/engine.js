@@ -923,7 +923,7 @@ async function reconcileRealFills({ fetchPositions = (wallet) => pm.positions({ 
   if (!waiting.length) return 0;
   if (!force && now - lastReconcile < 30e3) return 0;
   lastReconcile = now;
-  const wallet = (col('executor').devices || []).map((d) => d.info?.wallet).find(Boolean);
+  const wallet = (col('executor').devices || []).map((d) => d.info?.wallet).find(Boolean)?.toLowerCase();
   if (!wallet) return 0;
   const body = await fetchPositions(wallet);
   const rows = Array.isArray(body?.data) ? body.data : Array.isArray(body) ? body : [];
@@ -936,8 +936,38 @@ async function reconcileRealFills({ fetchPositions = (wallet) => pm.positions({ 
     // Shares other open real bets already hold on this token are not this fill.
     const others = col('bets').filter((b) => b !== bet && b.mode === 'real' && b.status === 'open' && b.tokenId === bet.tokenId).reduce((s, b) => s + (b.shares || 0), 0);
     if (bet.status === 'pending') {
+      // The wallet's own BUY trades on this token since the order: exactly this fill,
+      // never a buy made by hand on the same market (2026-11-07: a manual $2 CyberHero
+      // buy was booked as the bot's $1 order).
+      sellTrades ||= await fetchTrades(wallet).then((b) => (Array.isArray(b?.data) ? b.data : Array.isArray(b) ? b : [])).catch(() => []);
+      const claimed = new Set(col('bets').flatMap((b) => b.fillTx || []));
+      const buys = sellTrades.filter((t) => String(t.side).toUpperCase() === 'BUY' && String(t.token_id ?? t.asset) === String(bet.tokenId) && Number(t.timestamp) * 1000 >= (bet.placedAt || 0) - 5000 && !claimed.has(String(t.transaction_hash))).sort((a, b) => Number(a.timestamp) - Number(b.timestamp));
+      let cash = 0, got = 0;
+      const used = [];
+      for (const t of buys) {
+        if (cash >= (bet.amount || 0) * 0.98) break;
+        cash += Number(t.size) * Number(t.price);
+        got += Number(t.size);
+        used.push(String(t.transaction_hash));
+      }
+      if (got > 0.001) {
+        const rate = col('events')[bet.eventId]?.markets?.find((x) => x.conditionId === bet.conditionId)?.feeRate ?? 0;
+        bet.status = 'open';
+        bet.shares = Math.round(got * 1e4) / 1e4;
+        bet.price = cash / got;
+        bet.cost = Math.round((cash + pm.takerFee(rate, bet.price, got)) * 1e4) / 1e4;
+        bet.mark = bet.price;
+        bet.fillTx = used;
+        bet.confirmedFrom = 'trades';
+        delete bet.awaitingFill;
+        logLine('info', `REAL BUY filled after delay: ${bet.title} ${bet.outcome} ${bet.shares} at ${(bet.price * 100).toFixed(2)}%`);
+        changed++;
+        continue;
+      }
       const mine = size - others;
-      if (mine > 0.001) {
+      // The position alone cannot tell a hand-made buy apart: only trust it when its price fits this order.
+      const posAvg = Number(pos?.avg_price ?? pos?.avgPrice) || 0;
+      if (mine > 0.001 && !(bet.maxPrice && posAvg > bet.maxPrice + 0.02)) {
         const avg = Number(pos.avg_price ?? pos.avgPrice) || 0;
         const total = Number(pos.total_size ?? size) || mine;
         const costAll = Number(pos.total_cost_usdc ?? pos.initialValue) || mine * avg;

@@ -89,7 +89,7 @@ export async function runGuards({ now = Date.now(), fetchPositions = (w) => pm.p
   // Foreign positions, every 10 minutes.
   if (now - lastPositions >= 10 * 60e3) {
     lastPositions = now;
-    const wallet = (col('executor').devices || []).map((d) => d.info?.wallet).find(Boolean);
+    const wallet = (col('executor').devices || []).map((d) => d.info?.wallet).find(Boolean)?.toLowerCase();
     if (wallet) {
       const body = await fetchPositions(wallet).catch(() => null);
       const rows = Array.isArray(body?.data) ? body.data : Array.isArray(body) ? body : [];

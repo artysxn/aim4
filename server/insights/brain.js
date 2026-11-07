@@ -937,6 +937,15 @@ const tapeCache = new Map();
 async function matchTape(ev, m, now = Date.now()) {
   const hit = tapeCache.get(m.conditionId);
   if (hit && now - hit.at < 30e3) return hit;
+  try {
+    return await readTape(ev, m, now);
+  } catch (err) {
+    // A 429 or timeout mid-crash: the last read (up to 5 min old) beats dropping the decision.
+    if (hit && now - hit.at < 5 * 60e3) return hit;
+    throw err;
+  }
+}
+async function readTape(ev, m, now) {
   const s0 = Math.floor(ev.start / 1000);
   const rows = [];
   let cursor = '';
@@ -974,6 +983,14 @@ export async function crashFlow(m, c, now = Date.now()) {
   const key = `${m.conditionId}|${c}`;
   const hit = flowCache.get(key);
   if (hit && now - hit.at < 30e3) return hit;
+  try {
+    return await readFlow(m, c, now, key);
+  } catch (err) {
+    if (hit && now - hit.at < 5 * 60e3) return hit;
+    throw err;
+  }
+}
+async function readFlow(m, c, now, key) {
   const s0 = Math.floor(now / 1000) - 900;
   const rows = [];
   let cursor = '';
