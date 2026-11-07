@@ -129,7 +129,8 @@ export const BOT_TYPES = {
       { key: 'newMoneyBoost', label: 'Leader: stake times this when most crashed-team money is from wallets under 30 days old (1 = off)', kind: 'num', unit: 'x', min: 1, max: 4, step: 0.5, def: 1 },
       // Leader: on a crash the crashed-team bots skip (higher tier, busy or BO1), buy the team that leads.
       // The comeback is overpriced there: the leader won 87.7% while priced 84.6% (+3.3% per bet, every month).
-      { key: 'bet', label: 'Bet on', kind: 'choice', options: ['crashed', 'leader'], def: 'crashed' },
+      { key: 'bet', label: 'Bet on (both = the crashed team on its own rules, else the leader)', kind: 'choice', options: ['crashed', 'leader', 'both'], def: 'crashed' },
+      { key: 'leaderKellyPct', label: 'Both: full-Kelly % for the leader bets (used at a quarter)', kind: 'num', unit: '%', min: 0, max: 50, step: 0.1, def: 19.1 },
       { key: 'busyAt', label: 'Leader: a market counts as busy from (trades a minute)', kind: 'num', unit: '/min', min: 0.5, max: 60, step: 0.5, def: 4 },
       { key: 'sellAt', label: 'Take profit at (0 = hold)', kind: 'num', unit: '%', scale: 100, min: 0, max: 0.95, step: 1, def: 0 },
       { key: 'games', label: 'Games', kind: 'multi', options: ['cs2', 'valorant', 'lol', 'dota2'], def: ['cs2', 'valorant', 'lol', 'dota2'] },
@@ -240,6 +241,43 @@ export function comebackRules(p, { game, team, opponent }) {
   if (cs2 && has(p.skipAgainst, opponent)) return { skip: `Plays ${opponent} (skip list)`, listed: false };
   if (cs2 && has(p.holdTeams, team)) return { skip: '', listed: true, preMin: p.listPreMin ?? 0.4, collapseAt: p.listCollapseAt ?? 0.25, minDrop: 0, maxMinutes: 0, formats: [], sellAt: 0 };
   return { skip: '', listed: false, preMin: p.preMin, collapseAt: p.collapseAt, minDrop: p.minDrop || 0, maxMinutes: cs2 ? p.maxMinutes || 0 : 0, formats: p.formats || [], sellAt: p.sellAt || 0 };
+}
+
+/**
+ * A 'both' comeback bot (Oracle V3.2) is two legs on one wallet: its own crash
+ * rules, and on the crashes those rules turn down, the leader on the settings
+ * the leader bot was backtested with (any tier and format, no take profit).
+ * The owner's lists still hold: never-bet matches stay out, and a listed
+ * comeback team that crashes is never bet against.
+ */
+export function leaderView(p) {
+  return {
+    ...p,
+    bet: 'leader',
+    formats: [],
+    lowTierOnly: false,
+    maxMinutes: 600,
+    minDrop: 0,
+    sellAt: 0,
+    maxTradesPerMin: 0,
+    minShock: 0,
+    flowSkipIn: 0,
+    newMoneyBoost: 1,
+    holdTeams: [],
+    skipAgainst: [],
+    backListed: false,
+    maps: false,
+    notAgainst: [...(p.holdTeams || [])]
+  };
+}
+
+/** The bot as each leg sees it: the crash leg, then the leader leg (its own Kelly). */
+export function legViews(bot) {
+  if (bot.params.bet !== 'both') return [bot];
+  return [
+    { ...bot, params: { ...bot.params, bet: 'crashed' } },
+    { ...bot, kellyPct: bot.params.leaderKellyPct ?? 19.1, params: leaderView(bot.params) }
+  ];
 }
 
 export function stakeFor(bot, bankroll, auto = null) {
@@ -446,6 +484,30 @@ export function allBots() {
       }
     }
     if (v3 || leader) b.v11 = true;
+    touch('bots');
+  }
+  // 2026-11-07 owner: Oracle V3.2 = V3.1 and the leader in one bot. Its crash
+  // rules first; on the crashes they turn down, the leader. One wallet, one bet
+  // per match. $267 for 30 days: median $355 vs $299 (weak month), $550 vs $469
+  // (since 22 Jul); chance of ending the month down 24% vs 39%. Takes the real
+  // money; V3.1 goes to paper; the leader bot stays paper and stops promoting
+  // itself (V3.2 already trades its bets).
+  if (!b.v12) {
+    const v31 = b.list.find((x) => x.id === 'oracle-v3-1');
+    if (v31 && !b.list.some((x) => x.id === 'oracle-v3-2')) {
+      const now = Date.now();
+      const wasReal = v31.mode === 'real';
+      b.list.push({
+        ...sanitizeBot({ ...structuredClone(v31), name: 'Oracle V3.2', enabled: true, mode: wasReal ? 'real' : 'paper', realSince: wasReal ? now : 0, stoppedAt: 0, params: { ...v31.params, bet: 'both', leaderKellyPct: 19.1 } }),
+        id: 'oracle-v3-2',
+        paperEpoch: now
+      });
+      Object.assign(v31, { mode: 'paper', paperEpoch: now, updatedAt: now });
+      logLine('info', `Bots: Oracle V3.2 ${wasReal ? 'takes the real money' : 'added'}; Oracle V3.1 to paper`);
+    }
+    const leader = b.list.find((x) => x.name === 'Back the leader' && x.type === 'comeback');
+    if (leader) leader.promoteAfter = 0;
+    if (v31) b.v12 = true;
     touch('bots');
   }
   return b.list;

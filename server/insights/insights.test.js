@@ -290,7 +290,27 @@ engine.updateSettings({ botsOn: true });
     const lfb = await brainM.consider({ bot: botsM.botById(lf.id), ev: flow, m: flow.markets[0], idx: 1, leg: 'comeback' });
     const lfBet = store.col('bets').find((b) => b.id === lfb.betId);
     assert(lfb.action === 'entered' && lfb.boost === 2 && lfBet && lfBet.amount === 4, `new-wallet money doubles the leader stake (${lfb.action}: ${lfb.reason}, $${lfBet?.amount})`);
-    const gone = [v3.id, ld.id, v31.id, lf.id];
+    // Oracle V3.2: the crash rules first, the leader on the crashes they turn down.
+    const v32 = botsM.createBot({ ...structuredClone(V31), name: 'V3.2 test', params: { ...V31.params, bet: 'both', leaderKellyPct: 19.1, holdTeams: [], skipAgainst: [] } });
+    botsM.updateBot(v32.id, { enabled: true });
+    const V32 = botsM.botById(v32.id);
+    const b1 = await brainM.considerComeback(V32, shock, shock.markets[0], 0);
+    assert(b1.action === 'entered' && b1.outcome === shock.markets[0].outcomes[0], `V3.2 buys a shocked crash on the crash leg (${b1.action}: ${b1.reason})`);
+    const b2 = await brainM.considerComeback(V32, bleed, bleed.markets[0], 0);
+    assert(b2.action === 'entered' && b2.outcome === bleed.markets[0].outcomes[1] && b2.price >= 0.85, `V3.2 buys the leader on a busy slow bleed (${b2.action}: ${b2.reason})`);
+    const b3 = await brainM.considerComeback(V32, quiet, quiet.markets[0], 0);
+    assert(b3.action === 'skipped' && /real comeback chance/.test(b3.reason), `V3.2 leaves a quiet sudden crash with no shock alone, on both legs (${b3.reason})`);
+    const b4 = await brainM.considerComeback(V32, bo1, bo1.markets[0], 0);
+    assert(b4.action === 'entered' && b4.outcome === bo1.markets[0].outcomes[1], `V3.2 buys the leader in a BO1 crash (${b4.action}: ${b4.reason})`);
+    const b5 = await brainM.considerComeback(V32, bleed, bleed.markets[0], 0);
+    assert(b5.action === 'skipped' && /Already in this match|stake already in/.test(b5.reason), `one bet per match (${b5.reason})`);
+    const own = store.col('bets').filter((b) => b.botId === v32.id);
+    assert(own.length === 3 && own.every((b) => b.mode === 'sim'), `three V3.2 bets on its own wallet (${own.length})`);
+    // A listed comeback team that crashes is never bet against.
+    botsM.updateBot(v32.id, { params: { ...V32.params, holdTeams: [busy.markets[0].outcomes[0]] } });
+    const b6 = await brainM.considerComeback(botsM.botById(v32.id), busy, busy.markets[0], 0);
+    assert(b6.action === 'skipped' && /listed comeback team/.test(b6.reason), `no leader bet against a listed team (${b6.reason})`);
+    const gone = [v3.id, ld.id, v31.id, lf.id, v32.id];
     for (const id of gone) botsM.deleteBot(id);
     store.col('bets').splice(0, store.col('bets').length, ...store.col('bets').filter((b) => !gone.includes(b.botId)));
   } finally {
@@ -699,6 +719,10 @@ assert(dear.placed === 10 && dear.stopped && /over the mid/.test(dear.stopped.re
   const lead = bt._comebackBets(leaderP, 0, 0).filter((b) => /leader/.test(b.team));
   const crashedWon = bo1.filter((l) => JSON.parse(l).w === 0).length;
   assert(lead.length === 40 && lead.filter((b) => b.won).length === 40 - crashedWon && lead.every((b) => b.q > 0.8), `leader bets on BO1 crashes (${lead.length}, won ${lead.filter((b) => b.won).length})`);
+  // V3.2 in the backtest: every BO3 crash on the crash leg, the BO1 ones on the leader leg (its own Kelly), one per match.
+  const both = bt._comebackBets({ ...cbBot.params, bet: 'both', leaderKellyPct: 19.1, busyAt: 4 }, 0, 0);
+  const bothLead = both.filter((b) => /leader/.test(b.team));
+  assert(both.length === all.length + 40 && bothLead.length === 40 && bothLead.every((b) => b.kellyPct === 19.1) && new Set(both.map((b) => b.cid)).size === both.length, `V3.2 = crash bets + leader bets (${both.length} = ${all.length} + ${bothLead.length})`);
 }
 db.closeDb();
 

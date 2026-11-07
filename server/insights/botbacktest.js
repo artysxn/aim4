@@ -14,7 +14,7 @@
 
 import { col } from './store.js';
 import { loadPack } from './history.js';
-import { autoStake, comebackRules } from './bots.js';
+import { autoStake, comebackRules, leaderView, teamKey } from './bots.js';
 
 const DAY = 86400;
 const fee = (p) => 0.03 * Math.min(p, 1 - p);
@@ -29,6 +29,15 @@ const median = (a) => {
 // ---- signals per bot type (times in unix seconds) -------------------------------
 
 function comebackBets(p, sinceS, extraSlip) {
+  // Oracle V3.2: its crash bets, plus the leader on every other match's crash (one bet per match).
+  if (p.bet === 'both') {
+    const crash = comebackBets({ ...p, bet: 'crashed' }, sinceS, extraSlip);
+    const taken = new Set(crash.filter((b) => b.leg === 'comeback').map((b) => b.cid));
+    const lead = comebackBets(leaderView(p), sinceS, extraSlip)
+      .filter((b) => b.leg === 'comeback' && !taken.has(b.cid))
+      .map((b) => ({ ...b, kellyPct: p.leaderKellyPct ?? 19.1 }));
+    return [...crash, ...lead].sort((a, b) => a.at - b.at);
+  }
   const games = p.games?.length ? p.games : ['cs2', 'valorant', 'lol', 'dota2'];
   const bets = [];
   for (const r of loadPack()) {
@@ -61,13 +70,14 @@ function comebackBets(p, sinceS, extraSlip) {
         if (p.bet === 'leader') {
           // Buy the other side when the comeback is overpriced: not a crash the
           // crashed-team bots take, and higher tier, busy or BO1.
+          if (p.notAgainst?.some((t) => teamKey(t) === teamKey(r.n[x]))) break;
           const crashBotsTake = r.low && ['BO3', 'BO5'].includes(r.f) && hi - px(i) >= 0.2 && !(r.g === 'cs2' && r.p[i] / 60 > 90);
           if (crashBotsTake) break;
           if (r.low && tpm < (p.busyAt ?? 4) && r.f !== 'BO1') continue;
           const oq = Math.min(0.99, 1 - p3 + 0.01 + extraSlip);
           const lw = r.w === 1 - x;
           const at = r.s + r.p[i];
-          if (!best || at < best.at) best = { at, end: r.e, q: oq, won: lw, mult: lw ? 1 / (oq + fee(oq)) : 0, sold: false, leg: 'comeback', game: r.g, title: `${r.n[0]} vs ${r.n[1]}`, team: `${r.n[1 - x]} (leader)` };
+          if (!best || at < best.at) best = { at, end: r.e, cid: r.cid, q: oq, won: lw, mult: lw ? 1 / (oq + fee(oq)) : 0, sold: false, leg: 'comeback', game: r.g, title: `${r.n[0]} vs ${r.n[1]}`, team: `${r.n[1 - x]} (leader)` };
           break;
         }
         // Sudden collapses only: the highest price in the 10 minutes before, minus the price now.
@@ -94,7 +104,7 @@ function comebackBets(p, sinceS, extraSlip) {
             break;
           }
         }
-        if (!best || at < best.at) best = { at, end, q, won, mult, sold, leg: 'comeback', game: r.g, title: `${r.n[0]} vs ${r.n[1]}`, team: r.n[x] + (rules.listed ? ' (listed, held)' : '') };
+        if (!best || at < best.at) best = { at, end, cid: r.cid, q, won, mult, sold, leg: 'comeback', game: r.g, title: `${r.n[0]} vs ${r.n[1]}`, team: r.n[x] + (rules.listed ? ' (listed, held)' : '') };
         break;
       }
     }
@@ -182,8 +192,8 @@ function valueBets(p, sinceS, extraSlip) {
 
 // ---- wallet replay with the bot's stake rule ------------------------------------
 
-function stakeOf(bot, equity, drawdown) {
-  if (bot.sizing.kind === 'auto') return autoStake({ bankroll: equity, fillCost: 0.01, drawdown, maxStake: bot.maxStake, minStake: bot.minStake, kellyPct: bot.kellyPct, kellyFrom: bot.kellyFrom }).stake;
+function stakeOf(bot, equity, drawdown, kellyPct = bot.kellyPct) {
+  if (bot.sizing.kind === 'auto') return autoStake({ bankroll: equity, fillCost: 0.01, drawdown, maxStake: bot.maxStake, minStake: bot.minStake, kellyPct, kellyFrom: bot.kellyFrom }).stake;
   const raw = bot.sizing.kind === 'fixed' ? bot.sizing.value : (equity * bot.sizing.value) / 100;
   return Math.min(bot.maxStake, Math.max(bot.minStake, raw));
 }
@@ -240,9 +250,10 @@ function monteCarlo(bets, bot, start, spanDays, runs = 1000) {
       const before = w;
       for (let i = 0, n = Math.round(perDay * 30); i < n; i++) {
         peak = Math.max(peak, w);
-        const st = stakeOf(bot, w, 1 - w / peak);
+        const pick = bets[Math.floor(Math.random() * bets.length)];
+        const st = stakeOf(bot, w, 1 - w / peak, pick.kellyPct ?? bot.kellyPct);
         if (!st || w < Math.max(st, bot.minStake)) { dead = true; break; }
-        w += st * ret(bets[Math.floor(Math.random() * bets.length)]);
+        w += st * ret(pick);
         min = Math.min(min, w);
       }
       mN++;
@@ -339,7 +350,7 @@ function replayCurve(bets, bot, start, { fillCost = 0.01, startS = null } = {}) 
     }
     let stake;
     if (bot.sizing.kind === 'auto') {
-      const a = autoStake({ bankroll: eq, fillCost: fills >= 10 ? fillCost : null, drawdown: dd, maxStake: bot.maxStake, minStake: bot.minStake, kellyPct: bot.kellyPct, kellyFrom: bot.kellyFrom });
+      const a = autoStake({ bankroll: eq, fillCost: fills >= 10 ? fillCost : null, drawdown: dd, maxStake: bot.maxStake, minStake: bot.minStake, kellyPct: b.kellyPct ?? bot.kellyPct, kellyFrom: bot.kellyFrom });
       stake = a.stake;
       if (!stake) {
         // Under $10 with nothing left to settle, or fills too dear: the live bot is done.

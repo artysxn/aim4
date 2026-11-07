@@ -31,7 +31,7 @@ import { reviewDecision, reviewerConfigured } from './review.js';
 import { tables, volOf, priceAt } from './reaction.js';
 import { betTotals, teamTable } from './stats.js';
 import { normName } from './matching.js';
-import { activeBots, botById, stakeFor, autoStake, comebackRules } from './bots.js';
+import { activeBots, botById, stakeFor, autoStake, comebackRules, legViews, teamKey } from './bots.js';
 import { reasonKey, skipCategory } from './botReport.js';
 
 const newId = (p) => `${p}_${crypto.randomBytes(6).toString('hex')}`;
@@ -313,9 +313,11 @@ export async function consider({ bot, ev, m, idx, flag = null, whale = null, leg
     // bots skip, in a higher-tier, busy or BO1 match (2026-11-07 crash study).
     if (!ctx.live) return finish('skipped', 'Not live');
     if (m.kind === 'map') return finish('skipped', 'Match winner only');
+    if (cb.skip) return finish('skipped', cb.skip);
     const game = ev.game || 'cs2';
     if (params.games?.length && !params.games.includes(game)) return finish('skipped', `${game} not traded`);
     const c = 1 - idx;
+    if (params.notAgainst?.some((t) => teamKey(t) === teamKey(m.outcomes[c]))) return finish('skipped', `${m.outcomes[c]} is a listed comeback team: never bet against it`);
     const preC = col('prices')[m.conditionId]?.pre?.[c];
     if (!Number.isFinite(preC)) return finish('skipped', 'No start price');
     if (preC < cb.preMin) return finish('skipped', `The other team started at ${Math.round(preC * 100)}%, under ${Math.round(cb.preMin * 100)}%`);
@@ -1021,17 +1023,36 @@ async function evaluateComeback(ev, m, idx) {
     const game = ev.game || 'cs2';
     if (p.games?.length && !p.games.includes(game)) continue;
     const r = comebackRules(p, { game, team: m.outcomes[idx], opponent: m.outcomes[1 - idx] });
-    if (r.skip || pre < r.preMin || mid > r.collapseAt) continue;
-    if (r.maxMinutes && (Date.now() - ev.start) / MIN > r.maxMinutes) continue;
-    if (r.minDrop && recentDrop(m, idx, mid) < r.minDrop) continue;
+    const both = p.bet === 'both';
+    // A 'both' bot's leader leg needs no sudden fall and no time limit: only the never-bet list stops it here.
+    if ((both ? /never-bet/.test(r.skip || '') : r.skip) || pre < (r.preMin ?? p.preMin) || mid > (r.collapseAt ?? p.collapseAt)) continue;
+    if (!both && r.maxMinutes && (Date.now() - ev.start) / MIN > r.maxMinutes) continue;
+    if (!both && r.minDrop && recentDrop(m, idx, mid) < r.minDrop) continue;
     const k = `${token}|${bot.id}`;
     if (Date.now() - (state.lastEval.get(k) || 0) < 5e3) continue;
     state.lastEval.set(k, Date.now());
     if (walletFor(bot).mine.some((b) => b.eventId === ev.id && (b.leg || 'comeback') === 'comeback')) continue;
-    // A leader bot buys the other side of the same crash.
-    const buyIdx = p.bet === 'leader' ? 1 - idx : idx;
-    await consider({ bot, ev, m, idx: buyIdx, leg: 'comeback' }).catch((err) => logLine('error', `comeback bot ${bot.name}: ${err.message}`));
+    await considerComeback(bot, ev, m, idx).catch((err) => logLine('error', `comeback bot ${bot.name}: ${err.message}`));
   }
+}
+
+/**
+ * One crash (outcome crashedIdx has collapsed) for one comeback bot. A crash
+ * bot buys the crashed team, a leader bot the other one; a 'both' bot (Oracle
+ * V3.2) tries its crash rules first and, when they turn the crash down, the
+ * leader leg on its own settings. Returns the decision that was acted on, or
+ * the last skip.
+ */
+export async function considerComeback(bot, ev, m, crashedIdx) {
+  let last = null;
+  for (const view of legViews(bot)) {
+    const buyIdx = view.params.bet === 'leader' ? 1 - crashedIdx : crashedIdx;
+    last = await consider({ bot: view, ev, m, idx: buyIdx, leg: 'comeback' });
+    if (last.action !== 'skipped') return last;
+    // Same match already held: the other leg must not take the other side.
+    if (/^Already in this match|stake already in/i.test(last.reason)) return last;
+  }
+  return last;
 }
 
 /** Comeback bots that back their listed teams: once a minute inside the window before the start. */
