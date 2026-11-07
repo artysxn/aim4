@@ -31,7 +31,7 @@ import { reviewDecision, reviewerConfigured } from './review.js';
 import { tables, volOf, priceAt } from './reaction.js';
 import { betTotals, teamTable } from './stats.js';
 import { normName } from './matching.js';
-import { activeBots, botById, stakeFor, autoStake } from './bots.js';
+import { activeBots, botById, stakeFor, autoStake, comebackRules } from './bots.js';
 
 const newId = (p) => `${p}_${crypto.randomBytes(6).toString('hex')}`;
 const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
@@ -172,7 +172,7 @@ async function contextFor(ev, m, idx, horizon) {
  * @param {object} [a.flag]   the whale flag that triggered it
  * @param {object} [a.whale]  the whale wallet
  */
-export async function consider({ bot, ev, m, idx, flag = null, whale = null }) {
+export async function consider({ bot, ev, m, idx, flag = null, whale = null, leg = '' }) {
   const s = api.settings();
   const strategy = bot.type;
   const variantId = bot.id;
@@ -196,6 +196,8 @@ export async function consider({ bot, ev, m, idx, flag = null, whale = null }) {
     live: ctx.live,
     start: ev.start,
     trigger: flag ? { kind: 'whale', flagId: flag.id, wallet: flag.wallet, cash: flag.stackCash || flag.cash, price: flag.price, score: flag.score } : { kind: strategy },
+    // Comeback bots trade two legs per match: 'pre' (backing a listed team before the start) and 'comeback'.
+    leg: strategy === 'comeback' ? leg || 'comeback' : '',
     action: 'skipped',
     reason: ''
   };
@@ -206,6 +208,8 @@ export async function consider({ bot, ev, m, idx, flag = null, whale = null }) {
   };
 
   if (mid === null || ask === null) return finish('skipped', 'No order book');
+  const cb = strategy === 'comeback' ? comebackRules(params, { game: ev.game, team: m.outcomes[idx], opponent: m.outcomes[1 - idx] }) : null;
+  const sameLeg = (x) => strategy !== 'comeback' || (x.leg || 'comeback') === decision.leg;
   const { analysts, vol } = runAnalysts(ctx);
   const comb = combine(mid, analysts, vol, horizon);
   decision.analysts = analysts;
@@ -225,7 +229,7 @@ export async function consider({ bot, ev, m, idx, flag = null, whale = null }) {
   } else target = stakeFor(bot, wallet.bankroll);
   if (strategy === 'whale' || strategy === 'fade' || strategy === 'comeback') {
     // The whale stake is per match: what this bot already put on it counts.
-    const already = wallet.mine.filter((x) => x.eventId === ev.id).reduce((sum, x) => sum + (x.cost || x.amount || 0), 0);
+    const already = wallet.mine.filter((x) => x.eventId === ev.id && sameLeg(x)).reduce((sum, x) => sum + (x.cost || x.amount || 0), 0);
     target -= already;
     if (target < bot.minStake) {
       decision.analysts = [];
@@ -237,7 +241,7 @@ export async function consider({ bot, ev, m, idx, flag = null, whale = null }) {
   let maxPrice;
   if (strategy === 'whale') maxPrice = Math.min(params.maxEntry, flag.price + params.maxSlippage);
   else if (strategy === 'fade') maxPrice = Math.min(params.maxEntry, 1 - flag.price + params.maxSlippage);
-  else if (strategy === 'comeback') maxPrice = params.collapseAt + params.maxSlippage;
+  else if (strategy === 'comeback') maxPrice = decision.leg === 'pre' ? Math.min(params.backMaxPrice ?? 0.85, mid + params.maxSlippage) : (cb.collapseAt ?? params.collapseAt) + params.maxSlippage;
   else if (strategy === 'value') maxPrice = params.priceMax;
   else maxPrice = Math.min(0.97, comb.expected - params.minEdge);
   const fill = pm.walkAsks(book, target, maxPrice);
@@ -284,26 +288,34 @@ export async function consider({ bot, ev, m, idx, flag = null, whale = null }) {
     const buys = flag.underdogBuys || 0;
     if (buys < params.minBuys) return finish('skipped', `${buys} of ${params.minBuys} underdog buys so far`);
     if (wallet.mine.some((x) => x.eventId === ev.id)) return finish('skipped', 'Already in this match');
+  } else if (strategy === 'comeback' && decision.leg === 'pre') {
+    if (cb.skip) return finish('skipped', cb.skip);
+    if (!cb.listed || !params.backListed) return finish('skipped', 'Not a listed team');
+    const mins = (ev.start - Date.now()) / MIN;
+    if (ctx.live || mins < 0 || mins > (params.backWindowMax || 30)) return finish('skipped', 'Outside the window before the start');
+    if (mid > (params.backMaxPrice ?? 0.85)) return finish('skipped', `At ${Math.round(mid * 100)}%, over ${Math.round((params.backMaxPrice ?? 0.85) * 100)}%`);
+    if (wallet.mine.some((x) => x.eventId === ev.id && sameLeg(x))) return finish('skipped', 'Already backed this match');
   } else if (strategy === 'comeback') {
+    if (cb.skip) return finish('skipped', cb.skip);
     if (!ctx.live) return finish('skipped', 'Not live');
     if (m.kind === 'map' && !params.maps) return finish('skipped', 'Map markets off');
     const game = ev.game || 'cs2';
     if (params.games?.length && !params.games.includes(game)) return finish('skipped', `${game} not traded`);
     const minsIn = (Date.now() - ev.start) / MIN;
-    if (game === 'cs2' && params.maxMinutes && minsIn > params.maxMinutes) return finish('skipped', `${Math.round(minsIn)} min in, over ${params.maxMinutes}`);
-    if (params.formats?.length && ev.format && !params.formats.includes(ev.format)) return finish('skipped', `${ev.format} not traded`);
+    if (cb.maxMinutes && minsIn > cb.maxMinutes) return finish('skipped', `${Math.round(minsIn)} min in, over ${cb.maxMinutes}`);
+    if (cb.formats?.length && ev.format && !cb.formats.includes(ev.format)) return finish('skipped', `${ev.format} not traded`);
     if (params.lowTierOnly && game === 'cs2' && !(ev.vrs || []).every((r) => !r || r > 30)) return finish('skipped', 'A VRS top-30 team plays');
     if (params.lowTierOnly && game !== 'cs2' && Number(ev.tier) >= 1 && Number(ev.tier) <= 2) return finish('skipped', `League tier ${ev.tier}`);
     const pre = col('prices')[m.conditionId]?.pre?.[idx];
     if (!Number.isFinite(pre)) return finish('skipped', 'No start price');
-    if (pre < params.preMin) return finish('skipped', `Started at ${Math.round(pre * 100)}%, under ${Math.round(params.preMin * 100)}%`);
-    if (mid > params.collapseAt) return finish('skipped', `At ${Math.round(mid * 100)}%, not down to ${Math.round(params.collapseAt * 100)}%`);
-    if (params.minDrop) {
+    if (pre < cb.preMin) return finish('skipped', `Started at ${Math.round(pre * 100)}%, under ${Math.round(cb.preMin * 100)}%`);
+    if (mid > cb.collapseAt) return finish('skipped', `At ${Math.round(mid * 100)}%, not down to ${Math.round(cb.collapseAt * 100)}%`);
+    if (cb.minDrop) {
       const drop = recentDrop(m, idx, mid);
       decision.drop = drop;
-      if (drop < params.minDrop) return finish('skipped', `Fell ${Math.round(drop * 100)} pts in 10 min, under ${Math.round(params.minDrop * 100)}`);
+      if (drop < cb.minDrop) return finish('skipped', `Fell ${Math.round(drop * 100)} pts in 10 min, under ${Math.round(cb.minDrop * 100)}`);
     }
-    if (wallet.mine.some((x) => x.eventId === ev.id)) return finish('skipped', 'Already in this match');
+    if (wallet.mine.some((x) => x.eventId === ev.id && sameLeg(x))) return finish('skipped', 'Already in this match');
   } else if (strategy === 'value') {
     const mins = (ev.start - Date.now()) / MIN;
     if (ctx.live || mins > params.windowMax || mins < params.windowMin) return finish('skipped', 'Outside the start window');
@@ -347,7 +359,7 @@ export async function consider({ bot, ev, m, idx, flag = null, whale = null }) {
   const sdH = (vol.sd5 || 0.03) * Math.sqrt(horizon / 5);
   decision.plan =
     strategy === 'whale' || strategy === 'value' || strategy === 'fade' || strategy === 'comeback'
-      ? { hold: true, mirror: Boolean(params.mirrorExits), sellAt: params.sellAt || 0 }
+      ? { hold: true, mirror: Boolean(params.mirrorExits), sellAt: strategy === 'comeback' ? (decision.leg === 'pre' ? 0 : cb.sellAt || 0) : params.sellAt || 0 }
       : { target: Math.min(0.99, e.px + Math.max(params.minEdge, params.targetK * sdH)), stop: Math.max(0.01, e.px - Math.max(0.03, params.stopK * sdH)), timeStop: Date.now() + horizon * params.timeMult * MIN, edgeExit: params.edgeExit };
 
   // A pre-match bet of real size gets a second opinion first.
@@ -445,6 +457,7 @@ function newBet(decision, fields) {
     sourceWallet: decision.trigger?.wallet || '',
     sourceFlagId: decision.trigger?.flagId || '',
     whalePrice: decision.trigger?.price ?? null,
+    leg: decision.leg || '',
     // The mid when the bot decided: fill price minus this is what the automatic stake measures.
     midAt: Number.isFinite(decision.pMarket) ? decision.pMarket : null,
     live: decision.live,
@@ -798,16 +811,35 @@ async function evaluateComeback(ev, m, idx) {
   for (const bot of bots) {
     const p = bot.params;
     if (m.kind === 'map' && !p.maps) continue;
-    if (pre < p.preMin || mid > p.collapseAt) continue;
-    if (p.minDrop && recentDrop(m, idx, mid) < p.minDrop) continue;
     const game = ev.game || 'cs2';
     if (p.games?.length && !p.games.includes(game)) continue;
-    if (game === 'cs2' && p.maxMinutes && (Date.now() - ev.start) / MIN > p.maxMinutes) continue;
+    const r = comebackRules(p, { game, team: m.outcomes[idx], opponent: m.outcomes[1 - idx] });
+    if (r.skip || pre < r.preMin || mid > r.collapseAt) continue;
+    if (r.maxMinutes && (Date.now() - ev.start) / MIN > r.maxMinutes) continue;
+    if (r.minDrop && recentDrop(m, idx, mid) < r.minDrop) continue;
     const k = `${token}|${bot.id}`;
     if (Date.now() - (state.lastEval.get(k) || 0) < 5e3) continue;
     state.lastEval.set(k, Date.now());
-    if (walletFor(bot).mine.some((b) => b.eventId === ev.id)) continue;
-    await consider({ bot, ev, m, idx }).catch((err) => logLine('error', `comeback bot ${bot.name}: ${err.message}`));
+    if (walletFor(bot).mine.some((b) => b.eventId === ev.id && (b.leg || 'comeback') === 'comeback')) continue;
+    await consider({ bot, ev, m, idx, leg: 'comeback' }).catch((err) => logLine('error', `comeback bot ${bot.name}: ${err.message}`));
+  }
+}
+
+/** Comeback bots that back their listed teams: once a minute inside the window before the start. */
+async function evaluatePrematchBack(ev, m, idx) {
+  if (m.kind !== 'match' || (ev.game || 'cs2') !== 'cs2') return;
+  for (const bot of activeBots('comeback', botsOn())) {
+    const p = bot.params;
+    if (!p.backListed || !(p.holdTeams || []).length) continue;
+    const r = comebackRules(p, { game: 'cs2', team: m.outcomes[idx], opponent: m.outcomes[1 - idx] });
+    if (!r.listed) continue;
+    const mins = (ev.start - Date.now()) / MIN;
+    if (mins < 0 || mins > (p.backWindowMax || 30)) continue;
+    const k = `pre|${m.tokens[idx]}|${bot.id}`;
+    if (Date.now() - (state.lastEval.get(k) || 0) < 60e3) continue;
+    state.lastEval.set(k, Date.now());
+    if (walletFor(bot).mine.some((b) => b.eventId === ev.id && b.leg === 'pre')) continue;
+    await consider({ bot, ev, m, idx, leg: 'pre' }).catch((err) => logLine('error', `comeback bot ${bot.name} (pre): ${err.message}`));
   }
 }
 
@@ -839,6 +871,7 @@ async function sweep() {
       for (const i of [0, 1]) await evaluateSwing(ev, m, i);
       if (live) for (const i of [0, 1]) await evaluateComeback(ev, m, i);
       if (!live) for (const i of [0, 1]) await evaluateValue(ev, m, i);
+      if (!live) for (const i of [0, 1]) await evaluatePrematchBack(ev, m, i);
       await quoteMarket(ev, m).catch((err) => logLine('error', `mm: ${err.message}`));
     }
   }

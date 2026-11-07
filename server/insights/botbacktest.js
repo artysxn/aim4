@@ -14,7 +14,7 @@
 
 import { col } from './store.js';
 import { loadPack } from './history.js';
-import { autoStake } from './bots.js';
+import { autoStake, comebackRules } from './bots.js';
 
 const DAY = 86400;
 const fee = (p) => 0.03 * Math.min(p, 1 - p);
@@ -33,41 +33,48 @@ function comebackBets(p, sinceS, extraSlip) {
   const bets = [];
   for (const r of loadPack()) {
     if (r.s < sinceS || !games.includes(r.g)) continue;
-    if (p.formats?.length && r.f && !p.formats.includes(r.f)) continue;
     if (p.lowTierOnly && !r.low) continue;
     let best = null;
     for (let x = 0; x < 2; x++) {
+      const rules = comebackRules(p, { game: r.g, team: r.n[x], opponent: r.n[1 - x] });
+      if (rules.skip) continue;
       const preX = x === 0 ? r.pre : 1 - r.pre;
-      if (preX < p.preMin) continue;
+      // Leg 1: back a listed team before the start, held to the end.
+      if (rules.listed && p.backListed && preX + 0.01 + extraSlip <= (p.backMaxPrice ?? 0.85)) {
+        const q = Math.min(0.99, preX + 0.01 + extraSlip);
+        bets.push({ at: r.s - 600, end: r.e, q, won: r.w === x, mult: r.w === x ? 1 / (q + fee(q)) : 0, sold: false, leg: 'pre', game: r.g, title: `${r.n[0]} vs ${r.n[1]}`, team: `${r.n[x]} (before the start)` });
+      }
+      if (rules.formats?.length && r.f && !rules.formats.includes(r.f)) continue;
+      if (preX < rules.preMin) continue;
       const px = (i) => (x === 0 ? r.p[i + 1] / 1000 : 1 - r.p[i + 1] / 1000);
       for (let i = 0; i + 4 < r.p.length; i += 2) {
-        if (px(i) > p.collapseAt) continue;
+        if (px(i) > rules.collapseAt) continue;
         const p3 = median([px(i), px(i + 2), px(i + 4)]);
-        if (p3 > p.collapseAt + 0.03) continue;
+        if (p3 > rules.collapseAt + 0.03) continue;
         const q = Math.min(0.99, p3 + 0.01 + extraSlip);
-        if (q > p.collapseAt + p.maxSlippage + extraSlip) break;
-        if (r.g === 'cs2' && p.maxMinutes && r.p[i] / 60 > p.maxMinutes) break;
+        if (q > rules.collapseAt + p.maxSlippage + extraSlip) break;
+        if (rules.maxMinutes && r.p[i] / 60 > rules.maxMinutes) break;
         // Sudden collapses only: the highest price in the 10 minutes before, minus the price now.
-        if (p.minDrop) {
+        if (rules.minDrop) {
           let hi = px(i);
           for (let j = i; j >= 0 && r.p[i] - r.p[j] <= 600; j -= 2) hi = Math.max(hi, px(j));
-          if (hi - px(i) < p.minDrop) continue;
+          if (hi - px(i) < rules.minDrop) continue;
         }
         const at = r.s + r.p[i];
         const won = r.w === x;
         let mult = won ? 1 / (q + fee(q)) : 0, end = r.e, sold = false;
         // Take profit: the first later trade at or above sellAt sells it all, 1c under (the bid), taker fee.
-        if (p.sellAt) {
+        if (rules.sellAt) {
           for (let k = i + 6; k < r.p.length; k += 2) {
-            if (px(k) < p.sellAt) continue;
-            const sp = p.sellAt - 0.01;
+            if (px(k) < rules.sellAt) continue;
+            const sp = rules.sellAt - 0.01;
             mult = (sp - fee(sp)) / (q + fee(q));
             end = r.s + r.p[k];
             sold = true;
             break;
           }
         }
-        if (!best || at < best.at) best = { at, end, q, won, mult, sold, game: r.g, title: `${r.n[0]} vs ${r.n[1]}`, team: r.n[x] };
+        if (!best || at < best.at) best = { at, end, q, won, mult, sold, leg: 'comeback', game: r.g, title: `${r.n[0]} vs ${r.n[1]}`, team: r.n[x] + (rules.listed ? ' (listed, held)' : '') };
         break;
       }
     }

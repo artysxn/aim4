@@ -174,7 +174,7 @@ const engine = await import('./engine.js');
 engine.updateSettings({ simBankroll: 1000, stakePct: 2, maxStake: 100, minScore: 30 });
 const botsMod = await import('./bots.js');
 // The first look at the bots seeds them from the settings above: eight paper bots.
-assert(botsMod.allBots().length === 15 && botsMod.allBots().every((b) => b.mode === 'paper'), 'ten paper bots seeded');
+assert(botsMod.allBots().length === 16 && botsMod.allBots().every((b) => b.mode === 'paper'), 'ten paper bots seeded');
 assert(botsMod.botById('split-buys').enabled && botsMod.botById('split-buys').params.minWhalePrice === 0.25 && botsMod.botById('value-dogs').type === 'value' && !botsMod.botById('w-score').enabled, 'edge bots on, losing styles off');
 assert(botsMod.botById('w-score').params.minScore === 30 && botsMod.botById('w-score').sizing.value === 2, 'seeded from the old settings');
 for (const b of botsMod.allBots()) botsMod.updateBot(b.id, { enabled: b.id === 'w-score' });

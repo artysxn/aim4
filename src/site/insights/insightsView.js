@@ -1360,6 +1360,7 @@ export function initInsightsView({ escapeHtml, openRoute }) {
   function fieldHtml(f, value, path) {
     if (f.kind === 'bool') return `<div class="ins-seg" data-be-bool="${path}"><button type="button" class="ins-seg-btn${value ? ' on' : ''}" data-v="1">On</button><button type="button" class="ins-seg-btn${!value ? ' on' : ''}" data-v="0">Off</button></div>`;
     if (f.kind === 'choice') return `<div class="ins-seg" data-be-choice="${path}">${f.options.map((o) => `<button type="button" class="ins-seg-btn${o === value ? ' on' : ''}" data-v="${o}">${o}${f.unit ? ` ${esc(f.unit)}` : ''}</button>`).join('')}</div>`;
+    if (f.kind === 'list') return `<input class="ins-field" type="text" data-be-list="${path}" value="${esc((value || []).join(', '))}" placeholder="Team, team, ..." style="width:320px">`;
     if (f.kind === 'multi') return `<div class="ins-chips-t">${f.options.map((o) => `<button type="button" class="ins-chip-t${(value || []).includes(o) ? ' on' : ''}" data-be-multi="${path}" data-v="${esc(o)}">${esc(o)}</button>`).join('')}</div>`;
     const scale = f.scale || 1;
     return `<span class="ins-unit">${f.unit === '$' ? '$' : ''}<input class="ins-field" type="number" step="${f.step || 'any'}" data-be-num="${path}" data-scale="${scale}" value="${Number((Number(value) * scale).toFixed(4))}">${f.unit && f.unit !== '$' ? esc(f.unit) : ''}</span>`;
@@ -1404,6 +1405,8 @@ export function initInsightsView({ escapeHtml, openRoute }) {
       }
       const nm = e.target.closest('[data-be-name]');
       if (nm) ui.editBot.name = nm.value;
+      const li = e.target.closest('[data-be-list]');
+      if (li) setPath(ui.editBot, li.dataset.beList, li.value.split(',').map((x) => x.trim()).filter(Boolean));
     });
     panel.addEventListener('click', async (e) => {
       const bo = e.target.closest('[data-be-bool] .ins-seg-btn');

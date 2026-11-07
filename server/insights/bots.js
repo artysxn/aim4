@@ -116,6 +116,13 @@ export const BOT_TYPES = {
       { key: 'minDrop', label: 'Only after a sudden fall of at least (10 min)', kind: 'num', unit: 'pts', scale: 100, min: 0, max: 0.6, step: 1, def: 0 },
       { key: 'sellAt', label: 'Take profit at (0 = hold)', kind: 'num', unit: '%', scale: 100, min: 0, max: 0.95, step: 1, def: 0 },
       { key: 'games', label: 'Games', kind: 'multi', options: ['cs2', 'valorant', 'lol', 'dota2'], def: ['cs2', 'valorant', 'lol', 'dota2'] },
+      { key: 'holdTeams', label: 'CS2 comeback teams (looser entry, hold to the end)', kind: 'list', def: [] },
+      { key: 'listPreMin', label: 'Comeback teams: priced at the start at least', kind: 'num', unit: '%', scale: 100, min: 0.1, max: 0.9, step: 1, def: 0.4 },
+      { key: 'listCollapseAt', label: 'Comeback teams: buy once they fall to', kind: 'num', unit: '%', scale: 100, min: 0.03, max: 0.45, step: 1, def: 0.25 },
+      { key: 'skipAgainst', label: 'CS2: never buy a team playing against', kind: 'list', def: [] },
+      { key: 'backListed', label: 'Back the comeback teams before the start', kind: 'bool', def: false },
+      { key: 'backWindowMax', label: 'Back them from this long before the start', kind: 'num', unit: 'min', min: 1, max: 600, step: 1, def: 30 },
+      { key: 'backMaxPrice', label: 'Back them at most at', kind: 'num', unit: '%', scale: 100, min: 0.05, max: 0.95, step: 1, def: 0.85 },
       { key: 'maxMinutes', label: 'CS2: only this long after the start', kind: 'num', unit: 'min', min: 10, max: 600, step: 5, def: 90 },
       { key: 'formats', label: 'Series lengths', kind: 'multi', options: ['BO1', 'BO3', 'BO5'], def: ['BO3', 'BO5'] },
       { key: 'lowTierOnly', label: 'Low tier only (CS2: both outside VRS top 30; others: league tier 3-5)', kind: 'bool', def: true },
@@ -141,6 +148,12 @@ export const BOT_TYPES = {
 const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
 
 function cleanField(f, v, prev) {
+  if (f.kind === 'list') {
+    const raw = Array.isArray(v) ? v : typeof v === 'string' ? v.split(/[,\n]/) : null;
+    if (!raw) return prev ?? f.def;
+    const seen = new Set();
+    return raw.map((x) => String(x).trim().slice(0, 40)).filter((x) => x && !seen.has(teamKey(x)) && seen.add(teamKey(x))).slice(0, 100);
+  }
   if (f.kind === 'bool') return typeof v === 'boolean' ? v : prev ?? f.def;
   if (f.kind === 'choice') return f.options.includes(Number(v)) ? Number(v) : prev ?? f.def;
   if (f.kind === 'multi') return Array.isArray(v) ? [...new Set(v.map(String).filter((x) => f.options.includes(x)))] : prev ?? f.def;
@@ -181,6 +194,26 @@ function newBotId() {
 }
 
 /** The stake one decision may use: the bot's rule, inside its own min and max. */
+/** Team names compared without case, accents, spaces or punctuation: "LFO 10" = "lfo10". */
+export function teamKey(s) {
+  return String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+/**
+ * The rules a comeback bot applies to one team in one match. The team lists
+ * (CS2 only) override the defaults: a listed team gets the looser entry and is
+ * held to the end; a team playing a skip-listed team is never bought.
+ * Shared by the live bot and the backtest so the two never drift.
+ * @returns {{ skip:string, listed:boolean, preMin:number, collapseAt:number, minDrop:number, maxMinutes:number, formats:string[], sellAt:number }}
+ */
+export function comebackRules(p, { game, team, opponent }) {
+  const cs2 = (game || 'cs2') === 'cs2';
+  const has = (list, name) => (list || []).some((x) => teamKey(x) === teamKey(name));
+  if (cs2 && has(p.skipAgainst, opponent)) return { skip: `Plays ${opponent} (skip list)`, listed: false };
+  if (cs2 && has(p.holdTeams, team)) return { skip: '', listed: true, preMin: p.listPreMin ?? 0.4, collapseAt: p.listCollapseAt ?? 0.25, minDrop: 0, maxMinutes: 0, formats: [], sellAt: 0 };
+  return { skip: '', listed: false, preMin: p.preMin, collapseAt: p.collapseAt, minDrop: p.minDrop || 0, maxMinutes: cs2 ? p.maxMinutes || 0 : 0, formats: p.formats || [], sellAt: p.sellAt || 0 };
+}
+
 export function stakeFor(bot, bankroll, auto = null) {
   if (bot.sizing.kind === 'auto') return autoStake({ bankroll, maxStake: bot.maxStake, minStake: bot.minStake, ...(auto || {}) }).stake;
   const raw = bot.sizing.kind === 'fixed' ? bot.sizing.value : (bankroll * bot.sizing.value) / 100;
@@ -315,6 +348,30 @@ export function allBots() {
           params: { preMin: 0.5, collapseAt: 0.2, maxSlippage: 0.02, minDrop: 0.2, sellAt: 0.6, maxMinutes: 90, games: ['cs2', 'valorant', 'lol', 'dota2'], formats: ['BO3', 'BO5'], lowTierOnly: true, maps: false }
         }),
         id: 'oracle-v2-1'
+      });
+    }
+    touch('bots');
+  }
+  // 2026-11-07: Oracle V2.2 = V2.1 (take profit moved to 65%) + the owner's
+  // CS2 team lists: listed teams that collapse are bought on the looser entry
+  // and held; their collapsed opponents are skipped; listed teams are also
+  // backed in the last 30 minutes before the start (year: 62% won, +22%/bet).
+  if (!b.v9) {
+    b.v9 = true;
+    const teams = ['megoshort', 'QUAZAR', 'Entropy', 'LFO 10', 'LFO', 'Quintessence', 'TitanFlow'];
+    if (!b.list.some((x) => x.id === 'oracle-v2-2')) {
+      b.list.push({
+        ...sanitizeBot({
+          type: 'comeback',
+          name: 'Oracle V2.2',
+          enabled: true,
+          mode: 'paper',
+          sizing: { kind: 'auto', value: 1 },
+          maxStake: 25,
+          paperBankroll: 500,
+          params: { preMin: 0.5, collapseAt: 0.2, maxSlippage: 0.02, minDrop: 0.2, sellAt: 0.65, maxMinutes: 90, games: ['cs2', 'valorant', 'lol', 'dota2'], formats: ['BO3', 'BO5'], lowTierOnly: true, maps: false, holdTeams: teams, listPreMin: 0.4, listCollapseAt: 0.25, skipAgainst: teams, backListed: true, backWindowMax: 30, backMaxPrice: 0.85 }
+        }),
+        id: 'oracle-v2-2'
       });
     }
     touch('bots');
