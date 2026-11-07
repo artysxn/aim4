@@ -306,6 +306,13 @@ engine.updateSettings({ botsOn: true });
     const b4 = await brainM.considerComeback(V32, bo1, bo1.markets[0], 0);
     assert(b4.action === 'entered' && b4.outcome === bo1.markets[0].outcomes[1], `V3.2 buys the leader in a BO1 crash (${b4.action}: ${b4.reason})`);
     const b5 = await brainM.considerComeback(V32, bleed, bleed.markets[0], 0);
+    // The leader leg's price cap (V3.2 live: 85%): the slow-bleed leader sits at 88%.
+    const capped = botsM.createBot({ ...structuredClone(V32), name: 'V3.2 cap test', params: { ...V32.params, leaderMaxPrice: 0.85 } });
+    botsM.updateBot(capped.id, { enabled: true });
+    const bc = await brainM.considerComeback(botsM.botById(capped.id), bleed, bleed.markets[0], 0);
+    assert(bc.action === 'skipped' && /Leader at 88%, over 85%/.test(bc.reason), `leader over the cap is skipped (${bc.reason})`);
+    botsM.deleteBot(capped.id);
+    assert(brainM.sellFloor(0.995, 0.998, 0.01) === 0.99 && brainM.sellFloor(0.61, 0.66, 0.01) === 0.61 && brainM.sellFloor(0.6100000000000001, null, 0.01) === 0.61, 'sell floors on the grid, never above the bid');
     assert(b5.action === 'skipped' && /Already in this match|stake already in/.test(b5.reason), `one bet per match (${b5.reason})`);
     const own = store.col('bets').filter((b) => b.botId === v32.id);
     assert(own.length === 3 && own.every((b) => b.mode === 'sim'), `three V3.2 bets on its own wallet (${own.length})`);
@@ -726,6 +733,8 @@ assert(dear.placed === 10 && dear.stopped && /over the mid/.test(dear.stopped.re
   const both = bt._comebackBets({ ...cbBot.params, bet: 'both', leaderKellyPct: 19.1, busyAt: 4 }, 0, 0);
   const bothLead = both.filter((b) => /leader/.test(b.team));
   assert(both.length === all.length + 40 && bothLead.length === 40 && bothLead.every((b) => b.kellyPct === 19.1) && new Set(both.map((b) => b.cid)).size === both.length, `V3.2 = crash bets + leader bets (${both.length} = ${all.length} + ${bothLead.length})`);
+  const bothCap = bt._comebackBets({ ...cbBot.params, bet: 'both', leaderKellyPct: 19.1, busyAt: 4, leaderMaxPrice: 0.85 }, 0, 0);
+  assert(bothCap.filter((b) => /leader/.test(b.team)).length === 0 && bothCap.length === all.length, 'the 86% leader bets drop under an 85% cap');
 }
 db.closeDb();
 

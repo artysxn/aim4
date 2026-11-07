@@ -71,6 +71,8 @@ function comebackBets(p, sinceS, extraSlip) {
           // Buy the other side when the comeback is overpriced: not a crash the
           // crashed-team bots take, and higher tier, busy or BO1.
           if (p.notAgainst?.some((t) => teamKey(t) === teamKey(r.n[x]))) break;
+          // The leader pays only when it is not too dear (2026-11-08: 78-85% +4.3%/+4.9% a bet, above 85% none).
+          if (1 - p3 + 0.01 + extraSlip > (p.leaderMaxPrice ?? 0.97) + 1e-9) continue;
           const crashBotsTake = r.low && ['BO3', 'BO5'].includes(r.f) && hi - px(i) >= 0.2 && !(r.g === 'cs2' && r.p[i] / 60 > 90);
           if (crashBotsTake) break;
           if (r.low && tpm < (p.busyAt ?? 4) && r.f !== 'BO1') continue;

@@ -26,6 +26,7 @@ export const COMMON_FIELDS = [
   { key: 'paperBankroll', label: 'Paper wallet', kind: 'num', unit: '$', min: 10, max: 1e8, step: 10, def: 1000 },
   { key: 'maxOpenPct', label: 'Open bets at most', kind: 'num', unit: '% of wallet', min: 1, max: 100, step: 1, def: 25 },
   { key: 'dailyLossPct', label: 'Stop for the day after losing', kind: 'num', unit: '% of wallet', min: 1, max: 100, step: 1, def: 10 },
+  { key: 'sellAbove', label: 'Sell a held bet once its bid reaches (0 = hold to the result)', kind: 'num', unit: '%', scale: 100, min: 0, max: 0.999, step: 0.1, def: 0.998 },
   { key: 'autoStop', label: 'Back to paper if it keeps losing (real money)', kind: 'bool', def: true },
   { key: 'stopAfter', label: 'Losing check after this many real bets', kind: 'num', unit: 'bets', min: 5, max: 1000, step: 1, def: 30 },
   { key: 'stopBelow', label: 'Losing means a return per bet under', kind: 'num', unit: '%', min: -100, max: 100, step: 1, def: -20 },
@@ -132,6 +133,7 @@ export const BOT_TYPES = {
       // The comeback is overpriced there: the leader won 87.7% while priced 84.6% (+3.3% per bet, every month).
       { key: 'bet', label: 'Bet on (both = the crashed team on its own rules, else the leader)', kind: 'choice', options: ['crashed', 'leader', 'both'], def: 'crashed' },
       { key: 'leaderKellyPct', label: 'Both: full-Kelly % for the leader bets (used at a quarter)', kind: 'num', unit: '%', min: 0, max: 50, step: 0.1, def: 19.1 },
+      { key: 'leaderMaxPrice', label: 'Leader: pay at most', kind: 'num', unit: '%', scale: 100, min: 0.5, max: 0.97, step: 1, def: 0.97 },
       { key: 'busyAt', label: 'Leader: a market counts as busy from (trades a minute)', kind: 'num', unit: '/min', min: 0.5, max: 60, step: 0.5, def: 4 },
       { key: 'sellAt', label: 'Take profit at (0 = hold)', kind: 'num', unit: '%', scale: 100, min: 0, max: 0.95, step: 1, def: 0 },
       { key: 'games', label: 'Games', kind: 'multi', options: ['cs2', 'valorant', 'lol', 'dota2'], def: ['cs2', 'valorant', 'lol', 'dota2'] },
@@ -509,6 +511,13 @@ export function allBots() {
     const leader = b.list.find((x) => x.name === 'Back the leader' && x.type === 'comeback');
     if (leader) leader.promoteAfter = 0;
     if (v31) b.v12 = true;
+    touch('bots');
+  }
+  // 2026-11-08: V3.2's leader leg pays only up to 85% (78-85%: +4.3%/+4.9% a bet before/after 22 Jul;
+  // above: about zero, 97%+ negative). Backtest after 22 Jul +16.3%/bet vs +15.2%.
+  if (!b.v13) {
+    for (const x of b.list) if (x.params?.bet === 'both') x.params.leaderMaxPrice = 0.85;
+    b.v13 = true;
     touch('bots');
   }
   return b.list;

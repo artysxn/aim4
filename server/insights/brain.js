@@ -99,6 +99,8 @@ function tickOf(token, book) {
 }
 export const floorTick = (p, t) => Math.round(Math.floor(p / t + 1e-9) * t * 1e6) / 1e6;
 export const ceilTick = (p, t) => Math.round(Math.ceil(p / t - 1e-9) * t * 1e6) / 1e6;
+/** A sell's lowest price on the grid: rounded up, but never above the bid it sells into. */
+export const sellFloor = (p, bid, t) => (bid === null || bid === undefined ? ceilTick(p, t) : Math.min(ceilTick(p, t), floorTick(bid, t)));
 
 async function bookFor(token) {
   const live = feeds.bookSnapshot(token);
@@ -331,6 +333,8 @@ export async function consider({ bot, ev, m, idx, flag = null, whale = null, leg
     if (params.games?.length && !params.games.includes(game)) return finish('skipped', `${game} not traded`);
     const c = 1 - idx;
     if (params.notAgainst?.some((t) => teamKey(t) === teamKey(m.outcomes[c]))) return finish('skipped', `${m.outcomes[c]} is a listed comeback team: never bet against it`);
+    // The leader pays only when it is not too dear (2026-11-08: 78-85% +4.3%/+4.9% a bet; above 85% about zero, 97%+ negative).
+    if (mid > (params.leaderMaxPrice ?? 0.97) + 1e-9) return finish('skipped', `Leader at ${Math.round(mid * 100)}%, over ${Math.round((params.leaderMaxPrice ?? 0.97) * 100)}%`);
     const preC = col('prices')[m.conditionId]?.pre?.[c];
     if (!Number.isFinite(preC)) return finish('skipped', 'No start price');
     if (preC < cb.preMin) return finish('skipped', `The other team started at ${Math.round(preC * 100)}%, under ${Math.round(cb.preMin * 100)}%`);
@@ -687,7 +691,7 @@ export async function exitBet(bet, reason, minPrice = 0.01) {
     const s = api.settings();
     const book = await bookFor(bet.tokenId);
     const { bid } = bestOf(book);
-    const intent = api.queueIntent({ type: 'market', side: 'SELL', tokenId: bet.tokenId, conditionId: bet.conditionId, shares: bet.shares, minPrice: ceilTick(Math.max(minPrice, (bid ?? 0.02) - s.maxSlippage), tickOf(bet.tokenId, book)) });
+    const intent = api.queueIntent({ type: 'market', side: 'SELL', tokenId: bet.tokenId, conditionId: bet.conditionId, shares: bet.shares, minPrice: sellFloor(Math.max(minPrice, (bid ?? 0.02) - s.maxSlippage), bid, tickOf(bet.tokenId, book)) });
     bet.exiting = intent.id;
     bet.exitReason = reason;
   } else {
@@ -719,6 +723,12 @@ async function checkExits(token) {
     const p = bet.plan;
     if (p.hold) {
       if (p.sellAt && bid >= p.sellAt) await exitBet(bet, `Take profit at ${Math.round(p.sellAt * 100)}%`);
+      else {
+        // Practically won: sell into the near-1 bid instead of waiting hours for the result and
+        // a redemption (without a relayer key the executor cannot claim winnings by itself).
+        const top = botById(bet.botId)?.sellAbove ?? 0.998;
+        if (top > 0 && bid >= top) await exitBet(bet, `Practically won: sold at ${(bid * 100).toFixed(1)}%`, Math.max(0.01, bid - 0.003));
+      }
       continue;
     }
     if (bid >= p.target) await exitBet(bet, `Target ${(p.target * 100).toFixed(1)}% reached`);

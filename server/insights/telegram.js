@@ -19,6 +19,7 @@ import * as botsMod from './bots.js';
 import * as db from './db.js';
 import { botReport, skipCategory } from './botReport.js';
 import * as football from './football.js';
+import * as pm from './polymarket.js';
 
 const cfgFile = () => process.env.AIM4_TELEGRAM_FILE || path.join(os.homedir(), '.aim4', 'telegram.json');
 const stateFile = () => path.join(insightsDir(), 'telegram-state.json');
@@ -83,7 +84,8 @@ async function scan() {
       const id = m.eventId || m.id;
       if (!id || st.sus[id]) continue;
       st.sus[id] = Date.now();
-      if (st.primed) await say(`🔎 <b>Suspicious</b> ${susLine(m)}`);
+      // Only a match still to be decided is worth a message (a flag seen after the result is history).
+      if (st.primed && openMatch(m)) await say(`🔎 <b>Suspicious</b> ${susLine(m)}`);
     }
   } catch (err) {
     logLine('warn', `telegram suspicious: ${err.message}`);
@@ -121,6 +123,11 @@ async function dailyDigest(force = false) {
   if (paper.length) await say(`📄 <b>Paper bots today</b>\n${paper.map((p) => `${p.pnl >= 0 ? '🟢' : '🔴'} ${esc(p.name)}: ${usd(p.pnl)} (${p.rec})`).join('\n')}`);
 }
 
+
+/** Not settled, no winner yet, and live or still to start. */
+function openMatch(m) {
+  return !m.settled && (m.winner === null || m.winner === undefined) && Boolean(m.live || (m.start || 0) > Date.now());
+}
 
 /** "Dota 2 · <b>Team A</b> to WIN · Team B to lose · DreamLeague…" from a suspicious-match row. */
 function susLine(m) {
@@ -186,6 +193,8 @@ const HELP = `<b>Commands</b>
 /on &lt;bot&gt; · /off &lt;bot&gt; — switch a bot
 /arm · /disarm — real trading
 /real &lt;bot&gt; · /paper &lt;bot&gt; — move a bot to real money or paper
+/today · /bets — today's real bets, or the last 10, with results
+/refresh — re-check the wallet now: positions, fills, cash
 /set &lt;bot&gt; &lt;key&gt; &lt;value&gt; — change a bot setting (e.g. /set v3.1 maxOverMid 0.01)
 /settings &lt;bot&gt; — show a bot's settings
 /suspicious — current suspicious matches
@@ -248,6 +257,25 @@ async function handle(msg) {
     const got = top ? next?.[key] : next?.params?.[key];
     return say(got === undefined ? `Not a setting of ${esc(bot.name)}: ${esc(key)}` : `${esc(bot.name)}: ${esc(key)} = ${esc(JSON.stringify(got))}`);
   }
+  if (cmd === '/refresh') {
+    await engine.refreshNow().catch(() => {});
+    await engine._reconcileRealFills({ force: true }).catch(() => {});
+    const wallet = (col('executor').devices || []).map((d) => d.info?.wallet).find(Boolean)?.toLowerCase();
+    const body = wallet ? await pm.positions({ user: wallet, limit: 100 }).catch(() => null) : null;
+    const rows = (Array.isArray(body?.data) ? body.data : []).filter((r) => Number(r.current_size ?? r.size) > 0.01);
+    const realBets = col('bets').filter((b) => b.mode === 'real');
+    const nameOf = (tok, cond) => {
+      const b = realBets.find((x) => String(x.tokenId) === tok);
+      if (b) return `${b.outcome} (${b.title})`;
+      const ev = Object.values(col('events')).find((e) => e.markets?.some((x) => x.conditionId === cond));
+      const m = ev?.markets.find((x) => x.conditionId === cond);
+      const i = m ? m.tokens.indexOf(tok) : -1;
+      return ev ? `${i >= 0 ? m.outcomes[i] : '?'} (${ev.teams.join(' vs ')})` : tok.slice(0, 10);
+    };
+    const w = engine.realWallet();
+    const open = realBets.filter((b) => ['open', 'pending'].includes(b.status));
+    return say(`🔄 <b>Refreshed</b> · cash ${usd(w.cash)} · ${rows.length} position${rows.length === 1 ? '' : 's'} · ${open.length} bot bet${open.length === 1 ? '' : 's'} open\n${rows.map((r) => { const tok = String(r.token_id ?? r.asset); const sz = Number(r.current_size ?? r.size); const px = Number(r.current_price ?? r.curPrice) || 0; return `${realBets.some((b) => String(b.tokenId) === tok && ['open', 'pending'].includes(b.status)) ? '🤖' : '👤'} ${esc(nameOf(tok, String(r.condition_id ?? r.conditionId)))} · ${sz.toFixed(2)} at ${pct(px)} = ${usd(sz * px)}${r.redeemable ? ' · resolved: redeem it on Polymarket' : ''}`; }).join('\n') || 'No positions.'}`);
+  }
   if (cmd === '/today' || cmd === '/bets') {
     const day0 = new Date().setHours(0, 0, 0, 0);
     const real = col('bets').filter((b) => b.mode === 'real').sort((a, b) => b.placedAt - a.placedAt);
@@ -272,7 +300,7 @@ async function handle(msg) {
   }
   if (cmd === '/suspicious') {
     const { suspiciousView } = await import('./routes.js');
-    const list = suspiciousView().slice(0, 10);
+    const list = suspiciousView().filter(openMatch).slice(0, 10);
     return say(list.length ? list.map((m) => `• ${susLine(m)}`).join('\n') : 'Nothing suspicious right now.');
   }
   return say(HELP);
