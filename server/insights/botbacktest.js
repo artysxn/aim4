@@ -54,12 +54,26 @@ function comebackBets(p, sinceS, extraSlip) {
         const q = Math.min(0.99, p3 + 0.01 + extraSlip);
         if (q > rules.collapseAt + p.maxSlippage + extraSlip) break;
         if (rules.maxMinutes && r.p[i] / 60 > rules.maxMinutes) break;
-        // Sudden collapses only: the highest price in the 10 minutes before, minus the price now.
-        if (rules.minDrop) {
-          let hi = px(i);
-          for (let j = i; j >= 0 && r.p[i] - r.p[j] <= 600; j -= 2) hi = Math.max(hi, px(j));
-          if (hi - px(i) < rules.minDrop) continue;
+        let hi = px(i);
+        for (let j = i; j >= 0 && r.p[i] - r.p[j] <= 600; j -= 2) hi = Math.max(hi, px(j));
+        // In-game trades a minute so far: the path's points before now (as brain.tradesPerMin counts live).
+        const tpm = i / 2 / Math.max(1, r.p[i] / 60);
+        if (p.bet === 'leader') {
+          // Buy the other side when the comeback is overpriced: not a crash the
+          // crashed-team bots take, and higher tier, busy or BO1.
+          const crashBotsTake = r.low && ['BO3', 'BO5'].includes(r.f) && hi - px(i) >= 0.2 && !(r.g === 'cs2' && r.p[i] / 60 > 90);
+          if (crashBotsTake) break;
+          if (r.low && tpm < (p.busyAt ?? 4) && r.f !== 'BO1') continue;
+          const oq = Math.min(0.99, 1 - p3 + 0.01 + extraSlip);
+          const lw = r.w === 1 - x;
+          const at = r.s + r.p[i];
+          if (!best || at < best.at) best = { at, end: r.e, q: oq, won: lw, mult: lw ? 1 / (oq + fee(oq)) : 0, sold: false, leg: 'comeback', game: r.g, title: `${r.n[0]} vs ${r.n[1]}`, team: `${r.n[1 - x]} (leader)` };
+          break;
         }
+        // Sudden collapses only: the highest price in the 10 minutes before, minus the price now.
+        if (rules.minDrop && hi - px(i) < rules.minDrop) continue;
+        // Busy markets price a crash right: skip them.
+        if (p.maxTradesPerMin > 0 && tpm >= p.maxTradesPerMin) continue;
         const at = r.s + r.p[i];
         const won = r.w === x;
         let mult = won ? 1 / (q + fee(q)) : 0, end = r.e, sold = false;
@@ -242,18 +256,13 @@ const summary = (bets) => {
   return { bets: n, winRate: bets.filter((b) => multOf(b) > 1).length / n, sold: bets.filter((b) => b.sold).length / n, avgPrice: bets.reduce((s, b) => s + b.q, 0) / n, returnPerBet: bets.reduce((s, b) => s + ret(b), 0) / n };
 };
 
-/**
- * @param {object} bot      a bot as stored
- * @param {{ days?:number, start?:number, extraSlip?:number }} o
- *   extraSlip: cents (as a fraction) added to every fill, to test thinner books
- */
-export function botBacktest(bot, { days = 365, start = 500, extraSlip = 0 } = {}) {
-  const nowS = Math.floor(Date.now() / 1000);
-  const sinceS = nowS - days * DAY;
-  let bets, source;
+/** Every signal this bot would have acted on since a time (unix seconds), oldest first. */
+function signalsFor(bot, sinceS, extraSlip) {
+  let bets, source, dataFrom = null;
   if (bot.type === 'comeback') {
     bets = comebackBets(bot.params, sinceS, extraSlip);
     const pack = loadPack();
+    for (const r of pack) if (dataFrom === null || r.s < dataFrom) dataFrom = r.s;
     source = `History pack: ${pack.length.toLocaleString('en-US')} settled esports matches with full price paths`;
   } else if (bot.type === 'whale') {
     bets = whaleBets(bot.params, sinceS, extraSlip);
@@ -270,6 +279,140 @@ export function botBacktest(bot, { days = 365, start = 500, extraSlip = 0 } = {}
     throw e;
   }
   bets.sort((a, b) => a.at - b.at);
+  if (dataFrom === null) dataFrom = bets[0]?.at ?? null;
+  return { bets, source, dataFrom };
+}
+
+/**
+ * The wallet bet by bet, the way the live bot would size it: the automatic stake
+ * halves until 10 fills are measured, stops for good once fills run over 2.5c
+ * above the mid (fillCost), and stops under $10. Every settlement is a point.
+ * Times in the result are milliseconds.
+ */
+function replayCurve(bets, bot, start, { fillCost = 0.01, startS = null } = {}) {
+  let cash = start, peak = start, low = start, maxDd = 0, placed = 0, won = 0, fills = 0;
+  let stopped = null;
+  const open = [], curve = [], months = new Map(), dayPnl = new Map();
+  const skips = { daily: 0, open: 0, stake: 0 };
+  const equity = () => cash + open.reduce((s, x) => s + x.stake, 0);
+  const monthOf = (t) => {
+    const k = new Date(t * 1000).toISOString().slice(0, 7);
+    if (!months.has(k)) months.set(k, { month: k, start: equity(), bets: 0, won: 0, profit: 0 });
+    return months.get(k);
+  };
+  const settle = (until) => {
+    const due = open.filter((o) => o.end <= until).sort((a, b) => a.end - b.end);
+    for (const o of due) {
+      open.splice(open.indexOf(o), 1);
+      cash += o.pay;
+      const pnl = o.pay - o.stake;
+      dayPnl.set(o.day, (dayPnl.get(o.day) || 0) + pnl);
+      const mo = monthOf(o.end);
+      mo.profit += pnl;
+      if (pnl > 0) {
+        mo.won++;
+        won++;
+      }
+      const eq = equity();
+      peak = Math.max(peak, eq);
+      low = Math.min(low, eq);
+      maxDd = Math.max(maxDd, peak > 0 ? 1 - eq / peak : 0);
+      curve.push({ t: o.end * 1000, v: Math.round(eq * 100) / 100, d: Math.round(pnl * 100) / 100, title: o.b.title, team: o.b.team, price: o.b.q, stake: o.stake, won: pnl > 0, sold: Boolean(o.b.sold), game: o.b.game || '' });
+    }
+  };
+  for (const b of bets) {
+    settle(b.at);
+    if (stopped) continue;
+    const eq = equity();
+    const dd = peak > 0 ? 1 - eq / peak : 0;
+    const mo = monthOf(b.at);
+    const day = new Date(b.at * 1000).toISOString().slice(0, 10);
+    if ((dayPnl.get(day) || 0) <= -eq * ((bot.dailyLossPct ?? 10) / 100)) {
+      skips.daily++;
+      continue;
+    }
+    let stake;
+    if (bot.sizing.kind === 'auto') {
+      const a = autoStake({ bankroll: eq, fillCost: fills >= 10 ? fillCost : null, drawdown: dd, maxStake: bot.maxStake, minStake: bot.minStake });
+      stake = a.stake;
+      if (!stake) {
+        // Under $10 with nothing left to settle, or fills too dear: the live bot is done.
+        if (!open.length || fillCost > 0.025) stopped = { t: b.at * 1000, reason: a.reason };
+        skips.stake++;
+        continue;
+      }
+    } else stake = Math.floor(stakeOf(bot, eq, dd) * 100) / 100;
+    if (stake > cash) {
+      skips.stake++;
+      if (!open.length && cash < bot.minStake) stopped = { t: b.at * 1000, reason: 'Wallet under the minimum stake' };
+      continue;
+    }
+    if (open.reduce((s, x) => s + x.stake, 0) + stake > Math.max(eq * ((bot.maxOpenPct ?? 25) / 100), bot.minStake)) {
+      skips.open++;
+      continue;
+    }
+    cash -= stake;
+    placed++;
+    fills++;
+    mo.bets++;
+    open.push({ end: b.end, stake, day, pay: stake * multOf(b), b });
+  }
+  settle(Infinity);
+  const list = [...months.values()].sort((a, b) => (a.month < b.month ? -1 : 1));
+  list.forEach((m, i) => (m.end = i + 1 < list.length ? list[i + 1].start : cash));
+  const firstT = startS ? startS * 1000 : bets[0] ? bets[0].at * 1000 : null;
+  const lastT = curve.length ? curve[curve.length - 1].t : firstT;
+  return {
+    start,
+    end: Math.round(cash * 100) / 100,
+    peak: Math.round(Math.max(peak, cash) * 100) / 100,
+    low: Math.round(Math.min(low, cash) * 100) / 100,
+    maxDrawdown: maxDd,
+    placed,
+    won,
+    perDay: firstT && lastT > firstT ? placed / ((lastT - firstT) / 86400e3) : null,
+    skips,
+    stopped,
+    months: list.map((m) => ({ month: m.month, bets: m.bets, won: m.won, start: Math.round(m.start * 100) / 100, end: Math.round(m.end * 100) / 100, profit: Math.round((m.end - m.start) * 100) / 100 })),
+    curve
+  };
+}
+
+/**
+ * The same bot started on several dates with the same wallet, each run forward
+ * to the end of the data. For the bot page's chart.
+ * @param {object} bot
+ * @param {{ starts: number[], start?: number, extraSlip?: number, to?: number|null }} o  starts and to in ms
+ */
+export function botBacktestRuns(bot, { starts, start = 21, extraSlip = 0, to = null } = {}) {
+  const firstS = Math.floor(Math.min(...starts) / 1000);
+  const { bets, source, dataFrom } = signalsFor(bot, firstS, extraSlip);
+  const toS = to ? Math.floor(to / 1000) : Infinity;
+  const runs = starts
+    .slice()
+    .sort((a, b) => a - b)
+    .map((t) => {
+      const s = Math.floor(t / 1000);
+      const r = replayCurve(
+        bets.filter((b) => b.at >= s && b.at <= toS),
+        bot,
+        start,
+        { fillCost: 0.01 + extraSlip, startS: s }
+      );
+      return { from: t, beforeData: dataFrom !== null && s < dataFrom, ...r };
+    });
+  return { bot: { id: bot.id, name: bot.name, type: bot.type, sizing: bot.sizing }, source, dataFrom: dataFrom === null ? null : dataFrom * 1000, dataTo: bets.length ? bets[bets.length - 1].at * 1000 : null, start, extraSlip, runs };
+}
+
+/**
+ * @param {object} bot      a bot as stored
+ * @param {{ days?:number, start?:number, extraSlip?:number }} o
+ *   extraSlip: cents (as a fraction) added to every fill, to test thinner books
+ */
+export function botBacktest(bot, { days = 365, start = 500, extraSlip = 0 } = {}) {
+  const nowS = Math.floor(Date.now() / 1000);
+  const sinceS = nowS - days * DAY;
+  const { bets, source } = signalsFor(bot, sinceS, extraSlip);
   const from = bets[0]?.at || sinceS, to = bets[bets.length - 1]?.at || nowS;
   const spanDays = Math.max(1, (to - from) / DAY);
   const half = Math.floor(bets.length / 2);
@@ -296,3 +439,4 @@ export function botBacktest(bot, { days = 365, start = 500, extraSlip = 0 } = {}
     recent: w.placedBets.slice(-25).reverse().map((b) => ({ at: b.at, title: b.title, team: b.team, game: b.game || '', price: b.q, stake: b.stake, won: b.won, sold: Boolean(b.sold), profit: b.stake * (multOf(b) - 1) }))
   };
 }
+export { comebackBets as _comebackBets };

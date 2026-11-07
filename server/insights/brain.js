@@ -32,6 +32,7 @@ import { tables, volOf, priceAt } from './reaction.js';
 import { betTotals, teamTable } from './stats.js';
 import { normName } from './matching.js';
 import { activeBots, botById, stakeFor, autoStake, comebackRules } from './bots.js';
+import { reasonKey, skipCategory } from './botReport.js';
 
 const newId = (p) => `${p}_${crypto.randomBytes(6).toString('hex')}`;
 const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
@@ -241,7 +242,18 @@ export async function consider({ bot, ev, m, idx, flag = null, whale = null, leg
   let maxPrice;
   if (strategy === 'whale') maxPrice = Math.min(params.maxEntry, flag.price + params.maxSlippage);
   else if (strategy === 'fade') maxPrice = Math.min(params.maxEntry, 1 - flag.price + params.maxSlippage);
-  else if (strategy === 'comeback') maxPrice = decision.leg === 'pre' ? Math.min(params.backMaxPrice ?? 0.85, mid + params.maxSlippage) : (cb.collapseAt ?? params.collapseAt) + params.maxSlippage;
+  else if (strategy === 'comeback') {
+    maxPrice =
+      decision.leg === 'pre'
+        ? Math.min(params.backMaxPrice ?? 0.85, mid + params.maxSlippage)
+        : params.bet === 'leader'
+          ? Math.min(0.97, mid + params.maxSlippage)
+          : (cb.collapseAt ?? params.collapseAt) + params.maxSlippage;
+    // Never pay more than this over the mid: on thin books the fill cost is
+    // the whole edge (2026-11-07: paid 5.8% on a 3.5% mid). Also caps the real order.
+    const overMid = params.maxOverMid ?? 0.015;
+    if (overMid > 0) maxPrice = Math.min(maxPrice, Math.round((mid + overMid) * 1000) / 1000);
+  }
   else if (strategy === 'value') maxPrice = params.priceMax;
   else maxPrice = Math.min(0.97, comb.expected - params.minEdge);
   const fill = pm.walkAsks(book, target, maxPrice);
@@ -295,6 +307,27 @@ export async function consider({ bot, ev, m, idx, flag = null, whale = null, leg
     if (ctx.live || mins < 0 || mins > (params.backWindowMax || 30)) return finish('skipped', 'Outside the window before the start');
     if (mid > (params.backMaxPrice ?? 0.85)) return finish('skipped', `At ${Math.round(mid * 100)}%, over ${Math.round((params.backMaxPrice ?? 0.85) * 100)}%`);
     if (wallet.mine.some((x) => x.eventId === ev.id && sameLeg(x))) return finish('skipped', 'Already backed this match');
+  } else if (strategy === 'comeback' && params.bet === 'leader') {
+    // Buy the leader when the comeback is overpriced: a crash the crashed-team
+    // bots skip, in a higher-tier, busy or BO1 match (2026-11-07 crash study).
+    if (!ctx.live) return finish('skipped', 'Not live');
+    if (m.kind === 'map') return finish('skipped', 'Match winner only');
+    const game = ev.game || 'cs2';
+    if (params.games?.length && !params.games.includes(game)) return finish('skipped', `${game} not traded`);
+    const c = 1 - idx;
+    const preC = col('prices')[m.conditionId]?.pre?.[c];
+    if (!Number.isFinite(preC)) return finish('skipped', 'No start price');
+    if (preC < cb.preMin) return finish('skipped', `The other team started at ${Math.round(preC * 100)}%, under ${Math.round(cb.preMin * 100)}%`);
+    const cMid = feeds.midOf(m.tokens[c]) ?? 1 - mid;
+    if (cMid > cb.collapseAt) return finish('skipped', `No crash: the other team is at ${Math.round(cMid * 100)}%`);
+    const drop = recentDrop(m, c, cMid);
+    const tpm = await tradesPerMin(ev, m);
+    const low = isLowTier(ev);
+    Object.assign(decision, { drop, tradesPerMin: tpm });
+    const crashBotsTake = low && ['BO3', 'BO5'].includes(ev.format) && drop >= 0.2 && !(game === 'cs2' && (Date.now() - ev.start) / MIN > 90);
+    if (crashBotsTake) return finish('skipped', 'A real comeback chance (low tier, BO3+, sudden fall): the crash bots take it');
+    if (low && tpm < (params.busyAt ?? 4) && ev.format !== 'BO1') return finish('skipped', `Comeback not overpriced (low tier, ${tpm.toFixed(1)} trades a minute, ${ev.format || 'format unknown'})`);
+    if (wallet.mine.some((x) => x.eventId === ev.id)) return finish('skipped', 'Already in this match');
   } else if (strategy === 'comeback') {
     if (cb.skip) return finish('skipped', cb.skip);
     if (!ctx.live) return finish('skipped', 'Not live');
@@ -314,6 +347,12 @@ export async function consider({ bot, ev, m, idx, flag = null, whale = null, leg
       const drop = recentDrop(m, idx, mid);
       decision.drop = drop;
       if (drop < cb.minDrop) return finish('skipped', `Fell ${Math.round(drop * 100)} pts in 10 min, under ${Math.round(cb.minDrop * 100)}`);
+    }
+    // Busy markets price a crash right (2026-11-07 study): skip them.
+    if (params.maxTradesPerMin > 0) {
+      const tpm = await tradesPerMin(ev, m);
+      decision.tradesPerMin = tpm;
+      if (tpm >= params.maxTradesPerMin) return finish('skipped', `Busy market: ${tpm.toFixed(1)} trades a minute, max ${params.maxTradesPerMin}`);
     }
     if (wallet.mine.some((x) => x.eventId === ev.id && sameLeg(x))) return finish('skipped', 'Already in this match');
   } else if (strategy === 'value') {
@@ -339,7 +378,8 @@ export async function consider({ bot, ev, m, idx, flag = null, whale = null, leg
   if (ownRoom < bot.minStake) return finish('skipped', `Bot open-bets limit (${bot.maxOpenPct}% of wallet)`);
   target = Math.min(target, ownRoom);
   if (wallet.mode === 'real' && wallet.today <= -wallet.bankroll * (bot.dailyLossPct / 100)) return finish('skipped', 'Bot daily loss stop');
-  const limits = wallet.mode === 'real' ? { ...s, minStake: bot.minStake } : { ...s, minStake: bot.minStake, maxOpenPct: bot.maxOpenPct, dailyLossPct: bot.dailyLossPct };
+  // Real money: no size cap below one minimum bet (see risk.js), so a small wallet can still trade.
+  const limits = wallet.mode === 'real' ? { ...s, minStake: bot.minStake, capFloor: bot.minStake } : { ...s, minStake: bot.minStake, maxOpenPct: bot.maxOpenPct, dailyLossPct: bot.dailyLossPct };
   const risk = riskGate({
     cand: { eventId: ev.id, conditionId: m.conditionId, tokenId: token, outcome: m.outcomes[idx], side: 'BUY', stake: target, price: e.px, needsExit: strategy === 'swing', start: ev.start, live: ctx.live },
     open: wallet.open,
@@ -347,7 +387,8 @@ export async function consider({ bot, ev, m, idx, flag = null, whale = null, leg
     todayPnl: wallet.today,
     limits,
     exitDepth: ctx.depth,
-    spread: ask - (bid ?? ask),
+    // No buyers at all is the widest spread there is, not a 0c one.
+    spread: bid === null ? ask : ask - bid,
     rules: ev.rules
   });
   decision.risk = risk;
@@ -393,9 +434,37 @@ export async function consider({ bot, ev, m, idx, flag = null, whale = null, leg
   return decision;
 }
 
+// Every evaluation counts into the bot's funnel, once per market and reason per
+// UTC day (a restart forgets which were seen today, so it can count one twice).
+const tallied = { day: '', keys: new Set() };
+function tally(d) {
+  if (!d.variant) return;
+  const at = d.at || Date.now();
+  const day = new Date(at).toISOString().slice(0, 10);
+  if (tallied.day !== day) {
+    tallied.day = day;
+    tallied.keys = new Set();
+  }
+  const market = `${d.variant}|${d.token || d.eventId || ''}`;
+  try {
+    if (!tallied.keys.has(market)) {
+      tallied.keys.add(market);
+      db.tallyFunnel({ day, variant: d.variant, reason: '__considered', category: 'considered', at, sample: d.title });
+    }
+    if (d.action !== 'skipped' && d.action !== 'vetoed') return;
+    const key = reasonKey(d.reason);
+    if (tallied.keys.has(`${market}|${key}`)) return;
+    tallied.keys.add(`${market}|${key}`);
+    db.tallyFunnel({ day, variant: d.variant, reason: key, category: skipCategory(d.reason), at, sample: d.reason });
+  } catch (err) {
+    logLine('error', `funnel: ${err.message}`);
+  }
+}
+
 /** Save a decision, skipping repeat no-trade records of the same token and variant. */
 function record(d) {
   state.stats.decisions++;
+  tally(d);
   const k = `${d.token}|${d.variant}`;
   const quiet = d.action === 'skipped' && d.strategy !== 'whale';
   if (quiet) {
@@ -800,6 +869,51 @@ export function recentDrop(m, idx, mid, now = Date.now()) {
   return Math.max(0, hi - mid);
 }
 
+/**
+ * In-game trades a minute on a match market since the start, counted the way
+ * the history pack builds its price paths (history.js buildLine): trades of $2+
+ * on either outcome, a trade at the same team-A price as the one before not
+ * counted again. Read from Polymarket's trade history, so a restart mid-match
+ * does not undercount. Cached two minutes per market.
+ */
+const tpmCache = new Map();
+export async function tradesPerMin(ev, m, now = Date.now()) {
+  if (!ev.start || now <= ev.start) return 0;
+  const hit = tpmCache.get(m.conditionId);
+  if (hit && now - hit.at < 120e3) return hit.v;
+  const s0 = Math.floor(ev.start / 1000);
+  const rows = [];
+  let cursor = '';
+  for (let page = 0; page < 8; page++) {
+    const body = await pm.listTrades({ condition: m.conditionId, limit: 1000, ...(cursor ? { cursor } : {}) });
+    const data = body?.data || [];
+    for (const t of data) if (t.condition_id === m.conditionId && m.outcomes.includes(t.outcome) && Number(t.timestamp) >= s0 && Number(t.size) * Number(t.price) >= 2) rows.push(t);
+    cursor = body?.pagination?.has_more ? body.pagination.next_cursor || '' : '';
+    // Newest first: once a page reaches back before the start, the rest is pre-match.
+    if (!cursor || (data.length && Number(data[data.length - 1].timestamp) < s0)) break;
+  }
+  rows.sort((a, b) => Number(a.timestamp) - Number(b.timestamp));
+  let n = 0;
+  let last = -1;
+  for (const t of rows) {
+    const v = Math.round((t.outcome === m.outcomes[0] ? Number(t.price) : 1 - Number(t.price)) * 1000);
+    if (v === last) continue;
+    last = v;
+    n++;
+  }
+  const v = n / Math.max(1, (now - ev.start) / MIN);
+  tpmCache.set(m.conditionId, { at: now, v });
+  if (tpmCache.size > 500) tpmCache.delete(tpmCache.keys().next().value);
+  return v;
+}
+
+/** Low tier as the history pack defines it: CS2 both outside the VRS top 30; others league tier 0 or 3-5. */
+export function isLowTier(ev) {
+  if ((ev.game || 'cs2') === 'cs2') return (ev.vrs || []).every((r) => !r || r > 30);
+  const tier = Number(ev.tier) || 0;
+  return tier === 0 || tier >= 3;
+}
+
 async function evaluateComeback(ev, m, idx) {
   const bots = activeBots('comeback', botsOn());
   if (!bots.length) return;
@@ -821,7 +935,9 @@ async function evaluateComeback(ev, m, idx) {
     if (Date.now() - (state.lastEval.get(k) || 0) < 5e3) continue;
     state.lastEval.set(k, Date.now());
     if (walletFor(bot).mine.some((b) => b.eventId === ev.id && (b.leg || 'comeback') === 'comeback')) continue;
-    await consider({ bot, ev, m, idx, leg: 'comeback' }).catch((err) => logLine('error', `comeback bot ${bot.name}: ${err.message}`));
+    // A leader bot buys the other side of the same crash.
+    const buyIdx = p.bet === 'leader' ? 1 - idx : idx;
+    await consider({ bot, ev, m, idx: buyIdx, leg: 'comeback' }).catch((err) => logLine('error', `comeback bot ${bot.name}: ${err.message}`));
   }
 }
 

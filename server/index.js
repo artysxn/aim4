@@ -561,6 +561,12 @@ server.listen(PORT, HOST, async () => {
     if (!process.env.AIM4_UPSTREAM) {
       import('./insights/engine.js')
         .then((m) => m.startEngine())
+        // Telegram pushes and commands, only where ~/.aim4/telegram.json exists.
+        .then(() => import('./insights/telegram.js'))
+        .then((t) => t.startTelegram())
+        // Lower-tier football: suspicious money and a paper copy bot.
+        .then(() => import('./insights/football.js'))
+        .then((f) => f.startFootball())
         .catch((err) => console.warn(`[insights] engine did not start: ${err.message}`));
     }
     maybeStartExecutor();

@@ -1213,3 +1213,281 @@
 .ins-drawer .ins-bar .ins-grow {
   flex: 1;
 }
+
+/* ---- One bot: chart, day bars, skip funnel -------------------------------- */
+
+.ins-bot-name {
+  margin: 0;
+  font: 600 15px var(--font-display);
+  color: var(--text);
+}
+.ins-xchart {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+.ins-plot {
+  position: relative;
+  margin: 4px 0 20px 56px;
+}
+.ins-plot svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+.ins-plot .grid {
+  stroke: #1c1c1f;
+  stroke-width: 1;
+}
+.ins-plot .ref {
+  stroke: #3a3a40;
+  stroke-width: 1;
+  stroke-dasharray: 3 4;
+}
+.ins-ax {
+  position: absolute;
+  color: #5c5c62;
+  font: 400 10px var(--font-body);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.ins-ax.y {
+  right: calc(100% + 8px);
+  transform: translateY(-50%);
+}
+.ins-ax.x {
+  top: calc(100% + 6px);
+  transform: translateX(-50%);
+}
+.ins-ax.x.first {
+  transform: none;
+}
+.ins-ax.x.last {
+  transform: translateX(-100%);
+}
+.ins-pt {
+  position: absolute;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--c, var(--ins-line));
+  box-shadow: 0 0 0 2px var(--ins-card);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+.ins-pt.win {
+  background: var(--ins-win);
+}
+.ins-pt.loss {
+  background: var(--ins-loss);
+}
+.ins-pt.on {
+  width: 11px;
+  height: 11px;
+  box-shadow: 0 0 0 2px var(--ins-card), 0 0 0 4px var(--c, var(--ins-line));
+  z-index: 2;
+}
+.ins-xhair {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: #3a3a40;
+  pointer-events: none;
+}
+.ins-xhair[hidden] {
+  display: none;
+}
+.ins-plot .ins-tip b {
+  font-weight: 600;
+}
+
+.ins-days {
+  display: flex;
+  align-items: stretch;
+  gap: 3px;
+  height: 150px;
+  padding-bottom: 18px;
+}
+.ins-day {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  cursor: default;
+}
+.ins-day-bars {
+  position: relative;
+  flex: 1;
+  width: 100%;
+  max-width: 26px;
+}
+.ins-day-bars i {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  min-height: 1px;
+  border-radius: 2px 2px 0 0;
+}
+.ins-day-bars i.seen {
+  background: #2a2a2f;
+}
+.ins-day-bars i.took {
+  left: 25%;
+  right: 25%;
+  background: var(--ins-line);
+}
+.ins-day:hover .ins-day-bars i.seen {
+  background: #3a3a40;
+}
+.ins-day-n {
+  position: absolute;
+  left: 0;
+  right: 0;
+  color: var(--ins-line);
+  font: 600 10px var(--font-body);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+.ins-day-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: transparent;
+}
+.ins-day-dot.ins-pos {
+  background: var(--ins-win);
+}
+.ins-day-dot.ins-neg {
+  background: var(--ins-loss);
+}
+.ins-day-dot.flat {
+  background: #5c5c62;
+}
+.ins-day-l {
+  position: absolute;
+  top: 100%;
+  color: #5c5c62;
+  font-size: 10px;
+  white-space: nowrap;
+}
+.ins-days.dense .ins-day-l {
+  display: none;
+}
+.ins-days.dense .ins-day:nth-child(7n + 1) .ins-day-l {
+  display: block;
+}
+.ins-day .ins-tip {
+  display: none;
+  top: 0;
+  left: 50%;
+}
+.ins-day:hover .ins-tip {
+  display: block;
+}
+
+.ins-stack {
+  display: flex;
+  height: 14px;
+  gap: 2px;
+  border-radius: 4px;
+  overflow: hidden;
+}
+.ins-stack-seg {
+  min-width: 3px;
+  padding: 0;
+  border: 0;
+  cursor: pointer;
+  opacity: 0.85;
+}
+.ins-stack-seg:hover,
+.ins-stack-seg.on {
+  opacity: 1;
+}
+.ins-stack-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+}
+.ins-stack-l {
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: 400 12px var(--font-body);
+  cursor: pointer;
+}
+.ins-stack-l:hover,
+.ins-stack-l.on {
+  color: var(--text);
+}
+.ins-stack-l i,
+.ins-cat {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  margin-right: 6px;
+  border-radius: 2px;
+  vertical-align: -1px;
+}
+.ins-table tbody tr.on td {
+  background: rgba(57, 135, 229, 0.08);
+}
+@media (max-width: 700px) {
+  .ins-plot {
+    margin-left: 46px;
+  }
+}
+
+/* ---- Bot page: dated backtests, trendlines, legend toggles ----------------- */
+
+.ins-pt[hidden] {
+  display: none;
+}
+.ins-pt.dim {
+  opacity: 0.3;
+}
+.ins-pt.hover {
+  width: 11px;
+  height: 11px;
+  box-shadow: 0 0 0 2px var(--ins-card), 0 0 0 4px var(--c, var(--ins-line));
+  z-index: 3;
+}
+.ins-legend-t {
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  color: #8a8a90;
+  font: 400 11px var(--font-body);
+  text-align: left;
+  cursor: pointer;
+}
+.ins-legend-t:hover {
+  color: var(--text);
+}
+.ins-legend-t.off {
+  opacity: 0.4;
+  text-decoration: line-through;
+}
+.ins-btv {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ins-btv-starts {
+  flex-wrap: wrap;
+}
+.ins-multi {
+  flex-wrap: wrap;
+}
+.ins-btv input[type='date'] {
+  color-scheme: dark;
+}

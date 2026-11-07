@@ -49,7 +49,8 @@ import { getWeights } from './analysts.js';
 import { tables as reactionTables, MOVE_LABELS } from './reaction.js';
 import { learnedPoints } from './signals.js';
 import * as botsMod from './bots.js';
-import { botBacktest } from './botbacktest.js';
+import { botBacktest, botBacktestRuns } from './botbacktest.js';
+import { botReport } from './botReport.js';
 import { packInfo } from './history.js';
 
 /** One bot with its results: paper wallet, real share, decisions against later prices. */
@@ -99,7 +100,7 @@ export function isTopVrsMatch(ev) {
   return r.some((x) => x <= 20) || ((ev.vrs || []).length === 2 && r.length === 2 && r.every((x) => x <= 30));
 }
 
-function suspiciousView(minScore = 35, minCash = 200) {
+export function suspiciousView(minScore = 35, minCash = 200) {
   minCash = Math.max(200, minCash || 200);
   const events = col('events');
   const wallets = col('wallets');
@@ -668,6 +669,28 @@ export async function handleInsightsRequest(req, res, url) {
         return json(res, 200, { bot, ...botsView() }), true;
       }
     }
+    hit = m === 'GET' && p.match(/^\/api\/insights\/bots\/([\w-]+)\/report$/);
+    if (hit) {
+      const bot = botsMod.botById(hit[1]);
+      if (!bot) return json(res, 404, { error: 'No such bot.' }), true;
+      const days = Math.min(365, Math.max(0, Math.round(Number(url.searchParams.get('days') ?? 7))));
+      const mode = url.searchParams.get('mode') || '';
+      const now = Date.now();
+      const since = days > 0 ? now - days * 86400e3 : 0;
+      const report = botReport({
+        bot,
+        bets: col('bets').filter((b) => b.botId === bot.id),
+        decisions: db.decisionRows(bot.id, since),
+        funnel: db.funnelRows(bot.id, since ? new Date(since).toISOString().slice(0, 10) : ''),
+        wallet: engine.realWallet(),
+        now,
+        days,
+        mode
+      });
+      const w = brain.walletFor(bot);
+      report.blocker = bot.mode === 'real' ? w.blocker : '';
+      return json(res, 200, report), true;
+    }
     hit = p.match(/^\/api\/insights\/bots\/([\w-]+)(?:\/(duplicate|reset))?$/);
     if (hit) {
       const [, id, action] = hit;
@@ -707,6 +730,18 @@ export async function handleInsightsRequest(req, res, url) {
       const start = Math.min(1e7, Math.max(10, Number(body.start) || 500));
       const extraSlip = Math.min(0.1, Math.max(0, Number(body.extraSlip) || 0));
       return json(res, 200, botBacktest(bot, { days, start, extraSlip })), true;
+    }
+    if (m === 'POST' && p === '/api/insights/backtest-bot/runs') {
+      // One bot from several start dates with the same wallet, each run forward to now.
+      const body = await readJson(req, 4096);
+      const bot = botsMod.botById(body.bot);
+      if (!bot) return json(res, 400, { error: 'Pick a bot to test.' }), true;
+      const now = Date.now();
+      const starts = [...new Set((Array.isArray(body.starts) ? body.starts : []).map(Number).filter((t) => Number.isFinite(t) && t > now - 3 * 365 * 86400e3 && t < now))].slice(0, 8);
+      if (!starts.length) return json(res, 400, { error: 'Pick at least one start date in the past.' }), true;
+      const start = Math.min(1e6, Math.max(10, Number(body.start) || 21));
+      const extraSlip = Math.min(0.1, Math.max(0, Number(body.extraSlip) || 0));
+      return json(res, 200, botBacktestRuns(bot, { starts, start, extraSlip })), true;
     }
     if (m === 'POST' && p === '/api/insights/backtest') {
       const body = await readJson(req, 2048);

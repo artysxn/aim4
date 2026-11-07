@@ -113,7 +113,15 @@ export const BOT_TYPES = {
       { key: 'preMin', label: 'Team priced at the start at least', kind: 'num', unit: '%', scale: 100, min: 0.1, max: 0.9, step: 1, def: 0.5 },
       { key: 'collapseAt', label: 'Buy once it falls to', kind: 'num', unit: '%', scale: 100, min: 0.03, max: 0.4, step: 1, def: 0.2 },
       { key: 'maxSlippage', label: 'Pay at most that plus', kind: 'num', unit: 'c', scale: 100, min: 0, max: 0.1, step: 0.5, def: 0.02 },
+      { key: 'maxOverMid', label: 'And never more than the mid plus (0 = off)', kind: 'num', unit: 'c', scale: 100, min: 0, max: 0.1, step: 0.5, def: 0.015 },
       { key: 'minDrop', label: 'Only after a sudden fall of at least (10 min)', kind: 'num', unit: 'pts', scale: 100, min: 0, max: 0.6, step: 1, def: 0 },
+      // 2026-11-07 crash study (a year, found on Nov-Jul, checked on Jul-Nov): busy
+      // markets price a crash right; thin ones overreact. V2.2 +17.8% -> +25.1% per bet out of sample.
+      { key: 'maxTradesPerMin', label: 'Skip busy markets: this many trades a minute since the start or more (0 = off)', kind: 'num', unit: '/min', min: 0, max: 60, step: 0.5, def: 0 },
+      // Leader: on a crash the crashed-team bots skip (higher tier, busy or BO1), buy the team that leads.
+      // The comeback is overpriced there: the leader won 87.7% while priced 84.6% (+3.3% per bet, every month).
+      { key: 'bet', label: 'Bet on', kind: 'choice', options: ['crashed', 'leader'], def: 'crashed' },
+      { key: 'busyAt', label: 'Leader: a market counts as busy from (trades a minute)', kind: 'num', unit: '/min', min: 0.5, max: 60, step: 0.5, def: 4 },
       { key: 'sellAt', label: 'Take profit at (0 = hold)', kind: 'num', unit: '%', scale: 100, min: 0, max: 0.95, step: 1, def: 0 },
       { key: 'games', label: 'Games', kind: 'multi', options: ['cs2', 'valorant', 'lol', 'dota2'], def: ['cs2', 'valorant', 'lol', 'dota2'] },
       { key: 'holdTeams', label: 'CS2 comeback teams (looser entry, hold to the end)', kind: 'list', def: [] },
@@ -156,7 +164,10 @@ function cleanField(f, v, prev) {
     return raw.map((x) => String(x).trim().slice(0, 40)).filter((x) => x && !seen.has(teamKey(x)) && seen.add(teamKey(x))).slice(0, 100);
   }
   if (f.kind === 'bool') return typeof v === 'boolean' ? v : prev ?? f.def;
-  if (f.kind === 'choice') return f.options.includes(Number(v)) ? Number(v) : prev ?? f.def;
+  if (f.kind === 'choice') {
+    const c = typeof f.options[0] === 'number' ? Number(v) : String(v);
+    return f.options.includes(c) ? c : prev ?? f.def;
+  }
   if (f.kind === 'multi') return Array.isArray(v) ? [...new Set(v.map(String).filter((x) => f.options.includes(x)))] : prev ?? f.def;
   const n = Number(v);
   return Number.isFinite(n) ? clamp(n, f.min, f.max) : prev ?? f.def;

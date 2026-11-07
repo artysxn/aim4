@@ -35,7 +35,8 @@ const FILES = {
   executor: () => ({ devices: [], armed: false }),
   strategies: () => ({}),
   bots: () => ({}),
-  meta: () => ({ simEpoch: 0, backfill: null, log: [] })
+  meta: () => ({ simEpoch: 0, backfill: null, log: [] }),
+  football: () => ({ settings: {}, events: {}, flags: [], wallets: {} })
 };
 
 /** @type {Record<string, any>} */

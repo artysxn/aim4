@@ -798,6 +798,7 @@ const ROUTES = {
   // else and the view shows nothing; these only route the deep links.
   insights: { title: 'Insights', path: '/insights', shell: 'insights', page: 'ins-overview' },
   'insights-bots': { title: 'Insights', path: '/insights/bots', shell: 'insights', page: 'ins-bots' },
+  'insights-bot': { title: 'Insights', path: '/insights/bot', shell: 'insights', page: 'ins-bot' },
   'insights-matches': { title: 'Insights', path: '/insights/matches', shell: 'insights', page: 'ins-matches' },
   'insights-suspicious': { title: 'Insights', path: '/insights/suspicious', shell: 'insights', page: 'ins-suspicious' },
   'insights-backtest': { title: 'Insights', path: '/insights/backtest', shell: 'insights', page: 'ins-backtest' },
@@ -1166,7 +1167,7 @@ viewControllers.pitchdeck = lazyController(async () => {
 });
 viewControllers.insights = lazyController(async () => {
   const { initInsightsView } = await import('./insights/insightsView.js');
-  return initInsightsView({ escapeHtml, openRoute: (name) => setView(name, true, {}) });
+  return initInsightsView({ escapeHtml, openRoute: (name, params = {}) => setView(name, true, params) });
 });
 // The Insights entry is in the sidebar only for its owner; the server decides.
 async function syncInsightsNav() {

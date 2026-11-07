@@ -35,15 +35,22 @@ export function riskGate({ cand, open, bankroll, todayPnl, limits, exitDepth, sp
     return { ok: false, stake: 0, checks };
   }
 
+  // A small real wallet: 4% of $21 is under Polymarket's $1 minimum, so every
+  // percentage cap would refuse every bet. limits.capFloor (USD, set for real
+  // money only) keeps each size cap at least one minimum bet, but only while
+  // that bet is at most 10% of the wallet. The daily loss stop is not floored.
+  const floor = limits.capFloor > 0 && bankroll >= 10 * limits.capFloor ? limits.capFloor : 0;
+  const cap = (pct) => Math.max(bankroll * (pct / 100), floor);
+
   const exposure = (b) => b.cost || b.amount || 0;
   const onMatch = open.filter((b) => b.eventId === cand.eventId).reduce((s, b) => s + exposure(b), 0);
-  const matchCap = bankroll * (limits.matchCapPct / 100);
+  const matchCap = cap(limits.matchCapPct);
   if (onMatch + stake > matchCap) stake = Math.max(0, matchCap - onMatch);
   add('match', stake >= limits.minStake, `${usd(onMatch)} already on this match, cap ${usd(matchCap)}`);
 
   const team = normName(cand.outcome);
   const onTeam = open.filter((b) => normName(b.outcome) === team).reduce((s, b) => s + exposure(b), 0);
-  const teamCap = bankroll * (limits.teamCapPct / 100);
+  const teamCap = cap(limits.teamCapPct);
   if (onTeam + stake > teamCap) stake = Math.max(0, teamCap - onTeam);
   add('team', stake >= limits.minStake, `${usd(onTeam)} already on ${cand.outcome}, cap ${usd(teamCap)}`);
 
@@ -52,11 +59,11 @@ export function riskGate({ cand, open, bankroll, todayPnl, limits, exitDepth, sp
 
   // Worst case on this match: everything on it loses.
   const worst = onMatch + stake;
-  const worstCap = bankroll * (limits.worstCasePct / 100);
+  const worstCap = cap(limits.worstCasePct);
   add('worst', worst <= worstCap + 1e-9, `Worst case ${usd(worst)} vs ${usd(worstCap)} allowed`);
 
   const openTotal = open.reduce((s, b) => s + exposure(b), 0);
-  const openCap = bankroll * (limits.maxOpenPct / 100);
+  const openCap = cap(limits.maxOpenPct);
   if (openTotal + stake > openCap) stake = Math.max(0, openCap - openTotal);
   add('open', stake >= limits.minStake, `${usd(openTotal)} open of ${usd(openCap)} allowed`);
 

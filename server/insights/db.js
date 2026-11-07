@@ -46,6 +46,19 @@ function open() {
       json TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS models_kind ON models(kind, at);
+    -- Every evaluation, counted once per market and reason per UTC day. The
+    -- decisions table keeps only a sample of quiet skips; this keeps them all.
+    CREATE TABLE IF NOT EXISTS funnel (
+      day TEXT NOT NULL,
+      variant TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      category TEXT NOT NULL,
+      n INTEGER NOT NULL DEFAULT 0,
+      last_at INTEGER NOT NULL,
+      sample TEXT,
+      PRIMARY KEY (day, variant, reason)
+    );
+    CREATE INDEX IF NOT EXISTS funnel_variant ON funnel(variant, day);
   `);
   return db;
 }
@@ -162,6 +175,32 @@ export function variantStats() {
        FROM decisions WHERE action IN ('entered','queued') GROUP BY variant`
     )
     .all();
+}
+
+/** One bot's decisions since a time, oldest first, without the heavy analyst blob. */
+export function decisionRows(variant, since = 0, limit = 20000) {
+  return open()
+    .prepare(
+      `SELECT id, at, action, reason, price, stake, edge, live, event_id, outcome, m5, m30, close, result, pnl,
+         json_extract(json, '$.title') AS title, json_extract(json, '$.market') AS market
+       FROM decisions WHERE variant = ? AND at >= ? ORDER BY at ASC LIMIT ?`
+    )
+    .all(variant, since, Math.min(50000, limit));
+}
+
+/** Count one evaluation into the day's funnel. */
+export function tallyFunnel({ day, variant, reason, category, at, sample }) {
+  open()
+    .prepare(
+      `INSERT INTO funnel (day, variant, reason, category, n, last_at, sample) VALUES (?, ?, ?, ?, 1, ?, ?)
+       ON CONFLICT(day, variant, reason) DO UPDATE SET n = n + 1, last_at = excluded.last_at, sample = excluded.sample`
+    )
+    .run(day, variant, reason, category, at, String(sample || '').slice(0, 160));
+}
+
+/** A bot's funnel rows from a UTC day ('YYYY-MM-DD') on. */
+export function funnelRows(variant, sinceDay = '') {
+  return open().prepare('SELECT day, reason, category, n, last_at, sample FROM funnel WHERE variant = ? AND day >= ? ORDER BY day ASC').all(variant, sinceDay);
 }
 
 export function counts() {

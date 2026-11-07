@@ -351,6 +351,7 @@ async function watch() {
     if (run.seen.size > 250000) run.seen = new Set([...run.seen].slice(-100000));
     run.lastWatch = Date.now();
     await expireIntents();
+    await reconcileRealFills().catch((err) => logLine('warn', `fill check: ${err.message}`));
   } catch (err) {
     run.lastError = `watch: ${err.message}`;
     logLine('error', run.lastError);
@@ -891,6 +892,97 @@ export function pollIntents(device) {
   return { armed: Boolean(exec.armed), intents: out };
 }
 
+/**
+ * The bet an intent belongs to. A BUY's bet carries the intent id (bet.intentId),
+ * a SELL's carries it in bet.exiting; intent.betId is only a fallback. (Looking
+ * up intent.betId alone, as before 2026-11-07, matched no real bet at all.)
+ */
+function betOfIntent(intent) {
+  return col('bets').find((b) => b.mode === 'real' && (b.intentId === intent.id || b.exiting === intent.id || (intent.betId && b.id === intent.betId))) || null;
+}
+
+const FILL_WAIT_MS = 10 * MIN;
+let lastReconcile = 0;
+
+/**
+ * Real orders Polymarket accepted but held back (status "delayed") are
+ * confirmed from the wallet's public positions: the shares, average price and
+ * cost the fill actually got. A BUY that never shows up is failed after 10
+ * minutes. Bets stuck as pending from before this existed are picked up too.
+ * @param {{ fetchPositions?: (wallet: string) => Promise<any>, now?: number, force?: boolean }} [o]
+ */
+async function reconcileRealFills({ fetchPositions = (wallet) => pm.positions({ user: wallet, limit: 500 }), fetchTrades = (wallet) => pm.listTrades({ user: wallet, limit: 200 }), now = Date.now(), force = false } = {}) {
+  const intents = new Map(col('intents').map((i) => [i.id, i]));
+  for (const b of col('bets')) {
+    // Reported before the delay handling existed: the order went in, the bet never moved.
+    const it = b.mode === 'real' && b.status === 'pending' && !b.awaitingFill && b.intentId ? intents.get(b.intentId) : null;
+    if (it?.status === 'done' && it.result?.ok && !(it.result.shares > 0)) b.awaitingFill = { at: it.result.at || now, status: it.result.status || 'unconfirmed' };
+  }
+  const waiting = col('bets').filter((b) => b.mode === 'real' && ((b.status === 'pending' && b.awaitingFill) || (b.status === 'open' && b.exitAwaiting)));
+  if (!waiting.length) return 0;
+  if (!force && now - lastReconcile < 30e3) return 0;
+  lastReconcile = now;
+  const wallet = (col('executor').devices || []).map((d) => d.info?.wallet).find(Boolean);
+  if (!wallet) return 0;
+  const body = await fetchPositions(wallet);
+  const rows = Array.isArray(body?.data) ? body.data : Array.isArray(body) ? body : [];
+  const byToken = new Map(rows.map((r) => [String(r.token_id ?? r.asset ?? ''), r]));
+  let sellTrades = null;
+  let changed = 0;
+  for (const bet of waiting) {
+    const pos = byToken.get(String(bet.tokenId));
+    const size = Number(pos?.current_size ?? pos?.size ?? 0);
+    // Shares other open real bets already hold on this token are not this fill.
+    const others = col('bets').filter((b) => b !== bet && b.mode === 'real' && b.status === 'open' && b.tokenId === bet.tokenId).reduce((s, b) => s + (b.shares || 0), 0);
+    if (bet.status === 'pending') {
+      const mine = size - others;
+      if (mine > 0.001) {
+        const avg = Number(pos.avg_price ?? pos.avgPrice) || 0;
+        const total = Number(pos.total_size ?? size) || mine;
+        const costAll = Number(pos.total_cost_usdc ?? pos.initialValue) || mine * avg;
+        bet.status = 'open';
+        bet.shares = Math.round(mine * 1e4) / 1e4;
+        bet.cost = Math.round(costAll * (mine / total) * 1e4) / 1e4;
+        bet.price = avg || bet.cost / bet.shares;
+        bet.mark = Number(pos.current_price ?? pos.curPrice) || bet.price;
+        bet.confirmedFrom = 'positions';
+        delete bet.awaitingFill;
+        logLine('info', `REAL BUY filled after delay: ${bet.title} ${bet.outcome} ${bet.shares} at ${(bet.price * 100).toFixed(2)}%`);
+        changed++;
+      } else if (now - bet.awaitingFill.at > FILL_WAIT_MS) {
+        bet.status = 'failed';
+        bet.error = `Order ${bet.awaitingFill.status || 'delayed'} and never filled`;
+        delete bet.awaitingFill;
+        changed++;
+      }
+    } else {
+      // A sale is confirmed from the wallet's own SELL trades on this token: the
+      // shares and prices it really got. (A fully sold position drops out of the
+      // positions list, so it cannot price the sale; that recorded a +$2.21 take
+      // profit as -$0.04 on 2026-11-07.)
+      sellTrades ||= await fetchTrades(wallet).then((b) => (Array.isArray(b?.data) ? b.data : Array.isArray(b) ? b : [])).catch(() => []);
+      const fills = sellTrades.filter((t) => String(t.side).toUpperCase() === 'SELL' && String(t.token_id ?? t.asset) === String(bet.tokenId) && Number(t.timestamp) * 1000 >= bet.exitAwaiting.at - 120e3);
+      const soldShares = fills.reduce((s, t) => s + Number(t.size || 0), 0);
+      if (soldShares > 0.001) {
+        const rate = col('events')[bet.eventId]?.markets?.find((x) => x.conditionId === bet.conditionId)?.feeRate ?? 0;
+        const proceeds = fills.reduce((s, t) => s + Number(t.size) * Number(t.price) - pm.takerFee(rate, Number(t.price), Number(t.size)), 0);
+        delete bet.exitAwaiting;
+        bet.exiting = null;
+        applyExit(bet, Math.min(soldShares, bet.shares), Math.round(proceeds * 1e4) / 1e4);
+        logLine('info', `REAL SELL filled after delay: ${bet.title} ${bet.outcome} ${soldShares} for $${proceeds.toFixed(2)}`);
+        changed++;
+      } else if (now - bet.exitAwaiting.at > FILL_WAIT_MS) {
+        bet.exitError = 'Sale delayed and never filled';
+        bet.exiting = null;
+        delete bet.exitAwaiting;
+        changed++;
+      }
+    }
+  }
+  if (changed) touch('bets');
+  return changed;
+}
+
 /** The executor reports what one intent did. */
 export function reportIntent(device, r) {
   device.lastSeen = Date.now();
@@ -898,7 +990,10 @@ export function reportIntent(device, r) {
   if (!intent || intent.deviceId !== device.id) return false;
   intent.status = r.ok ? 'done' : 'failed';
   intent.result = { ok: Boolean(r.ok), orderId: String(r.orderId || ''), status: String(r.status || ''), spent: Number(r.spent) || 0, shares: Number(r.shares) || 0, error: String(r.error || '').slice(0, 300), at: Date.now() };
-  const bet = col('bets').find((b) => b.id === intent.betId);
+  // An accepted order Polymarket holds back (live sports matching delay) fills
+  // after the executor has reported: confirm it from the wallet's positions.
+  const delayed = r.ok && intent.result.shares <= 0 && /delay|live|pending|unmatched/i.test(intent.result.status);
+  const bet = betOfIntent(intent);
   if (bet) {
     if (intent.side === 'BUY') {
       if (r.ok && intent.result.shares > 0) {
@@ -908,17 +1003,25 @@ export function reportIntent(device, r) {
         bet.price = intent.result.spent / intent.result.shares;
         bet.mark = bet.price;
         bet.orderId = intent.result.orderId;
+      } else if (delayed) {
+        bet.orderId = intent.result.orderId;
+        bet.awaitingFill = { at: Date.now(), status: intent.result.status };
       } else {
         bet.status = 'failed';
         bet.error = intent.result.error || (r.ok ? `Order ${intent.result.status || 'not filled'}` : 'Rejected');
       }
     } else if (intent.side === 'SELL') {
-      bet.exiting = null;
       if (r.ok && intent.result.shares > 0) {
+        bet.exiting = null;
         // For a SELL, `spent` carries what the sale returned.
         applyExit(bet, intent.result.shares, intent.result.spent);
-        bet.exitReason = 'Whale sold';
+        bet.exitReason = bet.exitReason || 'Whale sold';
+      } else if (delayed) {
+        // Keep bet.exiting set until the sale is confirmed: otherwise the take
+        // profit fires again and sends sells for shares already gone (2026-11-07).
+        bet.exitAwaiting = { at: Date.now(), shares: bet.shares, status: intent.result.status };
       } else {
+        bet.exiting = null;
         bet.exitError = intent.result.error;
       }
     }
@@ -954,7 +1057,7 @@ async function expireIntents() {
     if ((i.status === 'queued' || i.status === 'sent') && i.expiresAt + grace < now) {
       i.status = 'expired';
       changed = true;
-      const bet = col('bets').find((b) => b.id === i.betId);
+      const bet = betOfIntent(i);
       if (bet && bet.status === 'pending') {
         bet.status = 'missed';
         bet.error = i.sentAt ? 'Executor did not report back' : 'Executor did not pick it up in time';
@@ -1118,4 +1221,4 @@ export async function refreshNow() {
 // The brain reaches back into the engine through these hooks (no import cycle at load).
 brain.initBrain({ settings, simWallet, realWallet, queueIntent, applyExit, hotEvents, walletRecord: recordOf, onlineDevice });
 
-export { discover as _discover, watch as _watch, settleClosed as _settleClosed, run as _run };
+export { discover as _discover, watch as _watch, settleClosed as _settleClosed, run as _run, reconcileRealFills as _reconcileRealFills };

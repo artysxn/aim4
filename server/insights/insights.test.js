@@ -199,6 +199,52 @@ engine.updateSettings({ botsOn: false });
 const offFlag = await engine.handleTrade({ ...big, transaction_hash: '0xt4', proxy_wallet: '0x' + '4'.repeat(40) }, ev, ev.markets[0], 'live');
 assert(offFlag.action === 'skip' && /off/i.test(offFlag.actionReason), 'off copies nothing');
 engine.updateSettings({ botsOn: true });
+
+// Real orders: the report finds its bet (BUY by intentId, SELL by exiting), and a
+// "delayed" live-sports fill is confirmed from the wallet's positions (2026-11-07).
+{
+  const { token } = engine.linkDevice('test-mac');
+  const device = engine.deviceForToken(token);
+  engine.setArmed(true);
+  engine.heartbeat(device, { balance: 21, wallet: '0xwallet' });
+  const buy = engine.queueIntent({ type: 'market', side: 'BUY', tokenId: 'TOK1', conditionId: 'C1', amount: 1, maxPrice: 0.22 });
+  const rb = { id: 'rb_delay', mode: 'real', botId: 'oracle-v2-2', status: 'pending', tokenId: 'TOK1', conditionId: 'C1', title: 'A vs B', outcome: 'B', amount: 1, intentId: buy.id, placedAt: Date.now() };
+  store.col('bets').push(rb);
+  engine.pollIntents(device);
+  assert(engine.reportIntent(device, { id: buy.id, ok: true, orderId: '0xo', status: 'delayed', spent: 0, shares: 0 }), 'report accepted');
+  assert(rb.status === 'pending' && rb.awaitingFill && rb.orderId === '0xo', `a delayed fill waits instead of failing (${rb.status})`);
+  const pos = (size, extra = {}) => async () => ({ data: [{ token_id: 'TOK1', current_size: size, total_size: 17.2413, avg_price: 0.0579, total_cost_usdc: 1.047, current_price: 0.0005, realized_pnl: 0, ...extra }] });
+  const n = await engine._reconcileRealFills({ fetchPositions: pos(17.2413), force: true });
+  assert(n === 1 && rb.status === 'open' && near(rb.shares, 17.2413, 1e-6) && near(rb.cost, 1.047, 1e-6) && near(rb.price, 0.0579, 1e-9), `confirmed from positions (${rb.status} ${rb.shares} ${rb.cost})`);
+  // Take profit: a delayed SELL settles from the drop in size and the realized P&L.
+  const sell = engine.queueIntent({ type: 'market', side: 'SELL', tokenId: 'TOK1', conditionId: 'C1', shares: rb.shares, minPrice: 0.6 });
+  rb.exiting = sell.id;
+  engine.pollIntents(device);
+  engine.reportIntent(device, { id: sell.id, ok: true, orderId: '0xs', status: 'delayed', spent: 0, shares: 0 });
+  assert(rb.exitAwaiting && rb.exiting === sell.id, 'a delayed sale waits for confirmation and stays marked as selling (no second sell)');
+  // The position is gone once fully sold: the sale is priced from the wallet's SELL trades.
+  const sellAt = Math.floor(Date.now() / 1000);
+  await engine._reconcileRealFills({ fetchPositions: async () => ({ data: [] }), fetchTrades: async () => ({ data: [{ side: 'SELL', token_id: 'TOK1', size: 17.2413, price: 0.63, timestamp: sellAt }, { side: 'BUY', token_id: 'TOK1', size: 5, price: 0.1, timestamp: sellAt }] }), force: true });
+  assert(!rb.exitAwaiting && !rb.exiting && rb.status === 'sold' && near(rb.payout, 17.2413 * 0.63, 1e-3), `sale priced from the real sell trades (${rb.status} payout ${rb.payout})`);
+  // A delayed BUY that never shows up fails after 10 minutes.
+  const buy2 = engine.queueIntent({ type: 'market', side: 'BUY', tokenId: 'TOK2', conditionId: 'C2', amount: 1, maxPrice: 0.2 });
+  const rb2 = { id: 'rb_never', mode: 'real', botId: 'oracle-v2-2', status: 'pending', tokenId: 'TOK2', intentId: buy2.id, placedAt: Date.now() };
+  store.col('bets').push(rb2);
+  engine.pollIntents(device);
+  engine.reportIntent(device, { id: buy2.id, ok: true, orderId: '0xo2', status: 'delayed', spent: 0, shares: 0 });
+  await engine._reconcileRealFills({ fetchPositions: async () => ({ data: [] }), now: Date.now() + 11 * 60e3, force: true });
+  assert(rb2.status === 'failed' && /never filled/.test(rb2.error), 'an order that never fills is failed');
+  // An outright fill still opens the bet straight from the report.
+  const buy3 = engine.queueIntent({ type: 'market', side: 'BUY', tokenId: 'TOK3', conditionId: 'C3', amount: 1, maxPrice: 0.2 });
+  const rb3 = { id: 'rb_now', mode: 'real', botId: 'oracle-v2-2', status: 'pending', tokenId: 'TOK3', intentId: buy3.id, placedAt: Date.now() };
+  store.col('bets').push(rb3);
+  engine.pollIntents(device);
+  engine.reportIntent(device, { id: buy3.id, ok: true, orderId: '0xo3', status: 'matched', spent: 1, shares: 10 });
+  assert(rb3.status === 'open' && rb3.shares === 10 && near(rb3.price, 0.1), 'an immediate fill opens the bet from the report');
+  store.col('bets').splice(0, store.col('bets').length, ...store.col('bets').filter((b) => !['rb_delay', 'rb_never', 'rb_now'].includes(b.id)));
+  engine.setArmed(false);
+  engine.revokeDevice(device.id);
+}
 botsMod.updateBot('w-score', { mode: 'real' });
 const realFlag = await engine.handleTrade({ ...big, transaction_hash: '0xt5', proxy_wallet: '0x' + '5'.repeat(40) }, { ...ev, id: '2' }, ev.markets[0], 'live');
 assert(realFlag.action === 'skip' && /armed/i.test(realFlag.actionReason), 'real mode does nothing until armed');
@@ -297,6 +343,21 @@ assert(!lossDay.ok, 'daily loss stop');
 const thin = riskGate({ cand: { eventId: 'e', conditionId: 'c', tokenId: 't1', outcome: 'X', side: 'BUY', stake: 20, price: 0.3, needsExit: true }, open: [], bankroll: 1000, todayPnl: 0, limits, exitDepth: { bidUsd: 2 } });
 assert(!thin.ok && thin.checks.some((c) => c.key === 'exit' && !c.ok), 'no swing entry without bids to exit into');
 
+// Small real wallet: 4% of $21.24 is $0.85, under the $1 minimum. capFloor keeps the size caps at one minimum bet.
+const dollar = { eventId: 'e', conditionId: 'c', tokenId: 't1', outcome: 'X', side: 'BUY', stake: 1, price: 0.11 };
+const small = riskGate({ cand: dollar, open: [], bankroll: 21.24, todayPnl: 0, limits });
+assert(!small.ok && small.checks.some((c) => c.key === 'match' && !c.ok), 'without a floor a $21 wallet cannot place $1');
+const floored = riskGate({ cand: dollar, open: [], bankroll: 21.24, todayPnl: 0, limits: { ...limits, capFloor: 1 } });
+assert(floored.ok && floored.stake === 1, `with the floor a $21 wallet places $1 (${floored.stake})`);
+const secondLeg = riskGate({ cand: dollar, open: [{ eventId: 'e', conditionId: 'c', tokenId: 't1', outcome: 'X', cost: 1, status: 'open' }], bankroll: 21.24, todayPnl: 0, limits: { ...limits, capFloor: 1 } });
+assert(!secondLeg.ok && secondLeg.checks.some((c) => c.key === 'match' && !c.ok), 'the floor is one bet per match, not more');
+const tiny = riskGate({ cand: dollar, open: [], bankroll: 9, todayPnl: 0, limits: { ...limits, capFloor: 1 } });
+assert(!tiny.ok, 'no floor once a minimum bet is over 10% of the wallet');
+const smallLossDay = riskGate({ cand: dollar, open: [], bankroll: 21.24, todayPnl: -2.2, limits: { ...limits, capFloor: 1 } });
+assert(!smallLossDay.ok && smallLossDay.checks.some((c) => c.key === 'daily' && !c.ok), 'the daily loss stop is not floored');
+const bigFloored = riskGate({ cand: { eventId: 'e', conditionId: 'c', tokenId: 't1', outcome: 'X', side: 'BUY', stake: 30, price: 0.3 }, open: [{ eventId: 'e', conditionId: 'c2', tokenId: 'z', outcome: 'X', cost: 25, status: 'open' }], bankroll: 1000, todayPnl: 0, limits: { ...limits, capFloor: 1 } });
+assert(bigFloored.stake === capped.stake && bigFloored.ok === capped.ok, 'the floor changes nothing for a big wallet');
+
 // ---- learning pieces ----------------------------------------------------------------
 
 const learn = await import('./learn.js');
@@ -351,6 +412,19 @@ assert(!store.col('bets').some((b) => b.decisionId === 'd_test'), 'a print above
 feeds._ingestMarket({ event_type: 'last_trade_price', asset_id: 'Z', market: '0xz', price: '0.30', size: '50', side: 'SELL', timestamp: String(Date.now()) });
 const lim = store.col('bets').find((b) => b.decisionId === 'd_test');
 assert(lim && near(lim.shares, 20) && near(lim.cost, 6.2), 'a print through our bid fills it at our price');
+
+// Marks: a stray last print never leaves the book (2026-11-07: 0.999 with no bids, ask 0.001).
+feeds.books.set('MK1', { bestBid: null, bestAsk: 0.001, last: { p: 0.999 } });
+assert(near(feeds.midOf('MK1'), 0.001), `no bids: the mark is capped at the ask (${feeds.midOf('MK1')})`);
+feeds.books.set('MK2', { bestBid: 0.4, bestAsk: 0.42, last: { p: 0.9 } });
+assert(near(feeds.midOf('MK2'), 0.41), 'a tight book still marks at the mid');
+feeds.books.set('MK3', { bestBid: 0.2, bestAsk: 0.6, last: { p: 0.35 } });
+assert(near(feeds.midOf('MK3'), 0.35), 'a wide book still uses a last print inside it');
+feeds.books.set('MK4', { bestBid: 0.2, bestAsk: 0.6, last: { p: 0.95 } });
+assert(near(feeds.midOf('MK4'), 0.6), 'a wide book clamps a print outside it');
+feeds.books.set('MK5', { bestBid: 0.3, bestAsk: null, last: null });
+assert(near(feeds.midOf('MK5'), 0.3), 'only a bid: mark at the bid');
+for (const k of ['MK1', 'MK2', 'MK3', 'MK4', 'MK5']) feeds.books.delete(k);
 assert(!brain._state.paperOrders.has('o1'), 'filled order is gone');
 
 // ---- decision records ------------------------------------------------------------------
@@ -362,6 +436,124 @@ const back = db.getDecision('d_x');
 assert(back.m30 === 0.45 && back.analysts[0].key === 'reaction', 'decision round-trips with its analysts');
 brain.onSettle('0xc', ['T', 'U'], 0);
 assert(db.getDecision('d_x').result === 1 && near(db.getDecision('d_x').pnl, 1 / 0.4 - 1), 'settlement writes the result');
+
+// ---- per-bot report ------------------------------------------------------------------
+
+const rep = await import('./botReport.js');
+assert(rep.reasonKey('At 45%, not down to 20%') === rep.reasonKey('At 38%, not down to 20%'), 'reason keys ignore the numbers');
+assert(rep.reasonKey('Risk: match, team, open') === 'Risk: match, team, open', 'risk reasons keep their checks');
+assert(rep.skipCategory('Risk: match, team, open') === 'risk' && rep.skipCategory('Real trading not armed') === 'blocked' && rep.skipCategory('Started at 40%, under 50%') === 'rules', 'skip categories');
+const day0 = new Date().toISOString().slice(0, 10);
+db.tallyFunnel({ day: day0, variant: 'rb', reason: '__considered', category: 'considered', at: Date.now(), sample: 'A vs B' });
+db.tallyFunnel({ day: day0, variant: 'rb', reason: '__considered', category: 'considered', at: Date.now(), sample: 'C vs D' });
+db.tallyFunnel({ day: day0, variant: 'rb', reason: 'Risk: match, team, open', category: 'risk', at: Date.now(), sample: 'Risk: match, team, open' });
+assert(db.funnelRows('rb').find((r) => r.reason === '__considered').n === 2, 'funnel counts upsert');
+const now0 = Date.now();
+db.saveDecision({ id: 'rb1', at: now0 - 3600e3, strategy: 'comeback', variant: 'rb', mode: 'real', eventId: 'ev1', conditionId: 'rc1', token: 'R1', outcome: 'A', side: 'BUY', price: 0.2, stake: 0, action: 'skipped', reason: 'Risk: match, team, open', title: 'A vs B', market: 'Match' });
+db.saveDecision({ id: 'rb2', at: now0 - 1800e3, strategy: 'comeback', variant: 'rb', mode: 'real', eventId: 'ev2', conditionId: 'rc2', token: 'R2', outcome: 'C', side: 'BUY', price: 0.25, stake: 1, action: 'queued', reason: 'Real market order', title: 'C vs D', market: 'Match' });
+db.updateDecision('rb1', { result: 1, pnl: 4 });
+db.updateDecision('rb2', { result: 0, pnl: -1 });
+const rows = db.decisionRows('rb', 0);
+assert(rows.length === 2 && rows[0].title === 'A vs B' && rows[0].at < rows[1].at, 'decision rows carry the title, oldest first');
+const rbBot = { id: 'rb', name: 'Report bot', type: 'comeback', mode: 'real', enabled: true, sizing: { kind: 'auto' }, minStake: 1, maxStake: 25, paperBankroll: 500 };
+const rbBets = [
+  { id: 'x1', botId: 'rb', mode: 'real', status: 'won', cost: 1, payout: 4, price: 0.25, placedAt: now0 - 5 * 3600e3, settledAt: now0 - 4 * 3600e3, title: 'E vs F', outcome: 'E', eventId: 'e1', live: true },
+  { id: 'x2', botId: 'rb', mode: 'real', status: 'lost', cost: 1, payout: 0, price: 0.15, placedAt: now0 - 3 * 3600e3, settledAt: now0 - 2 * 3600e3, title: 'G vs H', outcome: 'G', eventId: 'e2', live: true },
+  { id: 'x3', botId: 'rb', mode: 'real', status: 'open', cost: 1, shares: 5, mark: 0.3, price: 0.2, placedAt: now0 - 600e3 },
+  { id: 'x4', botId: 'rb', mode: 'sim', status: 'won', cost: 10, payout: 30, price: 0.3, placedAt: now0 - 3600e3, settledAt: now0 - 60e3 }
+];
+const r1 = rep.botReport({ bot: rbBot, bets: rbBets, decisions: rows, funnel: db.funnelRows('rb'), wallet: { equity: 21.5 }, now: now0, days: 7 });
+assert(r1.mode === 'real' && r1.kpis.equity === 21.5, 'real mode uses the real wallet');
+assert(r1.curve.length === 2 && r1.curve[1].v === 2 && r1.kpis.realized === 2 && r1.kpis.won === 1 && r1.kpis.lost === 1, `real curve and record (${JSON.stringify(r1.kpis)})`);
+assert(r1.kpis.open === 1 && r1.kpis.streak === -1 && r1.kpis.maxDrawdown === 1, 'open bets, streak and drawdown');
+assert(r1.funnel.considered === 2 && r1.funnel.byCategory.risk === 1 && r1.funnel.taken === 1, 'funnel counts');
+const riskRow = r1.reasons.find((x) => x.key === 'Risk: match, team, open');
+assert(riskRow && riskRow.n === 1 && riskRow.recorded === 1 && riskRow.avgPnl === 4, 'a skip reason shows what $1 would have made');
+assert(r1.perDollar.skipped.length === 1 && r1.perDollar.taken[0].v === -1, 'per-dollar lines for taken and skipped');
+assert(r1.breakdowns.price.find((g) => g.label === '20-30%').pnl === 3, 'price-band breakdown');
+assert(r1.daily.length >= 7 && r1.daily.some((d) => d.taken === 1), 'every day of the window is on the axis');
+const r2 = rep.botReport({ bot: rbBot, bets: rbBets, decisions: rows, funnel: [], now: now0, days: 7, mode: 'sim' });
+assert(r2.curve.length === 1 && r2.kpis.equity === 520, 'paper mode reads the paper wallet');
+
+// ---- lower-tier football ----------------------------------------------------------------
+
+{
+  const fbm = await import('./football.js');
+  const mk = (title, group, yes, price, extra = {}) => ({ sportsMarketType: 'moneyline', groupItemTitle: group, question: title, outcomes: '["Yes","No"]', outcomePrices: JSON.stringify([String(price), String(1 - price)]), clobTokenIds: JSON.stringify([yes, `${yes}n`]), conditionId: `c_${yes}`, bestBid: price - 0.01, bestAsk: price + 0.01, volume: '300', feeSchedule: { rate: 0.05 }, ...extra });
+  const start = Date.now() + 2 * 3600e3;
+  const raw = { id: 'fe1', title: 'FS Jelgava vs. Ogre United', startTime: new Date(start).toISOString(), teams: [{ name: 'FS Jelgava' }, { name: 'Ogre United' }], markets: [mk('Will FS Jelgava win on 2026-11-08?', 'FS Jelgava', 'TA', 0.53), mk('Will FS Jelgava vs. Ogre United end in a draw?', 'Draw (FS Jelgava vs. Ogre United)', 'TD', 0.24), mk('Will Ogre United win on 2026-11-08?', 'Ogre United', 'TB', 0.23), { sportsMarketType: 'totals' }] };
+  const ev = fbm.normalizeFootball(raw, 'Latvia');
+  assert(ev && ev.markets.length === 3 && ev.markets.map((m) => m.kind).sort().join() === 'A,B,draw' && ev.markets.find((m) => m.kind === 'B').label === 'Ogre United', 'football: three markets, A / draw / B');
+  assert(fbm.normalizeFootball({ ...raw, markets: raw.markets.slice(0, 2) }, 'Latvia') === null, 'football: a side market is not a match');
+  // Scoring: a big buy into a thin market from a fresh wallet is loud; a small one into a deep market is not.
+  const loud = fbm.scoreBuy({ cash: 800, priorVolume: 400, price: 0.23, wallet: { joinedAt: Date.now() - 2 * 86400e3, trades: 3 }, start, at: Date.now() });
+  const quiet = fbm.scoreBuy({ cash: 120, priorVolume: 50000, price: 0.5, wallet: { joinedAt: Date.now() - 900 * 86400e3, trades: 4000 }, start: start + 20 * 3600e3, at: Date.now() });
+  assert(loud.score >= 80 && quiet.score < 20, `football scoring (${loud.score} vs ${quiet.score})`);
+  // A wallet stacking buys on Ogre United is flagged once, as one stack.
+  fbm.setFootballSettings({ copy: false, minScore: 55, minCash: 100 });
+  const fs0 = fbm.fb();
+  fs0.events[ev.id] = ev;
+  fs0.wallets['0xfresh'] = { at: Date.now(), joinedAt: Date.now() - 3 * 86400e3, trades: 2 };
+  const seen = [];
+  fbm.onFootball((e) => seen.push(e));
+  const m = ev.markets.find((x) => x.kind === 'B');
+  const now = Math.floor(Date.now() / 1000);
+  for (const [i, size] of [[1, 1000], [2, 1500]]) await fbm._handleTrade({ transaction_hash: `0xh${i}`, proxy_wallet: '0xFRESH', token_id: 'TB', side: 'BUY', price: 0.23, size, timestamp: now + i, condition_id: m.conditionId, name: 'newguy' }, ev, m, fbm.fbSettings());
+  const flags = fs0.flags.filter((f) => f.eventId === ev.id);
+  assert(flags.length === 1 && flags[0].fills === 2 && near(flags[0].cash, 575, 1e-6) && flags[0].kind === 'B', `stacked buys are one flag (${flags.length}, ${flags[0]?.cash})`);
+  assert(seen.some((e) => e.type === 'flag' && e.flag.kind === 'B'), 'a suspicious stack is announced');
+  const sus = fbm.footballSuspicious();
+  assert(sus[0]?.label === 'Ogre United' && sus[0].score >= 55, 'suspicious list names the backed team');
+  // Paper copy settles on the result.
+  store.col('bets').push({ id: 'fb_t', mode: 'sim', botId: 'football-sus', status: 'open', eventId: ev.id, kind: 'B', shares: 80, cost: 20.5, outcome: 'Ogre United' });
+  fbm._settle(ev, 'B');
+  const pb = store.col('bets').find((b) => b.id === 'fb_t');
+  assert(pb.status === 'won' && pb.payout === 80 && flags[0].result === 'won' && fbm.footballPaper().realized > 59, 'paper copy settles and the flag records the result');
+  store.col('bets').splice(store.col('bets').indexOf(pb), 1);
+}
+
+// ---- dated backtest runs ---------------------------------------------------------------
+
+// A small synthetic history pack: low-tier CS2 BO3s where the favourite collapses to 15%.
+fs.mkdirSync(path.join(tmp, 'packs'), { recursive: true });
+const packLines = [];
+const nowS0 = Math.floor(Date.now() / 1000);
+for (let i = 0; i < 240; i++) {
+  const s = nowS0 - (120 - i * 0.5) * 86400;
+  const win = i % 5 < 2;
+  const p = [0, 620, 300, 600, 600, 560, 700, 300, 760, 150, 820, 150, 880, 150, 1500, win ? 700 : 100, 3000, win ? 990 : 10];
+  packLines.push(JSON.stringify({ g: 'cs2', id: `m${i}`, cid: `c${i}`, s, f: 'BO3', low: true, n: [`Fav ${i}`, `Dog ${i}`], w: win ? 0 : 1, pre: 0.62, e: s + 3600, p }));
+}
+fs.writeFileSync(path.join(tmp, 'packs', 'comeback-recent.ndjson'), packLines.join('\n') + '\n');
+const bt = await import('./botbacktest.js');
+const cbBot = { id: 'cb', name: 'Comeback test', type: 'comeback', sizing: { kind: 'auto' }, minStake: 1, maxStake: 25, maxOpenPct: 25, dailyLossPct: 10, params: { games: ['cs2'], preMin: 0.5, collapseAt: 0.2, maxSlippage: 0.02, maxMinutes: 90, formats: ['BO3'], lowTierOnly: true, minDrop: 0.2, sellAt: 0 } };
+const dayMs = 86400e3;
+const tRuns = bt.botBacktestRuns(cbBot, { starts: [Date.now() - 60 * dayMs, Date.now() - 200 * dayMs, Date.now() - 100 * dayMs], start: 21 });
+assert(tRuns.runs.length === 3 && tRuns.runs[0].from < tRuns.runs[1].from, 'runs come back oldest start first');
+assert(tRuns.runs[0].beforeData && !tRuns.runs[1].beforeData, 'a start before the history is flagged');
+const r100 = tRuns.runs[1];
+assert(r100.placed > 50 && r100.curve.length === r100.placed, `every placed bet settles into the curve (${r100.placed})`);
+assert(r100.curve.every((c, i) => i === 0 || c.t >= r100.curve[i - 1].t) && r100.curve[0].t >= r100.from, 'curve is in time order, after the start');
+assert(near(r100.curve[0].v - r100.curve[0].d, 21, 1e-6) && near(r100.curve[r100.curve.length - 1].v, r100.end, 0.01), 'curve starts at the wallet and ends at the result');
+assert(tRuns.runs[2].placed < r100.placed && r100.months.length >= 3, 'a later start sees fewer bets; months are listed');
+assert(r100.curve.slice(0, 10).every((c) => c.stake === 1), 'the first 10 fills use the halved stake, floored at $1');
+const dear = bt.botBacktestRuns(cbBot, { starts: [Date.now() - 100 * dayMs], start: 500, extraSlip: 0.02 }).runs[0];
+assert(dear.placed === 10 && dear.stopped && /over the mid/.test(dear.stopped.reason), `fills over 2.5c stop the bot after 10 (${dear.placed}, ${dear.stopped?.reason})`);
+
+// V3: busy markets are skipped; a leader bot buys the other side of crashes the crash bots skip.
+{
+  const all = bt._comebackBets(cbBot.params, 0, 0);
+  const quiet = bt._comebackBets({ ...cbBot.params, maxTradesPerMin: 0.1 }, 0, 0); // every synthetic crash has ~0.3 trades a minute
+  assert(all.length > 50 && quiet.length === 0, `busy-market skip (${all.length} -> ${quiet.length})`);
+  const leaderP = { ...cbBot.params, bet: 'leader', busyAt: 4, minDrop: 0, formats: [], lowTierOnly: false, sellAt: 0 };
+  assert(bt._comebackBets(leaderP, 0, 0).length === 0, 'leader leaves low-tier BO3 sudden crashes to the crash bots');
+  // The same crashes in BO1: the comeback is overpriced there, so the leader buys the other team.
+  const bo1 = packLines.slice(0, 40).map((l) => JSON.stringify({ ...JSON.parse(l), cid: `${JSON.parse(l).cid}b`, f: 'BO1' }));
+  fs.appendFileSync(path.join(tmp, 'packs', 'comeback-recent.ndjson'), bo1.join('\n') + '\n');
+  const lead = bt._comebackBets(leaderP, 0, 0).filter((b) => /leader/.test(b.team));
+  const crashedWon = bo1.filter((l) => JSON.parse(l).w === 0).length;
+  assert(lead.length === 40 && lead.filter((b) => b.won).length === 40 - crashedWon && lead.every((b) => b.q > 0.8), `leader bets on BO1 crashes (${lead.length}, won ${lead.filter((b) => b.won).length})`);
+}
 db.closeDb();
 
 store.flush();

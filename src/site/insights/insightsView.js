@@ -184,7 +184,26 @@ export function initInsightsView({ escapeHtml, openRoute }) {
     betsBot: '',
     decBot: '',
     editBot: null,
-    btBot: ''
+    btBot: '',
+    botId: '',
+    botFor: '',
+    botDays: 7,
+    botMode: null,
+    botChart: 'money',
+    botDec: '',
+    botCat: '',
+    botReason: '',
+    chartTrend: 'off',
+    chartHidden: new Set(),
+    btvStarts: null,
+    btvCustom: '',
+    btvUsd: 21,
+    btvSlip: 0,
+    btvAlign: 'time',
+    btvScale: 'log',
+    btvFocus: null,
+    btvCache: new Map(),
+    btvData: null
   };
 
   const banner = document.createElement('div');
@@ -866,6 +885,54 @@ export function initInsightsView({ escapeHtml, openRoute }) {
       await loadOverview().catch(() => {});
       return renderPage();
     }
+    const botPage = e.target.closest('[data-bot-page]');
+    if (botPage) {
+      ui.botId = botPage.dataset.botPage;
+      return openRoute('insights-bot', { id: ui.botId });
+    }
+    const hideLine = e.target.closest('[data-chart-hide]');
+    if (hideLine) {
+      const k = hideLine.dataset.chartHide;
+      if (ui.chartHidden.has(k)) ui.chartHidden.delete(k);
+      else ui.chartHidden.add(k);
+      return renderPage();
+    }
+    const btvMonth = e.target.closest('[data-btv-month]');
+    if (btvMonth) {
+      const m = btvMonth.dataset.btvMonth;
+      ui.btvStarts = ui.btvStarts.includes(m) ? ui.btvStarts.filter((x) => x !== m) : [...ui.btvStarts, m].slice(-8);
+      ui.btvFocus = null;
+      return renderPage();
+    }
+    const btvFocus = e.target.closest('[data-btv-focus]');
+    if (btvFocus) {
+      const v = Number(btvFocus.dataset.btvFocus) || null;
+      ui.btvFocus = ui.btvFocus === v ? null : v;
+      return renderPage();
+    }
+    if (e.target.closest('[data-btv-custom-clear]')) {
+      ui.btvCustom = '';
+      return renderPage();
+    }
+    const botCat = e.target.closest('[data-bot-cat]');
+    if (botCat) {
+      const v = botCat.dataset.botCat;
+      ui.botCat = ui.botCat === v ? '' : v;
+      if (ui.botCat === 'taken') {
+        ui.botDec = 'taken';
+        ui.botReason = '';
+      }
+      return renderPage();
+    }
+    const botReason = e.target.closest('[data-bot-reason]');
+    if (botReason) {
+      const v = botReason.dataset.botReason;
+      ui.botReason = ui.botReason === v ? '' : v;
+      ui.openDecision = null;
+      await renderPage();
+      if (ui.botReason) body.querySelector('.ins-decs')?.closest('.ins-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      return;
+    }
     const editB = e.target.closest('[data-edit-bot]');
     if (editB) {
       const bot = (await ensureBots()).bots.find((b) => b.id === editB.dataset.editBot);
@@ -983,7 +1050,8 @@ export function initInsightsView({ escapeHtml, openRoute }) {
     if (segBtn) {
       const key = segBtn.closest('[data-seg]').dataset.seg;
       const raw = segBtn.dataset.v;
-      ui[key] = ['statsLine', 'susMin', 'susCash', 'btbDays', 'btbSlip'].includes(key) ? Number(raw) : raw;
+      ui[key] = ['statsLine', 'susMin', 'susCash', 'btbDays', 'btbSlip', 'botDays', 'btvSlip'].includes(key) ? Number(raw) : raw;
+      if (key === 'botDec') ui.botReason = '';
       if (key === 'btKind' && raw === 'history') ui.btStrategy = 'swing';
       return renderPage();
     }
@@ -1150,6 +1218,21 @@ export function initInsightsView({ escapeHtml, openRoute }) {
   });
 
   body.addEventListener('change', (e) => {
+    const btvUsd = e.target.closest?.('[data-btv-usd]');
+    if (btvUsd) {
+      ui.btvUsd = Math.min(1e6, Math.max(10, Math.round(Number(btvUsd.value) || 21)));
+      btvUsd.blur();
+      renderPage();
+      return;
+    }
+    const btvCustom = e.target.closest?.('[data-btv-custom]');
+    if (btvCustom) {
+      ui.btvCustom = btvCustom.value || '';
+      ui.btvFocus = null;
+      btvCustom.blur();
+      renderPage();
+      return;
+    }
     const bv = e.target.closest?.('[data-bets-bot]');
     if (bv) {
       ui.betsBot = bv.value;
@@ -1350,11 +1433,442 @@ export function initInsightsView({ escapeHtml, openRoute }) {
         const modeSeg = type.paperOnly
           ? '<span class="ins-tag sim">Paper</span>'
           : `<div class="ins-seg ins-modeswitch ins-seg-sm" data-bot-mode="${esc(b.id)}"><button type="button" class="ins-seg-btn${b.mode === 'paper' ? ' on' : ''}" data-v="sim">Paper</button><button type="button" class="ins-seg-btn${b.mode === 'real' ? ' on' : ''}" data-v="real">Real</button></div>`;
-        return `<tr><td>${`<div class="ins-seg ins-seg-sm" data-bot-on="${esc(b.id)}"><button type="button" class="ins-seg-btn${b.enabled ? ' on' : ''}" data-v="1">On</button><button type="button" class="ins-seg-btn${!b.enabled ? ' on' : ''}" data-v="0">Off</button></div>`}</td><td><span class="ins-link" data-edit-bot="${esc(b.id)}">${esc(b.name)}</span><div class="ins-dim">${esc(type.label)}</div></td><td>${modeSeg}${b.mode === 'real' && b.wallet.blocker ? `<div class="ins-dim" title="${esc(b.wallet.blocker)}">${esc(b.wallet.blocker)}</div>` : ''}</td><td>${esc(stakeText(b))}<div class="ins-dim">max ${usd(b.maxStake)}</div></td><td class="r">${b.mode === 'real' ? '<span class="ins-dim">real</span>' : usd(b.paper.equity)}</td><td class="r">${t.count}${t.open ? ` <span class="ins-dim">${t.open} open</span>` : ''}</td><td class="r">${settled ? `${t.won}-${t.lost}` : '-'}</td><td class="r ${signCls(t.realized)}">${usd(t.realized, true)}</td><td class="r ${signCls(t.roi ?? 0)}">${t.roi === null ? '-' : pct(t.roi, 1)}</td><td class="r ${signCls(b.clv ?? 0)}" title="Average start price minus our entry, ${b.nClose} bets">${b.clv === null ? '-' : signedC(b.clv)}</td><td class="r">${b.lastAt ? ago(b.lastAt) : '-'}</td><td><button type="button" class="ins-btn ins-btn-sm" data-edit-bot="${esc(b.id)}">Edit</button> <button type="button" class="ins-btn ins-btn-sm" data-bot-bets="${esc(b.id)}" data-bot-mode-now="${b.mode === 'real' ? 'real' : 'sim'}">Bets</button>${['swing', 'mm'].includes(b.type) ? '' : ` <button type="button" class="ins-btn ins-btn-sm" data-bot-test="${esc(b.id)}">Test</button>`}</td></tr>`;
+        return `<tr><td>${`<div class="ins-seg ins-seg-sm" data-bot-on="${esc(b.id)}"><button type="button" class="ins-seg-btn${b.enabled ? ' on' : ''}" data-v="1">On</button><button type="button" class="ins-seg-btn${!b.enabled ? ' on' : ''}" data-v="0">Off</button></div>`}</td><td><span class="ins-link" data-bot-page="${esc(b.id)}" title="Open this bot's page: skips, takes, chart">${esc(b.name)}</span><div class="ins-dim">${esc(type.label)}</div></td><td>${modeSeg}${b.mode === 'real' && b.wallet.blocker ? `<div class="ins-dim" title="${esc(b.wallet.blocker)}">${esc(b.wallet.blocker)}</div>` : ''}</td><td>${esc(stakeText(b))}<div class="ins-dim">max ${usd(b.maxStake)}</div></td><td class="r">${b.mode === 'real' ? '<span class="ins-dim">real</span>' : usd(b.paper.equity)}</td><td class="r">${t.count}${t.open ? ` <span class="ins-dim">${t.open} open</span>` : ''}</td><td class="r">${settled ? `${t.won}-${t.lost}` : '-'}</td><td class="r ${signCls(t.realized)}">${usd(t.realized, true)}</td><td class="r ${signCls(t.roi ?? 0)}">${t.roi === null ? '-' : pct(t.roi, 1)}</td><td class="r ${signCls(b.clv ?? 0)}" title="Average start price minus our entry, ${b.nClose} bets">${b.clv === null ? '-' : signedC(b.clv)}</td><td class="r">${b.lastAt ? ago(b.lastAt) : '-'}</td><td><button type="button" class="ins-btn ins-btn-sm" data-edit-bot="${esc(b.id)}">Edit</button> <button type="button" class="ins-btn ins-btn-sm" data-bot-bets="${esc(b.id)}" data-bot-mode-now="${b.mode === 'real' ? 'real' : 'sim'}">Bets</button>${['swing', 'mm'].includes(b.type) ? '' : ` <button type="button" class="ins-btn ins-btn-sm" data-bot-test="${esc(b.id)}">Test</button>`}</td></tr>`;
       })
       .join('');
     const newSeg = `<div class="ins-seg" data-new-bot>${Object.entries(d.schema.types).map(([k, t]) => `<button type="button" class="ins-seg-btn" data-v="${k}">${esc(t.label)}</button>`).join('')}</div>`;
     return `<div class="ins-card"><div class="ins-card-h"><h3>Bots</h3><div class="ins-bar"><span class="ins-muted">All bots</span>${toggle('botsOn', d.botsOn)}<span class="ins-muted">New</span>${newSeg}</div></div>${realBox}${sugg}</div><div class="ins-table-wrap"><table class="ins-table"><thead><tr><th></th><th>Bot</th><th>Money</th><th>Stake</th><th class="r">Paper wallet</th><th class="r">Bets</th><th class="r">W-L</th><th class="r">P&L</th><th class="r">ROI</th><th class="r" title="Average start price minus our entry">vs start</th><th class="r">Last</th><th></th></tr></thead><tbody>${rows || '<tr><td colspan="12" class="ins-empty">No bots yet</td></tr>'}</tbody></table></div>`;
+  }
+
+  // ---- one bot ------------------------------------------------------------------
+  // Everything about one bot in a window: what it looked at, what it skipped and
+  // why (and what those skips would have made), what it took, and how it went.
+
+  const CATS = {
+    rules: ["The bot's own rules", '#6b6b72'],
+    risk: ['Wallet risk limits', 'var(--ins-loss)'],
+    stake: ['Stake sizing', 'var(--ins-warn)'],
+    blocked: ['Real money blocked', 'var(--ins-real)'],
+    duplicate: ['Already in the match', '#45454b'],
+    market: ['Market or order book', '#9b6bd6'],
+    review: ['AI review', 'var(--ins-whale)']
+  };
+  /** The same grouping as reasonKey in server/insights/botReport.js. */
+  const reasonKeyOf = (reason) =>
+    String(reason || 'No reason')
+      .replace(/\$?-?\d+(?:[.,]\d+)?\s?(?:%|c|k|min|s|h)?/g, '#')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 90);
+  const perD = (v) => (Number.isFinite(v) ? `${v >= 0 ? '+' : ''}${(v * 100).toFixed(0)}%` : '-');
+
+  /** Least squares through (t, y): y = a + b t. */
+  function fitLine(xs, ys) {
+    const n = xs.length;
+    if (n < 2) return null;
+    // Centred sums: timestamps in ms are large, raw sums of squares lose precision.
+    const mx = xs.reduce((s, x) => s + x, 0) / n;
+    const my = ys.reduce((s, y) => s + y, 0) / n;
+    let sxx = 0, sxy = 0;
+    for (let i = 0; i < n; i++) {
+      sxx += (xs[i] - mx) ** 2;
+      sxy += (xs[i] - mx) * (ys[i] - my);
+    }
+    if (!sxx) return null;
+    const b = sxy / sxx;
+    return { a: my - b * mx, b };
+  }
+
+  /** Mean of y over the trailing window (ms), at every point. Points are in time order. */
+  function movingAvg(ts, ys, win) {
+    const out = [];
+    let j = 0, sum = 0;
+    for (let i = 0; i < ts.length; i++) {
+      sum += ys[i];
+      while (ts[i] - ts[j] > win) sum -= ys[j++];
+      out.push(sum / (i - j + 1));
+    }
+    return out;
+  }
+
+  /**
+   * Running totals over time, one stepped line per series, with optional trendlines.
+   * Dots and labels are HTML over a stretched SVG, so they stay round and sharp.
+   * Hover: the nearest point's own tooltip. Click: its match. Legend: show or hide a series.
+   * @param {Array<{ key?: string, label: string, color: string, origin?: { t: number, v: number }, points: Array<{ t: number, v: number, d?: number, eventId?: string }>, dot?: (p: object) => string, dim?: boolean }>} series
+   * @param {{ fmt?: (v: number) => string, xfmt?: (t: number) => string, tip?: Function, height?: number, empty?: string, trend?: 'off'|'linear'|'avg', log?: boolean, ref?: number, unit?: string }} [o]
+   *   log: log scale (wallet values only; needs ref > 0) · ref: the dashed reference line (0, or the starting wallet)
+   */
+  function stepChart(series, { fmt = (v) => usd(v, true), xfmt = dayTime, tip, height = 220, empty = 'Nothing settled in this window yet', trend = 'off', log = false, ref = 0, unit = '$' } = {}) {
+    const withPts = series.filter((s) => s.points.length);
+    if (!withPts.length) return `<div class="ins-empty">${esc(empty)}</div>`;
+    const hidden = ui.chartHidden;
+    const live = withPts.filter((s) => !hidden.has(s.key || s.label));
+    const shown = live.length ? live : withPts.slice(0, 1);
+    const startOf = (s) => (s.origin ? s.origin : { t: s.points[0].t, v: s.points[0].v - (s.points[0].d ?? 0) });
+    const pts = shown.flatMap((s) => [startOf(s), ...s.points]);
+    log = log && pts.every((p) => p.v > 0) && ref > 0;
+    const Y = (v) => (log ? Math.log(v) : v);
+    const vals = pts.map((p) => Y(p.v)).concat(log ? [Y(ref)] : [ref]);
+    let lo = Math.min(...vals);
+    let hi = Math.max(...vals);
+    if (!log) {
+      lo = Math.min(lo, 0);
+      hi = Math.max(hi, 0);
+    }
+    const padV = (hi - lo || 1) * 0.08;
+    lo -= padV;
+    hi += padV;
+    let t0 = Math.min(...pts.map((p) => p.t));
+    let t1 = Math.max(...pts.map((p) => p.t));
+    const padT = Math.max(1800e3, (t1 - t0) * 0.03);
+    t0 -= padT;
+    t1 += padT;
+    const fx = (t) => (t - t0) / (t1 - t0);
+    const fy = (v) => 1 - (Y(v) - lo) / (hi - lo);
+    const P = (t, v) => `${(fx(t) * 1000).toFixed(1)},${(fy(v) * 1000).toFixed(1)}`;
+    const notes = new Map();
+    const paths = shown
+      .map((s) => {
+        const o = startOf(s);
+        let d = `M${P(o.t, o.v)}`;
+        for (const p of s.points) d += `H${(fx(p.t) * 1000).toFixed(1)}V${(fy(p.v) * 1000).toFixed(1)}`;
+        let line = `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linejoin="round" opacity="${s.dim ? 0.3 : 1}"/>`;
+        const all = [o, ...s.points];
+        if (trend === 'linear' && all.length >= 3) {
+          const f = fitLine(all.map((p) => p.t), all.map((p) => Y(p.v)));
+          if (f) {
+            const ta = all[0].t, tb = all[all.length - 1].t;
+            const at = (t) => (log ? Math.exp(f.a + f.b * t) : f.a + f.b * t);
+            line += `<path d="M${P(ta, at(ta))}L${P(tb, at(tb))}" fill="none" stroke="${s.color}" stroke-width="1.5" stroke-dasharray="6 5" vector-effect="non-scaling-stroke" opacity="${s.dim ? 0.3 : 0.9}"/>`;
+            const perDay = f.b * 86400e3;
+            notes.set(s.key || s.label, log ? `trend ${perDay >= 0 ? '+' : ''}${((Math.exp(perDay) - 1) * 100).toFixed(2)}%/day, ${perDay >= 0 ? '+' : ''}${((Math.exp(perDay * 30) - 1) * 100).toFixed(0)}%/30 days` : `trend ${unit === '$' ? usd(perDay, true) : perDay.toFixed(2)}/day`);
+          }
+        } else if (trend === 'avg' && all.length >= 3) {
+          const span = all[all.length - 1].t - all[0].t;
+          const win = span >= 60 * 86400e3 ? 14 * 86400e3 : span >= 14 * 86400e3 ? 3 * 86400e3 : Math.max(3600e3, span / 6);
+          const ys = movingAvg(all.map((p) => p.t), all.map((p) => Y(p.v)), win);
+          const back = (y) => (log ? Math.exp(y) : y);
+          line += `<path d="${all.map((p, i) => `${i ? 'L' : 'M'}${P(p.t, back(ys[i]))}`).join('')}" fill="none" stroke="${s.color}" stroke-width="1.5" stroke-dasharray="2 4" vector-effect="non-scaling-stroke" opacity="${s.dim ? 0.3 : 0.95}"/>`;
+          const daysW = win / 86400e3;
+          notes.set(s.key || s.label, `${daysW >= 1 ? `${Math.round(daysW)}-day` : `${Math.round(win / 3600e3)}-hour`} average`);
+        }
+        return line;
+      })
+      .join('');
+    const yTicks = log ? [lo + padV, (lo + hi) / 2, hi - padV].map(Math.exp) : [lo + padV, (lo + hi) / 2, hi - padV];
+    const grid = yTicks.map((v) => `<line x1="0" x2="1000" y1="${fy(v) * 1000}" y2="${fy(v) * 1000}" class="grid" vector-effect="non-scaling-stroke"/>`).join('') + `<line x1="0" x2="1000" y1="${fy(ref) * 1000}" y2="${fy(ref) * 1000}" class="ref" vector-effect="non-scaling-stroke"/>`;
+    const yLabels = yTicks.map((v) => `<span class="ins-ax y" style="top:${(fy(v) * 100).toFixed(2)}%">${esc(fmt(v))}</span>`).join('');
+    const xLabels = [t0 + padT, (t0 + t1) / 2, t1 - padT].map((t, i) => `<span class="ins-ax x${i === 0 ? ' first' : i === 2 ? ' last' : ''}" style="left:${(fx(t) * 100).toFixed(2)}%">${esc(xfmt(t))}</span>`).join('');
+    const flat = [];
+    shown.forEach((s, si) => s.points.forEach((p) => flat.push({ s: si, p, fx: fx(p.t), fy: fy(p.v) })));
+    // Dots for every point while they stay readable; past that the hover marker alone.
+    const dots = flat.length <= 700 ? flat.map((f) => `<i class="ins-pt ${shown[f.s].dot ? shown[f.s].dot(f.p) : ''}${shown[f.s].dim ? ' dim' : ''}" style="left:${(f.fx * 100).toFixed(2)}%;top:${(f.fy * 100).toFixed(2)}%;--c:${shown[f.s].color}"></i>`).join('') : '';
+    const id = `x${Math.random().toString(36).slice(2, 8)}`;
+    setTimeout(() => bindStepHover(id, flat, shown, tip), 0);
+    const toggles = withPts.length > 1;
+    const legendItems = withPts
+      .map((s) => {
+        const k = s.key || s.label;
+        const off = hidden.has(k) && live.length;
+        const note = notes.get(k);
+        const inner = `<i class="line" style="background:${s.color}"></i>${esc(s.label)}${note ? ` <span class="ins-dim">· ${esc(note)}</span>` : ''}`;
+        return toggles ? `<button type="button" class="ins-legend-t${off ? ' off' : ''}" data-chart-hide="${esc(k)}" title="Show or hide">${inner}</button>` : s.label || note ? `<span>${inner}</span>` : '';
+      })
+      .join('');
+    const legend = `<div class="ins-legend">${legendItems}<span class="ins-dim">${toggles ? 'Click a line to show or hide it · ' : ''}hover a point for details</span></div>`;
+    return `<div class="ins-xchart" id="${id}"><div class="ins-plot" style="height:${height}px"><svg viewBox="0 0 1000 1000" preserveAspectRatio="none">${grid}${paths}</svg>${yLabels}${xLabels}${dots}<i class="ins-pt hover" hidden></i><div class="ins-xhair" hidden></div><div class="ins-tip" style="display:none"></div></div>${legend}</div>`;
+  }
+
+  function bindStepHover(id, flat, series, tip) {
+    const host = document.getElementById(id);
+    if (!host || !flat.length) return;
+    const plot = host.querySelector('.ins-plot');
+    const box = host.querySelector('.ins-tip');
+    const hair = host.querySelector('.ins-xhair');
+    const mark = host.querySelector('.ins-pt.hover');
+    const nearest = (e) => {
+      const r = plot.getBoundingClientRect();
+      const px = e.clientX - r.left;
+      const py = e.clientY - r.top;
+      let best = null;
+      let bd = Infinity;
+      for (let i = 0; i < flat.length; i++) {
+        const dx = flat[i].fx * r.width - px;
+        const dy = (flat[i].fy * r.height - py) * 0.35;
+        const dist = dx * dx + dy * dy;
+        if (dist < bd) {
+          bd = dist;
+          best = i;
+        }
+      }
+      return Math.sqrt(bd) < 60 ? best : null;
+    };
+    const hide = () => {
+      box.style.display = 'none';
+      hair.hidden = true;
+      mark.hidden = true;
+      plot.style.cursor = '';
+    };
+    plot.addEventListener('mousemove', (e) => {
+      const i = nearest(e);
+      if (i === null) return hide();
+      const f = flat[i];
+      const s = series[f.s];
+      hair.hidden = false;
+      hair.style.left = `${f.fx * 100}%`;
+      mark.hidden = false;
+      mark.style.left = `${f.fx * 100}%`;
+      mark.style.top = `${f.fy * 100}%`;
+      mark.style.setProperty('--c', s.color);
+      mark.className = `ins-pt hover ${s.dot ? s.dot(f.p) : ''}`;
+      box.style.display = '';
+      box.style.left = `${f.fx * 100}%`;
+      box.style.top = `${f.fy * 100}%`;
+      box.innerHTML = tip ? tip(f.p, s) : `${esc(usd(f.p.v, true))}<small>${esc(dayTime(f.p.t))}</small>`;
+      plot.style.cursor = f.p.eventId ? 'pointer' : '';
+    });
+    plot.addEventListener('mouseleave', hide);
+    plot.addEventListener('click', (e) => {
+      const i = nearest(e);
+      if (i !== null && flat[i].p.eventId) showMatch(flat[i].p.eventId);
+    });
+  }
+
+  /** One column per day: markets looked at, trades taken, and the day's settled P&L on hover. */
+  function dayBars(daily) {
+    if (!daily.length) return '<div class="ins-empty">No activity recorded in this window</div>';
+    const top = Math.max(1, ...daily.map((d) => Math.max(d.considered, d.taken)));
+    const cols = daily
+      .map((d) => {
+        const label = new Date(`${d.day}T12:00:00Z`).toLocaleDateString([], { day: 'numeric', month: 'short' });
+        const pnl = d.settled ? `<span class="${signCls(d.pnl)}">${usd(d.pnl, true)}</span> on ${d.settled} settled` : 'nothing settled';
+        return `<div class="ins-day"><div class="ins-day-bars"><i class="seen" style="height:${((d.considered / top) * 100).toFixed(1)}%"></i><i class="took" style="height:${((d.taken / top) * 100).toFixed(1)}%"></i>${d.taken ? `<b class="ins-day-n" style="bottom:calc(${((d.taken / top) * 100).toFixed(1)}% + 2px)">${d.taken}</b>` : ''}</div><span class="ins-day-dot ${d.settled ? signCls(d.pnl) || 'flat' : ''}"></span><span class="ins-day-l">${esc(label)}</span><div class="ins-tip">${esc(label)}<small>${nf0.format(d.considered)} markets looked at · ${nf0.format(d.skipped)} skips · ${nf0.format(d.taken)} taken</small><small>${pnl}</small></div></div>`;
+      })
+      .join('');
+    return `<div class="ins-days${daily.length > 40 ? ' dense' : ''}">${cols}</div><div class="ins-legend"><span><i style="background:#2a2a2f;border-radius:2px"></i>Markets looked at</span><span><i style="background:var(--ins-line);border-radius:2px"></i>Trades taken</span><span><i style="background:var(--ins-win)"></i><i style="background:var(--ins-loss)"></i>Day's settled P&L</span></div>`;
+  }
+
+  /** Where the skips went: one bar split by the kind of no, plus what was taken. */
+  function funnelHtml(f) {
+    const cats = Object.entries(f.byCategory).sort((a, b) => b[1] - a[1]);
+    const total = cats.reduce((s, [, n]) => s + n, 0) + f.taken;
+    if (!total) return '<div class="ins-empty">No evaluations counted yet. Counting starts with this version, so give it a few minutes.</div>';
+    const seg = (key, n, color, label) => `<button type="button" class="ins-stack-seg${ui.botCat === key ? ' on' : ''}" data-bot-cat="${esc(key)}" style="flex:${n} 1 0;background:${color}" title="${esc(label)}: ${nf0.format(n)}"></button>`;
+    const bar = `<div class="ins-stack">${f.taken ? seg('taken', f.taken, 'var(--ins-line)', 'Taken') : ''}${cats.map(([k, n]) => seg(k, n, CATS[k]?.[1] || '#555', CATS[k]?.[0] || k)).join('')}</div>`;
+    const legend = [['taken', f.taken, 'var(--ins-line)', 'Taken']].concat(cats.map(([k, n]) => [k, n, CATS[k]?.[1] || '#555', CATS[k]?.[0] || k]))
+      .filter(([, n]) => n)
+      .map(([k, n, color, label]) => `<button type="button" class="ins-stack-l${ui.botCat === k ? ' on' : ''}" data-bot-cat="${esc(k)}"><i style="background:${color}"></i>${esc(label)} <b class="ins-num">${nf0.format(n)}</b> <span class="ins-dim">${pct(n / total)}</span></button>`)
+      .join('');
+    return `${bar}<div class="ins-stack-legend">${legend}</div><div class="ins-dim">${nf0.format(f.considered)} markets looked at · skips count once per market and reason each day${f.since ? ` · counted since ${esc(f.since)}` : ''}. Click a part to filter the reasons.</div>`;
+  }
+
+  function reasonsTable(rows) {
+    const list = ui.botCat && ui.botCat !== 'taken' ? rows.filter((r) => r.category === ui.botCat) : rows;
+    if (!list.length) return '<div class="ins-empty">No skips in this window</div>';
+    const body = list
+      .map((r) => {
+        const cat = CATS[r.category] || [r.category, '#555'];
+        const ifTaken = r.settled ? `<span class="${signCls(r.avgPnl)}">${perD(r.avgPnl)}</span> <span class="ins-dim">${r.won}/${r.settled} won</span>` : '<span class="ins-dim">-</span>';
+        return `<tr data-open data-bot-reason="${esc(r.key)}" class="${ui.botReason === r.key ? 'on' : ''}"><td class="wrap">${esc(r.label)}</td><td><i class="ins-cat" style="background:${cat[1]}"></i>${esc(cat[0])}</td><td class="r ins-num">${nf0.format(r.n)}</td><td class="r ins-num">${nf0.format(r.recorded)}</td><td class="r ins-num">${ifTaken}</td><td class="r ins-num ${signCls(r.move30 ?? 0)}">${r.move30 === null || r.move30 === undefined ? '-' : signedC(r.move30)}</td><td class="r">${r.lastAt ? ago(r.lastAt) : '-'}</td></tr>`;
+      })
+      .join('');
+    return `<div class="ins-table-wrap"><table class="ins-table"><thead><tr><th>Why it skipped</th><th>Kind</th><th class="r" title="Markets skipped for this reason, once per market a day">Count</th><th class="r" title="Skips kept in the decision log, with prices and results">Logged</th><th class="r" title="$1 on each logged skip, held to the result, no fees">If taken, per $1</th><th class="r" title="Average price move 30 minutes after the skip">+30 min</th><th class="r">Last</th></tr></thead><tbody>${body}</tbody></table></div>`;
+  }
+
+  function groupTable(title, rows) {
+    if (!rows.length) return '';
+    const body = rows.map((g) => `<tr><td>${esc(g.label)}</td><td class="r ins-num">${g.n}</td><td class="r ins-num">${g.won}-${g.lost}</td><td class="r ins-num ${signCls(g.pnl)}">${usd(g.pnl, true)}</td><td class="r ins-num ${signCls(g.roi ?? 0)}">${g.roi === null ? '-' : pct(g.roi, 1)}</td></tr>`).join('');
+    return `<div class="ins-card"><div class="ins-card-h"><h3>${esc(title)}</h3></div><div class="ins-table-wrap"><table class="ins-table"><thead><tr><th></th><th class="r">Bets</th><th class="r">W-L</th><th class="r">P&L</th><th class="r">ROI</th></tr></thead><tbody>${body}</tbody></table></div></div>`;
+  }
+
+  // ---- dated backtests on the bot page ----------------------------------------------
+
+  const RUN_COLORS = ['var(--ins-line)', 'var(--ins-whale)', 'var(--ins-win)', '#9b6bd6', 'var(--ins-warn)', '#e05ab8', '#4fc3c7', '#c7c7cc'];
+  const monthKey = (t) => new Date(t).toISOString().slice(0, 7) + '-01';
+  const monthLabel = (m) => new Date(`${m}T12:00:00Z`).toLocaleDateString([], { month: 'short', year: '2-digit', timeZone: 'UTC' });
+  const dateLabel = (t) => new Date(t).toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
+
+  /** First-of-month choices from where the data starts (or a year back) to this month. */
+  function backtestMonths() {
+    const now = Date.now();
+    const from = ui.btvData?.dataFrom ? Math.max(ui.btvData.dataFrom, now - 24 * 31 * 86400e3) : now - 12 * 31 * 86400e3;
+    const out = [];
+    const d = new Date(monthKey(from) + 'T00:00:00Z');
+    while (d.getTime() <= now) {
+      out.push(d.toISOString().slice(0, 10));
+      d.setUTCMonth(d.getUTCMonth() + 1);
+    }
+    return out;
+  }
+
+  /** The start dates in play: picked months (defaults: Dec, Mar, Jul) plus a typed date. */
+  function backtestStarts(months) {
+    if (!ui.btvStarts) {
+      const wanted = ['2025-12-01', '2026-03-01', '2026-07-01'].filter((m) => months.includes(m));
+      ui.btvStarts = wanted.length ? wanted : months.filter((_, i) => i % 3 === 0).slice(-3);
+    }
+    const dates = [...ui.btvStarts];
+    if (ui.btvCustom && !dates.includes(ui.btvCustom)) dates.push(ui.btvCustom);
+    return dates
+      .map((m) => Date.parse(`${m}T00:00:00Z`))
+      .filter((t) => Number.isFinite(t) && t < Date.now())
+      .sort((a, b) => a - b)
+      .slice(0, 8);
+  }
+
+  async function backtestView(b) {
+    const months = backtestMonths();
+    const starts = backtestStarts(months);
+    const usdStart = ui.btvUsd;
+    const slip = ui.btvSlip;
+    const key = JSON.stringify([b.id, starts, usdStart, slip]);
+    let data = ui.btvCache.get(key);
+    let error = '';
+    if (!data && starts.length) {
+      try {
+        data = await api('/api/insights/backtest-bot/runs', { method: 'POST', body: { bot: b.id, starts, start: usdStart, extraSlip: slip } });
+        ui.btvCache.set(key, data);
+        if (ui.btvCache.size > 20) ui.btvCache.delete(ui.btvCache.keys().next().value);
+        const firstData = !ui.btvData;
+        ui.btvData = { dataFrom: data.dataFrom, dataTo: data.dataTo };
+        // The month list depends on where the data starts: draw it again once known.
+        if (firstData && data.dataFrom) setTimeout(() => renderPage(), 0);
+      } catch (err) {
+        error = err.message;
+      }
+    }
+    const elapsed = ui.btvAlign === 'elapsed';
+    const monthBtns = months.map((m) => `<button type="button" class="ins-seg-btn${ui.btvStarts.includes(m) ? ' on' : ''}" data-btv-month="${m}">${esc(monthLabel(m))}</button>`).join('');
+    const controls = `<div class="ins-btv">
+      <div class="ins-bar"><span class="ins-muted">Start wallet</span><input class="ins-field ins-num" type="number" min="10" step="1" value="${usdStart}" data-btv-usd style="width:90px"><span class="ins-muted">Fills</span>${seg('btvSlip', [['0', 'As tested'], ['0.01', '1c worse'], ['0.02', '2c worse']], String(slip))}<span class="ins-grow"></span>${seg('btvAlign', [['time', 'Calendar'], ['elapsed', 'Days from start']], ui.btvAlign)}${seg('btvScale', [['log', 'Log scale'], ['linear', 'Linear']], ui.btvScale)}</div>
+      <div class="ins-bar ins-btv-starts"><span class="ins-muted">Start on the 1st of</span><div class="ins-seg ins-seg-sm ins-multi">${monthBtns}</div><span class="ins-muted">or on</span><input type="date" class="ins-field" data-btv-custom value="${esc(ui.btvCustom)}" max="${new Date().toISOString().slice(0, 10)}">${ui.btvCustom ? '<span class="ins-link" data-btv-custom-clear>Remove</span>' : ''}</div>
+    </div>`;
+    if (error) return { controls, chart: `<div class="ins-empty">${esc(error)}</div>`, below: '' };
+    if (!data || !starts.length) return { controls, chart: '<div class="ins-empty">Pick at least one start date</div>', below: '' };
+
+    const runs = data.runs;
+    const series = runs.map((run, i) => ({
+      key: `run-${run.from}`,
+      label: `From ${dateLabel(run.from)}: ${usd(run.start)} → ${usd(run.end)}`,
+      color: RUN_COLORS[i % RUN_COLORS.length],
+      from: run.from,
+      dim: ui.btvFocus !== null && ui.btvFocus !== run.from,
+      origin: { t: elapsed ? 0 : run.from, v: run.start },
+      points: run.curve.map((c) => ({ ...c, real: c.t, t: elapsed ? c.t - run.from : c.t })),
+      dot: (p) => (p.d > 0 ? 'win' : 'loss')
+    }));
+    const runTip = (p, s) => `<b>${esc(s.label.split(':')[0])}</b> · wallet ${usd(p.v)}<small>${p.won ? 'Won' : 'Lost'} <span class="${signCls(p.d)}">${usd(p.d, true)}</span> on ${usd(p.stake)}${p.sold ? ', sold early' : ''}</small><small>${esc(p.team)} at ${pct(p.price, 1)} · ${esc(p.title)}</small><small>${esc(dayTime(p.real))} · day ${Math.floor((p.real - s.from) / 86400e3) + 1}</small>`;
+    const chart = stepChart(series, {
+      fmt: (v) => usd(v),
+      xfmt: elapsed ? (t) => `day ${Math.max(0, Math.round(t / 86400e3))}` : dayTime,
+      tip: runTip,
+      height: 280,
+      empty: 'No bets in the history after these dates',
+      trend: ui.chartTrend,
+      log: ui.btvScale === 'log',
+      ref: usdStart
+    });
+
+    const status = (run) => {
+      if (run.stopped) return `<span class="ins-neg">Stopped ${esc(dateLabel(run.stopped.t))}</span><div class="ins-dim">${esc(run.stopped.reason)}</div>`;
+      if (run.beforeData) return `<span class="ins-dim">History starts ${esc(dateLabel(data.dataFrom))}</span>`;
+      return '<span class="ins-dim">Ran to the end of the data</span>';
+    };
+    const rows = runs
+      .map((run, i) => {
+        const chg = run.start ? run.end / run.start - 1 : null;
+        const winRate = run.placed ? run.won / run.placed : null;
+        return `<tr data-open data-btv-focus="${run.from}" class="${ui.btvFocus === run.from ? 'on' : ''}"><td><i class="ins-cat" style="background:${RUN_COLORS[i % RUN_COLORS.length]}"></i>${esc(dateLabel(run.from))}</td><td class="r ins-num">${usd(run.end)}</td><td class="r ins-num ${signCls(chg ?? 0)}">${chg === null ? '-' : `${chg >= 0 ? '+' : ''}${pct(chg, 0)}`}</td><td class="r ins-num">${usd(run.peak)}</td><td class="r ins-num">${usd(run.low)}</td><td class="r ins-num ins-neg">${pct(-run.maxDrawdown, 0)}</td><td class="r ins-num">${nf0.format(run.placed)}</td><td class="r ins-num">${winRate === null ? '-' : pct(winRate)}</td><td class="r ins-num">${run.perDay ? run.perDay.toFixed(1) : '-'}</td><td>${status(run)}</td></tr>`;
+      })
+      .join('');
+    const table = `<div class="ins-table-wrap"><table class="ins-table"><thead><tr><th>Started</th><th class="r">Wallet now</th><th class="r">Change</th><th class="r">Peak</th><th class="r">Lowest</th><th class="r" title="Largest fall from a peak">Worst dip</th><th class="r">Bets</th><th class="r">Won</th><th class="r">Per day</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
+    const focus = runs.find((x) => x.from === ui.btvFocus);
+    const monthsTable = focus
+      ? `<div class="ins-card-h"><h3>Month by month from ${esc(dateLabel(focus.from))}</h3><span class="ins-link" data-btv-focus="">Show all runs</span></div><div class="ins-table-wrap"><table class="ins-table"><thead><tr><th>Month</th><th class="r">Bets</th><th class="r">Won</th><th class="r">Wallet at start</th><th class="r">At end</th><th class="r">Profit</th><th class="r">Change</th></tr></thead><tbody>${focus.months
+          .map((m) => `<tr><td>${esc(monthLabel(`${m.month}-01`))}</td><td class="r ins-num">${m.bets}</td><td class="r ins-num">${m.won}</td><td class="r ins-num">${usd(m.start)}</td><td class="r ins-num">${usd(m.end)}</td><td class="r ins-num ${signCls(m.profit)}">${usd(m.profit, true)}</td><td class="r ins-num ${signCls(m.profit)}">${m.start ? pct(m.profit / m.start, 0) : '-'}</td></tr>`)
+          .join('')}</tbody></table></div>`
+      : '<div class="ins-dim">Click a run for its month-by-month table; click a line in the legend to hide it.</div>';
+    const note = `<div class="ins-dim">${esc(data.source)}${data.dataFrom ? ` · ${esc(dateLabel(data.dataFrom))} to ${esc(dateLabel(data.dataTo))}` : ''}. Each run follows the live sizing: half stake until 10 fills, $1 minimum, stop under $10, stop if fills run over 2.5c above the mid. The bot's current settings are applied to the past, including lists picked from this same data, so earlier months look better than a live bot would have done.</div>`;
+    return { controls, chart, below: `${table}${monthsTable}${note}` };
+  }
+
+  async function pageBot() {
+    const id = ui.botId;
+    if (!id) return '<div class="ins-card"><div class="ins-empty">Pick a bot on the <span class="ins-link" data-go="insights-bots">Bots</span> page</div></div>';
+    if (ui.botFor !== id) {
+      // A different bot: its own filters.
+      Object.assign(ui, { botFor: id, botMode: null, botCat: '', botReason: '', botDec: '', openDecision: null, btvFocus: null, btvData: null });
+      ui.chartHidden.clear();
+    }
+    if (!ui.botList) ui.botList = (await api('/api/insights/bots')).bots;
+    const q = new URLSearchParams({ days: String(ui.botDays) });
+    if (ui.botMode) q.set('mode', ui.botMode);
+    const r = await api(`/api/insights/bots/${encodeURIComponent(id)}/report?${q}`);
+    const decAction = ui.botReason ? 'skipped' : ui.botDec;
+    const [decs, betsRes] = await Promise.all([
+      api(`/api/insights/decisions?${new URLSearchParams({ bot: id, action: decAction, limit: ui.botReason ? '500' : '120' })}`),
+      api(`/api/insights/bets?${new URLSearchParams({ mode: r.mode, bot: id })}`)
+    ]);
+    const b = r.bot;
+    const k = r.kpis;
+    const settled = k.won + k.lost;
+    const realMode = r.mode === 'real';
+    const head = `<div class="ins-card"><div class="ins-bar"><span class="ins-link" data-go="insights-bots">Bots</span><span class="ins-dim">/</span><h3 class="ins-bot-name">${esc(b.name)}</h3>${modeTag(b.mode === 'real' ? 'real' : 'sim')}${b.enabled ? '' : '<span class="ins-tag">Off</span>'}<span class="ins-dim">${esc(ui.botsData?.schema?.types?.[b.type]?.label || b.type)} · ${esc(b.sizing?.kind === 'auto' ? 'auto stake' : b.sizing?.kind === 'pct' ? `${b.sizing.value}% stake` : `${usd(b.sizing?.value)} stake`)}, ${usd(b.minStake)} to ${usd(b.maxStake)}</span><span class="ins-grow"></span><button type="button" class="ins-btn ins-btn-sm" data-edit-bot="${esc(b.id)}">Edit</button>${['swing', 'mm'].includes(b.type) ? '' : `<button type="button" class="ins-btn ins-btn-sm" data-bot-test="${esc(b.id)}">Backtest</button>`}</div>${r.blocker ? `<div class="ins-hint ins-neg">Real money is blocked right now: ${esc(r.blocker)}</div>` : ''}<div class="ins-bar">${seg('botDays', [['1', '24 h'], ['7', '7 days'], ['30', '30 days'], ['90', '90 days'], ['0', 'All']], String(ui.botDays))}${b.type === 'mm' ? '' : `<div class="ins-seg ins-modeswitch" data-seg="botMode"><button type="button" class="ins-seg-btn${!realMode ? ' on' : ''}" data-v="sim">Paper</button><button type="button" class="ins-seg-btn${realMode ? ' on' : ''}" data-v="real">Real money</button></div>`}<span class="ins-grow"></span><span class="ins-muted">${realMode ? 'Real-money bets' : 'Paper bets'}${ui.botDays ? ` since ${esc(dayTime(r.since))}` : ', all time'}</span></div></div>`;
+    const kpis = `<div class="ins-kpis">${kpi(realMode ? 'Real wallet' : 'Paper wallet', k.equity === null ? '-' : usd(k.equity), realMode ? 'whole real wallet, shared' : `started at ${usd(b.paperBankroll)}`)}${kpi('Settled P&L', usd(k.realized, true), `${k.roi === null ? 'no ROI yet' : `${pct(k.roi, 1)} ROI`} · all time ${usd(k.realizedAll, true)}`, signCls(k.realized))}${kpi('Record', settled ? `${k.won}-${k.lost}` : '-', settled ? `${pct(k.won / settled)} hit${k.streak ? ` · ${Math.abs(k.streak)} ${k.streak > 0 ? 'won' : 'lost'} in a row` : ''}` : 'nothing settled')}${kpi('Open', `${k.open}`, `${usd(k.openCost)} in · marked ${usd(k.openMark)}`)}${kpi('Placed', `${k.placed}`, `${usd(k.staked)} staked${k.avgStake ? ` · ${usd(k.avgStake)} each` : ''}${k.failed ? ` · ${k.failed} failed` : ''}`)}${kpi('Avg entry', k.avgPrice === null ? '-' : pct(k.avgPrice, 1), 'price paid')}${kpi('Worst dip', k.maxDrawdown ? usd(-k.maxDrawdown) : '-', 'from the best point in the window', k.maxDrawdown ? 'ins-neg' : '')}</div>`;
+    const bestWorst = k.best ? `<div class="ins-bar ins-dim">Best <span class="ins-link" data-match="${esc(k.best.eventId)}">${esc(k.best.outcome)} in ${esc(k.best.title)}</span> <span class="${signCls(k.best.pnl)}">${usd(k.best.pnl, true)}</span> · worst <span class="ins-link" data-match="${esc(k.worst.eventId)}">${esc(k.worst.outcome)} in ${esc(k.worst.title)}</span> <span class="${signCls(k.worst.pnl)}">${usd(k.worst.pnl, true)}</span></div>` : '';
+
+    // The chart: money as it settled, $1 on every taken and logged skip, or a
+    // dated backtest of this bot's own rules.
+    const canBacktest = ['comeback', 'whale', 'fade', 'value'].includes(b.type);
+    if (ui.botChart === 'backtest' && !canBacktest) ui.botChart = 'money';
+    const chartSeg = seg('botChart', [['money', 'Settled P&L'], ['dollar', 'Taken vs skipped, per $1'], ...(canBacktest ? [['backtest', 'Backtest from a date']] : [])], ui.botChart);
+    const trendSeg = seg('chartTrend', [['off', 'No trend'], ['linear', 'Trendline'], ['avg', 'Moving average']], ui.chartTrend);
+    const betTip = (p) => `<b>${esc(p.outcome)}</b> ${p.price ? pct(p.price, 1) : ''} · ${esc(p.title)}<small>${esc({ won: 'Won', lost: 'Lost', sold: 'Sold', void: 'Void' }[p.status] || p.status)} <span class="${signCls(p.d)}">${usd(p.d, true)}</span> on ${usd(p.cost)} · running ${usd(p.v, true)}</small><small>${esc(dayTime(p.t))}</small>`;
+    const decTip = (p, s) => `<b>${esc(p.outcome)}</b> ${p.price ? pct(p.price, 1) : ''} · ${esc(p.title)}<small>${esc(s.label)}: $1 ${p.d >= 0 ? 'would make' : 'loses'} <span class="${signCls(p.d)}">${usd(p.d, true)}</span> · running ${usd(p.v, true)}</small>${p.reason ? `<small>${esc(p.reason)}</small>` : ''}<small>${esc(dayTime(p.t))}</small>`;
+    let chart;
+    let chartExtra = '';
+    let chartBelow = '';
+    if (ui.botChart === 'backtest') {
+      const bt = await backtestView(b);
+      chart = bt.chart;
+      chartExtra = bt.controls;
+      chartBelow = bt.below;
+    } else if (ui.botChart === 'dollar') {
+      chart = stepChart(
+        [
+          { key: 'taken', label: `Taken (${r.perDollar.taken.length} settled)`, color: 'var(--ins-line)', points: r.perDollar.taken, dot: (p) => (p.d > 0 ? 'win' : 'loss') },
+          { key: 'skipped', label: `Skipped, if taken (${r.perDollar.skipped.length} settled)`, color: 'var(--ins-whale)', points: r.perDollar.skipped, dot: (p) => (p.d > 0 ? 'win' : 'loss') }
+        ],
+        { tip: decTip, empty: 'No logged decisions have settled in this window yet', trend: ui.chartTrend }
+      );
+    } else {
+      chart = stepChart([{ label: '', color: 'var(--ins-line)', points: r.curve, dot: (p) => (p.d > 0 ? 'win' : p.status === 'void' ? '' : 'loss') }], { tip: betTip, trend: ui.chartTrend });
+    }
+    const chartCard = `<div class="ins-card"><div class="ins-card-h"><h3>How it went</h3><div class="ins-bar">${chartSeg}${trendSeg}</div></div>${chartExtra}${chart}${chartBelow}</div>`;
+    const cmp = r.compare;
+    const cmpRow = (label, s) => `<tr><td>${label}</td><td class="r ins-num">${nf0.format(s.n)}</td><td class="r ins-num">${s.settled}</td><td class="r ins-num">${s.settled ? pct(s.won / s.settled) : '-'}</td><td class="r ins-num ${signCls(s.avgPnl ?? 0)}">${perD(s.avgPnl)}</td><td class="r ins-num ${signCls(s.move30 ?? 0)}">${s.move30 === null ? '-' : signedC(s.move30)}</td></tr>`;
+    const compare = `<div class="ins-table-wrap"><table class="ins-table"><thead><tr><th></th><th class="r">Logged</th><th class="r">Settled</th><th class="r">Won</th><th class="r" title="$1 held to the result, no fees">Per $1</th><th class="r" title="Average price move 30 minutes later">+30 min</th></tr></thead><tbody>${cmpRow('Taken', cmp.taken)}${cmpRow('Skipped', cmp.skipped)}</tbody></table></div><div class="ins-dim">If skips keep doing better than takes, a filter is throwing away good bets.</div>`;
+
+    // Decisions: what it considered, with the analysts and risk checks inside each.
+    let list = decs.decisions.filter((d) => !r.since || d.at >= r.since);
+    if (ui.botReason) list = list.filter((d) => reasonKeyOf(d.reason) === ui.botReason);
+    const decFilter = ui.botReason
+      ? `<span class="ins-muted">Skips for: ${esc(r.reasons.find((x) => x.key === ui.botReason)?.label || ui.botReason)}</span> <span class="ins-link" data-bot-reason="">Clear</span>`
+      : seg('botDec', [['', 'All'], ['taken', 'Taken'], ['skipped', 'Skipped']], ui.botDec);
+    const decHtml = list.length ? list.slice(0, 150).map(decisionCard).join('') : '<div class="ins-empty">No logged decisions for this filter</div>';
+
+    return `${head}${kpis}${bestWorst}
+      ${chartCard}
+      <div class="ins-grid2">
+        <div class="ins-card"><div class="ins-card-h"><h3>What it looked at</h3></div>${funnelHtml(r.funnel)}</div>
+        <div class="ins-card"><div class="ins-card-h"><h3>Day by day</h3></div>${dayBars(r.daily)}</div>
+      </div>
+      <div class="ins-card"><div class="ins-card-h"><h3>Why it skipped</h3>${ui.botCat && ui.botCat !== 'taken' ? `<span class="ins-muted">${esc(CATS[ui.botCat]?.[0] || ui.botCat)} only · <span class="ins-link" data-bot-cat="">All kinds</span></span>` : '<span class="ins-dim">Click a reason to see those skips</span>'}</div>${reasonsTable(r.reasons)}</div>
+      <div class="ins-card"><div class="ins-card-h"><h3>Taken vs skipped</h3></div>${compare}</div>
+      <div class="ins-grid2">${groupTable('By entry price', r.breakdowns.price)}${groupTable('By timing', r.breakdowns.phase)}${groupTable('By how it ended', r.breakdowns.exit)}${groupTable('By market', r.breakdowns.market)}</div>
+      <div class="ins-card"><div class="ins-card-h"><h3>Decisions</h3><div class="ins-bar">${decFilter}</div></div><div class="ins-decs">${decHtml}</div></div>
+      <div class="ins-card"><div class="ins-card-h"><h3>${realMode ? 'Real-money bets' : 'Paper bets'}</h3><span class="ins-dim">${nf0.format(betsRes.bets.length)} shown, newest first</span></div>${betsTable(betsRes.bets.slice(0, 100))}</div>`;
   }
 
   function fieldHtml(f, value, path) {
@@ -1412,7 +1926,7 @@ export function initInsightsView({ escapeHtml, openRoute }) {
       const bo = e.target.closest('[data-be-bool] .ins-seg-btn');
       if (bo) return setPath(ui.editBot, bo.closest('[data-be-bool]').dataset.beBool, bo.dataset.v === '1'), redraw();
       const ch = e.target.closest('[data-be-choice] .ins-seg-btn');
-      if (ch) return setPath(ui.editBot, ch.closest('[data-be-choice]').dataset.beChoice, Number(ch.dataset.v)), redraw();
+      if (ch) return setPath(ui.editBot, ch.closest('[data-be-choice]').dataset.beChoice, /^-?\d+(\.\d+)?$/.test(ch.dataset.v) ? Number(ch.dataset.v) : ch.dataset.v), redraw();
       const mu = e.target.closest('[data-be-multi]');
       if (mu) {
         const list = new Set(getPath(ui.editBot, mu.dataset.beMulti) || []);
@@ -1483,6 +1997,7 @@ export function initInsightsView({ escapeHtml, openRoute }) {
     'ins-signals': pageSignals,
     'ins-decisions': pageDecisions,
     'ins-bots': pageBots,
+    'ins-bot': pageBot,
     'ins-backtest': pageBacktest,
     'ins-suspicious': pageSuspicious,
     'ins-bets': pageBets,
@@ -1493,7 +2008,8 @@ export function initInsightsView({ escapeHtml, openRoute }) {
 
   async function renderPage(opts = {}) {
     const seq = ++ui.renderSeq;
-    tabs.querySelectorAll('[data-page]').forEach((b) => b.classList.toggle('on', b.dataset.page === ui.page));
+    const tabPage = ui.page === 'ins-bot' ? 'ins-bots' : ui.page;
+    tabs.querySelectorAll('[data-page]').forEach((b) => b.classList.toggle('on', b.dataset.page === tabPage));
     try {
       if (!ui.settings) {
         const s = await api('/api/insights/settings').catch(() => null);
@@ -1523,7 +2039,8 @@ export function initInsightsView({ escapeHtml, openRoute }) {
     if (!ui.visible) return;
     ui.timer = setTimeout(async () => {
       if (!ui.visible) return;
-      const busy = document.activeElement && body.contains(document.activeElement) && /INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName);
+      // Typing, or reading a chart's tooltip: refresh on the next round instead.
+      const busy = (document.activeElement && body.contains(document.activeElement) && /INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName)) || Boolean(body.querySelector('.ins-plot:hover, .ins-days:hover'));
       if (ui.page !== 'ins-settings' && !busy && !drawer) {
         await loadOverview().catch(() => {});
         await renderPage();
@@ -1538,6 +2055,7 @@ export function initInsightsView({ escapeHtml, openRoute }) {
     async onShow(params = {}) {
       ui.visible = true;
       ui.page = PAGES[params.page] ? params.page : 'ins-overview';
+      if (ui.page === 'ins-bot') ui.botId = params.id || ui.botId;
       if (!(await insightsAccess())) {
         banner.innerHTML = '';
         tabs.hidden = true;

@@ -72,7 +72,11 @@ export function midOf(token) {
   const b = books.get(token);
   if (!b) return null;
   if (b.bestBid !== null && b.bestAsk !== null && b.bestAsk - b.bestBid <= 0.1) return (b.bestBid + b.bestAsk) / 2;
-  return b.last?.p ?? (b.bestBid !== null && b.bestAsk !== null ? (b.bestBid + b.bestAsk) / 2 : null);
+  const fallback = b.last?.p ?? (b.bestBid !== null && b.bestAsk !== null ? (b.bestBid + b.bestAsk) / 2 : b.bestAsk ?? b.bestBid ?? null);
+  if (fallback === null) return null;
+  // The last print can be stale or stray (2026-11-07: 0.999 on a token with no
+  // bids and an ask at 0.001). Never let it leave what the book allows.
+  return Math.min(b.bestAsk ?? 1, Math.max(b.bestBid ?? 0, fallback));
 }
 
 function sampleMid(token, b, at) {
