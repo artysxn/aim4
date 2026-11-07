@@ -266,6 +266,8 @@ export async function consider({ bot, ev, m, idx, flag = null, whale = null, leg
   // On the market's tick grid, rounded down: Polymarket refuses anything else
   // (2026-11-07: "maxPrice 0.125 must be a multiple of tick size 0.01", 3 real buys lost).
   maxPrice = floorTick(maxPrice, tickOf(token, book));
+  // Polymarket's client cannot round a $1 buy cleanly this cheap ("maker amount max 2 decimals", 2026-11-07 at 3c).
+  if (wallet.mode === 'real' && maxPrice < 0.05) return finish('skipped', `Price ${(maxPrice * 100).toFixed(1)}% too low for a clean real order`);
   const fill = pm.walkAsks(book, target, maxPrice);
   const maker = (strategy === 'swing' || strategy === 'value') && params.maker && ask - (bid ?? 0) >= 0.02;
   const makerPx = maker ? Math.min(maxPrice, Math.round(((bid ?? 0) + 0.01) * 100) / 100) : null;
