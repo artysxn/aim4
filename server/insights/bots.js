@@ -113,6 +113,8 @@ export const BOT_TYPES = {
       { key: 'preMin', label: 'Team priced at the start at least', kind: 'num', unit: '%', scale: 100, min: 0.1, max: 0.9, step: 1, def: 0.5 },
       { key: 'collapseAt', label: 'Buy once it falls to', kind: 'num', unit: '%', scale: 100, min: 0.03, max: 0.4, step: 1, def: 0.2 },
       { key: 'maxSlippage', label: 'Pay at most that plus', kind: 'num', unit: 'c', scale: 100, min: 0, max: 0.1, step: 0.5, def: 0.02 },
+      { key: 'minDrop', label: 'Only after a sudden fall of at least (10 min)', kind: 'num', unit: 'pts', scale: 100, min: 0, max: 0.6, step: 1, def: 0 },
+      { key: 'sellAt', label: 'Take profit at (0 = hold)', kind: 'num', unit: '%', scale: 100, min: 0, max: 0.95, step: 1, def: 0 },
       { key: 'games', label: 'Games', kind: 'multi', options: ['cs2', 'valorant', 'lol', 'dota2'], def: ['cs2', 'valorant', 'lol', 'dota2'] },
       { key: 'maxMinutes', label: 'CS2: only this long after the start', kind: 'num', unit: 'min', min: 10, max: 600, step: 5, def: 90 },
       { key: 'formats', label: 'Series lengths', kind: 'multi', options: ['BO1', 'BO3', 'BO5'], def: ['BO3', 'BO5'] },
@@ -292,6 +294,29 @@ export function allBots() {
     }
     const old = b.list.find((x) => x.id === 'comeback-low');
     if (old) old.enabled = false;
+    touch('bots');
+  }
+  // 2026-11-07: Oracle V2.1, the same comeback with two rules from the year test:
+  // only sudden collapses (20+ points in the 10 minutes before) and take profit
+  // at 60%. Year: +35.8%/bet vs +22.9%, 39% of bets profitable vs 20%, worst
+  // 30-bet run -16 stakes vs -25. Paper; Oracle V2 keeps its mode.
+  if (!b.v8) {
+    b.v8 = true;
+    if (!b.list.some((x) => x.id === 'oracle-v2-1')) {
+      b.list.push({
+        ...sanitizeBot({
+          type: 'comeback',
+          name: 'Oracle V2.1',
+          enabled: true,
+          mode: 'paper',
+          sizing: { kind: 'auto', value: 1 },
+          maxStake: 25,
+          paperBankroll: 500,
+          params: { preMin: 0.5, collapseAt: 0.2, maxSlippage: 0.02, minDrop: 0.2, sellAt: 0.6, maxMinutes: 90, games: ['cs2', 'valorant', 'lol', 'dota2'], formats: ['BO3', 'BO5'], lowTierOnly: true, maps: false }
+        }),
+        id: 'oracle-v2-1'
+      });
+    }
     touch('bots');
   }
   return b.list;

@@ -298,6 +298,11 @@ export async function consider({ bot, ev, m, idx, flag = null, whale = null }) {
     if (!Number.isFinite(pre)) return finish('skipped', 'No start price');
     if (pre < params.preMin) return finish('skipped', `Started at ${Math.round(pre * 100)}%, under ${Math.round(params.preMin * 100)}%`);
     if (mid > params.collapseAt) return finish('skipped', `At ${Math.round(mid * 100)}%, not down to ${Math.round(params.collapseAt * 100)}%`);
+    if (params.minDrop) {
+      const drop = recentDrop(m, idx, mid);
+      decision.drop = drop;
+      if (drop < params.minDrop) return finish('skipped', `Fell ${Math.round(drop * 100)} pts in 10 min, under ${Math.round(params.minDrop * 100)}`);
+    }
     if (wallet.mine.some((x) => x.eventId === ev.id)) return finish('skipped', 'Already in this match');
   } else if (strategy === 'value') {
     const mins = (ev.start - Date.now()) / MIN;
@@ -762,17 +767,39 @@ function onBook(token) {
  * Comeback bots: a live team that started at preMin or more and has fallen to
  * collapseAt. Cheap checks first; the full decision runs only on a collapse.
  */
+/** Mids seen in the last 15 minutes per token (sampled every sweep), for "how fast did it fall". */
+const midHist = new Map();
+function noteMid(token, mid, now = Date.now()) {
+  if (mid === null || !Number.isFinite(mid)) return;
+  const h = midHist.get(token) || [];
+  h.push([now, mid]);
+  while (h.length && now - h[0][0] > 15 * MIN) h.shift();
+  midHist.set(token, h);
+}
+/**
+ * How far this outcome fell in the last 10 minutes: the highest price seen
+ * since then minus now. Reads both the sweep's mids and the trade-price series.
+ */
+export function recentDrop(m, idx, mid, now = Date.now()) {
+  let hi = mid;
+  for (const [t, p] of midHist.get(m.tokens[idx]) || []) if (now - t <= 10 * MIN) hi = Math.max(hi, p);
+  for (const [t, p0] of col('prices')[m.conditionId]?.series || []) if (now - t <= 10 * MIN) hi = Math.max(hi, idx === 0 ? p0 : 1 - p0);
+  return Math.max(0, hi - mid);
+}
+
 async function evaluateComeback(ev, m, idx) {
   const bots = activeBots('comeback', botsOn());
   if (!bots.length) return;
   const token = m.tokens[idx];
   const mid = feeds.midOf(token);
+  noteMid(token, mid);
   const pre = col('prices')[m.conditionId]?.pre?.[idx];
   if (mid === null || !Number.isFinite(pre)) return;
   for (const bot of bots) {
     const p = bot.params;
     if (m.kind === 'map' && !p.maps) continue;
     if (pre < p.preMin || mid > p.collapseAt) continue;
+    if (p.minDrop && recentDrop(m, idx, mid) < p.minDrop) continue;
     const game = ev.game || 'cs2';
     if (p.games?.length && !p.games.includes(game)) continue;
     if (game === 'cs2' && p.maxMinutes && (Date.now() - ev.start) / MIN > p.maxMinutes) continue;

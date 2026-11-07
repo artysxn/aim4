@@ -18,7 +18,9 @@ import { autoStake } from './bots.js';
 
 const DAY = 86400;
 const fee = (p) => 0.03 * Math.min(p, 1 - p);
-const ret = (b) => (b.won ? 1 / (b.q + fee(b.q)) - 1 : -1);
+// What one dollar returns: held to the end (1/cost or 0), or sold on the way up (mult set by the signal).
+const multOf = (b) => (Number.isFinite(b.mult) ? b.mult : b.won ? 1 / (b.q + fee(b.q)) : 0);
+const ret = (b) => multOf(b) - 1;
 const median = (a) => {
   const s = a.slice().sort((x, y) => x - y);
   return s.length ? s[Math.floor(s.length / 2)] : null;
@@ -45,8 +47,27 @@ function comebackBets(p, sinceS, extraSlip) {
         const q = Math.min(0.99, p3 + 0.01 + extraSlip);
         if (q > p.collapseAt + p.maxSlippage + extraSlip) break;
         if (r.g === 'cs2' && p.maxMinutes && r.p[i] / 60 > p.maxMinutes) break;
+        // Sudden collapses only: the highest price in the 10 minutes before, minus the price now.
+        if (p.minDrop) {
+          let hi = px(i);
+          for (let j = i; j >= 0 && r.p[i] - r.p[j] <= 600; j -= 2) hi = Math.max(hi, px(j));
+          if (hi - px(i) < p.minDrop) continue;
+        }
         const at = r.s + r.p[i];
-        if (!best || at < best.at) best = { at, end: r.e, q, won: r.w === x, game: r.g, title: `${r.n[0]} vs ${r.n[1]}`, team: r.n[x] };
+        const won = r.w === x;
+        let mult = won ? 1 / (q + fee(q)) : 0, end = r.e, sold = false;
+        // Take profit: the first later trade at or above sellAt sells it all, 1c under (the bid), taker fee.
+        if (p.sellAt) {
+          for (let k = i + 6; k < r.p.length; k += 2) {
+            if (px(k) < p.sellAt) continue;
+            const sp = p.sellAt - 0.01;
+            mult = (sp - fee(sp)) / (q + fee(q));
+            end = r.s + r.p[k];
+            sold = true;
+            break;
+          }
+        }
+        if (!best || at < best.at) best = { at, end, q, won, mult, sold, game: r.g, title: `${r.n[0]} vs ${r.n[1]}`, team: r.n[x] };
         break;
       }
     }
@@ -152,7 +173,7 @@ function replay(bets, bot, start) {
       dayPnl.set(o.day, (dayPnl.get(o.day) || 0) + o.pay - o.stake);
       const mo = months.get(o.month);
       mo.profit += o.pay - o.stake;
-      if (o.pay > 0) mo.won++;
+      if (o.pay > o.stake) mo.won++;
     }
   };
   for (const b of bets) {
@@ -171,7 +192,7 @@ function replay(bets, bot, start) {
     cash -= stake;
     placed++;
     months.get(month).bets++;
-    open.push({ end: b.end, stake, month, day, pay: b.won ? stake / (b.q + fee(b.q)) : 0 });
+    open.push({ end: b.end, stake, month, day, pay: stake * multOf(b) });
     placedBets.push({ ...b, stake });
   }
   settle(Infinity);
@@ -211,7 +232,7 @@ function monteCarlo(bets, bot, start, spanDays, runs = 1000) {
 const summary = (bets) => {
   const n = bets.length;
   if (!n) return { bets: 0 };
-  return { bets: n, winRate: bets.filter((b) => b.won).length / n, avgPrice: bets.reduce((s, b) => s + b.q, 0) / n, returnPerBet: bets.reduce((s, b) => s + ret(b), 0) / n };
+  return { bets: n, winRate: bets.filter((b) => multOf(b) > 1).length / n, sold: bets.filter((b) => b.sold).length / n, avgPrice: bets.reduce((s, b) => s + b.q, 0) / n, returnPerBet: bets.reduce((s, b) => s + ret(b), 0) / n };
 };
 
 /**
@@ -264,6 +285,7 @@ export function botBacktest(bot, { days = 365, start = 500, extraSlip = 0 } = {}
     wallet: { start: w.start, end: w.end, peak: w.peak, maxDrawdown: w.maxDrawdown, broke: w.broke, placed: w.placed },
     months: w.months.map((m) => ({ month: m.month, bets: m.bets, won: m.won, start: m.start, end: m.end, profit: m.end - m.start })),
     monteCarlo: monteCarlo(bets, bot, start, spanDays),
-    recent: w.placedBets.slice(-25).reverse().map((b) => ({ at: b.at, title: b.title, team: b.team, game: b.game || '', price: b.q, stake: b.stake, won: b.won }))
+    worstRun30: (() => { const rs = bets.map(ret); let w = 0; for (let i = 0; i + 30 <= rs.length; i++) { let t = 0; for (let k = i; k < i + 30; k++) t += rs[k]; w = Math.min(w, t); } return w; })(),
+    recent: w.placedBets.slice(-25).reverse().map((b) => ({ at: b.at, title: b.title, team: b.team, game: b.game || '', price: b.q, stake: b.stake, won: b.won, sold: Boolean(b.sold), profit: b.stake * (multOf(b) - 1) }))
   };
 }
