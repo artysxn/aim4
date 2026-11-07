@@ -22,6 +22,7 @@ const REASONS = ['fresh', 'specialist', 'record', 'stacking', 'impact', 'cluster
 export const COMMON_FIELDS = [
   { key: 'maxStake', label: 'Largest stake', kind: 'num', unit: '$', min: 1, max: 1e6, step: 1, def: 100 },
   { key: 'minStake', label: 'Smallest stake', kind: 'num', unit: '$', min: 1, max: 1e5, step: 1, def: 1 },
+  { key: 'maxStakePct', label: 'Largest stake as % of the wallet (0 = off; maxStake caps in $)', kind: 'num', unit: '%', min: 0, max: 100, step: 0.5, def: 0 },
   { key: 'paperBankroll', label: 'Paper wallet', kind: 'num', unit: '$', min: 10, max: 1e8, step: 10, def: 1000 },
   { key: 'maxOpenPct', label: 'Open bets at most', kind: 'num', unit: '% of wallet', min: 1, max: 100, step: 1, def: 25 },
   { key: 'dailyLossPct', label: 'Stop for the day after losing', kind: 'num', unit: '% of wallet', min: 1, max: 100, step: 1, def: 10 },

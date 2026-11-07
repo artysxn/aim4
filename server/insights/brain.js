@@ -244,6 +244,7 @@ export async function consider({ bot, ev, m, idx, flag = null, whale = null, leg
       return finish('skipped', already > 0 ? 'Match stake already in' : 'Stake under minimum');
     }
   }
+  if (bot.maxStakePct > 0) target = Math.min(target, Math.max(bot.minStake, (wallet.bankroll * bot.maxStakePct) / 100));
   target = Math.floor(target * 100) / 100;
 
   let maxPrice;
