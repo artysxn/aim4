@@ -779,20 +779,72 @@ async function pidsFromProcCmdline(c) {
   return found;
 }
 
-/** Live PIDs that still look like our CloakBrowser / ingest stack. */
-async function remainingCloakPids(c) {
+/**
+ * Linux: every PID whose cmdline matches any of our patterns, in ONE pass over
+ * /proc, without spawning anything. Same matches as cloakKillPatterns via
+ * pgrep -f plus pidsFromProcCmdline, filtered by cmdlineLooksLikeOurs.
+ */
+async function ourPidsFromProc(c) {
   const found = new Set();
-  for (const pid of await profileLockPids(c.cloakProfileDir)) {
-    if (alive(pid) && (await cmdlineLooksLikeOurs(pid, c))) found.add(pid);
+  const patterns = cloakKillPatterns(c).map((p) => new RegExp(p));
+  let entries = [];
+  try {
+    entries = await fsp.readdir('/proc');
+  } catch {
+    return found;
   }
-  for (const pattern of cloakKillPatterns(c)) {
-    for (const pid of await pidsMatching(pattern, c)) found.add(pid);
-  }
-  for (const pid of await pidsFromProcCmdline(c)) {
+  for (const name of entries) {
+    if (!/^\d+$/.test(name)) continue;
+    const pid = Number(name);
+    if (pid <= 1 || pid === process.pid) continue;
+    let text = '';
+    try {
+      text = (await fsp.readFile(`/proc/${pid}/cmdline`)).toString('utf8').replace(/\0/g, ' ').trim();
+    } catch {
+      continue;
+    }
+    if (!text || !patterns.some((re) => re.test(text))) continue;
     if (await cmdlineLooksLikeOurs(pid, c)) found.add(pid);
   }
-  return [...found];
+  return found;
 }
+
+// 2026-11-07 outage: this check used to spawn ~10 pgrep processes every 5 s
+// while ingest was Off. On a busy box each spawn stalled the event loop for
+// seconds, passes overlapped, and the box never recovered (load 60+, site 503).
+// Now: no spawns on Linux, one pass at a time, and callers may reuse a recent result.
+const sweep = { inFlight: null, at: 0, pids: [] };
+
+/** Live PIDs that still look like our CloakBrowser / ingest stack. */
+async function remainingCloakPids(c, { maxAgeMs = 0 } = {}) {
+  if (maxAgeMs > 0 && Date.now() - sweep.at < maxAgeMs) return sweep.pids;
+  if (sweep.inFlight) return sweep.inFlight;
+  sweep.inFlight = (async () => {
+    const found = new Set();
+    for (const pid of await profileLockPids(c.cloakProfileDir)) {
+      if (alive(pid) && (await cmdlineLooksLikeOurs(pid, c))) found.add(pid);
+    }
+    if (process.platform === 'linux') {
+      for (const pid of await ourPidsFromProc(c)) found.add(pid);
+    } else {
+      for (const pattern of cloakKillPatterns(c)) {
+        for (const pid of await pidsMatching(pattern, c)) found.add(pid);
+      }
+      for (const pid of await pidsFromProcCmdline(c)) {
+        if (await cmdlineLooksLikeOurs(pid, c)) found.add(pid);
+      }
+    }
+    sweep.at = Date.now();
+    sweep.pids = [...found];
+    return sweep.pids;
+  })().finally(() => {
+    sweep.inFlight = null;
+  });
+  return sweep.inFlight;
+}
+
+/** While Off, look for leftovers at most this often (supervisor and status polls). */
+const OFF_SWEEP_MS = 60_000;
 
 /**
  * Kill every process that can hold a CloakBrowser license seat or profile lock:
@@ -1095,8 +1147,9 @@ export async function supervise() {
     // Belt-and-braces: while Off, also reap orphan CloakBrowser chrome that
     // still holds a Pro seat after the CLI exited uncleanly.
     const pid = await readPid(c.lockPath);
-    const leftovers = await remainingCloakPids(c);
+    const leftovers = await remainingCloakPids(c, { maxAgeMs: OFF_SWEEP_MS });
     if ((pid && alive(pid)) || leftovers.length) {
+      sweep.at = 0; // look again next pass, after the kill
       await appendIngestLog(
         c,
         `supervisor Off sweep` +
@@ -1168,8 +1221,16 @@ export function startSupervisor({ intervalMs = 5_000 } = {}) {
   disableForBoot()
     .then(() => supervise())
     .then(() => {
+      // Never overlap: a pass slower than the interval skips the next tick.
+      let busy = false;
       armed = setInterval(() => {
-        supervise().catch((err) => console.warn(`[ingest] supervisor: ${err.message}`));
+        if (busy) return;
+        busy = true;
+        supervise()
+          .catch((err) => console.warn(`[ingest] supervisor: ${err.message}`))
+          .finally(() => {
+            busy = false;
+          });
       }, intervalMs);
       armed.unref?.();
       state.supervisor = armed;
@@ -1191,8 +1252,9 @@ export async function status() {
   // Also reap orphan chrome that still holds a Pro seat (status polls often).
   if (!desired.enabled) {
     const stray = await readPid(c.lockPath);
-    const leftovers = await remainingCloakPids(c);
+    const leftovers = await remainingCloakPids(c, { maxAgeMs: 15_000 });
     if ((stray && alive(stray)) || leftovers.length) {
+      sweep.at = 0;
       await appendIngestLog(
         c,
         `status poll Off sweep` +
@@ -1345,3 +1407,6 @@ export async function readIngestLog({ tail = LOG_TAIL_DEFAULT } = {}) {
     throw err;
   }
 }
+
+/** For checks and tests: the Off-sweep scan (cached, single-flight, no spawns on Linux). */
+export { remainingCloakPids as _remainingCloakPids };
