@@ -1,0 +1,17 @@
+{
+  "name": "aim4-insights-bot",
+  "private": true,
+  "type": "module",
+  "description": "Standalone Insights executor: places the real-money orders aim4.io's bots decide on.",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "setup": "node setup.mjs",
+    "start": "node bot.mjs",
+    "install-service": "sh install-service.sh",
+    "uninstall-service": "sh install-service.sh --remove"
+  },
+  "dependencies": {
+    "@polymarket/client": "^0.17.0",
+    "viem": "^2.57.16"
+  }
+}
