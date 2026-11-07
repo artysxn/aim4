@@ -32,7 +32,7 @@ function comebackBets(p, sinceS, extraSlip) {
   // Oracle V3.2: its crash bets, plus the leader on every other match's crash (one bet per match).
   if (p.bet === 'both') {
     const crash = comebackBets({ ...p, bet: 'crashed' }, sinceS, extraSlip);
-    const taken = new Set(crash.filter((b) => b.leg === 'comeback').map((b) => b.cid));
+    const taken = new Set(crash.map((b) => b.cid)); // live: the leader leg skips any match the bot already holds, pre-match leg included
     const lead = comebackBets(leaderView(p), sinceS, extraSlip)
       .filter((b) => b.leg === 'comeback' && !taken.has(b.cid))
       .map((b) => ({ ...b, kellyPct: p.leaderKellyPct ?? 19.1 }));
@@ -51,7 +51,7 @@ function comebackBets(p, sinceS, extraSlip) {
       // Leg 1: back a listed team before the start, held to the end.
       if (rules.listed && p.backListed && preX + 0.01 + extraSlip <= (p.backMaxPrice ?? 0.85)) {
         const q = Math.min(0.99, preX + 0.01 + extraSlip);
-        bets.push({ at: r.s - 600, end: r.e, q, won: r.w === x, mult: r.w === x ? 1 / (q + fee(q)) : 0, sold: false, leg: 'pre', game: r.g, title: `${r.n[0]} vs ${r.n[1]}`, team: `${r.n[x]} (before the start)` });
+        bets.push({ at: r.s - 600, end: r.e, cid: r.cid, q, won: r.w === x, mult: r.w === x ? 1 / (q + fee(q)) : 0, sold: false, leg: 'pre', game: r.g, title: `${r.n[0]} vs ${r.n[1]}`, team: `${r.n[x]} (before the start)` });
       }
       if (rules.formats?.length && r.f && !rules.formats.includes(r.f)) continue;
       if (preX < rules.preMin) continue;
