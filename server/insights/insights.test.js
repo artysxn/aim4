@@ -312,6 +312,14 @@ engine.updateSettings({ botsOn: true });
     const bc = await brainM.considerComeback(botsM.botById(capped.id), bleed, bleed.markets[0], 0);
     assert(bc.action === 'skipped' && /Leader at 88%, over 85%/.test(bc.reason), `leader over the cap is skipped (${bc.reason})`);
     botsM.deleteBot(capped.id);
+    // V3.3's leader shock skip: one trade knocked team A from 36% to 12%, so no leader bet.
+    const { leaderView } = await import('./bots.js');
+    const sl = botsM.createBot({ ...structuredClone(V32), name: 'V3.3 shock test', params: leaderView({ ...V32.params, leaderMaxPrice: 0.97, leaderMaxShock: 0.2 }) });
+    botsM.updateBot(sl.id, { enabled: true });
+    const bs = await brainM.consider({ bot: botsM.botById(sl.id), ev: shock, m: shock.markets[0], idx: 1, leg: 'comeback' });
+    botsM.deleteBot(sl.id);
+    assert(bs.action === 'skipped' && /Shock crash \(2\d-pt single drop/.test(bs.reason), `leader skips a shock crash (${bs.reason})`);
+    assert(leaderView({ preMin: 0.5, collapseAt: 0.2, leaderPreMin: 0.4, leaderCollapseAt: 0.25 }).preMin === 0.4 && leaderView({ preMin: 0.5, collapseAt: 0.2 }).collapseAt === 0.2, 'leader leg start price and depth settings');
     assert(brainM.sellFloor(0.995, 0.998, 0.01) === 0.99 && brainM.sellFloor(0.61, 0.66, 0.01) === 0.61 && brainM.sellFloor(0.6100000000000001, null, 0.01) === 0.61, 'sell floors on the grid, never above the bid');
     assert(b5.action === 'skipped' && /Already in this match|stake already in/.test(b5.reason), `one bet per match (${b5.reason})`);
     const own = store.col('bets').filter((b) => b.botId === v32.id);

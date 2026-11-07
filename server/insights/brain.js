@@ -335,6 +335,11 @@ export async function consider({ bot, ev, m, idx, flag = null, whale = null, leg
     if (params.notAgainst?.some((t) => teamKey(t) === teamKey(m.outcomes[c]))) return finish('skipped', `${m.outcomes[c]} is a listed comeback team: never bet against it`);
     // The leader pays only when it is not too dear (2026-11-08: 78-85% +4.3%/+4.9% a bet; above 85% about zero, 97%+ negative).
     if (mid > (params.leaderMaxPrice ?? 0.97) + 1e-9) return finish('skipped', `Leader at ${Math.round(mid * 100)}%, over ${Math.round((params.leaderMaxPrice ?? 0.97) * 100)}%`);
+    if (params.leaderMaxShock > 0) {
+      const sh = await shockStep(ev, m, c);
+      decision.shock = sh;
+      if (sh >= params.leaderMaxShock) return finish('skipped', `Shock crash (${Math.round(sh * 100)}-pt single drop): it tends to come back, no leader bet`);
+    }
     const preC = col('prices')[m.conditionId]?.pre?.[c];
     if (!Number.isFinite(preC)) return finish('skipped', 'No start price');
     if (preC < cb.preMin) return finish('skipped', `The other team started at ${Math.round(preC * 100)}%, under ${Math.round(cb.preMin * 100)}%`);
@@ -1065,7 +1070,9 @@ async function evaluateComeback(ev, m, idx) {
     const r = comebackRules(p, { game, team: m.outcomes[idx], opponent: m.outcomes[1 - idx] });
     const both = p.bet === 'both';
     // A 'both' bot's leader leg needs no sudden fall and no time limit: only the never-bet list stops it here.
-    if ((both ? /never-bet/.test(r.skip || '') : r.skip) || pre < (r.preMin ?? p.preMin) || mid > (r.collapseAt ?? p.collapseAt)) continue;
+    const preMinAll = both ? Math.min(r.preMin ?? p.preMin, p.leaderPreMin ?? p.preMin) : r.preMin;
+    const collapseAll = both ? Math.max(r.collapseAt ?? p.collapseAt, p.leaderCollapseAt ?? p.collapseAt) : r.collapseAt;
+    if ((both ? /never-bet/.test(r.skip || '') : r.skip) || pre < preMinAll || mid > collapseAll) continue;
     if (!both && r.maxMinutes && (Date.now() - ev.start) / MIN > r.maxMinutes) continue;
     if (!both && r.minDrop && recentDrop(m, idx, mid) < r.minDrop) continue;
     const k = `${token}|${bot.id}`;

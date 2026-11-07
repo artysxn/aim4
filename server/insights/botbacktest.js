@@ -44,6 +44,7 @@ function comebackBets(p, sinceS, extraSlip) {
     if (r.s < sinceS || !games.includes(r.g)) continue;
     if (p.lowTierOnly && !r.low) continue;
     let best = null;
+    const again = [null, null];
     for (let x = 0; x < 2; x++) {
       const rules = comebackRules(p, { game: r.g, team: r.n[x], opponent: r.n[1 - x] });
       if (rules.skip) continue;
@@ -76,6 +77,12 @@ function comebackBets(p, sinceS, extraSlip) {
           const crashBotsTake = r.low && ['BO3', 'BO5'].includes(r.f) && hi - px(i) >= 0.2 && !(r.g === 'cs2' && r.p[i] / 60 > 90);
           if (crashBotsTake) break;
           if (r.low && tpm < (p.busyAt ?? 4) && r.f !== 'BO1') continue;
+          // A crash with a big single-trade shock tends to come back: no leader bet (2026-11-08: 20+ pt shock -9.8%/-6.1% a bet).
+          if (p.leaderMaxShock > 0) {
+            let step = 0;
+            for (let j = i; j >= 2 && r.p[i] - r.p[j] <= 600; j -= 2) step = Math.max(step, px(j - 2) - px(j));
+            if (step >= p.leaderMaxShock) continue;
+          }
           const oq = Math.min(0.99, 1 - p3 + 0.01 + extraSlip);
           const lw = r.w === 1 - x;
           const at = r.s + r.p[i];
@@ -94,23 +101,39 @@ function comebackBets(p, sinceS, extraSlip) {
         }
         const at = r.s + r.p[i];
         const won = r.w === x;
-        let mult = won ? 1 / (q + fee(q)) : 0, end = r.e, sold = false;
-        // Take profit: the first later trade at or above sellAt sells it all, 1c under (the bid), taker fee.
-        if (rules.sellAt) {
-          for (let k = i + 6; k < r.p.length; k += 2) {
-            if (px(k) < rules.sellAt) continue;
-            const sp = rules.sellAt - 0.01;
-            mult = (sp - fee(sp)) / (q + fee(q));
-            end = r.s + r.p[k];
-            sold = true;
+        const exit = (from, qq) => {
+          // Take profit: the first later trade at or above sellAt sells it all, 1c under (the bid), taker fee.
+          if (rules.sellAt) for (let k = from + 6; k < r.p.length; k += 2) if (px(k) >= rules.sellAt) { const sp = rules.sellAt - 0.01; return { mult: (sp - fee(sp)) / (qq + fee(qq)), end: r.s + r.p[k], sold: true, k }; }
+          return { mult: won ? 1 / (qq + fee(qq)) : 0, end: r.e, sold: false, k: r.p.length };
+        };
+        const e1 = exit(i, q);
+        if (!best || at < best.at) best = { x, at, end: e1.end, cid: r.cid, q, won, mult: e1.mult, sold: e1.sold, leg: 'comeback', game: r.g, title: `${r.n[0]} vs ${r.n[1]}`, team: r.n[x] + (rules.listed ? ' (listed, held)' : '') };
+        // Sold on the way up and it crashes again: the same rules buy it again (the live bot does: it only checks open bets).
+        if (e1.sold && p.reenter !== false) {
+          for (let i2 = e1.k + 2; i2 + 4 < r.p.length; i2 += 2) {
+            if (px(i2) > rules.collapseAt) continue;
+            const p32 = median([px(i2), px(i2 + 2), px(i2 + 4)]);
+            if (p32 > rules.collapseAt + 0.03) continue;
+            const q2 = Math.min(0.99, p32 + 0.01 + extraSlip);
+            if (q2 > rules.collapseAt + p.maxSlippage + extraSlip) break;
+            if (rules.maxMinutes && r.p[i2] / 60 > rules.maxMinutes) break;
+            let hi2 = px(i2), step2 = 0;
+            for (let j = i2; j >= 2 && r.p[i2] - r.p[j] <= 600; j -= 2) { hi2 = Math.max(hi2, px(j)); step2 = Math.max(step2, px(j - 2) - px(j)); }
+            if (rules.minDrop && hi2 - px(i2) < rules.minDrop) continue;
+            if (p.maxTradesPerMin > 0 && i2 / 2 / Math.max(1, r.p[i2] / 60) >= p.maxTradesPerMin) continue;
+            if (p.minShock > 0 && step2 < p.minShock) continue;
+            const e2 = exit(i2, q2);
+            again[x] = { at: r.s + r.p[i2], end: e2.end, cid: r.cid, q: q2, won, mult: e2.mult, sold: e2.sold, leg: 'comeback', game: r.g, title: `${r.n[0]} vs ${r.n[1]}`, team: `${r.n[x]} (again)` };
             break;
           }
         }
-        if (!best || at < best.at) best = { at, end, cid: r.cid, q, won, mult, sold, leg: 'comeback', game: r.g, title: `${r.n[0]} vs ${r.n[1]}`, team: r.n[x] + (rules.listed ? ' (listed, held)' : '') };
         break;
       }
     }
-    if (best) bets.push(best);
+    if (best) {
+      bets.push(best);
+      if (best.x !== undefined && again[best.x]) bets.push(again[best.x]);
+    }
   }
   return bets;
 }

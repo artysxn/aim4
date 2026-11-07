@@ -133,6 +133,9 @@ export const BOT_TYPES = {
       // The comeback is overpriced there: the leader won 87.7% while priced 84.6% (+3.3% per bet, every month).
       { key: 'bet', label: 'Bet on (both = the crashed team on its own rules, else the leader)', kind: 'choice', options: ['crashed', 'leader', 'both'], def: 'crashed' },
       { key: 'leaderKellyPct', label: 'Both: full-Kelly % for the leader bets (used at a quarter)', kind: 'num', unit: '%', min: 0, max: 50, step: 0.1, def: 19.1 },
+      { key: 'leaderPreMin', label: 'Leader: the crashed team started at least', kind: 'num', unit: '%', scale: 100, min: 0.2, max: 0.9, step: 1, def: 0.5 },
+      { key: 'leaderCollapseAt', label: 'Leader: once the crashed team is down to', kind: 'num', unit: '%', scale: 100, min: 0.05, max: 0.4, step: 1, def: 0.2 },
+      { key: 'leaderMaxShock', label: 'Leader: skip when one trade dropped the crashed team this much (10 min, 0 = off)', kind: 'num', unit: 'pts', scale: 100, min: 0, max: 0.6, step: 1, def: 0 },
       { key: 'leaderMaxPrice', label: 'Leader: pay at most', kind: 'num', unit: '%', scale: 100, min: 0.5, max: 0.97, step: 1, def: 0.97 },
       { key: 'busyAt', label: 'Leader: a market counts as busy from (trades a minute)', kind: 'num', unit: '/min', min: 0.5, max: 60, step: 0.5, def: 4 },
       { key: 'sellAt', label: 'Take profit at (0 = hold)', kind: 'num', unit: '%', scale: 100, min: 0, max: 0.95, step: 1, def: 0 },
@@ -257,6 +260,8 @@ export function leaderView(p) {
   return {
     ...p,
     bet: 'leader',
+    preMin: p.leaderPreMin ?? p.preMin,
+    collapseAt: p.leaderCollapseAt ?? p.collapseAt,
     formats: [],
     lowTierOnly: false,
     maxMinutes: 600,
