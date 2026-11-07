@@ -736,8 +736,11 @@ export async function backfill(days) {
     await ensureRanks();
     const since = new Date(Date.now() - days * 86400e3).toISOString();
     const todo = [];
-    for (let page = 0; page < 40; page++) {
-      const rows = await pm.listEvents({ tag_id: CS2_TAG_ID, closed: true, end_date_min: since, limit: 100, offset: page * 100 });
+    let cursor = '';
+    for (let page = 0; page < 400; page++) {
+      const res = await pm.listEventsKeyset({ tag_id: CS2_TAG_ID, closed: true, end_date_min: since, limit: 100, ...(cursor ? { after_cursor: cursor } : {}) });
+      const rows = res?.events;
+      cursor = res?.next_cursor || '';
       if (!Array.isArray(rows) || !rows.length) break;
       for (const raw of rows) {
         prog.scanned++;
@@ -749,7 +752,7 @@ export async function backfill(days) {
         todo.push(raw);
       }
       touch('meta');
-      if (rows.length < 100) break;
+      if (rows.length < 100 || !cursor) break;
     }
     prog.matches = todo.length;
     // A few matches at a time; the request queue in polymarket.js still caps
@@ -794,7 +797,8 @@ async function backfillOne(raw, s, prog) {
   const rows = [];
   let cursor = '';
   for (let p = 0; p < 4; p++) {
-    const body = await pm.listTrades(cursor ? { cursor } : { condition: m.conditionId, filter_type: 'CASH', filter_amount: s.minCash, limit: 1000 });
+    // The cursor alone loses the filter (empty or unrelated pages): send both.
+    const body = await pm.listTrades({ condition: m.conditionId, filter_type: 'CASH', filter_amount: s.minCash, limit: 1000, ...(cursor ? { cursor } : {}) });
     rows.push(...(body?.data || []));
     cursor = body?.pagination?.next_cursor || '';
     if (!cursor) break;

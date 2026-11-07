@@ -87,6 +87,37 @@ export const BOT_TYPES = {
       { key: 'maps', label: 'Map-winner markets too', kind: 'bool', def: false }
     ]
   },
+  // Big underdog buys before the start are overpriced: over a year of CS2 on
+  // Polymarket, underdogs whales bought at 25-30% won 21%. This bot buys the
+  // other team once the underdog money has piled up.
+  fade: {
+    label: 'Fade underdog money',
+    sizingLabel: 'Stake per match',
+    fields: [
+      { key: 'minBuys', label: 'After this many big underdog buys', kind: 'num', unit: 'buys', min: 1, max: 50, step: 1, def: 3 },
+      { key: 'formats', label: 'Series lengths', kind: 'multi', options: ['BO1', 'BO3', 'BO5'], def: ['BO3'] },
+      { key: 'prematchOnly', label: 'Before the start only', kind: 'bool', def: true },
+      { key: 'maxWhalePrice', label: 'Underdog priced at most', kind: 'num', unit: '%', scale: 100, min: 0.01, max: 0.5, step: 1, def: 0.3 },
+      { key: 'maxSlippage', label: 'Pay up to 100% minus underdog price plus', kind: 'num', unit: 'c', scale: 100, min: 0, max: 0.2, step: 0.5, def: 0.03 },
+      { key: 'maxEntry', label: 'Never buy above', kind: 'num', unit: '%', scale: 100, min: 0.5, max: 0.97, step: 1, def: 0.92 }
+    ]
+  },
+  // Low-tier CS2 (both teams outside the VRS top 30): a team that started as a
+  // contender and collapses in-game comes back more often than its price says.
+  // Year of Polymarket data, both halves: collapsed to 25% after starting at 40%+,
+  // won 24.9% while priced 22.3%.
+  comeback: {
+    label: 'Low-tier comeback',
+    sizingLabel: 'Stake per match',
+    fields: [
+      { key: 'preMin', label: 'Team priced at the start at least', kind: 'num', unit: '%', scale: 100, min: 0.1, max: 0.9, step: 1, def: 0.4 },
+      { key: 'collapseAt', label: 'Buy once it falls to', kind: 'num', unit: '%', scale: 100, min: 0.03, max: 0.4, step: 1, def: 0.25 },
+      { key: 'maxSlippage', label: 'Pay at most that plus', kind: 'num', unit: 'c', scale: 100, min: 0, max: 0.1, step: 0.5, def: 0.02 },
+      { key: 'formats', label: 'Series lengths', kind: 'multi', options: ['BO1', 'BO3', 'BO5'], def: ['BO3'] },
+      { key: 'lowTierOnly', label: 'Both teams outside the VRS top 30', kind: 'bool', def: true },
+      { key: 'maps', label: 'Map-winner markets too', kind: 'bool', def: false }
+    ]
+  },
   mm: {
     label: 'Market making',
     sizingLabel: 'Quote size',
@@ -176,6 +207,14 @@ export function allBots() {
     if (vd) Object.assign(vd.params, { priceMax: 0.4, formats: ['BO3'] });
     if (vd) vd.name = 'Underdogs 30-40% at start, BO3';
     if (!b.list.some((x) => x.id === 'split-uncrowded')) b.list.push({ ...sanitizeBot({ type: 'whale', name: 'Split buys, uncrowded', enabled: true, sizing: { kind: 'pct', value: 2 }, maxStake: 50, params: { minScore: 0, needs: ['stacking'], excludes: ['cluster'], maxWhalePrice: 0.31, skipLosers: false, maxSlippage: 0.02, maxEntry: 0.34 } }), id: 'split-uncrowded' });
+    touch('bots');
+  }
+  // 2026-11-07 year review: the underdog bots lose over 12 months; fading the
+  // pre-match underdog money is the edge that held (paper until the owner arms it).
+  if (!b.v4) {
+    b.v4 = true;
+    if (!b.list.some((x) => x.id === 'fade-prematch')) b.list.push({ ...sanitizeBot({ type: 'fade', name: 'Fade underdog money, BO3 pre-match', enabled: false, mode: 'paper', sizing: { kind: 'pct', value: 6 }, maxStake: 50 }), id: 'fade-prematch' });
+    if (!b.list.some((x) => x.id === 'comeback-low')) b.list.push({ ...sanitizeBot({ type: 'comeback', name: 'Low-tier comeback, BO3', enabled: true, mode: 'paper', sizing: { kind: 'pct', value: 4 }, maxStake: 25 }), id: 'comeback-low' });
     touch('bots');
   }
   return b.list;

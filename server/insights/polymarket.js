@@ -98,6 +98,11 @@ export function listEvents(params, opts) {
   return getJson(`${GAMMA}/events?${qs(params)}`, opts);
 }
 
+/** Deep paging: /events stops at offset ~2000, keyset pages without limit. */
+export function listEventsKeyset(params, opts) {
+  return getJson(`${GAMMA}/events/keyset?${qs(params)}`, opts);
+}
+
 export function getEvent(id, opts) {
   return getJson(`${GAMMA}/events/${encodeURIComponent(id)}`, opts);
 }

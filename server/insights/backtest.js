@@ -97,7 +97,7 @@ function summarize(trades, meta) {
 
 /** Replay recorded ticks for a market-making or swing bot's settings. */
 export async function tickBacktest(strategy, p, { days = 30, feeRate = 0.03, tables = null, size = 15, name = strategy } = {}) {
-  if (!p || strategy === 'whale') throw new Error('Tick backtests run market-making and swing bots');
+  if (!p || !['mm', 'swing'].includes(strategy)) throw new Error('Tick backtests run market-making and swing bots');
   const since = new Date(Date.now() - days * 86400e3).toISOString().slice(0, 10);
   const recs = listRecordings().filter((r) => r.day >= since);
   const events = col('events');
