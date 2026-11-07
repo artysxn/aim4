@@ -226,10 +226,21 @@ engine.updateSettings({ botsOn: true });
   const busy = mkEv('b', 'BO3', '0xbusy');
   const bo1 = mkEv('o', 'BO1', '0xbo1');
   const bleed = mkEv('s', 'BO3', '0xbleed', true);
+  // A quiet crash where one trade knocked team A from 36% to 12% four minutes ago (the V3.1 shock).
+  const shock = mkEv('k', 'BO3', '0xshock');
+  // A BO1 crash with $60 aggressor buys of the crashed team A in the last 10 minutes, from day-old wallets.
+  const flow = mkEv('f', 'BO1', '0xflow');
+  const flowTrades = Array.from({ length: 30 }, (_, i) => ({ condition_id: '0xflow', outcome: flow.markets[0].outcomes[0], side: 'BUY', proxy_wallet: `0x${String(i).padStart(40, 'f')}`, timestamp: Math.floor((now - (i + 1) * 15e3) / 1000), size: 300, price: 0.2 }));
   const realFetch = globalThis.fetch;
   globalThis.fetch = async (url, o) => {
     const u = String(url);
     const cond = new URL(u).searchParams.get('condition');
+    if (u.includes('/v2/trades') && cond === '0xshock') {
+      const t = trades(shock, 20);
+      t.push({ ...t[19], timestamp: Math.floor((now - 4 * 60e3) / 1000), price: 0.12 });
+      return new Response(JSON.stringify({ data: t.reverse(), pagination: { has_more: false } }), { status: 200 });
+    }
+    if (u.includes('/v2/trades') && cond === '0xflow') return new Response(JSON.stringify({ data: flowTrades, pagination: { has_more: false } }), { status: 200 });
     if (u.includes('/v2/trades') && cond) {
       const e = [quiet, busy, bo1, bleed].find((x) => x.markets[0].conditionId === cond);
       const n = e === busy || e === bleed ? 300 : 20; // ~10 vs ~0.7 trades a minute
@@ -259,11 +270,75 @@ engine.updateSettings({ botsOn: true });
     assert(ls.action === 'entered' && ls.outcome === bleed.markets[0].outcomes[1] && ls.price >= 0.85, `leader buys the leader on a busy slow bleed (${ls.action}: ${ls.reason})`);
     const lo = await brainM.consider({ bot: L, ev: bo1, m: bo1.markets[0], idx: 1, leg: 'comeback' });
     assert(lo.action === 'entered', `leader buys the leader in a BO1 crash (${lo.action}: ${lo.reason})`);
-    for (const id of [v3.id, ld.id]) botsM.deleteBot(id);
-    store.col('bets').splice(0, store.col('bets').length, ...store.col('bets').filter((b) => ![v3.id, ld.id].includes(b.botId)));
+    // V3.1 = V3 + the shock filter.
+    const v31 = botsM.createBot({ ...structuredClone(V3), name: 'V3.1 test', params: { ...V3.params, minShock: 0.1 } });
+    botsM.updateBot(v31.id, { enabled: true });
+    const V31 = botsM.botById(v31.id);
+    assert(near(await brainM.shockStep(shock, shock.markets[0], 0), 0.36 - 0.12, 0.011) && (await brainM.shockStep(quiet, quiet.markets[0], 0)) <= 0.06 && (await brainM.shockStep(shock, shock.markets[0], 1)) <= 0.06, 'shock read from the tape, per side');
+    const sq = await brainM.consider({ bot: V31, ev: quiet, m: quiet.markets[0], idx: 0, leg: 'comeback' });
+    assert(sq.action === 'skipped' && /No shock/.test(sq.reason), `V3.1 skips a crash with no single big drop (${sq.reason})`);
+    const sk = await brainM.consider({ bot: V31, ev: shock, m: shock.markets[0], idx: 0, leg: 'comeback' });
+    assert(sk.action === 'entered' && sk.shock >= 0.2, `V3.1 buys the shocked crash (${sk.action}: ${sk.reason})`);
+    // Leader money-flow tells: net money into the crashed team skips; new-wallet money doubles the stake.
+    const fl = await brainM.crashFlow(flow.markets[0], 0);
+    assert(fl.net === 1800 && fl.bigBuys === 30 && fl.newShare === 1, `money flow read (${JSON.stringify(fl)})`);
+    const lf = botsM.createBot({ ...structuredClone(L), name: 'Leader flow test', params: { ...L.params, flowSkipIn: 200, newMoneyBoost: 2 } });
+    botsM.updateBot(lf.id, { enabled: true });
+    const lfs = await brainM.consider({ bot: botsM.botById(lf.id), ev: flow, m: flow.markets[0], idx: 1, leg: 'comeback' });
+    assert(lfs.action === 'skipped' && /Money flowing into the crashed team/.test(lfs.reason), `leader skips when money pours into the crashed team (${lfs.reason})`);
+    botsM.updateBot(lf.id, { params: { ...botsM.botById(lf.id).params, flowSkipIn: 0 } });
+    const lfb = await brainM.consider({ bot: botsM.botById(lf.id), ev: flow, m: flow.markets[0], idx: 1, leg: 'comeback' });
+    const lfBet = store.col('bets').find((b) => b.id === lfb.betId);
+    assert(lfb.action === 'entered' && lfb.boost === 2 && lfBet && lfBet.amount === 4, `new-wallet money doubles the leader stake (${lfb.action}: ${lfb.reason}, $${lfBet?.amount})`);
+    const gone = [v3.id, ld.id, v31.id, lf.id];
+    for (const id of gone) botsM.deleteBot(id);
+    store.col('bets').splice(0, store.col('bets').length, ...store.col('bets').filter((b) => !gone.includes(b.botId)));
   } finally {
     globalThis.fetch = realFetch;
-    for (const e of [quiet, busy, bo1, bleed]) delete store.col('events')[e.id];
+    for (const e of [quiet, busy, bo1, bleed, shock, flow]) delete store.col('events')[e.id];
+  }
+}
+
+// Quarter-Kelly stakes from $100; under that the 1% rule (floored at the $1 minimum).
+{
+  const { autoStake } = await import('./bots.js');
+  assert(near(autoStake({ bankroll: 200, fillCost: 0.005, kellyPct: 12.6 }).stake, 6.3) && autoStake({ bankroll: 50, fillCost: 0.005, kellyPct: 12.6 }).stake === 1 && near(autoStake({ bankroll: 200, fillCost: 0.005 }).stake, 2), 'quarter-Kelly from $100, 1% under');
+  assert(near(autoStake({ bankroll: 200, fillCost: 0.005, kellyPct: 19.1, maxStake: 25 }).stake, 9.55) && autoStake({ bankroll: 2000, fillCost: 0.005, kellyPct: 19.1, maxStake: 25 }).stake === 25, 'quarter-Kelly under the depth cap');
+}
+
+// Guards: losing stop, promotion to real, bets in the wallet no bot placed.
+{
+  const botsM = await import('./bots.js');
+  const guards = await import('./guards.js');
+  const t0 = Date.now() - 86400e3;
+  const mk = (botId, mode, n, ret) => Array.from({ length: n }, (_, i) => ({ id: `g_${botId}_${i}`, botId, mode, status: ret > 0 ? 'won' : 'lost', placedAt: t0 + i * 1000, settledAt: t0 + i * 1000 + 500, cost: 1, payout: 1 + ret, tokenId: `tok_${botId}_${i}` }));
+  const loser = botsM.createBot({ type: 'comeback', name: 'Guard loser', sizing: { kind: 'auto', value: 1 }, stopAfter: 30, stopBelow: -20 });
+  botsM.updateBot(loser.id, { enabled: true, mode: 'real' });
+  botsM.botById(loser.id).realSince = t0 - 1000;
+  const climber = botsM.createBot({ type: 'comeback', name: 'Guard climber', sizing: { kind: 'auto', value: 1 }, promoteAfter: 5, promoteAbove: 2 });
+  botsM.updateBot(climber.id, { enabled: true });
+  store.col('bets').push(...mk(loser.id, 'real', 29, -0.5), ...mk(climber.id, 'sim', 4, 0.1));
+  const ex = store.col('executor');
+  const devicesBefore = ex.devices;
+  ex.devices = [{ id: 'gdev', info: { wallet: '0xguard' } }];
+  const positions = async () => ({ data: [{ token_id: 'tok_manual', current_size: 10, current_price: 0.4, title: 'Manual vs Bet', outcome: 'Manual' }, { token_id: `tok_${loser.id}_0`, current_size: 5, current_price: 0.5 }] });
+  try {
+    guards._resetGuards();
+    const before = await guards.runGuards({ fetchPositions: positions });
+    assert(botsM.botById(loser.id).mode === 'real' && botsM.botById(climber.id).mode === 'paper', `nothing moves one bet short (${before.join(', ')})`);
+    assert(before.length === 1 && before[0] === 'foreign tok_manual' && /Not a bot's bet/.test(store.col('meta').alerts.at(-1).text), `a hand-placed position is reported, a bot's is not (${before.join(', ')})`);
+    store.col('bets').push(...mk(loser.id, 'real', 30, -0.5).slice(29), ...mk(climber.id, 'sim', 5, 0.1).slice(4));
+    const did = await guards.runGuards({ fetchPositions: positions });
+    assert(botsM.botById(loser.id).mode === 'paper' && botsM.botById(loser.id).stoppedAt > 0, `30 real bets at -50% send it back to paper (${did.join(', ')})`);
+    assert(botsM.botById(climber.id).mode === 'real' && botsM.botById(climber.id).promotedAt > 0 && botsM.botById(climber.id).realSince > 0, 'five paper bets at +10% move it to real money');
+    assert(!did.some((d) => d.startsWith('foreign')) && store.col('meta').alerts.some((a) => /back to paper/.test(a.text)) && store.col('meta').alerts.some((a) => /moves to real money/.test(a.text)), 'each action alerts once; positions are read every 10 minutes');
+    const again = await guards.runGuards({ fetchPositions: positions });
+    assert(!again.some((d) => d.startsWith('promote') || d.startsWith('stop')), 'a promoted bot does not flip back on its paper record');
+  } finally {
+    ex.devices = devicesBefore;
+    const gone = [loser.id, climber.id];
+    for (const id of gone) botsM.deleteBot(id);
+    store.col('bets').splice(0, store.col('bets').length, ...store.col('bets').filter((b) => !gone.includes(b.botId)));
   }
 }
 
@@ -612,6 +687,10 @@ assert(dear.placed === 10 && dear.stopped && /over the mid/.test(dear.stopped.re
   const all = bt._comebackBets(cbBot.params, 0, 0);
   const quiet = bt._comebackBets({ ...cbBot.params, maxTradesPerMin: 0.1 }, 0, 0); // every synthetic crash has ~0.3 trades a minute
   assert(all.length > 50 && quiet.length === 0, `busy-market skip (${all.length} -> ${quiet.length})`);
+  // V3.1: each synthetic crash has a 26-pt single-trade drop (56% -> 30%) a minute before it.
+  const shocked = bt._comebackBets({ ...cbBot.params, minShock: 0.2 }, 0, 0);
+  const noShock = bt._comebackBets({ ...cbBot.params, minShock: 0.3 }, 0, 0);
+  assert(shocked.length === all.length && noShock.length === 0, `shock filter passes a 26-pt drop at 20, not at 30 (${shocked.length}/${all.length}, ${noShock.length})`);
   const leaderP = { ...cbBot.params, bet: 'leader', busyAt: 4, minDrop: 0, formats: [], lowTierOnly: false, sellAt: 0 };
   assert(bt._comebackBets(leaderP, 0, 0).length === 0, 'leader leaves low-tier BO3 sudden crashes to the crash bots');
   // The same crashes in BO1: the comeback is overpriced there, so the leader buys the other team.

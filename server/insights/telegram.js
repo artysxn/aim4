@@ -88,6 +88,12 @@ async function scan() {
   } catch (err) {
     logLine('warn', `telegram suspicious: ${err.message}`);
   }
+  // Guard actions (guards.js), each once.
+  for (const a of col('meta').alerts || []) {
+    if (a.at <= (st.alertAt || 0)) continue;
+    st.alertAt = a.at;
+    await say(a.text);
+  }
   st.primed = true; // the first pass only learns what already exists
   await dailyDigest();
   saveState();
@@ -179,13 +185,14 @@ const HELP = `<b>Commands</b>
 /bots — all bots
 /on &lt;bot&gt; · /off &lt;bot&gt; — switch a bot
 /arm · /disarm — real trading
-/set &lt;bot&gt; &lt;key&gt; &lt;value&gt; — change a bot setting (e.g. /set v2.2 maxOverMid 0.01)
+/real &lt;bot&gt; · /paper &lt;bot&gt; — move a bot to real money or paper
+/set &lt;bot&gt; &lt;key&gt; &lt;value&gt; — change a bot setting (e.g. /set v3.1 maxOverMid 0.01)
 /settings &lt;bot&gt; — show a bot's settings
 /suspicious — current suspicious matches
 /digest — the daily insights now
 /football — football scanner, suspicious matches, paper copy
 /fset &lt;key&gt; &lt;value&gt; — football settings (minScore, minCash, copy, stake…)
-Sent automatically: real orders, fills, results, near-misses, new suspicious matches, and daily insights at 21:00.`;
+Sent automatically: real orders, fills, results, near-misses, new suspicious matches, guard actions (a bot sent back to paper or promoted to real, bets in the wallet no bot placed), and daily insights at 21:00.`;
 
 async function handle(msg) {
   const chat = msg.chat?.id;
@@ -216,6 +223,12 @@ async function handle(msg) {
     botsMod.updateBot(bot.id, { enabled: cmd === '/on' });
     return say(`${esc(bot.name)} ${cmd === '/on' ? 'on' : 'off'}.`);
   }
+  if (cmd === '/real' || cmd === '/paper') {
+    const bot = args.length ? findBot(args.join(' ')) : null;
+    if (!bot) return say(`Usage: ${cmd} &lt;bot&gt;`);
+    const next = botsMod.updateBot(bot.id, { mode: cmd === '/real' ? 'real' : 'paper', ...(cmd === '/real' ? { stoppedAt: 0 } : {}) });
+    return say(`${esc(next.name)} is now on ${next.mode === 'real' ? '💰 real money' : '📄 paper'}.`);
+  }
   if (cmd === '/arm' || cmd === '/disarm') {
     engine.setArmed(cmd === '/arm');
     return say(cmd === '/arm' ? '🔴 Real trading ARMED.' : '⚪ Real trading disarmed.');
@@ -223,14 +236,14 @@ async function handle(msg) {
   if (cmd === '/settings') {
     const bot = pickBot(args.join(' '));
     if (!bot) return say('No such bot.');
-    return say(`<b>${esc(bot.name)}</b>\n<code>${esc(JSON.stringify({ sizing: bot.sizing, minStake: bot.minStake, maxStake: bot.maxStake, maxOpenPct: bot.maxOpenPct, dailyLossPct: bot.dailyLossPct, ...bot.params }, null, 1))}</code>`);
+    return say(`<b>${esc(bot.name)}</b> · ${bot.mode === 'real' ? '💰 real' : '📄 paper'}\n<code>${esc(JSON.stringify({ sizing: bot.sizing, ...Object.fromEntries(botsMod.COMMON_FIELDS.map((f) => [f.key, bot[f.key]])), ...bot.params }, null, 1))}</code>`);
   }
   if (cmd === '/set') {
     const [q, key, raw] = args;
     const bot = q && findBot(q);
     if (!bot || !key || raw === undefined) return say('Usage: /set &lt;bot&gt; &lt;key&gt; &lt;value&gt;');
     const value = raw === 'true' ? true : raw === 'false' ? false : Number.isFinite(Number(raw)) ? Number(raw) : raw;
-    const top = ['minStake', 'maxStake', 'maxOpenPct', 'dailyLossPct'].includes(key);
+    const top = botsMod.COMMON_FIELDS.some((f) => f.key === key);
     const next = botsMod.updateBot(bot.id, top ? { [key]: value } : { params: { ...bot.params, [key]: value } });
     const got = top ? next?.[key] : next?.params?.[key];
     return say(got === undefined ? `Not a setting of ${esc(bot.name)}: ${esc(key)}` : `${esc(bot.name)}: ${esc(key)} = ${esc(JSON.stringify(got))}`);

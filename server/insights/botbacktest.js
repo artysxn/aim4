@@ -74,6 +74,12 @@ function comebackBets(p, sinceS, extraSlip) {
         if (rules.minDrop && hi - px(i) < rules.minDrop) continue;
         // Busy markets price a crash right: skip them.
         if (p.maxTradesPerMin > 0 && tpm >= p.maxTradesPerMin) continue;
+        // A shock: the biggest single-trade fall in the 10 minutes before (as brain.shockStep reads it live).
+        if (p.minShock > 0) {
+          let step = 0;
+          for (let j = i; j >= 2 && r.p[i] - r.p[j] <= 600; j -= 2) step = Math.max(step, px(j - 2) - px(j));
+          if (step < p.minShock) continue;
+        }
         const at = r.s + r.p[i];
         const won = r.w === x;
         let mult = won ? 1 / (q + fee(q)) : 0, end = r.e, sold = false;
@@ -177,7 +183,7 @@ function valueBets(p, sinceS, extraSlip) {
 // ---- wallet replay with the bot's stake rule ------------------------------------
 
 function stakeOf(bot, equity, drawdown) {
-  if (bot.sizing.kind === 'auto') return autoStake({ bankroll: equity, fillCost: 0.01, drawdown, maxStake: bot.maxStake, minStake: bot.minStake }).stake;
+  if (bot.sizing.kind === 'auto') return autoStake({ bankroll: equity, fillCost: 0.01, drawdown, maxStake: bot.maxStake, minStake: bot.minStake, kellyPct: bot.kellyPct, kellyFrom: bot.kellyFrom }).stake;
   const raw = bot.sizing.kind === 'fixed' ? bot.sizing.value : (equity * bot.sizing.value) / 100;
   return Math.min(bot.maxStake, Math.max(bot.minStake, raw));
 }
@@ -333,7 +339,7 @@ function replayCurve(bets, bot, start, { fillCost = 0.01, startS = null } = {}) 
     }
     let stake;
     if (bot.sizing.kind === 'auto') {
-      const a = autoStake({ bankroll: eq, fillCost: fills >= 10 ? fillCost : null, drawdown: dd, maxStake: bot.maxStake, minStake: bot.minStake });
+      const a = autoStake({ bankroll: eq, fillCost: fills >= 10 ? fillCost : null, drawdown: dd, maxStake: bot.maxStake, minStake: bot.minStake, kellyPct: bot.kellyPct, kellyFrom: bot.kellyFrom });
       stake = a.stake;
       if (!stake) {
         // Under $10 with nothing left to settle, or fills too dear: the live bot is done.

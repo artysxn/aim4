@@ -27,6 +27,7 @@ import { betTotals, walletRecord } from './stats.js';
 import { CAPS, col, logLine, touch } from './store.js';
 import * as brain from './brain.js';
 import { allBots } from './bots.js';
+import { runGuards } from './guards.js';
 import { queueSettled } from './history.js';
 import * as feeds from './feeds.js';
 import { startRecorder, setRecordFilter } from './recorder.js';
@@ -1209,6 +1210,8 @@ export function startEngine() {
     }, 400);
   });
   tick(refreshLive, 15000);
+  // Real-money guards: losing and fill stops, paper-to-real promotion, foreign positions.
+  tick(runGuards, 60e3);
   logLine('info', 'Engine started');
 }
 

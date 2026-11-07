@@ -26,6 +26,12 @@ export const COMMON_FIELDS = [
   { key: 'maxOpenPct', label: 'Open bets at most', kind: 'num', unit: '% of wallet', min: 1, max: 100, step: 1, def: 25 },
   { key: 'dailyLossPct', label: 'Stop for the day after losing', kind: 'num', unit: '% of wallet', min: 1, max: 100, step: 1, def: 10 },
   { key: 'autoStop', label: 'Back to paper if it keeps losing (real money)', kind: 'bool', def: true },
+  { key: 'stopAfter', label: 'Losing check after this many real bets', kind: 'num', unit: 'bets', min: 5, max: 1000, step: 1, def: 30 },
+  { key: 'stopBelow', label: 'Losing means a return per bet under', kind: 'num', unit: '%', min: -100, max: 100, step: 1, def: -20 },
+  { key: 'promoteAfter', label: 'Paper: move to real money after this many settled bets (0 = never)', kind: 'num', unit: 'bets', min: 0, max: 1000, step: 1, def: 0 },
+  { key: 'promoteAbove', label: 'Paper: only if the return per bet is at least', kind: 'num', unit: '%', min: -100, max: 100, step: 0.5, def: 2 },
+  { key: 'kellyPct', label: 'Automatic stake: full-Kelly % from the backtest, used at a quarter (0 = off)', kind: 'num', unit: '%', min: 0, max: 50, step: 0.1, def: 0 },
+  { key: 'kellyFrom', label: 'Automatic stake: Kelly sizing from a wallet of', kind: 'num', unit: '$', min: 10, max: 1e6, step: 10, def: 100 },
   { key: 'review', label: 'AI review before pre-match bets', kind: 'bool', def: false }
 ];
 
@@ -118,6 +124,9 @@ export const BOT_TYPES = {
       // 2026-11-07 crash study (a year, found on Nov-Jul, checked on Jul-Nov): busy
       // markets price a crash right; thin ones overreact. V2.2 +17.8% -> +25.1% per bet out of sample.
       { key: 'maxTradesPerMin', label: 'Skip busy markets: this many trades a minute since the start or more (0 = off)', kind: 'num', unit: '/min', min: 0, max: 60, step: 0.5, def: 0 },
+      { key: 'minShock', label: 'Only after one trade dropped it at least (last 10 min, 0 = off)', kind: 'num', unit: 'pts', scale: 100, min: 0, max: 0.5, step: 1, def: 0 },
+      { key: 'flowSkipIn', label: 'Leader: skip when this much net money went into the crashed team in 15 min (0 = off)', kind: 'num', unit: '$', min: 0, max: 1e6, step: 10, def: 0 },
+      { key: 'newMoneyBoost', label: 'Leader: stake times this when most crashed-team money is from wallets under 30 days old (1 = off)', kind: 'num', unit: 'x', min: 1, max: 4, step: 0.5, def: 1 },
       // Leader: on a crash the crashed-team bots skip (higher tier, busy or BO1), buy the team that leads.
       // The comeback is overpriced there: the leader won 87.7% while priced 84.6% (+3.3% per bet, every month).
       { key: 'bet', label: 'Bet on', kind: 'choice', options: ['crashed', 'leader'], def: 'crashed' },
@@ -191,6 +200,10 @@ export function sanitizeBot(patch = {}, prev = null) {
     createdAt: prev?.createdAt || Date.now(),
     updatedAt: Date.now(),
     paperEpoch: prev?.paperEpoch || 0,
+    // When it last went to real money, and the guards' automatic moves (guards.js).
+    realSince: Number(p.realSince ?? prev?.realSince) || 0,
+    promotedAt: Number(p.promotedAt ?? prev?.promotedAt) || 0,
+    stoppedAt: Number(p.stoppedAt ?? prev?.stoppedAt) || 0,
     params: {}
   };
   const rawValue = p.sizing?.value ?? prev?.sizing?.value;
@@ -230,7 +243,7 @@ export function comebackRules(p, { game, team, opponent }) {
 }
 
 export function stakeFor(bot, bankroll, auto = null) {
-  if (bot.sizing.kind === 'auto') return autoStake({ bankroll, maxStake: bot.maxStake, minStake: bot.minStake, ...(auto || {}) }).stake;
+  if (bot.sizing.kind === 'auto') return autoStake({ bankroll, maxStake: bot.maxStake, minStake: bot.minStake, kellyPct: bot.kellyPct, kellyFrom: bot.kellyFrom, ...(auto || {}) }).stake;
   const raw = bot.sizing.kind === 'fixed' ? bot.sizing.value : (bankroll * bot.sizing.value) / 100;
   return Math.floor(Math.min(raw, bot.maxStake) * 100) / 100;
 }
@@ -246,14 +259,19 @@ export function stakeFor(bot, bankroll, auto = null) {
  *  - A drawdown of 25% from the peak halves it again, 50% quarters it.
  *  - Polymarket's $1 minimum is the floor; under $10 the bot stops.
  *  - maxStake is the depth cap: $25 fits within 2c of the ask ~85% of the time.
- * @param {{ bankroll:number, fillCost?:number|null, drawdown?:number, maxStake?:number, minStake?:number }} a
+ *  - kellyPct (the strategy's full-Kelly stake from its backtest): from a wallet
+ *    of kellyFrom ($100) the base becomes a quarter of it instead of 1%. Below
+ *    that the $1 minimum is already more than a quarter-Kelly stake.
+ * @param {{ bankroll:number, fillCost?:number|null, drawdown?:number, maxStake?:number, minStake?:number, kellyPct?:number, kellyFrom?:number }} a
  * @returns {{ stake:number, pct:number, reason:string }}
  */
-export function autoStake({ bankroll, fillCost = null, drawdown = 0, maxStake = 25, minStake = 1 }) {
+export function autoStake({ bankroll, fillCost = null, drawdown = 0, maxStake = 25, minStake = 1, kellyPct = 0, kellyFrom = 100 }) {
   if (!(bankroll >= 10)) return { stake: 0, pct: 0, reason: 'Wallet under $10' };
   if (fillCost !== null && fillCost > 0.025) return { stake: 0, pct: 0, reason: `Fills ${(fillCost * 100).toFixed(1)}c over the mid: no edge left` };
-  let pct = 0.01;
   const notes = [];
+  const kelly = kellyPct > 0 && bankroll >= (kellyFrom || 100);
+  let pct = kelly ? kellyPct / 400 : 0.01;
+  if (kelly) notes.push(`quarter of ${kellyPct}% Kelly`);
   if (fillCost === null) { pct /= 2; notes.push('fills not measured yet'); }
   else if (fillCost > 0.015) { pct /= 2; notes.push(`fills ${(fillCost * 100).toFixed(1)}c over the mid`); }
   if (drawdown >= 0.5) { pct /= 4; notes.push(`down ${Math.round(drawdown * 100)}% from the peak`); }
@@ -398,6 +416,38 @@ export function allBots() {
     if (v22) v22.params.neverTeams = [...new Set([...(v22.params.neverTeams || []), 'The Golden Horde', 'Golden Horde'])];
     touch('bots');
   }
+  // 2026-11-07 owner's plan: Oracle V3.1 = V3 + the shock filter takes the real
+  // money (after 22 Jul +34%/bet vs +17%; $17 from 22 Jul -> $111 vs $9), V3
+  // goes to paper. The leader moves to real by itself after 50 paper bets at
+  // +2%/bet. A paper copy of the leader tries the money-flow tells. Quarter-Kelly
+  // stakes from $100 (full Kelly: V3.1 12.6%, leader 19.1%).
+  if (!b.v11) {
+    const v3 = b.list.find((x) => x.name === 'Oracle V3' && x.type === 'comeback');
+    const leader = b.list.find((x) => x.name === 'Back the leader' && x.type === 'comeback');
+    if (v3 && !b.list.some((x) => x.id === 'oracle-v3-1')) {
+      const now = Date.now();
+      const wasReal = v3.mode === 'real';
+      b.list.push({
+        ...sanitizeBot({ ...structuredClone(v3), name: 'Oracle V3.1', enabled: true, mode: wasReal ? 'real' : 'paper', realSince: wasReal ? now : 0, kellyPct: 12.6, kellyFrom: 100, stopAfter: 30, stopBelow: -20, params: { ...v3.params, minShock: 0.1 } }),
+        id: 'oracle-v3-1',
+        paperEpoch: now
+      });
+      Object.assign(v3, { mode: 'paper', paperEpoch: now, paperBankroll: Math.max(v3.paperBankroll || 0, 500), updatedAt: now });
+      logLine('info', `Bots: Oracle V3.1 ${wasReal ? 'takes the real money' : 'added'}; Oracle V3 to paper`);
+    }
+    if (leader) {
+      Object.assign(leader, { promoteAfter: 50, promoteAbove: 2, kellyPct: 19.1, kellyFrom: 100, stopAfter: 30, stopBelow: -10 });
+      if (!b.list.some((x) => x.id === 'leader-flow')) {
+        b.list.push({
+          ...sanitizeBot({ ...structuredClone(leader), name: 'Back the leader + money flow', enabled: true, mode: 'paper', promoteAfter: 0, params: { ...leader.params, flowSkipIn: 200, newMoneyBoost: 2 } }),
+          id: 'leader-flow',
+          paperEpoch: Date.now()
+        });
+      }
+    }
+    if (v3 || leader) b.v11 = true;
+    touch('bots');
+  }
   return b.list;
 }
 
@@ -423,6 +473,7 @@ export function updateBot(id, patch) {
   if (i < 0) return null;
   const prev = list[i];
   const next = sanitizeBot(patch, prev);
+  if (prev.mode !== 'real' && next.mode === 'real') next.realSince = Date.now();
   list[i] = next;
   touch('bots');
   if (prev.mode !== next.mode) logLine('info', `Bot ${next.name}: ${prev.mode.toUpperCase()} -> ${next.mode.toUpperCase()}`);

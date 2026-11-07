@@ -223,7 +223,7 @@ export async function consider({ bot, ev, m, idx, flag = null, whale = null, leg
   // Size before the edge check: the edge depends on how deep we walk the book.
   let target;
   if (bot.sizing.kind === 'auto') {
-    const a = autoStake({ bankroll: wallet.bankroll, maxStake: bot.maxStake, minStake: bot.minStake, ...autoInputs(bot, wallet) });
+    const a = autoStake({ bankroll: wallet.bankroll, maxStake: bot.maxStake, minStake: bot.minStake, kellyPct: bot.kellyPct, kellyFrom: bot.kellyFrom, ...autoInputs(bot, wallet) });
     decision.sizing = a;
     if (!a.stake) return finish('skipped', `Auto stake: ${a.reason}`);
     target = a.stake;
@@ -270,6 +270,7 @@ export async function consider({ bot, ev, m, idx, flag = null, whale = null, leg
   decision.edge = e.edge;
 
   // The bot's own rules.
+  let boost = 1;
   if (strategy === 'whale') {
     if (!flag) return finish('skipped', 'No flag');
     if (whale?.ignore) return finish('skipped', 'Wallet ignored');
@@ -328,6 +329,15 @@ export async function consider({ bot, ev, m, idx, flag = null, whale = null, leg
     if (crashBotsTake) return finish('skipped', 'A real comeback chance (low tier, BO3+, sudden fall): the crash bots take it');
     if (low && tpm < (params.busyAt ?? 4) && ev.format !== 'BO1') return finish('skipped', `Comeback not overpriced (low tier, ${tpm.toFixed(1)} trades a minute, ${ev.format || 'format unknown'})`);
     if (wallet.mine.some((x) => x.eventId === ev.id)) return finish('skipped', 'Already in this match');
+    // Money-flow tells (2026-11-07, held in both halves, small samples): money
+    // pouring into the crashed team makes the leader worse; new wallets buying
+    // the crashed team make it better (+10%/bet vs +3%).
+    if (params.flowSkipIn > 0 || params.newMoneyBoost > 1) {
+      const fl = await crashFlow(m, c);
+      decision.flow = fl;
+      if (params.flowSkipIn > 0 && fl.net > params.flowSkipIn) return finish('skipped', `Money flowing into the crashed team: $${fl.net} net in 15 min, over $${params.flowSkipIn}`);
+      if (params.newMoneyBoost > 1 && fl.newShare > 0.5) boost = params.newMoneyBoost;
+    }
   } else if (strategy === 'comeback') {
     if (cb.skip) return finish('skipped', cb.skip);
     if (!ctx.live) return finish('skipped', 'Not live');
@@ -354,6 +364,13 @@ export async function consider({ bot, ev, m, idx, flag = null, whale = null, leg
       decision.tradesPerMin = tpm;
       if (tpm >= params.maxTradesPerMin) return finish('skipped', `Busy market: ${tpm.toFixed(1)} trades a minute, max ${params.maxTradesPerMin}`);
     }
+    // V3.1: only crashes with a shock, one trade that knocked it down hard (2026-11-07:
+    // after 22 Jul +34%/bet with it vs +17% without; the rest lose for both sides).
+    if (params.minShock > 0) {
+      const shock = await shockStep(ev, m, idx);
+      decision.shock = shock;
+      if (shock < params.minShock) return finish('skipped', `No shock: biggest single-trade drop ${Math.round(shock * 100)} pts in 10 min, under ${Math.round(params.minShock * 100)}`);
+    }
     if (wallet.mine.some((x) => x.eventId === ev.id && sameLeg(x))) return finish('skipped', 'Already in this match');
   } else if (strategy === 'value') {
     const mins = (ev.start - Date.now()) / MIN;
@@ -374,6 +391,10 @@ export async function consider({ bot, ev, m, idx, flag = null, whale = null, leg
 
   // The bot's own exposure, then the risk gate against the whole wallet.
   if (strategy === 'swing') target = Math.min(target * clamp(e.edge / params.minEdge, 0.5, 2), bot.maxStake);
+  if (boost > 1) {
+    target = Math.floor(Math.min(target * boost, bot.maxStake) * 100) / 100;
+    decision.boost = boost;
+  }
   const ownRoom = wallet.bankroll * (bot.maxOpenPct / 100) - wallet.mineCost;
   if (ownRoom < bot.minStake) return finish('skipped', `Bot open-bets limit (${bot.maxOpenPct}% of wallet)`);
   target = Math.min(target, ownRoom);
@@ -876,11 +897,34 @@ export function recentDrop(m, idx, mid, now = Date.now()) {
  * counted again. Read from Polymarket's trade history, so a restart mid-match
  * does not undercount. Cached two minutes per market.
  */
-const tpmCache = new Map();
 export async function tradesPerMin(ev, m, now = Date.now()) {
   if (!ev.start || now <= ev.start) return 0;
-  const hit = tpmCache.get(m.conditionId);
-  if (hit && now - hit.at < 120e3) return hit.v;
+  return (await matchTape(ev, m, now)).tpm;
+}
+
+/**
+ * The biggest single-trade fall of outcome idx in the 10 minutes before now,
+ * on the same tape (the V3.1 shock filter; backtest: botbacktest minShock).
+ */
+export async function shockStep(ev, m, idx, now = Date.now()) {
+  if (!ev.start || now <= ev.start) return 0;
+  const { pts } = await matchTape(ev, m, now);
+  const from = now / 1000 - 600;
+  let best = 0;
+  for (let j = 1; j < pts.length; j++) {
+    if (pts[j][0] < from) continue;
+    const a = idx === 0 ? pts[j - 1][1] : 1 - pts[j - 1][1];
+    const b = idx === 0 ? pts[j][1] : 1 - pts[j][1];
+    best = Math.max(best, a - b);
+  }
+  return Math.round(best * 1000) / 1000;
+}
+
+/** The in-game tape of a match market: [unix s, team-A price] points and trades a minute. Cached 30 s. */
+const tapeCache = new Map();
+async function matchTape(ev, m, now = Date.now()) {
+  const hit = tapeCache.get(m.conditionId);
+  if (hit && now - hit.at < 30e3) return hit;
   const s0 = Math.floor(ev.start / 1000);
   const rows = [];
   let cursor = '';
@@ -893,18 +937,67 @@ export async function tradesPerMin(ev, m, now = Date.now()) {
     if (!cursor || (data.length && Number(data[data.length - 1].timestamp) < s0)) break;
   }
   rows.sort((a, b) => Number(a.timestamp) - Number(b.timestamp));
-  let n = 0;
+  const pts = [];
   let last = -1;
   for (const t of rows) {
     const v = Math.round((t.outcome === m.outcomes[0] ? Number(t.price) : 1 - Number(t.price)) * 1000);
     if (v === last) continue;
     last = v;
-    n++;
+    pts.push([Number(t.timestamp), v / 1000]);
   }
-  const v = n / Math.max(1, (now - ev.start) / MIN);
-  tpmCache.set(m.conditionId, { at: now, v });
-  if (tpmCache.size > 500) tpmCache.delete(tpmCache.keys().next().value);
-  return v;
+  const out = { at: now, tpm: pts.length / Math.max(1, (now - ev.start) / MIN), pts };
+  tapeCache.set(m.conditionId, out);
+  if (tapeCache.size > 500) tapeCache.delete(tapeCache.keys().next().value);
+  return out;
+}
+
+/**
+ * Who put money in during the 15 minutes before now (aggressor trades only):
+ * net dollars toward the crashed outcome c, and the share of its $50+ buys
+ * from wallets under 30 days old (2026-11-07 money-flow study). Cached 30 s.
+ */
+const flowCache = new Map();
+const joinCache = new Map();
+export async function crashFlow(m, c, now = Date.now()) {
+  const key = `${m.conditionId}|${c}`;
+  const hit = flowCache.get(key);
+  if (hit && now - hit.at < 30e3) return hit;
+  const s0 = Math.floor(now / 1000) - 900;
+  const rows = [];
+  let cursor = '';
+  for (let page = 0; page < 6; page++) {
+    const body = await pm.listTrades({ condition: m.conditionId, taker_only: true, limit: 1000, ...(cursor ? { cursor } : {}) });
+    const data = body?.data || [];
+    for (const t of data) if (t.condition_id === m.conditionId && m.outcomes.includes(t.outcome) && Number(t.timestamp) >= s0) rows.push(t);
+    cursor = body?.pagination?.has_more ? body.pagination.next_cursor || '' : '';
+    if (!cursor || (data.length && Number(data[data.length - 1].timestamp) < s0)) break;
+  }
+  let net = 0;
+  const big = [];
+  for (const t of rows) {
+    const cash = Number(t.size) * Number(t.price);
+    const toCrashed = (t.outcome === m.outcomes[c]) === (String(t.side).toUpperCase() === 'BUY');
+    net += toCrashed ? cash : -cash;
+    if (t.outcome === m.outcomes[c] && String(t.side).toUpperCase() === 'BUY' && cash >= 50) big.push({ w: String(t.proxy_wallet || '').toLowerCase(), cash, ts: Number(t.timestamp) });
+  }
+  // Wallet ages, biggest buyers first, at most 15 new lookups a call.
+  let looked = 0, known = 0, fresh = 0;
+  for (const b of big.sort((x, y) => y.cash - x.cash)) {
+    if (!joinCache.has(b.w) && looked < 15) {
+      looked++;
+      const st = await pm.userStats(b.w).catch(() => null);
+      joinCache.set(b.w, Number(st?.data?.join_date) || 0);
+      if (joinCache.size > 20000) joinCache.delete(joinCache.keys().next().value);
+    }
+    const joined = joinCache.get(b.w);
+    if (!joined) continue;
+    known += b.cash;
+    if (b.ts - joined < 30 * 86400) fresh += b.cash;
+  }
+  const out = { at: now, net: Math.round(net), trades: rows.length, bigBuys: big.length, newShare: known ? Math.round((fresh / known) * 1000) / 1000 : 0 };
+  flowCache.set(key, out);
+  if (flowCache.size > 500) flowCache.delete(flowCache.keys().next().value);
+  return out;
 }
 
 /** Low tier as the history pack defines it: CS2 both outside the VRS top 30; others league tier 0 or 3-5. */
