@@ -770,6 +770,37 @@ assert(dear.placed === 10 && dear.stopped && /over the mid/.test(dear.stopped.re
   const bothCap = bt._comebackBets({ ...cbBot.params, bet: 'both', leaderKellyPct: 19.1, busyAt: 4, leaderMaxPrice: 0.85 }, 0, 0);
   assert(bothCap.filter((b) => /leader/.test(b.team)).length === 0 && bothCap.length === all.length, 'the 86% leader bets drop under an 85% cap');
 }
+// Telegram charts: trendline maths, day grids, and the views built from bets.
+{
+  const ch = await import('./tgcharts.js');
+  const t = ch.trendline([1, 3, 5, 7]);
+  assert(near(t.slope, 2) && t.fit.join(',') === '1,3,5,7', 'trendline through a straight line');
+  assert(ch.trendline([4]).slope === 0, 'one point has no trend');
+  const D = 86400e3, t0 = Date.parse('2026-11-01T00:00:00Z');
+  const days = ch.onDays([{ t: t0 + 3600e3, v: 2 }, { t: t0 + 2 * D + 60e3, v: -1 }], t0, t0 + 3 * D, 0);
+  assert(days.map((d) => d.v).join(',') === '2,2,-1,-1', 'running total read at the end of each day');
+  const bars = ch.dailyPnl([{ settledAt: t0 + 3600e3, payout: 3, cost: 1 }, { settledAt: t0 + 3600e3 * 5, payout: 0, cost: 2 }, { settledAt: t0 + D + 1, payout: 0, cost: 1 }], 2, t0 + D + 5);
+  assert(bars.map((b) => b.v).join(',') === '0,-1' && bars[0].n === 2, 'profit per day');
+  const lc = ch.lineChart('x', ['a', 'b', 'c'], [{ label: 'A', values: [1, 2, 3] }, { label: 'B', values: [3, 2, 1], trend: false }]);
+  assert(lc.data.datasets.length === 3 && lc.data.datasets[1].borderDash && lc.data.datasets[1].data.join(',') === '1,2,3', 'line chart with a dashed trend for the series that wants one');
+  const bc = ch.barChart('y', ['a', 'b'], [2, -1]);
+  assert(bc.data.datasets[0].backgroundColor.join(',') === '#2e9e5b,#d64545' && bc.data.datasets[1].type === 'line', 'bars green and red, with a trend line');
+  const tgm = await import('./telegram.js');
+  const cb = botsMod.createBot({ type: 'comeback', name: 'Chart test', paperBankroll: 200, sizing: { kind: 'auto', value: 1 } });
+  botsMod.updateBot(cb.id, { enabled: true });
+  botsMod.resetPaper(cb.id);
+  const at = Date.now() - 2 * D;
+  store.col('bets').push({ id: 'b_ch1', botId: cb.id, mode: 'sim', status: 'won', placedAt: at, settledAt: at + 3600e3, cost: 2, payout: 6, title: 'x', outcome: 'y' }, { id: 'b_ch2', botId: cb.id, mode: 'sim', status: 'lost', placedAt: at + D, settledAt: at + D + 3600e3, cost: 1, payout: 0, title: 'x', outcome: 'y' });
+  botsMod.botById(cb.id).paperEpoch = at - 1000;
+  const ev = tgm._equityView(botsMod.botById(cb.id), 7);
+  assert(/Profit \$3\.00 on 2 settled bets/.test(ev.caption) && ev.chart.data.datasets.length === 2, `equity chart and caption (${ev.caption})`);
+  const cv = tgm._compareView(7);
+  assert(cv.chart.data.datasets.some((d) => d.label === 'Chart test') && /Chart test: \+1\.5% \(2 bets\)/.test(cv.caption), `compare: % of the starting wallet (${cv.caption.split('\n').find((l) => /Chart test/.test(l))})`);
+  const dv = tgm._dailyView(botsMod.botById(cb.id), 14);
+  assert(dv.chart.data.labels.length <= 4 && /Total \$3\.00/.test(dv.caption), `daily bars start when the bot started (${dv.chart.data.labels.length} days)`);
+  botsMod.deleteBot(cb.id);
+  store.col('bets').splice(0, store.col('bets').length, ...store.col('bets').filter((b) => b.botId !== cb.id));
+}
 db.closeDb();
 
 store.flush();

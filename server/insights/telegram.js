@@ -20,6 +20,8 @@ import * as db from './db.js';
 import { botReport, skipCategory } from './botReport.js';
 import * as football from './football.js';
 import * as pm from './polymarket.js';
+import * as charts from './tgcharts.js';
+import { botBacktestRuns } from './botbacktest.js';
 
 const cfgFile = () => process.env.AIM4_TELEGRAM_FILE || path.join(os.homedir(), '.aim4', 'telegram.json');
 const stateFile = () => path.join(insightsDir(), 'telegram-state.json');
@@ -110,7 +112,7 @@ async function dailyDigest(force = false) {
   for (const bot of realBots()) {
     const s = summary(bot, 1);
     await say(`📊 <b>Daily insights</b>\n${s.text}`);
-    if (s.curve.length >= 2) await tg('sendPhoto', { chat_id: st.chat, photo: chartUrl(s.curve, `${bot.name} today`) }).catch(() => {});
+    await sendChart(equityView(bot, 7)).catch((e) => logLine('warn', `digest chart: ${e.message}`));
   }
   const paper = botsMod
     .allBots()
@@ -121,6 +123,7 @@ async function dailyDigest(force = false) {
     })
     .sort((a, c) => c.pnl - a.pnl);
   if (paper.length) await say(`📄 <b>Paper bots today</b>\n${paper.map((p) => `${p.pnl >= 0 ? '🟢' : '🔴'} ${esc(p.name)}: ${usd(p.pnl)} (${p.rec})`).join('\n')}`);
+  await sendChart(compareView(7)).catch((e) => logLine('warn', `digest compare chart: ${e.message}`));
 }
 
 
@@ -180,11 +183,97 @@ function summary(bot, days) {
   return { text, curve: r.curve };
 }
 
-function chartUrl(curve, title) {
-  const pts = curve.length > 300 ? curve.filter((_, i) => i % Math.ceil(curve.length / 300) === 0) : curve;
-  const chart = { type: 'line', data: { labels: pts.map((p) => new Date(p.t).toISOString().slice(5, 16).replace('T', ' ')), datasets: [{ label: title, data: pts.map((p) => p.v), fill: false, borderColor: '#3987e5', pointRadius: 0 }] }, options: { plugins: { legend: { display: true } } } };
-  return `https://quickchart.io/chart?w=800&h=400&bkg=white&c=${encodeURIComponent(JSON.stringify(chart))}`;
+
+// ---- charts (rendered by QuickChart, uploaded as photos; every line has a dashed trend) ----
+
+const DAY_MS = 86400e3;
+const short = (name) => String(name).replace(/^Oracle /, '').replace(/^Back the leader/, 'Leader');
+/** The bot's settled bets in its current mode, and when that mode started for it. */
+function track(bot) {
+  const real = bot.mode === 'real';
+  const start = real ? bot.realSince || 0 : bot.paperEpoch || 0;
+  const bets = col('bets').filter((b) => b.botId === bot.id && b.mode === (real ? 'real' : 'sim') && b.placedAt >= start);
+  return { real, start, bets };
 }
+
+/** Profit over time with a trendline. */
+function equityView(bot, days = 7, now = Date.now()) {
+  const { real, start, bets } = track(bot);
+  const from = Math.max(now - days * DAY_MS, start || 0, now - 365 * DAY_MS);
+  const run = charts.runningPnl(bets.filter((b) => b.settledAt >= from));
+  const pts = charts.onDays(run, from, now);
+  const values = pts.map((p) => p.v);
+  const t = charts.trendline(values);
+  const chart = charts.lineChart(`${short(bot.name)} · profit since ${charts.dayLabel(from)} ($)`, pts.map((p) => charts.dayLabel(p.t)), [{ label: `${short(bot.name)} ${real ? '(real)' : '(paper)'}`, values, width: 3 }], { yLabel: '$' });
+  const last = values[values.length - 1] || 0;
+  return { chart, caption: `📈 <b>${esc(bot.name)}</b> · ${real ? 'real' : 'paper'} · since ${charts.dayLabel(from)}\nProfit ${usd(last)} on ${run.length} settled bets · trend ${charts.perDay(t.slope)}` };
+}
+
+/** Profit per day as bars, with a trend. */
+function dailyView(bot, days = 14, now = Date.now()) {
+  const { real, start, bets } = track(bot);
+  if (start > 0) days = Math.min(days, Math.max(2, Math.ceil((now - start) / DAY_MS) + 1));
+  const rows = charts.dailyPnl(bets, days, now);
+  const values = rows.map((r) => r.v);
+  const t = charts.trendline(values);
+  const chart = charts.barChart(`${short(bot.name)} · profit per day ($)`, rows.map((r) => charts.dayLabel(r.t)), values);
+  const up = rows.filter((r) => r.v > 0).length, down = rows.filter((r) => r.v < 0).length;
+  const best = rows.reduce((a, r) => (r.v > a.v ? r : a), rows[0]), worst = rows.reduce((a, r) => (r.v < a.v ? r : a), rows[0]);
+  return { chart, caption: `📊 <b>${esc(bot.name)}</b> · ${real ? 'real' : 'paper'} · last ${days} days\nTotal ${usd(values.reduce((s, v) => s + v, 0))} · ${up} days up, ${down} down · best ${charts.dayLabel(best.t)} ${usd(best.v)} · worst ${charts.dayLabel(worst.t)} ${usd(worst.v)} · trend ${charts.perDay(t.slope)}` };
+}
+
+/** Every comeback bot side by side, as % of the wallet it started with. */
+function compareView(days = 7, now = Date.now()) {
+  const bots = botsMod.allBots().filter((b) => b.enabled && b.type === 'comeback').sort((a, b) => (a.mode === 'real' ? -1 : b.mode === 'real' ? 1 : a.name.localeCompare(b.name)));
+  // No empty days before every bot had started.
+  const from = Math.max(now - days * DAY_MS, Math.min(...bots.map((b) => track(b).start || 0)));
+  const w = engine.realWallet();
+  const series = [], lines = [];
+  let labels = [];
+  for (const bot of bots) {
+    const { real, start, bets } = track(bot);
+    const run = charts.runningPnl(bets.filter((b) => b.settledAt >= Math.max(from, start)));
+    const total = run.length ? run[run.length - 1].v : 0;
+    // Real: the wallet before these bets (live balance, or the executor's last known one when it is offline).
+    const lastBal = (col('executor').devices || []).map((d) => Number(d.info?.balance)).find(Number.isFinite);
+    const base = real ? Math.max(10, (w.equity ?? w.cash ?? lastBal ?? 250) - total) : bot.paperBankroll || 1;
+    const pts = charts.onDays(run, from, now);
+    labels = pts.map((p) => charts.dayLabel(p.t));
+    series.push({ label: `${short(bot.name)}${real ? ' (real)' : ''}`, values: pts.map((p) => Math.round((p.v / base) * 1000) / 10), trend: real, width: real ? 4 : 2, ...(real ? { color: charts.REAL_COLOR } : {}) });
+    lines.push({ name: bot.name, real, pctv: (total / base) * 100, n: run.length });
+  }
+  const chart = charts.lineChart(`All bots · return since ${charts.dayLabel(from)} (% of starting wallet)`, labels, series, { yLabel: '%' });
+  lines.sort((a, b) => b.pctv - a.pctv);
+  return { chart, caption: `🏁 <b>Bots compared</b> · last ${days} days\n${lines.map((l) => `${l.pctv >= 0 ? '🟢' : '🔴'} ${l.real ? '💰 ' : ''}${esc(l.name)}: ${l.pctv >= 0 ? '+' : ''}${l.pctv.toFixed(1)}% (${l.n} bets)`).join('\n')}` };
+}
+
+/** A bot's backtest from a date with a starting wallet, as an equity curve with a trend. */
+function backtestView(bot, fromMs, start, now = Date.now()) {
+  const out = botBacktestRuns({ ...bot, matchCapPct: engine.settings().matchCapPct ?? 4 }, { starts: [fromMs], start });
+  const r = out.runs[0];
+  const pts = charts.onDays((r.curve || []).map((c) => ({ t: c.t, v: c.v })), fromMs, now, start);
+  const values = pts.map((p) => p.v);
+  const t = charts.trendline(values);
+  const chart = charts.lineChart(`${short(bot.name)} · backtest from ${charts.dayLabel(fromMs)} with $${start}`, pts.map((p) => charts.dayLabel(p.t)), [{ label: 'wallet ($)', values, width: 3 }], { yLabel: '$' });
+  return { chart, caption: `🧪 <b>Backtest · ${esc(bot.name)}</b>\n$${start} on ${new Date(fromMs).toISOString().slice(0, 10)} → <b>$${r.end.toFixed(2)}</b> today\n${r.placed} bets · ${r.won} won · lowest $${r.low.toFixed(2)} · worst dip ${Math.round(r.maxDrawdown * 100)}% · trend ${charts.perDay(t.slope)}${r.stopped ? `\nStopped: ${esc(r.stopped.reason)}` : ''}\n<i>Past matches replayed with today's settings; not a promise.</i>` };
+}
+
+/** Render a chart and upload it to the chat. */
+async function sendChart({ chart, caption }) {
+  const r = await fetch('https://quickchart.io/chart', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chart, width: 900, height: 500, devicePixelRatio: 2, backgroundColor: 'white', format: 'png' }), signal: AbortSignal.timeout(30e3) });
+  if (!r.ok) throw new Error(`chart render ${r.status}`);
+  const form = new FormData();
+  form.append('chat_id', String(st.chat));
+  form.append('photo', new Blob([Buffer.from(await r.arrayBuffer())], { type: 'image/png' }), 'chart.png');
+  if (caption) {
+    form.append('caption', caption.slice(0, 1000));
+    form.append('parse_mode', 'HTML');
+  }
+  const res = await fetch(`https://api.telegram.org/bot${cfg.token}/sendPhoto`, { method: 'POST', body: form, signal: AbortSignal.timeout(40e3) });
+  const out = await res.json().catch(() => ({}));
+  if (!out.ok) throw new Error(`telegram sendPhoto: ${out.description || res.status}`);
+}
+export { equityView as _equityView, dailyView as _dailyView, compareView as _compareView, backtestView as _backtestView };
 
 const HELP = `<b>Commands</b>
 /status — wallet, armed, open bets
@@ -194,6 +283,10 @@ const HELP = `<b>Commands</b>
 /arm · /disarm — real trading
 /real &lt;bot&gt; · /paper &lt;bot&gt; — move a bot to real money or paper
 /today · /bets — today's real bets, or the last 10, with results
+/chart [bot] [days] — profit curve with a trendline (default: real bot, 7 days)
+/daily [bot] [days] — profit per day as bars, with a trend (default 14 days)
+/compare [days] — every bot side by side, % of its starting wallet
+/backtest [bot] [YYYY-MM-DD] [$start] — replay a bot from a date, as a chart
 /refresh — re-check the wallet now: positions, fills, cash
 /set &lt;bot&gt; &lt;key&gt; &lt;value&gt; — change a bot setting (e.g. /set v3.1 maxOverMid 0.01)
 /settings &lt;bot&gt; — show a bot's settings
@@ -201,7 +294,7 @@ const HELP = `<b>Commands</b>
 /digest — the daily insights now
 /football — football scanner, suspicious matches, paper copy
 /fset &lt;key&gt; &lt;value&gt; — football settings (minScore, minCash, copy, stake…)
-Sent automatically: real orders, fills, results, near-misses, new suspicious matches, guard actions (a bot sent back to paper or promoted to real, bets in the wallet no bot placed), and daily insights at 21:00.`;
+Sent automatically: real orders, fills, results, near-misses, new suspicious matches, guard actions (a bot sent back to paper or promoted to real, bets in the wallet no bot placed), and daily insights with charts at 21:00.`;
 
 async function handle(msg) {
   const chat = msg.chat?.id;
@@ -223,8 +316,30 @@ async function handle(msg) {
     if (!bot) return say('No such bot.');
     const s = summary(bot, days);
     await say(s.text);
-    if (s.curve.length >= 2) await tg('sendPhoto', { chat_id: st.chat, photo: chartUrl(s.curve, `${bot.name} settled P&L`) }).catch((e) => say(`Chart failed: ${esc(e.message)}`));
+    await sendChart(equityView(bot, days || 365)).catch((e) => say(`Chart failed: ${esc(e.message)}`));
     return;
+  }
+  if (cmd === '/chart' || cmd === '/daily') {
+    const n = Number(args.find((a) => /^\d+$/.test(a)) ?? (cmd === '/chart' ? 7 : 14));
+    const bot = pickBot(args.filter((a) => !/^\d+$/.test(a)).join(' '));
+    if (!bot) return say('No such bot.');
+    return sendChart(cmd === '/chart' ? equityView(bot, n) : dailyView(bot, Math.min(60, Math.max(2, n)))).catch((e) => say(`Chart failed: ${esc(e.message)}`));
+  }
+  if (cmd === '/compare') {
+    const n = Number(args.find((a) => /^\d+$/.test(a)) ?? 7);
+    return sendChart(compareView(Math.min(90, Math.max(1, n)))).catch((e) => say(`Chart failed: ${esc(e.message)}`));
+  }
+  if (cmd === '/backtest') {
+    const date = args.find((a) => /^\d{4}-\d{2}-\d{2}$/.test(a));
+    const amount = args.find((a) => /^\$?\d+(\.\d+)?$/.test(a) && !/^\d{4}-/.test(a));
+    const bot = pickBot(args.filter((a) => a !== date && a !== amount).join(' '));
+    if (!bot) return say('No such bot.');
+    if (bot.type !== 'comeback') return say('Backtest charts are for the comeback bots (Oracle versions, leader).');
+    const fromMs = date ? Date.parse(`${date}T00:00:00Z`) : Date.now() - 30 * 86400e3;
+    if (!Number.isFinite(fromMs) || fromMs > Date.now()) return say('Usage: /backtest [bot] [YYYY-MM-DD] [$start], e.g. /backtest v3.2 2026-10-01 259');
+    const start = Math.max(10, Math.round(Number(String(amount || '').replace('$', '')) || engine.realWallet().cash || 250));
+    await say(`🧪 Replaying ${esc(bot.name)} from ${new Date(fromMs).toISOString().slice(0, 10)} with $${start}…`);
+    return sendChart(backtestView(bot, fromMs, start)).catch((e) => say(`Backtest failed: ${esc(e.message)}`));
   }
   if (cmd === '/on' || cmd === '/off') {
     const bot = pickBot(args.join(' '));
