@@ -386,6 +386,9 @@ function replayCurve(bets, bot, start, { fillCost = 0.01, startS = null } = {}) 
         continue;
       }
     } else stake = Math.floor(stakeOf(bot, eq, dd) * 100) / 100;
+    // A bet may carry its own multiplier (a boosted signal); the live 4% match cap when the bot sets one.
+    if (b.stakeMult > 0) stake = Math.floor(Math.min(bot.maxStake, stake * b.stakeMult) * 100) / 100;
+    if (bot.matchCapPct > 0) stake = Math.floor(Math.min(stake, Math.max(bot.minStake, (eq * bot.matchCapPct) / 100)) * 100) / 100;
     if (stake > cash) {
       skips.stake++;
       if (!open.length && cash < bot.minStake) stopped = { t: b.at * 1000, reason: 'Wallet under the minimum stake' };
@@ -483,4 +486,4 @@ export function botBacktest(bot, { days = 365, start = 500, extraSlip = 0 } = {}
     recent: w.placedBets.slice(-25).reverse().map((b) => ({ at: b.at, title: b.title, team: b.team, game: b.game || '', price: b.q, stake: b.stake, won: b.won, sold: Boolean(b.sold), profit: b.stake * (multOf(b) - 1) }))
   };
 }
-export { comebackBets as _comebackBets };
+export { comebackBets as _comebackBets, replayCurve as _replayCurve };
