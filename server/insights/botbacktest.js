@@ -57,12 +57,14 @@ function comebackBets(p, sinceS, extraSlip) {
       if (rules.formats?.length && r.f && !rules.formats.includes(r.f)) continue;
       if (preX < rules.preMin) continue;
       const px = (i) => (x === 0 ? r.p[i + 1] / 1000 : 1 - r.p[i + 1] / 1000);
+      // Top-tier LoL/Valorant comebacks are overpriced (2026-11-08): the leader leg may fire earlier there.
+      const ca = p.bet === 'leader' && !r.low && p.leaderTopCollapseAt > 0 && (p.leaderTopGames || []).includes(r.g) ? Math.max(rules.collapseAt, p.leaderTopCollapseAt) : rules.collapseAt;
       for (let i = 0; i + 4 < r.p.length; i += 2) {
-        if (px(i) > rules.collapseAt) continue;
+        if (px(i) > ca) continue;
         const p3 = median([px(i), px(i + 2), px(i + 4)]);
-        if (p3 > rules.collapseAt + 0.03) continue;
+        if (p3 > ca + 0.03) continue;
         const q = Math.min(0.99, p3 + 0.01 + extraSlip);
-        if (q > rules.collapseAt + p.maxSlippage + extraSlip) break;
+        if (q > ca + p.maxSlippage + extraSlip) break;
         if (rules.maxMinutes && r.p[i] / 60 > rules.maxMinutes) break;
         let hi = px(i);
         for (let j = i; j >= 0 && r.p[i] - r.p[j] <= 600; j -= 2) hi = Math.max(hi, px(j));

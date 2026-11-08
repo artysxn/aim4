@@ -243,6 +243,7 @@ engine.updateSettings({ botsOn: true });
     if (u.includes('/v2/trades') && cond === '0xflow') return new Response(JSON.stringify({ data: flowTrades, pagination: { has_more: false } }), { status: 200 });
     if (u.includes('/v2/trades') && cond) {
       const e = [quiet, busy, bo1, bleed].find((x) => x.markets[0].conditionId === cond);
+      if (!e) return new Response(JSON.stringify({ data: [], pagination: { has_more: false } }), { status: 200 });
       const n = e === busy || e === bleed ? 300 : 20; // ~10 vs ~0.7 trades a minute
       return new Response(JSON.stringify({ data: trades(e, n).reverse(), pagination: { has_more: false } }), { status: 200 });
     }
@@ -312,6 +313,21 @@ engine.updateSettings({ botsOn: true });
     const bc = await brainM.considerComeback(botsM.botById(capped.id), bleed, bleed.markets[0], 0);
     assert(bc.action === 'skipped' && /Leader at 88%, over 85%/.test(bc.reason), `leader over the cap is skipped (${bc.reason})`);
     botsM.deleteBot(capped.id);
+    // Top-tier trigger: a LoL top-tier match where the 70% favourite fell to 25%; the leader leg fires only with the trigger on.
+    const top = mkEv('t', 'BO3', '0xtop');
+    Object.assign(top, { game: 'lol', tier: '1' });
+    store.col('prices')['0xtop'] = { ...store.col('prices')['0xtop'], last: [0.25, 0.75], min: [0.25, 0.3], series: [[now - 5 * 60e3, 0.6], [now - 60e3, 0.25]] };
+    feedsM.books.set(top.markets[0].tokens[0], { bids: new Map([[0.24, 400]]), asks: new Map([[0.26, 400]]), bestBid: 0.24, bestAsk: 0.26, tick: 0.01, at: Date.now(), last: null, tape: [], mids: [], lastMidAt: 0 });
+    feedsM.books.set(top.markets[0].tokens[1], { bids: new Map([[0.74, 400]]), asks: new Map([[0.76, 400]]), bestBid: 0.74, bestAsk: 0.76, tick: 0.01, at: Date.now(), last: null, tape: [], mids: [], lastMidAt: 0 });
+    const tl = botsM.createBot({ ...structuredClone(V32), name: 'V3.2 top test', params: { ...V32.params, games: ['cs2', 'lol'], leaderMaxPrice: 0.85 } });
+    botsM.updateBot(tl.id, { enabled: true });
+    const t0 = await brainM.considerComeback(botsM.botById(tl.id), top, top.markets[0], 0);
+    assert(t0.action === 'skipped' && /No crash|Not live/.test(t0.reason), `no top-tier trigger: a 25% team is no crash (${t0.reason})`);
+    botsM.updateBot(tl.id, { params: { ...botsM.botById(tl.id).params, leaderTopCollapseAt: 0.3, leaderTopGames: ['lol'] } });
+    const t1 = await brainM.considerComeback(botsM.botById(tl.id), top, top.markets[0], 0);
+    assert(t1.action === 'entered' && t1.outcome === top.markets[0].outcomes[1], `top-tier LoL: the leader is bought once the other team is under 30% (${t1.action}: ${t1.reason})`);
+    botsM.deleteBot(tl.id);
+    delete store.col('events')[top.id];
     // V3.3's leader shock skip: one trade knocked team A from 36% to 12%, so no leader bet.
     const { leaderView } = await import('./bots.js');
     const sl = botsM.createBot({ ...structuredClone(V32), name: 'V3.3 shock test', params: leaderView({ ...V32.params, leaderMaxPrice: 0.97, leaderMaxShock: 0.2 }) });

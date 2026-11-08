@@ -135,6 +135,8 @@ export const BOT_TYPES = {
       { key: 'leaderKellyPct', label: 'Both: full-Kelly % for the leader bets (used at a quarter)', kind: 'num', unit: '%', min: 0, max: 50, step: 0.1, def: 19.1 },
       { key: 'leaderPreMin', label: 'Leader: the crashed team started at least', kind: 'num', unit: '%', scale: 100, min: 0.2, max: 0.9, step: 1, def: 0.5 },
       { key: 'leaderCollapseAt', label: 'Leader: once the crashed team is down to', kind: 'num', unit: '%', scale: 100, min: 0.05, max: 0.4, step: 1, def: 0.2 },
+      { key: 'leaderTopCollapseAt', label: 'Leader, top-tier events: already once the crashed team is under (0 = off)', kind: 'num', unit: '%', scale: 100, min: 0, max: 0.45, step: 1, def: 0 },
+      { key: 'leaderTopGames', label: 'Leader, top-tier trigger in', kind: 'multi', options: ['cs2', 'valorant', 'lol', 'dota2'], def: ['lol', 'valorant'] },
       { key: 'leaderMaxShock', label: 'Leader: skip when one trade dropped the crashed team this much (10 min, 0 = off)', kind: 'num', unit: 'pts', scale: 100, min: 0, max: 0.6, step: 1, def: 0 },
       { key: 'leaderMaxPrice', label: 'Leader: pay at most', kind: 'num', unit: '%', scale: 100, min: 0.5, max: 0.97, step: 1, def: 0.97 },
       { key: 'busyAt', label: 'Leader: a market counts as busy from (trades a minute)', kind: 'num', unit: '/min', min: 0.5, max: 60, step: 0.5, def: 4 },
@@ -520,6 +522,14 @@ export function allBots() {
   }
   // 2026-11-08: V3.2's leader leg pays only up to 85% (78-85%: +4.3%/+4.9% a bet before/after 22 Jul;
   // above: about zero, 97%+ negative). Backtest after 22 Jul +16.3%/bet vs +15.2%.
+  // 2026-11-08: top-tier LoL and Valorant comebacks are overpriced (a 50%+ team that falls under 30%
+  // came back 12-23% against a ~28% price, both periods): the leader leg fires already under 30% there.
+  // V3.2 head-to-head: better or equal in every window; last 30 days $0.63 vs $0.57 a day at $1.
+  if (!b.v14) {
+    for (const x of b.list) if (x.params?.bet === 'both') Object.assign(x.params, { leaderTopCollapseAt: 0.3, leaderTopGames: ['lol', 'valorant'] });
+    b.v14 = true;
+    touch('bots');
+  }
   if (!b.v13) {
     for (const x of b.list) if (x.params?.bet === 'both') x.params.leaderMaxPrice = 0.85;
     b.v13 = true;

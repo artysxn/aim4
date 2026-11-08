@@ -344,7 +344,9 @@ export async function consider({ bot, ev, m, idx, flag = null, whale = null, leg
     if (!Number.isFinite(preC)) return finish('skipped', 'No start price');
     if (preC < cb.preMin) return finish('skipped', `The other team started at ${Math.round(preC * 100)}%, under ${Math.round(cb.preMin * 100)}%`);
     const cMid = feeds.midOf(m.tokens[c]) ?? 1 - mid;
-    if (cMid > cb.collapseAt) return finish('skipped', `No crash: the other team is at ${Math.round(cMid * 100)}%`);
+    const topTier = !isLowTier(ev) && params.leaderTopCollapseAt > 0 && (params.leaderTopGames || []).includes(game);
+    const crashAt = topTier ? Math.max(cb.collapseAt, params.leaderTopCollapseAt) : cb.collapseAt;
+    if (cMid > crashAt) return finish('skipped', `No crash: the other team is at ${Math.round(cMid * 100)}%`);
     const drop = recentDrop(m, c, cMid);
     const tpm = await tradesPerMin(ev, m);
     const low = isLowTier(ev);
@@ -1071,7 +1073,8 @@ async function evaluateComeback(ev, m, idx) {
     const both = p.bet === 'both';
     // A 'both' bot's leader leg needs no sudden fall and no time limit: only the never-bet list stops it here.
     const preMinAll = both ? Math.min(r.preMin ?? p.preMin, p.leaderPreMin ?? p.preMin) : r.preMin;
-    const collapseAll = both ? Math.max(r.collapseAt ?? p.collapseAt, p.leaderCollapseAt ?? p.collapseAt) : r.collapseAt;
+    const topLeader = both && !isLowTier(ev) && p.leaderTopCollapseAt > 0 && (p.leaderTopGames || []).includes(game) ? p.leaderTopCollapseAt : 0;
+    const collapseAll = both ? Math.max(r.collapseAt ?? p.collapseAt, p.leaderCollapseAt ?? p.collapseAt, topLeader) : r.collapseAt;
     if ((both ? /never-bet/.test(r.skip || '') : r.skip) || pre < preMinAll || mid > collapseAll) continue;
     if (!both && r.maxMinutes && (Date.now() - ev.start) / MIN > r.maxMinutes) continue;
     if (!both && r.minDrop && recentDrop(m, idx, mid) < r.minDrop) continue;
