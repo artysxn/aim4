@@ -34,7 +34,8 @@ for (const k of ['token', 'wallet', 'privateKey']) {
 }
 
 startExecutor();
-console.log(`Insights executor running for ${cfg.wallet.slice(0, 6)}..${cfg.wallet.slice(-4)}, talking to ${process.env.AIM4_UPSTREAM}`);
+// The server it really polls is cfg.base (or the local default); AIM4_UPSTREAM is only the site fallback.
+executorStatus().then((s) => console.log(`Insights executor running for ${cfg.wallet.slice(0, 6)}..${cfg.wallet.slice(-4)}, talking to ${s.base} · relayer key ${s.relayer ? 'set (winnings claimed automatically)' : 'not set'}`));
 
 // A status line every 5 minutes, for the service log.
 setInterval(async () => {
@@ -42,7 +43,8 @@ setInterval(async () => {
   console.log(
     `${new Date().toISOString()} poll ${s.lastOk ? Math.round((Date.now() - s.lastOk) / 1000) + 's ago' : 'never'}` +
       ` | balance ${s.balance ?? '-'} | ${s.geo ? `${s.geo.country} ${s.geo.blocked ? 'BLOCKED' : 'allowed'}` : 'location -'}` +
-      ` | placed ${s.placed} failed ${s.failed} | claimed $${(s.claims?.total || 0).toFixed(2)}` +
+      ` | placed ${s.placed} failed ${s.failed} | claimed $${(s.claims?.total || 0).toFixed(2)}${s.claims?.pending > 0.049 ? ` (waiting $${s.claims.pending.toFixed(2)})` : ''}` +
+      `${s.claims?.lastError ? ` | claim error: ${s.claims.lastError}` : ''}` +
       `${s.lastError ? ` | error: ${s.lastError}` : ''}`
   );
 }, 5 * 60e3);

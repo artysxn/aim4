@@ -422,10 +422,10 @@ for (const k of ["token", "wallet", "privateKey"]) {
   }
 }
 startExecutor();
-console.log(`Insights executor running for ${cfg.wallet.slice(0, 6)}..${cfg.wallet.slice(-4)}, talking to ${process.env.AIM4_UPSTREAM}`);
+executorStatus().then((s) => console.log(`Insights executor running for ${cfg.wallet.slice(0, 6)}..${cfg.wallet.slice(-4)}, talking to ${s.base} \xB7 relayer key ${s.relayer ? "set (winnings claimed automatically)" : "not set"}`));
 setInterval(async () => {
   const s = await executorStatus();
   console.log(
-    `${(/* @__PURE__ */ new Date()).toISOString()} poll ${s.lastOk ? Math.round((Date.now() - s.lastOk) / 1e3) + "s ago" : "never"} | balance ${s.balance ?? "-"} | ${s.geo ? `${s.geo.country} ${s.geo.blocked ? "BLOCKED" : "allowed"}` : "location -"} | placed ${s.placed} failed ${s.failed} | claimed $${(s.claims?.total || 0).toFixed(2)}${s.lastError ? ` | error: ${s.lastError}` : ""}`
+    `${(/* @__PURE__ */ new Date()).toISOString()} poll ${s.lastOk ? Math.round((Date.now() - s.lastOk) / 1e3) + "s ago" : "never"} | balance ${s.balance ?? "-"} | ${s.geo ? `${s.geo.country} ${s.geo.blocked ? "BLOCKED" : "allowed"}` : "location -"} | placed ${s.placed} failed ${s.failed} | claimed $${(s.claims?.total || 0).toFixed(2)}${s.claims?.pending > 0.049 ? ` (waiting $${s.claims.pending.toFixed(2)})` : ""}${s.claims?.lastError ? ` | claim error: ${s.claims.lastError}` : ""}${s.lastError ? ` | error: ${s.lastError}` : ""}`
   );
 }, 5 * 6e4);
