@@ -26,6 +26,7 @@ export const COMMON_FIELDS = [
   { key: 'paperBankroll', label: 'Paper wallet', kind: 'num', unit: '$', min: 10, max: 1e8, step: 10, def: 1000 },
   { key: 'maxOpenPct', label: 'Open bets at most', kind: 'num', unit: '% of wallet', min: 1, max: 100, step: 1, def: 25 },
   { key: 'dailyLossPct', label: 'Stop for the day after losing', kind: 'num', unit: '% of wallet', min: 1, max: 100, step: 1, def: 10 },
+  { key: 'sellBelow', label: 'Sell a held bet once its chance falls to (0 = hold to the result)', kind: 'num', unit: '%', scale: 100, min: 0, max: 0.1, step: 0.5, def: 0.01 },
   { key: 'sellAbove', label: 'Sell a held bet once its bid reaches (0 = hold to the result)', kind: 'num', unit: '%', scale: 100, min: 0, max: 0.999, step: 0.1, def: 0.998 },
   { key: 'autoStop', label: 'Back to paper if it keeps losing (real money)', kind: 'bool', def: true },
   { key: 'stopAfter', label: 'Losing check after this many real bets', kind: 'num', unit: 'bets', min: 5, max: 1000, step: 1, def: 30 },

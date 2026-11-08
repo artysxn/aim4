@@ -328,6 +328,16 @@ engine.updateSettings({ botsOn: true });
     assert(t1.action === 'entered' && t1.outcome === top.markets[0].outcomes[1], `top-tier LoL: the leader is bought once the other team is under 30% (${t1.action}: ${t1.reason})`);
     botsM.deleteBot(tl.id);
     delete store.col('events')[top.id];
+    // Practically lost: a held paper bet whose team is down to 0.85% is sold, once.
+    {
+      const lt = 'lowsell_tok';
+      feedsM.books.set(lt, { bids: new Map([[0.005, 1000]]), asks: new Map([[0.012, 1000]]), bestBid: 0.005, bestAsk: 0.012, tick: 0.001, at: Date.now(), last: null, tape: [], mids: [], lastMidAt: 0 });
+      const lb = { id: 'b_lowsell', mode: 'sim', botId: V32.id, status: 'open', tokenId: lt, shares: 20, price: 0.15, cost: 3.05, mark: 0.15, plan: { hold: true, sellAt: 0.65 }, eventId: 'none', conditionId: 'none', title: 'Low sell', outcome: 'X', placedAt: Date.now() };
+      store.col('bets').push(lb);
+      await brainM._checkExits(lt);
+      assert(lb.status === 'sold' && /Practically lost/.test(lb.exitReason) && lb.lowSellTried > 0 && lb.payout > 0.09 && lb.payout < 0.11, `a bet at 0.85% is sold for what is left (${lb.status}, ${lb.exitReason}, ${lb.payout})`);
+      store.col('bets').splice(store.col('bets').indexOf(lb), 1);
+    }
     // V3.3's leader shock skip: one trade knocked team A from 36% to 12%, so no leader bet.
     const { leaderView } = await import('./bots.js');
     const sl = botsM.createBot({ ...structuredClone(V32), name: 'V3.3 shock test', params: leaderView({ ...V32.params, leaderMaxPrice: 0.97, leaderMaxShock: 0.2 }) });

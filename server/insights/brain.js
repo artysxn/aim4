@@ -97,6 +97,7 @@ function teamRow(name) {
 function tickOf(token, book) {
   return Number(book?.tick ?? book?.tick_size) || feeds.books.get(token)?.tick || 0.01;
 }
+export { checkExits as _checkExits };
 export const floorTick = (p, t) => Math.round(Math.floor(p / t + 1e-9) * t * 1e6) / 1e6;
 export const ceilTick = (p, t) => Math.round(Math.ceil(p / t - 1e-9) * t * 1e6) / 1e6;
 /** A sell's lowest price on the grid: rounded up, but never above the bid it sells into. */
@@ -735,6 +736,15 @@ async function checkExits(token) {
         // a redemption (without a relayer key the executor cannot claim winnings by itself).
         const top = botById(bet.botId)?.sellAbove ?? 0.998;
         if (top > 0 && bid >= top) await exitBet(bet, `Practically won: sold at ${(bid * 100).toFixed(1)}%`, Math.max(0.01, bid - 0.003));
+        // Practically lost: sell what is left once the chance is 1% or less (2026-11-08: of 707 crash
+        // bets that fell to 1%, one came back; selling there lifted crash bets +78.7%->+81.6% and
+        // +39.1%->+43.1% a bet before/after 22 Jul). Tried once: a refused tiny order is not retried.
+        const floorAt = botById(bet.botId)?.sellBelow ?? 0.01;
+        const midNow = feeds.midOf(token);
+        if (floorAt > 0 && !bet.lowSellTried && midNow !== null && midNow <= floorAt && bid > 0) {
+          bet.lowSellTried = Date.now();
+          await exitBet(bet, `Practically lost: sold at ${(bid * 100).toFixed(1)}%`, Math.max(0.001, bid - 0.002));
+        }
       }
       continue;
     }
