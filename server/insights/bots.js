@@ -170,6 +170,30 @@ export const BOT_TYPES = {
       { key: 'priceMax', label: 'Price at most', kind: 'num', unit: '%', scale: 100, min: 0.01, max: 0.99, step: 1, def: 0.95 },
       { key: 'maps', label: 'Map-winner markets too', kind: 'bool', def: false }
     ]
+  },
+  // Polymarket's 5- and 15-minute crypto Up/Down markets (server/insights/vision.js).
+  // 72 h BTC backtest, 2026-11-06..09: buying the 65-95c favourite 270-60 s before
+  // the end made +6.2% on stake on 15m (95% interval -0.4% to +12.4%), flat on 5m.
+  // The model-edge rule lost 12-17%. Advice backtest (96 h): holding with the 5c model check
+  // +6.3% on 15m; locking early lost. Seeded on paper.
+  vision: {
+    label: 'Crypto Up/Down',
+    sizingLabel: 'Stake per market',
+    fields: [
+      { key: 'assets', label: 'Coins', kind: 'multi', options: ['btc', 'eth', 'sol', 'xrp'], def: ['btc'] },
+      { key: 'timeframes', label: 'Markets', kind: 'multi', options: ['5m', '15m'], def: ['15m'] },
+      { key: 'fav', label: 'Buy the favourite', kind: 'bool', def: true },
+      { key: 'favLo', label: 'Favourite priced at least', kind: 'num', unit: '%', scale: 100, min: 0.5, max: 0.98, step: 1, def: 0.65 },
+      { key: 'favHi', label: 'Favourite priced under', kind: 'num', unit: '%', scale: 100, min: 0.51, max: 0.99, step: 1, def: 0.95 },
+      { key: 'favFrom', label: 'From this long before the end', kind: 'num', unit: 's', min: 10, max: 900, step: 10, def: 270 },
+      { key: 'favTo', label: 'Until this long before the end', kind: 'num', unit: 's', min: 5, max: 600, step: 5, def: 60 },
+      { key: 'modelCheck', label: 'Skip a favourite the price model rates lower', kind: 'bool', def: true },
+      { key: 'favVeto', label: 'Skip when the model is below the price by', kind: 'num', unit: 'c', scale: 100, min: 0, max: 0.3, step: 0.5, def: 0.05 },
+      { key: 'lockPct', label: 'Lock in at (0 = hold to the end)', kind: 'num', unit: '%', min: 0, max: 50, step: 1, def: 0 },
+      { key: 'arb', label: 'Buy both sides when together under $1', kind: 'bool', def: true },
+      { key: 'edge', label: 'Trade the model against the market', kind: 'bool', def: false },
+      { key: 'entryEdge', label: 'Model edge after fees at least', kind: 'num', unit: 'c', scale: 100, min: 0.01, max: 0.3, step: 0.5, def: 0.09 }
+    ]
   }
 };
 
@@ -534,6 +558,28 @@ export function allBots() {
   if (!b.v13) {
     for (const x of b.list) if (x.params?.bet === 'both') x.params.leaderMaxPrice = 0.85;
     b.v13 = true;
+    touch('bots');
+  }
+  // 2026-11-09: Vision V1, the crypto Up/Down favourite rule, paper, around the clock.
+  if (!b.v15) {
+    b.v15 = true;
+    if (!b.list.some((x) => x.id === 'vision-v1')) {
+      b.list.push({
+        ...sanitizeBot({
+          type: 'vision',
+          name: 'Vision V1',
+          enabled: true,
+          mode: 'paper',
+          sizing: { kind: 'pct', value: 5 },
+          maxStake: 50,
+          paperBankroll: 500,
+          maxOpenPct: 25,
+          dailyLossPct: 20,
+          params: { assets: ['btc'], timeframes: ['15m'], fav: true, favLo: 0.65, favHi: 0.95, favFrom: 270, favTo: 60, modelCheck: true, favVeto: 0.05, lockPct: 0, arb: true, edge: false }
+        }),
+        id: 'vision-v1'
+      });
+    }
     touch('bots');
   }
   return b.list;

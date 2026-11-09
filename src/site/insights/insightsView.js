@@ -1407,7 +1407,7 @@ export function initInsightsView({ escapeHtml, openRoute }) {
 
   // ---- bots ---------------------------------------------------------------------
 
-  const stakeText = (b) => `${b.sizing.kind === 'auto' ? 'Auto, risk-adjusted' : b.sizing.kind === 'pct' ? `${b.sizing.value}% of wallet` : usd(b.sizing.value)} ${{ whale: 'per match', swing: 'per trade', mm: 'per quote', value: 'per match', fade: 'per match', comeback: 'per match' }[b.type] || ''}`.trim();
+  const stakeText = (b) => `${b.sizing.kind === 'auto' ? 'Auto, risk-adjusted' : b.sizing.kind === 'pct' ? `${b.sizing.value}% of wallet` : usd(b.sizing.value)} ${{ whale: 'per match', swing: 'per trade', mm: 'per quote', value: 'per match', fade: 'per match', comeback: 'per match', vision: 'per market' }[b.type] || ''}`.trim();
   const getPath = (o, path) => path.split('.').reduce((x, k) => x?.[k], o);
   function setPath(o, path, v) {
     const keys = path.split('.');

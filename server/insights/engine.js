@@ -32,6 +32,7 @@ import { queueSettled } from './history.js';
 import * as feeds from './feeds.js';
 import { startRecorder, setRecordFilter } from './recorder.js';
 import { restoreModels, scheduleTraining, runTraining } from './learn.js';
+import { startVision, visionStatus } from './vision.js';
 
 const MIN = 60e3;
 const HOUR = 3600e3;
@@ -1161,6 +1162,7 @@ export function engineStatus() {
   return {
     running: run.started,
     tracking: settings().tracking,
+    vision: visionStatus(),
     startedAt: run.startedAt,
     lastDiscover: run.lastDiscover,
     lastWatch: run.lastWatch,
@@ -1242,6 +1244,7 @@ export function startEngine() {
   tick(refreshLive, 15000);
   // Real-money guards: losing and fill stops, paper-to-real promotion, foreign positions.
   tick(runGuards, 60e3);
+  startVision({ settings, queueIntent });
   logLine('info', 'Engine started');
 }
 

@@ -22,6 +22,7 @@ import * as football from './football.js';
 import * as pm from './polymarket.js';
 import * as charts from './tgcharts.js';
 import { botBacktestRuns } from './botbacktest.js';
+import { visionStatus } from './vision.js';
 
 const cfgFile = () => process.env.AIM4_TELEGRAM_FILE || path.join(os.homedir(), '.aim4', 'telegram.json');
 const stateFile = () => path.join(insightsDir(), 'telegram-state.json');
@@ -293,6 +294,7 @@ const HELP = `<b>Commands</b>
 /suspicious — current suspicious matches
 /digest — the daily insights now
 /football — football scanner, suspicious matches, paper copy
+/vision — crypto Up/Down bots: markets watched, prices, Vision bets today
 /fset &lt;key&gt; &lt;value&gt; — football settings (minScore, minCash, copy, stake…)
 Sent automatically: real orders, fills, results, near-misses, new suspicious matches, guard actions (a bot sent back to paper or promoted to real, bets in the wallet no bot placed), and daily insights with charts at 21:00.`;
 
@@ -309,6 +311,16 @@ async function handle(msg) {
   const pickBot = (q) => (q ? findBot(q) : realBots()[0] || botsMod.allBots()[0]);
   if (cmd === '/help' || cmd === '/start') return say(HELP);
   if (cmd === '/status') return say(statusText());
+  if (cmd === '/vision') {
+    const v = visionStatus();
+    const day0 = new Date().setHours(0, 0, 0, 0);
+    const bets = col('bets').filter((b) => b.strategy === 'vision' && ((b.settledAt || 0) >= day0 || b.placedAt >= day0));
+    const pnl = bets.reduce((a, b) => a + (b.payout !== undefined ? b.payout - (b.cost || 0) : 0), 0);
+    const feed = v.feed.map((f) => `${f.asset.toUpperCase()} $${f.price ? Math.round(f.price).toLocaleString('en-US') : '-'} (${f.ageSec ?? '-'}s old)`).join(' · ') || 'no price feed';
+    const mk = v.markets.map((m) => `${esc(m.title || m.slug)} · ${Math.max(0, m.secondsLeft)}s left · Up ${m.askUp == null ? '-' : pct(m.askUp)} / Down ${m.askDown == null ? '-' : pct(m.askDown)}${m.fairUp == null ? '' : ` · model Up ${pct(m.fairUp)}`}${m.error ? ` · ${esc(m.error)}` : ''}`).join('\n') || 'No Vision bot is on.';
+    const rows = bets.slice(-8).map((b) => `${b.mode === 'real' ? '💰' : '📄'} ${b.status === 'won' ? '✅' : b.status === 'lost' ? '❌' : '⏳'} ${esc(b.outcome)} at ${pct(b.price ?? b.maxPrice)} · ${usd(b.cost || b.amount)}${b.payout !== undefined ? ` → ${usd(b.payout)}` : ''}`).join('\n');
+    return say(`<b>Vision</b> · ${feed}\n${mk}\nToday ${usd(pnl)} on ${bets.length} bets${rows ? `\n${rows}` : ''}`);
+  }
   if (cmd === '/bots') return say(botsMod.allBots().map((b) => `${b.enabled ? '🟢' : '⚫'} ${b.mode === 'real' ? '💰' : '📄'} ${esc(b.name)} <code>${b.id}</code>`).join('\n'));
   if (cmd === '/summary') {
     const days = Number(args.find((a) => /^\d+$/.test(a)) ?? 7);
